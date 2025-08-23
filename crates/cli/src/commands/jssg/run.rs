@@ -13,8 +13,8 @@ use std::{
 };
 
 use crate::dirty_git_check;
-use crate::engine::create_progress_callback;
-use codemod_sandbox::tree_sitter::SupportedLanguage;
+use crate::engine::{create_download_progress_callback, create_progress_callback};
+use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
 #[derive(Args, Debug)]
@@ -84,6 +84,11 @@ pub async fn handler(args: &Command) -> Result<()> {
     };
 
     let started = Instant::now();
+    let _ = load_tree_sitter(
+        config.languages.as_ref().unwrap(),
+        Some(create_download_progress_callback().callback.clone()),
+    )
+    .await;
 
     let _ = config.execute(|file_path, _config| {
         // Only process files

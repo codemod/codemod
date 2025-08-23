@@ -92,6 +92,7 @@ impl FromStr for DynamicLang {
     }
 }
 
+#[derive(Debug)]
 struct Inner {
     lang: TSLanguage,
     name: String,
