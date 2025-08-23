@@ -18,6 +18,7 @@ pub fn create_language_extension_map() -> HashMap<&'static str, Vec<&'static str
         map.insert("bash", vec![".sh", ".bash", ".zsh", ".fish"]);
         map.insert("c", vec![".c", ".h"]);
         map.insert("csharp", vec![".cs"]);
+        map.insert("c-sharp", vec![".cs"]);
         map.insert("css", vec![".css"]);
         map.insert(
             "cpp",
