@@ -5,18 +5,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::timeout;
 
+use codemod_ast_grep_dynamic_lang::DynamicLang;
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
 use crate::commands::jssg::testing::{
     config::TestOptions,
     fixtures::{TestCase, TestError, TestFile},
 };
-use ast_grep_language::SupportLang;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, errors::ExecutionError, filesystem::RealFileSystem,
     resolvers::OxcResolver,
 };
-
+use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct TestSummary {
     pub total: usize,
@@ -126,7 +127,7 @@ impl TestRunner {
 
     async fn run_tests_once(&mut self, codemod_path: &Path, language: &str) -> Result<TestSummary> {
         // Parse language
-        let language_enum: SupportLang = language.parse()?;
+        let language_enum: DynamicLang = language.parse().unwrap();
 
         // Discover test cases
         let test_cases = TestCase::discover_in_directory(&self.test_directory, language_enum)
@@ -225,7 +226,7 @@ impl TestRunner {
 
     async fn execute_test_case(
         codemod_path: &Path,
-        language: SupportLang,
+        language: DynamicLang,
         filesystem: &Arc<RealFileSystem>,
         resolver: &Arc<OxcResolver>,
         test_case: &TestCase,
@@ -269,7 +270,7 @@ impl TestRunner {
                 codemod_path,
                 filesystem.clone(),
                 resolver.clone(),
-                language,
+                SupportedLanguage::from_str(language.name()).unwrap(),
                 &input_file.path,
                 &input_file.content,
             )
@@ -327,7 +328,7 @@ impl TestRunner {
 
     async fn create_expected_files(
         codemod_path: &Path,
-        language: SupportLang,
+        language: DynamicLang,
         filesystem: &Arc<RealFileSystem>,
         resolver: &Arc<OxcResolver>,
         test_case: &TestCase,
@@ -337,7 +338,7 @@ impl TestRunner {
                 codemod_path,
                 filesystem.clone(),
                 resolver.clone(),
-                language,
+                SupportedLanguage::from_str(language.name()).unwrap(),
                 &input_file.path,
                 &input_file.content,
             )

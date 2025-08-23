@@ -3,7 +3,8 @@ use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::filesystem::FileSystem;
 use crate::sandbox::resolvers::ModuleResolver;
-use ast_grep_language::SupportLang;
+#[cfg(feature = "native")]
+use crate::tree_sitter::SupportedLanguage;
 use llrt_modules::module_builder::ModuleBuilder;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
@@ -130,7 +131,7 @@ pub async fn execute_codemod_with_quickjs<F, R>(
     script_path: &Path,
     _filesystem: Arc<F>,
     resolver: Arc<R>,
-    language: SupportLang,
+    language: SupportedLanguage,
     file_path: &Path,
     content: &str,
 ) -> Result<ExecutionOutput, ExecutionError>

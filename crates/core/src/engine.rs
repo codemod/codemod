@@ -1262,12 +1262,21 @@ impl Engine {
                 let execution_config = CodemodExecutionConfig {
                     pre_run_callback: None,
                     progress_callback: self.workflow_run_config.progress_callback.clone(),
+                    download_progress_callback: self
+                        .workflow_run_config
+                        .download_progress_callback
+                        .clone(),
                     target_path: Some(self.workflow_run_config.target_path.clone()),
                     base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
                     dry_run: self.workflow_run_config.dry_run,
-                    languages: Some(languages.iter().map(|l| l.to_string()).collect()),
+                    languages: Some(
+                        languages
+                            .iter()
+                            .map(|l| l.name().parse().unwrap())
+                            .collect(),
+                    ),
                 };
 
                 // Clone variables needed in the closure
@@ -1390,6 +1399,7 @@ impl Engine {
         let config = CodemodExecutionConfig {
             pre_run_callback: None,
             progress_callback: self.workflow_run_config.progress_callback.clone(),
+            download_progress_callback: self.workflow_run_config.download_progress_callback.clone(),
             target_path: Some(self.workflow_run_config.target_path.clone()),
             base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
             include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
@@ -1398,7 +1408,9 @@ impl Engine {
             languages: Some(vec![js_ast_grep
                 .language
                 .clone()
-                .unwrap_or("typescript".to_string())]),
+                .unwrap_or("typescript".to_string())
+                .parse()
+                .unwrap()]),
         };
 
         // Set language first to get default extensions
@@ -1539,6 +1551,7 @@ impl Engine {
                     );
                 }
             })
+            .await
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
         Ok(())

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use butterflow_core::utils;
 use clap::Args;
 
-use crate::engine::create_engine;
+use crate::engine::{create_download_progress_callback, create_engine};
 use crate::workflow_runner::{resolve_workflow_source, run_workflow};
 
 #[derive(Args, Debug)]
@@ -50,6 +50,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         args.allow_dirty,
         params,
         None,
+        Some(create_download_progress_callback()),
     )?;
 
     // Run workflow using the extracted workflow runner

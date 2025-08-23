@@ -2,6 +2,7 @@
 name = "codemod-sandbox"
 version.workspace = true
 edition = "2021"
+build = "src/build.rs"
 
 [dependencies]
 rquickjs = { git = "https://github.com/DelSkayn/rquickjs.git", version = "0.9.0", default-features = false, optional = true }
@@ -39,10 +40,13 @@ web-tree-sitter-sg = { git = "https://github.com/mohebifar/tree-sitter-wasm.git"
 serde-wasm-bindgen = { version = "0.6", optional = true }
 ast-grep-core = { version = "0.38.6", default-features = false, optional = true }
 ast-grep-config = { version = "0.38.6", default-features = false, optional = true }
-ast-grep-language = { workspace = true, default-features = true, optional = true }
 llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features = true, optional = true }
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
+codemod-ast-grep-dynamic-lang = { path = "../codemod-ast-grep-dynamic-lang", optional = true }
+reqwest.workspace = true
+tokio-stream = "0.1.17"
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -67,12 +71,12 @@ native = [
   "real-fs",
   "ast-grep-core/tree-sitter",
   "ast-grep-config/tree-sitter",
-  "ast-grep-language",
   "llrt_modules",
   "rquickjs",
   "rquickjs/full-async",
   "tokio",
   "serde_yaml",
+  "codemod-ast-grep-dynamic-lang",
 ]
 real-fs = ["tokio", "ignore"]
 mock-fs = []
