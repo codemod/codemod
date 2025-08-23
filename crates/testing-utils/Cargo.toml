@@ -15,3 +15,4 @@ similar = "2.6.0"
 thiserror = "2.0.0"
 serde = { workspace = true, features = ["derive"] }
 codemod-llrt-capabilities.workspace = true
+codemod-ast-grep-dynamic-lang = {workspace = true}

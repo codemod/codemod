@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use butterflow_core::config::{PreRunCallback, WorkflowRunConfig};
 use butterflow_core::engine::Engine;
-use butterflow_core::execution::ProgressCallback;
+use butterflow_core::execution::{DownloadProgressCallback, ProgressCallback};
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
@@ -75,6 +75,15 @@ pub fn create_progress_callback() -> ProgressCallback {
     }
 }
 
+pub fn create_download_progress_callback() -> DownloadProgressCallback {
+    let progress_bar = progress_bar::download_progress_bar();
+    DownloadProgressCallback {
+        callback: Arc::new(Box::new(move |downloaded: u64, total: u64| {
+            progress_bar(downloaded, total);
+        })),
+    }
+}
+
 /// Create an engine based on configuration
 #[allow(clippy::too_many_arguments)]
 pub fn create_engine(
@@ -86,6 +95,7 @@ pub fn create_engine(
     registry: Option<String>,
     capabilities: Option<HashSet<LlrtSupportedModules>>,
     no_interactive: bool,
+    download_progress_callback: Option<DownloadProgressCallback>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -108,6 +118,7 @@ pub fn create_engine(
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(Some(progress_callback)),
+        download_progress_callback,
         dry_run,
         target_path,
         workflow_file_path,

@@ -2,6 +2,7 @@
 name = "codemod-sandbox"
 version.workspace = true
 edition = "2021"
+build = "src/build.rs"
 
 [dependencies]
 rquickjs = { git = "https://github.com/DelSkayn/rquickjs.git", version = "0.10.0", default-features = false, optional = true }
@@ -40,9 +41,13 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 ast-grep-core = { workspace = true, default-features = false, optional = true }
 ast-grep-config = { workspace = true, default-features = false, optional = true }
 ast-grep-language = { workspace = true, default-features = true, optional = true }
+codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
-codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
+codemod-ast-grep-dynamic-lang = { path = "../codemod-ast-grep-dynamic-lang", optional = true }
+reqwest.workspace = true
+tokio-stream = "0.1.17"
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -73,6 +78,7 @@ native = [
   "tokio",
   "serde_yaml",
   "codemod-llrt-capabilities",
+  "codemod-ast-grep-dynamic-lang",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]
