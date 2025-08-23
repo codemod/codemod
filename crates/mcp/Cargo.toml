@@ -18,6 +18,5 @@ tracing = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 ast-grep-core.workspace = true
-ast-grep-language.workspace = true
 codemod-sandbox.workspace = true
 testing-utils.workspace = true

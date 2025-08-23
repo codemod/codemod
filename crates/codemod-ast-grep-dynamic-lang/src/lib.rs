@@ -1,6 +1,3 @@
-fn main() {
-    println!("Hello, world!");
-}
 use ast_grep_core::tree_sitter::{LanguageExt, StrDoc, TSLanguage};
 use ast_grep_core::Language;
 

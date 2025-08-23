@@ -3,17 +3,20 @@ use crate::ast_grep::sg_node::SgRootRjs;
 use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
+#[cfg(feature = "native")]
+use crate::tree_sitter::SupportedLanguage;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use llrt_modules::module_builder::ModuleBuilder;
 use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Result of executing a codemod on a single file
@@ -29,10 +32,10 @@ pub enum ExecutionResult {
 pub async fn execute_codemod_with_quickjs<R>(
     script_path: &Path,
     resolver: Arc<R>,
-    language: SupportLang,
+    language: SupportedLanguage,
     file_path: &Path,
     content: &str,
-    selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    selector_config: Option<Arc<Box<RuleConfig<DynamicLang>>>>,
 ) -> Result<ExecutionResult, ExecutionError>
 where
     R: ModuleResolver + 'static,
@@ -57,7 +60,14 @@ where
         },
     })?;
 
-    let ast_grep = AstGrep::new(content, language);
+    let ast_grep = AstGrep::new(
+        content,
+        DynamicLang::from_str(&language.to_string()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: e.to_string(),
+            },
+        })?,
+    );
 
     if let Some(selector_config) = &selector_config {
         let matches: Vec<_> = ast_grep
@@ -217,7 +227,7 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use ast_grep_language::SupportLang;
+    use codemod_ast_grep_dynamic_lang::DynamicLang;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -278,7 +288,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,
@@ -315,7 +325,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,
@@ -353,7 +363,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,
@@ -391,7 +401,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,
@@ -432,7 +442,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,
@@ -467,7 +477,7 @@ function example() {
         let result = execute_codemod_with_quickjs(
             nonexistent_path,
             resolver,
-            SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             None,

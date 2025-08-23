@@ -1,4 +1,4 @@
-use crate::engine::{create_engine, create_registry_client};
+use crate::engine::{create_download_progress_callback, create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
@@ -112,6 +112,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.allow_dirty,
         params,
         args.registry.clone(),
+        Some(create_download_progress_callback()),
     )?;
 
     run_workflow(&engine, config).await?;

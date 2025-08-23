@@ -1,5 +1,5 @@
 use crate::dirty_git_check;
-use crate::engine::create_progress_callback;
+use crate::engine::{create_download_progress_callback, create_progress_callback};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::Result;
@@ -19,7 +19,6 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
@@ -78,78 +77,95 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let config = CodemodExecutionConfig {
         pre_run_callback: None,
         progress_callback: Arc::new(Some(create_progress_callback())),
+        download_progress_callback: Some(create_download_progress_callback()),
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,
         exclude_globs: None,
         dry_run: args.dry_run,
-        languages: Some(vec![args.language.clone()]),
+        languages: Some(vec![args.language.clone().parse().unwrap()]),
     };
 
     let started = Instant::now();
 
-    let _ = config.execute(|file_path, _config| {
-        // Only process files
-        if !file_path.is_file() {
-            return;
-        }
+    let _ = config
+        .execute(|file_path, _config| {
+            // Only process files
+            if !file_path.is_file() {
+                return;
+            }
 
-        info!("Processing file with JS AST grep: {}", file_path.display());
+            info!("Processing file with JS AST grep: {}", file_path.display());
 
-        // Use a tokio runtime to handle the async execution within the sync callback
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            // Read file content
-            let content = match tokio::fs::read_to_string(&file_path).await {
-                Ok(content) => content,
-                Err(e) => {
-                    warn!("Failed to read file {}: {}", file_path.display(), e);
-                    return;
-                }
-            };
+            // Use a tokio runtime to handle the async execution within the sync callback
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                // Read file content
+                let content = match tokio::fs::read_to_string(&file_path).await {
+                    Ok(content) => content,
+                    Err(e) => {
+                        warn!("Failed to read file {}: {}", file_path.display(), e);
+                        return;
+                    }
+                };
 
-            // Execute the codemod on this file
-            match execute_codemod_with_quickjs(
-                js_file_path,
-                resolver.clone(),
-                args.language
-                    .clone()
-                    .parse()
-                    .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
-                file_path,
-                &content,
-                None,
-            )
-            .await
-            {
-                Ok(execution_output) => {
-                    // Handle the execution output (write back if modified and not dry run)
-                    if let ExecutionResult::Modified(ref new_content) = execution_output {
-                        if !config.dry_run {
-                            if let Err(e) = tokio::fs::write(&file_path, new_content).await {
-                                error!(
-                                    "Failed to write modified file {}: {}",
-                                    file_path.display(),
-                                    e
-                                );
-                            } else {
-                                debug!("Modified file: {}", file_path.display());
+                // Execute the codemod on this file
+                match execute_codemod_with_quickjs(
+                    js_file_path,
+                    filesystem.clone(),
+                    resolver.clone(),
+                    args.language
+                        .clone()
+                        .parse()
+                        .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
+                    file_path,
+                    &content,
+                )
+                .await
+                {
+                    Ok(execution_output) => {
+                        // Handle the execution output (write back if modified and not dry run)
+                        if let Some(ref new_content) = execution_output.content {
+                            if new_content != &content {
+                                if !config.dry_run {
+                                    if let Err(e) = tokio::fs::write(&file_path, new_content).await
+                                    {
+                                        error!(
+                                            "Failed to write modified file {}: {}",
+                                            file_path.display(),
+                                            e
+                                        );
+                                    } else {
+                                        debug!("Modified file: {}", file_path.display());
+                                    }
+                                } else if config.dry_run {
+                                    debug!("Would modify file (dry run): {}", file_path.display());
+                                }
                             }
                         } else if config.dry_run {
                             debug!("Would modify file (dry run): {}", file_path.display());
                         }
+
+                        // Handle execution errors
+                        if let Some(ref error_msg) = execution_output.error {
+                            warn!(
+                                "Execution completed with error for {}: {}",
+                                file_path.display(),
+                                error_msg
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to execute codemod on {}: {:?}",
+                            file_path.display(),
+                            e
+                        );
                     }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to execute codemod on {}:\n{:?}",
-                        file_path.display(),
-                        e
-                    );
-                }
-            }
-        });
-    });
+            });
+        })
+        .await;
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
