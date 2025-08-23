@@ -11,6 +11,7 @@ members = [
     "crates/mcp",
     "crates/testing-utils",
     "xtask",
+    "crates/codemod-ast-grep-dynamic-lang",
 ]
 resolver = "2"
 
@@ -37,6 +38,7 @@ codemod-telemetry = { path = "crates/telemetry" }
 codemod-mcp = { path = "crates/mcp" }
 testing-utils = { path = "crates/testing-utils" }
 rmcp = { version = "0.6", features = ["server"] }
+codemod-ast-grep-dynamic-lang = { path = "crates/codemod-ast-grep-dynamic-lang" }
 
 anyhow = "1.0"
 ast-grep-core = "0.38.6"
