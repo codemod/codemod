@@ -14,7 +14,7 @@ use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
-use codemod_sandbox::tree_sitter::SupportedLanguage;
+use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, warn};
@@ -27,7 +27,6 @@ use std::{
     time::Instant,
     time::Instant,
 };
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
@@ -139,6 +138,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     };
 
     let started = Instant::now();
+    let _ = load_tree_sitter(
+        config.languages.as_ref().unwrap(),
+        Some(create_download_progress_callback().callback.clone()),
+    )
+    .await;
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;

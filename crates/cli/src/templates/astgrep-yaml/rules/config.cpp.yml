@@ -1,0 +1,10 @@
+# Codemod Studio uses ast-grep to match and rewrite code.
+# https://ast-grep.github.io/guide/rule-config.html#rule
+id: modernize-raw-pointers
+language: cpp
+rule:
+  any:
+    - pattern: $TYPE* $VAR = new $CONSTRUCTOR($$$ARGS)
+    - pattern: $TYPE* $VAR = new $TYPE[$SIZE]
+fix: |
+  auto $VAR = std::make_unique<$TYPE>($ARGS)

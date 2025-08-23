@@ -1,0 +1,7 @@
+id: angular-find-ngclass-binding
+language: angular
+rule:
+  kind: property_binding
+  has:
+    kind: binding_name
+    regex: ^ngClass$

@@ -1,0 +1,10 @@
+# Codemod Studio uses ast-grep to match and rewrite code.
+# https://ast-grep.github.io/guide/rule-config.html#rule
+id: replace-console-log
+language: typescript
+rule:
+  any:
+    - pattern: console.log($ARG)
+    - pattern: console.debug($ARG)
+fix:
+  logger.log($ARG)
