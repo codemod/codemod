@@ -41,6 +41,7 @@ rand = "0.9.2"
 codemod-llrt-capabilities = { workspace = true }
 anyhow.workspace = true
 codemod-ast-grep-dynamic-lang = { workspace = true }
+serial_test = "3.2.0"
 
 [dev-dependencies]
 tempfile = { workspace = true }
