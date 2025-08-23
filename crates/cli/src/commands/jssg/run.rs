@@ -1,4 +1,4 @@
-use crate::engine::create_progress_callback;
+use crate::engine::{create_download_progress_callback, create_progress_callback};
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
@@ -23,7 +23,6 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute

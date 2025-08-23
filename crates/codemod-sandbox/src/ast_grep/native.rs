@@ -6,15 +6,15 @@ use std::{fs, panic};
 use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 
 use crate::ast_grep::scanner::scan_content;
 use crate::ast_grep::types::{AstGrepError, AstGrepMatch};
 use crate::ast_grep::utils::detect_language_from_extension;
 
 pub struct CombinedScanWithRuleConfigs<'a> {
-    pub combined_scan: CombinedScan<'a, SupportLang>,
-    pub rule_refs: Vec<&'a RuleConfig<SupportLang>>,
+    pub combined_scan: CombinedScan<'a, DynamicLang>,
+    pub rule_refs: Vec<&'a RuleConfig<DynamicLang>>,
 }
 
 pub fn with_combined_scan<T>(
@@ -26,7 +26,7 @@ pub fn with_combined_scan<T>(
         .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?;
 
     let combined_scan = CombinedScan::new(rule_configs.iter().collect());
-    let rule_refs: Vec<&RuleConfig<SupportLang>> = rule_configs.iter().collect();
+    let rule_refs: Vec<&RuleConfig<DynamicLang>> = rule_configs.iter().collect();
 
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {
@@ -44,7 +44,7 @@ pub fn with_combined_scan<T>(
 
 pub fn scan_file_with_combined_scan(
     file_path: &Path,
-    combined_scan: &CombinedScan<SupportLang>,
+    combined_scan: &CombinedScan<DynamicLang>,
     apply_fixes: bool,
 ) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
     let content = fs::read_to_string(file_path)?;
@@ -56,7 +56,7 @@ pub fn scan_file_with_combined_scan(
             .unwrap_or_default(),
     )?;
 
-    let language = SupportLang::from_str(language_str)
+    let language = DynamicLang::from_str(language_str)
         .map_err(|_| AstGrepError::Language(format!("Language not supported: {language_str}")))?;
 
     let doc = StrDoc::new(&content, language);

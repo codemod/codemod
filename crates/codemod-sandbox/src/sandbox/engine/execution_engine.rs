@@ -4,20 +4,24 @@ use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
+#[cfg(feature = "native")]
+use crate::tree_sitter::SupportedLanguage;
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
+use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Result of executing a codemod on a single file
@@ -32,10 +36,10 @@ pub enum ExecutionResult {
 pub struct JssgExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    pub language: SupportLang,
+    pub language: SupportedLanguage,
     pub file_path: &'a Path,
     pub content: &'a str,
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<DynamicLang>>>>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
@@ -69,8 +73,27 @@ where
         },
     })?;
 
-    // Create AstGrep instance for the SgRootRjs
-    let ast_grep = AstGrep::new(options.content, options.language);
+    let ast_grep = AstGrep::new(
+        options.content,
+        DynamicLang::from_str(&options.language.to_string()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: e.to_string(),
+            },
+        })?,
+    );
+
+    if let Some(selector_config) = &selector_config {
+        let matches: Vec<_> = ast_grep
+            .root()
+            .dfs()
+            .filter_map(move |node| selector_config.matcher.match_node(node))
+            .collect();
+
+        if matches.is_empty() {
+            return Ok(ExecutionResult::Skipped);
+        }
+    }
+>>>>>>> 7ca8c94e (feat: add dynamic link support)
 
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
@@ -391,7 +414,7 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use ast_grep_language::SupportLang;
+    use codemod_ast_grep_dynamic_lang::DynamicLang;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -452,7 +475,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -493,7 +516,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -535,7 +558,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -577,7 +600,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -622,7 +645,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -661,7 +684,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: nonexistent_path,
             resolver,
-            language: SupportLang::JavaScript,
+            SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,

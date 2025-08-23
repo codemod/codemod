@@ -3,6 +3,7 @@ pub mod capabilities;
 #[cfg(feature = "wasm")]
 mod plugins;
 pub mod sandbox;
+pub mod tree_sitter;
 pub mod utils;
 pub mod workflow_global;
 

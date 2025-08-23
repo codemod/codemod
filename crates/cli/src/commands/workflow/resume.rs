@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::engine::create_engine;
+use crate::engine::{create_download_progress_callback, create_engine};
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::resolve_workflow_source;
 use anyhow::{Context, Result};
@@ -96,6 +96,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
         Some(capabilities),
         args.no_interactive,
+        Some(create_download_progress_callback()),
     )?;
 
     if args.trigger_all {

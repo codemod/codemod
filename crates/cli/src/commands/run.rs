@@ -1,4 +1,4 @@
-use crate::engine::{create_engine, create_registry_client};
+use crate::engine::{create_download_progress_callback, create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
@@ -160,6 +160,7 @@ pub async fn handler(
         args.registry.clone(),
         Some(capabilities),
         args.no_interactive,
+        Some(create_download_progress_callback()),
     )?;
 
     run_workflow(&engine, config).await?;

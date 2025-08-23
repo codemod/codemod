@@ -1,66 +1,61 @@
 use std::collections::HashMap;
 
-#[cfg(feature = "native")]
-use ast_grep_language::SupportLang;
-
 /// Creates a map from SupportLang to their associated file extensions
-pub fn create_language_extension_map() -> HashMap<SupportLang, Vec<&'static str>> {
+pub fn create_language_extension_map() -> HashMap<&'static str, Vec<&'static str>> {
     let mut map = HashMap::new();
 
     #[cfg(feature = "native")]
     {
-        use ast_grep_language::SupportLang::*;
-
-        map.insert(JavaScript, vec![".js", ".mjs", ".cjs", ".jsx"]);
+        map.insert("javascript", vec![".js", ".mjs", ".cjs", ".jsx"]);
         map.insert(
-            TypeScript,
+            "typescript",
             vec![".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"],
         );
         map.insert(
-            Tsx,
+            "tsx",
             vec![".tsx", ".jsx", ".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"],
         );
-        map.insert(Bash, vec![".sh", ".bash", ".zsh", ".fish"]);
-        map.insert(C, vec![".c", ".h"]);
-        map.insert(CSharp, vec![".cs"]);
-        map.insert(Css, vec![".css"]);
+        map.insert("bash", vec![".sh", ".bash", ".zsh", ".fish"]);
+        map.insert("c", vec![".c", ".h"]);
+        map.insert("csharp", vec![".cs"]);
+        map.insert("css", vec![".css"]);
         map.insert(
-            Cpp,
+            "cpp",
             vec![".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++"],
         );
-        map.insert(Elixir, vec![".ex", ".exs"]);
-        map.insert(Go, vec![".go"]);
-        map.insert(Haskell, vec![".hs", ".lhs"]);
-        map.insert(Html, vec![".html", ".htm"]);
-        map.insert(Java, vec![".java"]);
-        map.insert(Json, vec![".json", ".jsonc"]);
-        map.insert(Kotlin, vec![".kt", ".kts"]);
-        map.insert(Lua, vec![".lua"]);
+        map.insert("elixir", vec![".ex", ".exs"]);
+        map.insert("go", vec![".go"]);
+        map.insert("haskell", vec![".hs", ".lhs"]);
+        map.insert("html", vec![".html", ".htm"]);
+        map.insert("java", vec![".java"]);
+        map.insert("json", vec![".json", ".jsonc"]);
+        map.insert("kotlin", vec![".kt", ".kts"]);
+        map.insert("lua", vec![".lua"]);
         map.insert(
-            Php,
+            "php",
             vec![
                 ".php", ".phtml", ".php3", ".php4", ".php5", ".php7", ".phps", ".php-s",
             ],
         );
-        map.insert(Python, vec![".py", ".pyw", ".pyi"]);
-        map.insert(Ruby, vec![".rb", ".rbw"]);
-        map.insert(Rust, vec![".rs"]);
-        map.insert(Scala, vec![".scala", ".sc"]);
-        map.insert(Swift, vec![".swift"]);
-        map.insert(Yaml, vec![".yaml", ".yml"]);
+        map.insert("python", vec![".py", ".pyw", ".pyi"]);
+        map.insert("ruby", vec![".rb", ".rbw"]);
+        map.insert("rust", vec![".rs"]);
+        map.insert("scala", vec![".scala", ".sc"]);
+        map.insert("swift", vec![".swift"]);
+        map.insert("yaml", vec![".yaml", ".yml"]);
     }
 
     map
 }
 
 /// Get file extensions for a specific language
-pub fn get_extensions_for_language(lang: SupportLang) -> Vec<&'static str> {
+pub fn get_extensions_for_language(lang: &str) -> Vec<&'static str> {
     let map = create_language_extension_map();
     map.get(&lang).cloned().unwrap_or_default()
 }
 
 /// Determine language from file extension
-pub fn get_language_from_extension(extension: &str) -> Option<SupportLang> {
+pub fn get_language_from_extension(extension: &str) -> Option<&'static str> {
     let map = create_language_extension_map();
 
     for (lang, extensions) in map.iter() {
@@ -92,17 +87,15 @@ mod tests {
 
         #[cfg(feature = "native")]
         {
-            use ast_grep_language::SupportLang::*;
-            assert!(map.get(&JavaScript).unwrap().contains(&".js"));
-            assert!(map.get(&TypeScript).unwrap().contains(&".ts"));
-            assert!(map.get(&Rust).unwrap().contains(&".rs"));
+            assert!(map.get(&"javascript").unwrap().contains(&".js"));
+            assert!(map.get(&"typescript").unwrap().contains(&".ts"));
+            assert!(map.get(&"rust").unwrap().contains(&".rs"));
         }
     }
 
     #[test]
     fn test_get_extensions_for_language() {
-        use ast_grep_language::SupportLang::*;
-        let js_extensions = get_extensions_for_language(JavaScript);
+        let js_extensions = get_extensions_for_language("javascript");
         assert!(js_extensions.contains(&".js"));
         assert!(js_extensions.contains(&".mjs"));
         assert!(js_extensions.contains(&".cjs"));
