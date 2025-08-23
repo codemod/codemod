@@ -207,7 +207,7 @@ version = "0.39.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "482b9052ee2dd55471941b1fb16a24dd24c314027013e917d99bc5255b8d8e18"
 dependencies = [
- "ast-grep-core 0.39.7",
+ "ast-grep-core",
  "bit-set",
  "globset",
  "regex",
@@ -215,18 +215,6 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror 2.0.16",
-]
-
-[[package]]
-name = "ast-grep-core"
-version = "0.38.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a807991d95797b16ed5bf7431be8d1890dccb8c1b2e560c1f0d983a4f125405d"
-dependencies = [
- "bit-set",
- "regex",
- "thiserror 2.0.16",
- "tree-sitter",
 ]
 
 [[package]]
@@ -247,7 +235,7 @@ version = "0.39.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f11c1b15a9d7ffd7926f1e05caaab715ea266a0e90f4d2608180c6a6a1024a0"
 dependencies = [
- "ast-grep-core 0.39.7",
+ "ast-grep-core",
  "ignore",
  "serde",
  "tree-sitter",
@@ -1084,7 +1072,7 @@ dependencies = [
 name = "codemod-ast-grep-dynamic-lang"
 version = "1.2.1"
 dependencies = [
- "ast-grep-core 0.38.7",
+ "ast-grep-core",
  "ignore",
  "libloading",
  "serde",
@@ -1108,7 +1096,7 @@ name = "codemod-mcp"
 version = "1.2.1"
 dependencies = [
  "anyhow",
- "ast-grep-core 0.39.7",
+ "ast-grep-core",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
  "rmcp",
@@ -1125,7 +1113,7 @@ name = "codemod-sandbox"
 version = "1.2.1"
 dependencies = [
  "ast-grep-config",
- "ast-grep-core 0.39.7",
+ "ast-grep-core",
  "ast-grep-language",
  "bytes",
  "codemod-ast-grep-dynamic-lang",

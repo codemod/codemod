@@ -75,6 +75,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    let download_progress_callback = create_download_progress_callback();
     let (engine, config) = create_engine(
         workflow_file_path,
         target_path,
@@ -84,7 +85,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         None,
         Some(capabilities),
         args.no_interactive,
-        Some(create_download_progress_callback()),
+        Some(download_progress_callback),
     )?;
 
     // Run workflow using the extracted workflow runner

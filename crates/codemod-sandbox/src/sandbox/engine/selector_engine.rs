@@ -1,25 +1,23 @@
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
-use rquickjs::{CatchResultExt, Function, Module};
-use rquickjs::{FromJs, IntoJs};
+use rquickjs::{CatchResultExt, FromJs, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-
-use crate::ast_grep::serde::JsValue;
 use crate::workflow_global::WorkflowGlobalModule;
-
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
-    pub language: SupportLang,
+    pub language: DynamicLang,
     pub resolver: Arc<R>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
@@ -28,7 +26,7 @@ pub struct SelectorEngineOptions<'a, R> {
 /// This executes the getSelector function and converts the result to RuleConfig
 pub async fn extract_selector_with_quickjs<'a, R>(
     options: SelectorEngineOptions<'a, R>,
-) -> Result<Option<Box<RuleConfig<SupportLang>>>, ExecutionError>
+) -> Result<Option<Box<RuleConfig<DynamicLang>>>, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -131,7 +129,7 @@ where
                 })?;
 
             ctx.globals()
-                .set("CODEMOD_LANGUAGE", options.language.to_string())
+                .set("CODEMOD_LANGUAGE", options.language.name())
                 .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: format!("Failed to set language global variable: {e}"),
@@ -198,7 +196,7 @@ where
                         },
                     })?;
 
-                let serializable_config: SerializableRuleConfig<SupportLang> =
+                let serializable_config: SerializableRuleConfig<DynamicLang> =
                     serde_json::from_value(js_value.0)
                         .map_err(|e| ExecutionError::Runtime {
                             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {

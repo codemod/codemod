@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{
     extract_selector_with_quickjs, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
 };
+use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -50,7 +52,7 @@ use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
-
+use serde::Deserialize;
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
     notify: Arc<Notify>,
@@ -79,6 +81,10 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct Rule {
+    language: String,
+}
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -1541,6 +1547,24 @@ impl Engine {
         }
 
         let config_path_clone = config_path.clone();
+        let config_content = tokio::fs::read_to_string(&config_path_clone).await?;
+        let mut languages = Vec::new();
+        for content in config_content.split("---") {
+            let parsed = serde_yaml::Deserializer::from_str(content);
+            let rule = Rule::deserialize(parsed)
+                .map_err(|e| Error::StepExecution(format!("Failed to parse rule: {e:?}")))?;
+            languages.push(SupportedLanguage::from_str(&rule.language).unwrap());
+        }
+
+        let _ = load_tree_sitter(
+            &languages,
+            self.workflow_run_config
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| Error::StepExecution(format!("Failed to load tree-sitter language: {e:?}")))?;
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
@@ -1551,10 +1575,6 @@ impl Engine {
                 let execution_config = CodemodExecutionConfig {
                     pre_run_callback: None,
                     progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    download_progress_callback: self
-                        .workflow_run_config
-                        .download_progress_callback
-                        .clone(),
                     target_path: Some(self.workflow_run_config.target_path.clone()),
                     base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
@@ -1575,7 +1595,7 @@ impl Engine {
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                let _ = execution_config.execute(|path, config| {
+                execution_config.execute(|path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
@@ -1635,7 +1655,7 @@ impl Engine {
                         let callback = callback.callback.clone();
                         callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
                     }
-                });
+                })?;
 
                 Ok(())
             },
@@ -1702,10 +1722,24 @@ impl Engine {
                 }
             })),
         };
+        let _ = load_tree_sitter(
+            &[js_ast_grep
+                .language
+                .clone()
+                .unwrap_or("typescript".to_string())
+                .parse()
+                .unwrap()],
+            self.workflow_run_config
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| Error::StepExecution(format!("Failed to load tree-sitter language: {e:?}")))?;
+
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
             progress_callback: self.workflow_run_config.progress_callback.clone(),
-            download_progress_callback: self.workflow_run_config.download_progress_callback.clone(),
             target_path: Some(self.workflow_run_config.target_path.clone()),
             base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
             include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
@@ -1859,7 +1893,6 @@ impl Engine {
                     );
                 }
             })
-            .await
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
         Ok(())

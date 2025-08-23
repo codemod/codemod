@@ -14,6 +14,7 @@ use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, warn};
@@ -21,8 +22,12 @@ use std::sync::Arc;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Instant,
     time::Instant,
 };
+
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
