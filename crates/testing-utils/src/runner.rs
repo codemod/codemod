@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::future::Future;
@@ -78,22 +79,27 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        language: DynamicLang,
     ) -> Result<TestSummary> {
         if self.options.watch {
-            return self.run_with_watch(extensions, execution_fn).await;
+            return self
+                .run_with_watch(extensions, execution_fn, language)
+                .await;
         }
 
-        self.run_tests_once(extensions, execution_fn).await
+        self.run_tests_once(extensions, execution_fn, language)
+            .await
     }
 
     async fn run_tests_once<'a>(
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        language: DynamicLang,
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
-            .to_unified_test_cases(extensions)
+            .to_unified_test_cases(extensions, language)
             .map_err(|e| anyhow::anyhow!("Failed to load test cases: {}", e))?;
 
         if test_cases.is_empty() {
@@ -283,10 +289,13 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        language: DynamicLang,
     ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
 
-        let initial_summary = self.run_tests_once(extensions, execution_fn).await?;
+        let initial_summary = self
+            .run_tests_once(extensions, execution_fn, language)
+            .await?;
 
         println!("Watch mode not fully implemented yet. Use --no-watch for now.");
 

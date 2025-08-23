@@ -4,10 +4,14 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    execution::{DownloadProgressCallback, ProgressCallback},
-    registry::RegistryClient,
-};
+use crate::{execution::ProgressCallback, registry::RegistryClient};
+
+type DownloadProgressCallbackFn = Box<dyn Fn(u64, u64) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct DownloadProgressCallback {
+    pub callback: Arc<DownloadProgressCallbackFn>,
+}
 
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
