@@ -1042,6 +1042,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "codemod-ai"
 version = "1.2.1"
 dependencies = [
@@ -1074,6 +1075,20 @@ dependencies = [
  "llrt_modules",
  "serde",
  "ts-rs",
+]
+
+[[package]]
+name = "codemod-ast-grep-dynamic-lang"
+version = "1.0.8"
+dependencies = [
+ "ast-grep-core",
+ "ignore",
+ "libloading",
+ "serde",
+ "serde_yaml",
+ "target-triple",
+ "thiserror 2.0.16",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -8014,6 +8029,12 @@ dependencies = [
  "libc",
  "xattr",
 ]
+
+[[package]]
+name = "target-triple"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
 
 [[package]]
 name = "tempfile"
