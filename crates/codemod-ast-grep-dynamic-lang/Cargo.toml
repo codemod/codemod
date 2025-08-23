@@ -1,0 +1,22 @@
+[package]
+name = "codemod-ast-grep-dynamic-lang"
+edition = "2021"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+ast-grep-core = "0.38.6"
+ignore.workspace = true
+libloading = "0.8.8"
+serde.workspace = true
+target-triple = "0.1.4"
+thiserror.workspace = true
+tree-sitter = "0.25.6"
+
+[dev-dependencies]
+serde_yaml.workspace = true
