@@ -11,6 +11,13 @@ use crate::{
 use anyhow::Result;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
+type DownloadProgressCallbackFn = Box<dyn Fn(u64, u64) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct DownloadProgressCallback {
+    pub callback: Arc<DownloadProgressCallbackFn>,
+}
+
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,

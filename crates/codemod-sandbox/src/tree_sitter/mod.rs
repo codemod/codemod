@@ -10,6 +10,8 @@ use tokio_stream::StreamExt;
 
 use crate::sandbox::engine::language_data::get_extensions_for_language;
 
+pub type ProgressCallback = Arc<Box<dyn Fn(u64, u64) + Send + Sync>>;
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct ReadyLang {
     language: SupportedLanguage,
@@ -21,7 +23,7 @@ pub const BASE_URL: &str = env!("TREE_SITTER_BASE_URL");
 
 pub async fn load_tree_sitter(
     languages: &[SupportedLanguage],
-    progress_callback: Option<Arc<Box<dyn Fn(u64, u64) + Send + Sync>>>,
+    progress_callback: Option<ProgressCallback>,
 ) -> Result<Vec<DynamicLang>, String> {
     let mut ready_langs = HashSet::new();
     for language in languages {

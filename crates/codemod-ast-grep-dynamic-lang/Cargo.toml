@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-ast-grep-core = "0.38.6"
+ast-grep-core.workspace = true
 ignore.workspace = true
 libloading = "0.8.8"
 serde.workspace = true

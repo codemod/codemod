@@ -1,7 +1,6 @@
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
-    sandbox::engine::language_data::get_extensions_for_language,
-    tree_sitter::{load_tree_sitter, SupportedLanguage},
+    sandbox::engine::language_data::get_extensions_for_language, tree_sitter::SupportedLanguage,
 };
 use ignore::{
     overrides::{Override, OverrideBuilder},
@@ -31,12 +30,6 @@ pub struct ProgressCallback {
     pub callback: Arc<ProgressCallbackFn>,
 }
 
-type DownloadProgressCallbackFn = Box<dyn Fn(u64, u64) + Send + Sync>;
-
-#[derive(Clone)]
-pub struct DownloadProgressCallback {
-    pub callback: Arc<DownloadProgressCallbackFn>,
-}
 /// Shared execution context to minimize Arc cloning in parallel processing
 struct SharedExecutionContext<'a, F>
 where
@@ -56,8 +49,6 @@ pub struct CodemodExecutionConfig {
     pub pre_run_callback: Option<PreRunCallback>,
     /// Callback to report progress
     pub progress_callback: Arc<Option<ProgressCallback>>,
-    /// Callback to download progress
-    pub download_progress_callback: Option<DownloadProgressCallback>,
     /// Path to the target file or directory
     pub target_path: Option<PathBuf>,
     /// Path to the base directory relative to the target path
@@ -78,11 +69,11 @@ pub struct CodemodExecutionConfig {
 
 impl CodemodExecutionConfig {
     /// Execute the codemod by iterating through files and calling the provided callback
-    pub async fn execute<F>(&self, callback: F) -> Result<(), Box<dyn Error>>
+    pub fn execute<F>(&self, callback: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
     {
-        self.execute_with_task_id("main", callback).await
+        self.execute_with_task_id("main", callback)
     }
 
     /// Execute the codemod with a specific task ID for progress tracking
@@ -110,6 +101,7 @@ impl CodemodExecutionConfig {
         )
         .await?;
 
+        // Pre-scan to count total files for accurate progress reporting
         let total_files = self.count_files(&search_base, &globs)?;
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
