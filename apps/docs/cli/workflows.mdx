@@ -205,42 +205,6 @@ Codemod Workflows can be run using [Codemod CLI](/cli/cli-reference) or [Codemod
       You can combine different codemod types in a single package by placing each type under its required directory (e.g., `scripts/` for shell scripts, `rules/` for ast-grep rules) and referencing them from `workflow.yaml`. This allows you to orchestrate complex, multi-step migrations using the best tool for each job.
     </Info>
   </Step>
-  <Step title="Understand an example workflow">
-    The generated `workflow.yaml` (when you choose the YAML-based ast-grep codemod for JavaScript/TypeScript) defines a simple workflow that applies an ast-grep rule to all TypeScript files in the `src/` directory (excluding test files):
-
-    ```yaml
-    version: "1"
-    nodes:
-      - id: apply-rules
-        name: Apply ast-grep Rules
-        steps:
-          - name: "Scan TypeScript files only"
-            ast-grep:
-              include:
-                - "**/*.ts"
-                - "**/*.tsx"
-              exclude:
-                - "**/*.test.ts"
-                - "**/*.spec.ts"
-              base_path: "src"
-              config_file: "rules/config.yml"
-    ```
-
-    The referenced `rules/config.yml` contains an example rule:
-
-    ```yaml
-    id: replace-console-log
-    language: javascript
-    rule:
-      any:
-        - pattern: console.log($ARG)
-        - pattern: console.debug($ARG)
-    fix:
-      logger.log($ARG)
-    ```
-
-    This rule will replace all `console.log(...)` and `console.debug(...)` calls with `logger.log(...)` in your TypeScript/JavaScript files.
-  </Step>
   <Step title="Validate & run your workflow">
     ```bash
     npx codemod workflow validate -w workflow.yaml
@@ -511,15 +475,7 @@ nodes:
 
 <AccordionGroup>
   <Accordion title="Container Runtimes">
-    You can specify how a node or template runs:
-
-    ```yaml
-    runtime:
-      type: docker
-      image: node:18-alpine
-    ```
-
-    Supported types: `docker`, `podman`, `direct` (host shell).
+    Planned feature: containerized execution (e.g., Docker/Podman). Currently, workflows run in the host shell. When available, you'll be able to specify a runtime per node or template.
   </Accordion>
   <Accordion title="State Management & Persistence">
     <Info>
@@ -561,63 +517,6 @@ nodes:
     </Info>
   </Accordion>
 </AccordionGroup>
-
----
-
-## End-to-End Example
-
-This comprehensive workflow demonstrates state management, templates, matrix strategies, and manual triggers:
-
-```yaml
-version: "1"
-state:
-  schema:
-    - name: shards
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shardId: { type: string }
-templates:
-  - id: checkout-repo
-    name: Checkout Repository
-    inputs:
-      - name: repo_url
-        type: string
-        required: true
-    steps:
-      - name: Clone
-        run: git clone ${{inputs.repo_url}} repo
-nodes:
-  - id: make-shards
-    name: Make Shards
-    type: automatic
-    steps:
-      - name: Write shards
-        run: echo 'shards@={"team":"core","shardId":"1"}' >> "$STATE_OUTPUTS"
-  - id: matrix-codemod
-    name: Matrix Codemod
-    strategy:
-      type: matrix
-      from_state: shards
-    trigger:
-      type: manual
-    steps:
-      - name: Codemod
-        run: node codemod.js --team=$team --shard=$shardId
-      - name: PR
-        run: codemodctl pr create
-```
-
-**What this workflow does:**
-
-1. **State Management**: Defines a `shards` array to store team and shard information
-2. **Template Reuse**: Creates a reusable `checkout-repo` template for cloning repositories
-3. **Dynamic State**: The `make-shards` node populates the state with shard data
-4. **Matrix Execution**: The `matrix-codemod` node creates parallel tasks for each shard
-5. **Manual Gates**: Requires approval before running the codemod on each shard
-6. **Multi-step Tasks**: Each matrix task runs both the codemod and creates a PR
 
 ---
 
@@ -663,19 +562,150 @@ nodes:
 
 ---
 
+## Examples
+
+<Tabs>
+  <Tab title="Workflow Orchestration (Matrix + Manual)">
+    This comprehensive workflow demonstrates state management, templates, matrix strategies, and manual triggers:
+
+    ```yaml
+    version: "1"
+    state:
+      schema:
+        - name: shards
+          type: array
+          items:
+            type: object
+            properties:
+              team: { type: string }
+              shardId: { type: string }
+    templates:
+      - id: checkout-repo
+        name: Checkout Repository
+        inputs:
+          - name: repo_url
+            type: string
+            required: true
+        steps:
+          - name: Clone
+            run: git clone ${{inputs.repo_url}} repo
+    nodes:
+      - id: make-shards
+        name: Make Shards
+        type: automatic
+        steps:
+          - name: Write shards
+            run: echo 'shards@={"team":"core","shardId":"1"}' >> "$STATE_OUTPUTS"
+      - id: matrix-codemod
+        name: Matrix Codemod
+        strategy:
+          type: matrix
+          from_state: shards
+        trigger:
+          type: manual
+        steps:
+          - name: Codemod
+            run: node codemod.js --team=$team --shard=$shardId
+          - name: PR
+            run: codemodctl pr create
+    ```
+
+    **What this workflow does:**
+
+    1. **State Management**: Defines a `shards` array to store team and shard information
+    2. **Template Reuse**: Creates a reusable `checkout-repo` template for cloning repositories
+    3. **Dynamic State**: The `make-shards` node populates the state with shard data
+    4. **Matrix Execution**: The `matrix-codemod` node creates parallel tasks for each shard
+    5. **Manual Gates**: Requires approval before running the codemod on each shard
+    6. **Multi-step Tasks**: Each matrix task runs both the codemod and creates a PR
+  </Tab>
+  <Tab title="Migration Recipes">
+    <Steps>
+      <Step title="Scaffold a new workflow package">
+        ```bash
+        npx codemod init migration-recipe
+        cd migration-recipe
+        ```
+
+        When prompted, choose a `Shell command workflow codemod`.
+      </Step>
+
+      <Step title="Populate package manifest (codemod.yaml)">
+        ```yaml codemod.yaml
+        name: @your-scope/migration-recipe
+        version: 1.0.0
+        workflow: "workflow.yaml"
+        ```
+
+        This links your package to the workflow definition.
+      </Step>
+
+      <Step title="Author the recipe workflow (workflow.yaml)">
+        Chain Registry codemods as ordered steps. Use npx to call packages. Keep it minimal:
+
+        ```yaml workflow.yaml
+        version: "1"
+        nodes:
+          - id: migrate
+            name: Migration Recipe
+            type: automatic
+            steps:
+              - name: Step 1
+                run: npx -y codemod@latest <registry-package-1> -t /abs/path/to/repo
+              - name: Step 2
+                run: npx -y codemod@latest <registry-package-2> -t /abs/path/to/repo
+        ```
+
+        Notes:
+        - Replace `<registry-package-1>` and `<registry-package-2>` with names from the Registry.
+        - Pin versions by suffixing `@<version>`.
+      </Step>
+
+      <Step title="Validate the workflow">
+        ```bash
+        npx codemod workflow validate -w ./workflow.yaml
+        ```
+      </Step>
+
+      <Step title="Run the recipe on a repo">
+        Pass a target path:
+
+        ```bash
+        npx codemod workflow run -w ./workflow.yaml -t /abs/path/to/repo
+        ```
+      </Step>
+
+      <Step title="(Optional) Publish and run from the Registry">
+        ```bash
+        # Publish from the package directory
+        npx codemod publish
+
+        # Later, run anywhere (use -t for target)
+        npx codemod @your-scope/migration-recipe -t /abs/path/to/repo
+        ```
+      </Step>
+
+      <Step title="Tips">
+        - For packages that require the legacy runner, call: `npx codemod@legacy <name> --target <path>`
+        - Order matters: steps run top-to-bottom.
+        - Use `env:` at the node/step if environment variables are required.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
 ## Roadmap
 
-<Update description="Container runtime support">
-  Support for `runtime: docker` and other container runtimes, allowing tasks to run in isolated environments.
-</Update>
-
-<Update description="Parameter flags">
-  Ability to pass parameters to workflows via `--param key=value` flags.
-</Update>
-
-<Update description="Nested matrix strategies">
-  Support for matrix strategies within matrix strategies, enabling more complex task fan-out.
-</Update>
+<Steps>
+  <Step title="Container runtime support" icon="flag-pennant">
+    Support for `runtime: docker` and other container runtimes, allowing tasks to run in isolated environments.
+  </Step>
+  <Step title="Nested matrix strategies" icon="flag-pennant">
+    Support for matrix strategies within matrix strategies, enabling more complex task fan-out.
+  </Step>
+</Steps>
 
 ## Next Steps
 

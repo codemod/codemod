@@ -71,11 +71,11 @@ Run a workflow.
 <CodeGroup>
 
 ```bash Running a local workflow
-npx codemod workflow run -w <workflow.yaml|directory> [--param key=value]
+npx codemod workflow run -w <workflow.yaml|directory>
 ```
 
 ```bash Running a workflow from Codemod Registry
-npx codemod workflow run <package-name> [--param key=value]
+npx codemod <package-name>
 ```
 
 </CodeGroup>
@@ -90,11 +90,6 @@ npx codemod workflow run <package-name> [--param key=value]
   Path to workflow file or directory.
 </ResponseField>
 
-<ResponseField name="--param <KEY=VALUE>" type="string">
-  Workflow parameters (format: key=value).
-</ResponseField>
-
-
 <Accordion title="Examples">
 
 **Running a local workflow**:
@@ -106,8 +101,9 @@ npx codemod workflow run -w ./my-workflow.yaml
 # Run a workflow from a local directory
 npx codemod workflow run -w ./my-codemod
 
-# Run with parameters
-npx codemod workflow run -w ./my-codemod --param version=latest --param target=src
+
+# Specify a target directory
+npx codemod workflow run -w ./my-codemod -t /abs/path/to/repo
 ```
 
 **Running a workflow from the registry**:
@@ -116,8 +112,8 @@ npx codemod workflow run -w ./my-codemod --param version=latest --param target=s
 # Run a workflow package from the registry
 npx codemod @codemod-com/my-test-pkg
 
-# Run with parameters
-npx codemod @codemod-com/my-test-pkg --param version=latest --param target=src
+# Specify a target directory
+npx codemod @codemod-com/my-test-pkg -t /abs/path/to/repo
 ```
 
 Explore available packages on [Codemod Registry](https://app.codemod.com/registry).
