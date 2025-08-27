@@ -5,6 +5,9 @@ use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
+use butterflow_core::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
@@ -124,25 +127,26 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         })),
     };
 
-    let config = CodemodExecutionConfig {
-        pre_run_callback: Some(pre_run_callback),
-        progress_callback: Arc::new(Some(create_progress_callback())),
-        target_path: Some(target_directory.to_path_buf()),
-        base_path: None,
-        include_globs: None,
-        exclude_globs: None,
-        dry_run: args.dry_run,
-        languages: Some(vec![args.language.clone()]),
-        threads: args.max_threads,
-        capabilities: Some(capabilities),
-    };
-
-    let started = Instant::now();
-    let _ = load_tree_sitter(
-        config.languages.as_ref().unwrap(),
-        Some(create_download_progress_callback().callback.clone()),
+    let config = CodemodExecutionConfig::new(
+        Some(pre_run_callback),
+        ProgressCallbackCodemodExecutionConfig {
+            progress_callback: Arc::new(Some(create_progress_callback())),
+            download_progress_callback: Some(create_download_progress_callback()),
+        },
+        Some(target_directory.to_path_buf()),
+        None,
+        GlobsCodemodExecutionConfig {
+            include_globs: None,
+            exclude_globs: None,
+        },
+        args.dry_run,
+        Some(vec![args.language.clone()]),
+        args.max_threads,
+        Some(capabilities),
     )
     .await;
+
+    let started = Instant::now();
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
