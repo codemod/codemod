@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use butterflow_core::config::{DownloadProgressCallback, PreRunCallback, WorkflowRunConfig};
+use butterflow_core::config::{PreRunCallback, WorkflowRunConfig};
 use butterflow_core::engine::Engine;
-use butterflow_core::execution::ProgressCallback;
+use butterflow_core::execution::{DownloadProgressCallback, ProgressCallback};
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
