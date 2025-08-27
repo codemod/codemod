@@ -7,11 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::WorkflowRunConfig;
-use crate::execution::CodemodExecutionConfig;
+use crate::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
-use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -1269,38 +1271,29 @@ impl Engine {
             languages.push(SupportedLanguage::from_str(&rule.language).unwrap());
         }
 
-        let _ = load_tree_sitter(
-            &languages,
-            self.workflow_run_config
-                .download_progress_callback
-                .as_ref()
-                .map(|c| c.callback.clone()),
+        let execution_config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            Some(self.workflow_run_config.target_path.clone()),
+            ast_grep.base_path.as_deref().map(PathBuf::from),
+            GlobsCodemodExecutionConfig {
+                include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            self.workflow_run_config.dry_run,
+            Some(languages),
         )
-        .await
-        .map_err(|e| Error::StepExecution(format!("Failed to load tree-sitter language: {e:?}")))?;
+        .await;
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
             |combined_scan_with_rule| {
-                let rule_refs = combined_scan_with_rule.rule_refs.clone();
-                let languages = rule_refs.iter().map(|r| r.language).collect::<Vec<_>>();
-
-                let execution_config = CodemodExecutionConfig {
-                    pre_run_callback: None,
-                    progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    target_path: Some(self.workflow_run_config.target_path.clone()),
-                    base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
-                    include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
-                    exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-                    dry_run: self.workflow_run_config.dry_run,
-                    languages: Some(
-                        languages
-                            .iter()
-                            .map(|l| l.name().parse().unwrap())
-                            .collect(),
-                    ),
-                };
-
                 // Clone variables needed in the closure
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
@@ -1418,36 +1411,30 @@ impl Engine {
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
         );
 
-        let _ = load_tree_sitter(
-            &[js_ast_grep
-                .language
-                .clone()
-                .unwrap_or("typescript".to_string())
-                .parse()
-                .unwrap()],
-            self.workflow_run_config
-                .download_progress_callback
-                .as_ref()
-                .map(|c| c.callback.clone()),
-        )
-        .await
-        .map_err(|e| Error::StepExecution(format!("Failed to load tree-sitter language: {e:?}")))?;
-
-        let config = CodemodExecutionConfig {
-            pre_run_callback: None,
-            progress_callback: self.workflow_run_config.progress_callback.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
-            base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
-            include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
-            exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-            dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
-            languages: Some(vec![js_ast_grep
+        let config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            Some(self.workflow_run_config.target_path.clone()),
+            None,
+            GlobsCodemodExecutionConfig {
+                include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
+            Some(vec![js_ast_grep
                 .language
                 .clone()
                 .unwrap_or("typescript".to_string())
                 .parse()
                 .unwrap()]),
-        };
+        )
+        .await;
 
         // Set language first to get default extensions
         let language = if let Some(lang_str) = &js_ast_grep.language {
