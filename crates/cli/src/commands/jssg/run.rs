@@ -3,7 +3,9 @@ use crate::engine::{create_download_progress_callback, create_progress_callback}
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::Result;
-use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
@@ -78,23 +80,24 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
-    let config = CodemodExecutionConfig {
-        pre_run_callback: None,
-        progress_callback: Arc::new(Some(create_progress_callback())),
-        target_path: Some(target_directory.to_path_buf()),
-        base_path: None,
-        include_globs: None,
-        exclude_globs: None,
-        dry_run: args.dry_run,
-        languages: Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
-    };
-
-    let started = Instant::now();
-    let _ = load_tree_sitter(
-        config.languages.as_ref().unwrap(),
-        Some(create_download_progress_callback().callback.clone()),
+    let config = CodemodExecutionConfig::new(
+        None,
+        ProgressCallbackCodemodExecutionConfig {
+            progress_callback: Arc::new(Some(create_progress_callback())),
+            download_progress_callback: Some(create_download_progress_callback()),
+        },
+        Some(target_directory.to_path_buf()),
+        None,
+        GlobsCodemodExecutionConfig {
+            include_globs: None,
+            exclude_globs: None,
+        },
+        args.dry_run,
+        Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
     )
     .await;
+
+    let started = Instant::now();
 
     let _ = config.execute(|file_path, _config| {
         // Only process files

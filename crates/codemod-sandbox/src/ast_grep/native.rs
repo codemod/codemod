@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::{fs, panic};
 
-use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
+use ast_grep_config::{from_yaml_string, CombinedScan};
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
 use codemod_ast_grep_dynamic_lang::DynamicLang;
@@ -14,7 +14,6 @@ use crate::ast_grep::utils::detect_language_from_extension;
 
 pub struct CombinedScanWithRuleConfigs<'a> {
     pub combined_scan: CombinedScan<'a, DynamicLang>,
-    pub rule_refs: Vec<&'a RuleConfig<DynamicLang>>,
 }
 
 pub fn with_combined_scan<T>(
@@ -26,16 +25,12 @@ pub fn with_combined_scan<T>(
         .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?;
 
     let combined_scan = CombinedScan::new(rule_configs.iter().collect());
-    let rule_refs: Vec<&RuleConfig<DynamicLang>> = rule_configs.iter().collect();
 
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {
         // Silently ignore panics during ast-grep scanning
     }));
-    let result = f(&CombinedScanWithRuleConfigs {
-        combined_scan,
-        rule_refs,
-    })?;
+    let result = f(&CombinedScanWithRuleConfigs { combined_scan })?;
     // Restore the original panic hook
     panic::set_hook(original_hook);
 
