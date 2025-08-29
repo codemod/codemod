@@ -227,7 +227,7 @@ async fn main() -> Result<()> {
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {
             WorkflowCommands::Run(args) => {
-                commands::workflow::run::handler(args).await?;
+                commands::workflow::run::handler(args, telemetry_sender.as_ref()).await?;
             }
             WorkflowCommands::Resume(args) => {
                 commands::workflow::resume::handler(args).await?;
@@ -250,7 +250,7 @@ async fn main() -> Result<()> {
                 args.clone().run().await?;
             }
             JssgCommands::Run(args) => {
-                commands::jssg::run::handler(args).await?;
+                commands::jssg::run::handler(args, telemetry_sender.as_ref()).await?;
             }
             JssgCommands::Test(args) => {
                 commands::jssg::test::handler(args).await?;

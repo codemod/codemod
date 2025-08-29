@@ -5,7 +5,9 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use log::{debug, error, info, warn};
+use rand::Rng;
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -14,6 +16,7 @@ use std::{
 use crate::dirty_git_check;
 use crate::engine::create_progress_callback;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
+use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -41,7 +44,7 @@ pub struct Command {
     pub allow_dirty: bool,
 }
 
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<()> {
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path
@@ -159,6 +162,32 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    let execution_id: [u8; 20] = rand::thread_rng().gen();
+    let execution_id = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        execution_id,
+    );
+    let cli_version = env!("CARGO_PKG_VERSION");
+
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "localJssgExecuted".to_string(),
+                properties: HashMap::from([
+                    ("executionId".to_string(), execution_id.clone()),
+                    ("runTimeSeconds".to_string(), seconds.to_string()),
+                    ("language".to_string(), args.language.clone()),
+                    ("dirtyRun".to_string(), args.allow_dirty.to_string()),
+                    ("dryRun".to_string(), args.dry_run.to_string()),
+                    ("cliVersion".to_string(), cli_version.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
 
     Ok(())
 }
