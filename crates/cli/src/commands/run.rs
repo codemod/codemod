@@ -116,8 +116,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     run_workflow(&engine, config).await?;
 
     let cli_version = env!("CARGO_PKG_VERSION");
-    let telemetry_sender = telemetry.lock().await;
-    telemetry_sender
+    telemetry
         .send_event(
             BaseEvent {
                 kind: "failedToExecuteCommand".to_string(),
@@ -151,7 +150,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         execution_id,
     );
 
-    telemetry_sender
+    telemetry
         .send_event(
             BaseEvent {
                 kind: "codemodExecuted".to_string(),

@@ -208,8 +208,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let cli_version = env!("CARGO_PKG_VERSION");
 
-    let telemetry_sender = telemetry.lock().await;
-    telemetry_sender
+    telemetry
         .send_event(
             BaseEvent {
                 kind: "codemodPublished".to_string(),

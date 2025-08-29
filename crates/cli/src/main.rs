@@ -19,7 +19,6 @@ use codemod_telemetry::{
 use std::collections::HashMap;
 use std::panic;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(name = "codemod")]
@@ -153,7 +152,7 @@ fn is_package_name(arg: &str) -> bool {
     !known_commands.contains(&arg)
 }
 
-type TelemetrySenderMutex = Arc<Mutex<Box<dyn TelemetrySender + Send + Sync>>>;
+type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
 
 /// Handle implicit run command from trailing arguments
 async fn handle_implicit_run_command(
@@ -213,37 +212,34 @@ async fn main() -> Result<()> {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
-    let telemetry_sender: Arc<
-        Mutex<Box<dyn codemod_telemetry::send_event::TelemetrySender + Send + Sync>>,
-    > = if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
-        || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-    {
-        Arc::new(Mutex::new(Box::new(NullSender {})))
-    } else {
-        let storage = TokenStorage::new()?;
-        let config = storage.load_config()?;
+    let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
+        if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
+            || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
+        {
+            Arc::new(Box::new(NullSender {}))
+        } else {
+            let storage = TokenStorage::new()?;
+            let config = storage.load_config()?;
 
-        let auth = storage.get_auth_for_registry(&config.default_registry)?;
+            let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-        let distinct_id = auth
-            .map(|auth| auth.user.id)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let distinct_id = auth
+                .map(|auth| auth.user.id)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        Arc::new(Mutex::new(Box::new(
-            PostHogSender::new(TelemetrySenderOptions {
-                distinct_id,
-                cloud_role: "CLI".to_string(),
-            })
-            .await,
-        )))
-    };
+            Arc::new(Box::new(
+                PostHogSender::new(TelemetrySenderOptions {
+                    distinct_id,
+                    cloud_role: "CLI".to_string(),
+                })
+                .await,
+            ))
+        };
 
     let panic_telemetry_sender = telemetry_sender.clone();
-
     panic::set_hook(Box::new(move |panic_info| {
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
 
-        // Extract the panic message before moving into async block
         let panic_message: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
@@ -252,7 +248,6 @@ async fn main() -> Result<()> {
             "Unknown panic occurred".to_string()
         };
 
-        // Extract the location before moving into async block
         let location = if let Some(location) = panic_info.location() {
             format!(
                 "{}:{}:{}",
@@ -267,31 +262,33 @@ async fn main() -> Result<()> {
         let sender = panic_telemetry_sender.clone();
         let cli_version = env!("CARGO_PKG_VERSION");
 
-        tokio::spawn(async move {
-            let _ = sender
-                .lock()
-                .await
-                .send_event(
-                    BaseEvent {
-                        kind: "cliPanic".to_string(),
-                        properties: HashMap::from([
-                            ("timestamp".to_string(), timestamp.to_string()),
-                            ("message".to_string(), panic_message), // Now owned String
-                            ("location".to_string(), location),     // Now owned String
-                            ("cliVersion".to_string(), cli_version.to_string()),
-                            ("os".to_string(), std::env::consts::OS.to_string()),
-                            ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                        ]),
-                    },
-                    None,
-                )
-                .await;
-        });
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let _ = sender
+                    .send_event(
+                        BaseEvent {
+                            kind: "cliPanic".to_string(),
+                            properties: HashMap::from([
+                                ("timestamp".to_string(), timestamp.to_string()),
+                                ("message".to_string(), panic_message),
+                                ("location".to_string(), location),
+                                ("cliVersion".to_string(), cli_version.to_string()),
+                                ("os".to_string(), std::env::consts::OS.to_string()),
+                                ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                            ]),
+                        },
+                        None,
+                    )
+                    .await;
+            });
+        })
+        .join()
+        .unwrap();
 
         std::process::exit(1);
     }));
 
-    // Handle command or implicit run
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {
             WorkflowCommands::Run(args) => {
