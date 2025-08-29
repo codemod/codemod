@@ -404,7 +404,12 @@ npx codemod init [PATH] [options]
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
-  Project type: `shell`, `ast-grep-js`, `ast-grep-yaml`.
+  Project type: `ast-grep-js`.
+
+  <Accordion title="More package types (advanced)">
+    - `shell`: Shell script-based codemods
+    - `ast-grep-yaml`: YAML-based ast-grep codemods
+  </Accordion>
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">
