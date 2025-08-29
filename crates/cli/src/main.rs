@@ -286,7 +286,13 @@ async fn main() -> Result<()> {
         .join()
         .unwrap();
 
-        std::process::exit(1);
+        std::panic::resume_unwind(Box::new(
+            panic_info
+                .payload()
+                .downcast_ref::<String>()
+                .unwrap_or(&"Unknown panic".to_string())
+                .clone(),
+        ));
     }));
 
     match &cli.command {
