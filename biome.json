@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.1.1/schema.json",
   "assist": { "actions": { "source": { "organizeImports": "off" } } },
   "files": {
     "includes": [
@@ -7,7 +7,11 @@
       "!**/__testfixtures__/**",
       "!**/schemas/**",
       "!**/submodules/**",
-      "!crates/cli/src/templates/**"
+      "!crates/cli/src/templates/**",
+      "!**/target/**",
+      "!**/build/**",
+      "!**/.next/**",
+      "!**/dist/**"
     ]
   },
   "linter": {
@@ -24,7 +28,8 @@
       "!**/.next",
       "!**/.vscode",
       "!**/build-ncc",
-      "!**/generated"
+      "!**/generated",
+      "!**/target"
     ],
     "rules": {
       "suspicious": {
@@ -136,7 +141,8 @@
       "!**/*.py",
       "!apps/ai/**",
       "!**/.all-contributorsrc",
-      "!**/__testfixtures__/**"
+      "!**/__testfixtures__/**",
+      "!**/target"
     ]
   }
 }
