@@ -38,6 +38,10 @@ struct Cli {
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     trailing_args: Vec<String>,
+
+    /// Disable telemetry
+    #[arg(long, short)]
+    disable_analytics: bool,
 }
 
 #[derive(Subcommand)]
@@ -203,6 +207,10 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "debug");
     } else {
         std::env::set_var("RUST_LOG", "info");
+    }
+
+    if cli.disable_analytics {
+        std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
     let telemetry_sender: Arc<
