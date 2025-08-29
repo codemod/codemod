@@ -1,22 +1,22 @@
+use crate::dirty_git_check;
+use crate::engine::create_progress_callback;
+use crate::TelemetrySenderMutex;
 use anyhow::Result;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
+use codemod_sandbox::utils::project_discovery::find_tsconfig;
+use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, info, warn};
 use rand::Rng;
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Instant,
 };
-
-use crate::dirty_git_check;
-use crate::engine::create_progress_callback;
-use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -44,7 +44,7 @@ pub struct Command {
     pub allow_dirty: bool,
 }
 
-pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path
@@ -170,7 +170,8 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
     );
     let cli_version = env!("CARGO_PKG_VERSION");
 
-    telemetry
+    let telemetry_sender = telemetry.lock().await;
+    telemetry_sender
         .send_event(
             BaseEvent {
                 kind: "localJssgExecuted".to_string(),

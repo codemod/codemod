@@ -9,13 +9,17 @@ mod dirty_git_check;
 mod engine;
 mod progress_bar;
 mod workflow_runner;
+use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
+use chrono::Utc;
 use codemod_telemetry::{
-    send_event::{PostHogSender, TelemetrySender, TelemetrySenderOptions},
+    send_event::{BaseEvent, PostHogSender, TelemetrySender, TelemetrySenderOptions},
     send_null::NullSender,
 };
-
-use crate::auth::TokenStorage;
+use std::collections::HashMap;
+use std::panic;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(name = "codemod")]
@@ -145,10 +149,12 @@ fn is_package_name(arg: &str) -> bool {
     !known_commands.contains(&arg)
 }
 
+type TelemetrySenderMutex = Arc<Mutex<Box<dyn TelemetrySender + Send + Sync>>>;
+
 /// Handle implicit run command from trailing arguments
 async fn handle_implicit_run_command(
     trailing_args: Vec<String>,
-    telemetry_sender: &dyn TelemetrySender,
+    telemetry_sender: TelemetrySenderMutex,
 ) -> Result<bool> {
     if trailing_args.is_empty() {
         return Ok(false);
@@ -167,7 +173,7 @@ async fn handle_implicit_run_command(
     match Cli::try_parse_from(&full_args) {
         Ok(new_cli) => {
             if let Some(Commands::Run(run_args)) = new_cli.command {
-                commands::run::handler(&run_args, telemetry_sender).await?;
+                commands::run::handler(&run_args, telemetry_sender.clone()).await?;
                 Ok(true)
             } else {
                 Ok(false)
@@ -199,35 +205,89 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let telemetry_sender: Box<dyn codemod_telemetry::send_event::TelemetrySender> =
-        if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
-            || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-        {
-            Box::new(NullSender {})
+    let telemetry_sender: Arc<
+        Mutex<Box<dyn codemod_telemetry::send_event::TelemetrySender + Send + Sync>>,
+    > = if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
+        || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
+    {
+        Arc::new(Mutex::new(Box::new(NullSender {})))
+    } else {
+        let storage = TokenStorage::new()?;
+        let config = storage.load_config()?;
+
+        let auth = storage.get_auth_for_registry(&config.default_registry)?;
+
+        let distinct_id = auth
+            .map(|auth| auth.user.id)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        Arc::new(Mutex::new(Box::new(
+            PostHogSender::new(TelemetrySenderOptions {
+                distinct_id,
+                cloud_role: "CLI".to_string(),
+            })
+            .await,
+        )))
+    };
+
+    let panic_telemetry_sender = telemetry_sender.clone();
+
+    panic::set_hook(Box::new(move |panic_info| {
+        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+
+        // Extract the panic message before moving into async block
+        let panic_message: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
         } else {
-            let storage = TokenStorage::new()?;
-            let config = storage.load_config()?;
-
-            let auth = storage.get_auth_for_registry(&config.default_registry)?;
-
-            let distinct_id = auth
-                .map(|auth| auth.user.id)
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-            Box::new(
-                PostHogSender::new(TelemetrySenderOptions {
-                    distinct_id,
-                    cloud_role: "CLI".to_string(),
-                })
-                .await,
-            )
+            "Unknown panic occurred".to_string()
         };
+
+        // Extract the location before moving into async block
+        let location = if let Some(location) = panic_info.location() {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        } else {
+            "Unknown location".to_string()
+        };
+
+        let sender = panic_telemetry_sender.clone();
+        let cli_version = env!("CARGO_PKG_VERSION");
+
+        tokio::spawn(async move {
+            let _ = sender
+                .lock()
+                .await
+                .send_event(
+                    BaseEvent {
+                        kind: "cliPanic".to_string(),
+                        properties: HashMap::from([
+                            ("timestamp".to_string(), timestamp.to_string()),
+                            ("message".to_string(), panic_message), // Now owned String
+                            ("location".to_string(), location),     // Now owned String
+                            ("cliVersion".to_string(), cli_version.to_string()),
+                            ("os".to_string(), std::env::consts::OS.to_string()),
+                            ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                        ]),
+                    },
+                    None,
+                )
+                .await;
+        });
+
+        std::process::exit(1);
+    }));
 
     // Handle command or implicit run
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {
             WorkflowCommands::Run(args) => {
-                commands::workflow::run::handler(args, telemetry_sender.as_ref()).await?;
+                commands::workflow::run::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Resume(args) => {
                 commands::workflow::resume::handler(args).await?;
@@ -250,7 +310,7 @@ async fn main() -> Result<()> {
                 args.clone().run().await?;
             }
             JssgCommands::Run(args) => {
-                commands::jssg::run::handler(args, telemetry_sender.as_ref()).await?;
+                commands::jssg::run::handler(args, telemetry_sender.clone()).await?;
             }
             JssgCommands::Test(args) => {
                 commands::jssg::test::handler(args).await?;
@@ -269,13 +329,13 @@ async fn main() -> Result<()> {
             commands::whoami::handler(args).await?;
         }
         Some(Commands::Publish(args)) => {
-            commands::publish::handler(args, telemetry_sender.as_ref()).await?;
+            commands::publish::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Search(args)) => {
             commands::search::handler(args).await?;
         }
         Some(Commands::Run(args)) => {
-            commands::run::handler(args, telemetry_sender.as_ref()).await?;
+            commands::run::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Unpublish(args)) => {
             commands::unpublish::handler(args).await?;
@@ -285,7 +345,7 @@ async fn main() -> Result<()> {
         }
         None => {
             // Try to parse as implicit run command
-            if !handle_implicit_run_command(cli.trailing_args, telemetry_sender.as_ref()).await? {
+            if !handle_implicit_run_command(cli.trailing_args, telemetry_sender.clone()).await? {
                 // No valid subcommand or package name provided, show help
                 print_ascii_art();
                 eprintln!("No command provided. Use --help for usage information.");

@@ -17,7 +17,8 @@ use tempfile::TempDir;
 use walkdir::WalkDir;
 
 use crate::auth::TokenStorage;
-use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
+use crate::TelemetrySenderMutex;
+use codemod_telemetry::send_event::BaseEvent;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -125,7 +126,7 @@ struct PublishedPackage {
     published_at: String,
 }
 
-pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let package_path = args
         .path
         .as_ref()
@@ -207,7 +208,8 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
 
     let cli_version = env!("CARGO_PKG_VERSION");
 
-    let _ = telemetry
+    let telemetry_sender = telemetry.lock().await;
+    telemetry_sender
         .send_event(
             BaseEvent {
                 kind: "codemodPublished".to_string(),

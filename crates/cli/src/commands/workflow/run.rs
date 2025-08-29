@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::TelemetrySenderMutex;
 use anyhow::{Context, Result};
 use butterflow_core::utils;
 use clap::Args;
-use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
+use codemod_telemetry::send_event::BaseEvent;
 use rand::Rng;
 
 use crate::engine::create_engine;
@@ -34,7 +35,7 @@ pub struct Command {
 }
 
 /// Run a workflow
-pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve workflow file and bundle path
     let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
 
@@ -64,7 +65,8 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
         execution_id,
     );
     let cli_version = env!("CARGO_PKG_VERSION");
-    telemetry
+    let telemetry_sender = telemetry.lock().await;
+    telemetry_sender
         .send_event(
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
