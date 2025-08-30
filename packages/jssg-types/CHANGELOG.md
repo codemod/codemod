@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.0.6
+
+### Patch Changes
+
+- 76d1179: Add JSON to jssg-types
+
 ## 1.0.5
 
 ### Patch Changes
