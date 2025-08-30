@@ -8,6 +8,7 @@ type SupportedLanguage =
   | "c_sharp"
   | "css"
   | "html"
+  | "json"
   | "kotlin"
   | "ruby"
   | "tsx"
