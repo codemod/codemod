@@ -34,6 +34,10 @@ declare module "codemod:ast-grep/langs/html" {
   export { default } from "@codemod.com/jssg-types/langs/html";
 }
 
+declare module "codemod:ast-grep/langs/json" {
+  export { default } from "@codemod.com/jssg-types/langs/json";
+}
+
 declare module "codemod:ast-grep/langs/java" {
   export { default } from "@codemod.com/jssg-types/langs/java";
 }
