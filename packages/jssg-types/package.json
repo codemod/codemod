@@ -24,7 +24,8 @@
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false"
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "prepublishOnly": "cp -R ../../submodules/llrt/types ./src/"
   },
   "keywords": [
     "ast-grep",
