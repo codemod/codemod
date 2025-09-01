@@ -1,0 +1,40 @@
+[package]
+name = "codemod-llrt-capabilities"
+edition = "2021"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features = false, features = [
+  "console",
+  "abort",
+  "assert",
+  "buffer",
+  "child-process",
+  "crypto",
+  "events",
+  "exceptions",
+  "fetch",
+  "fs",
+  "os",
+  "path",
+  "perf-hooks",
+  "process",
+  "stream-web",
+  "string-decoder",
+  "timers",
+  "tty",
+  "url",
+  "util",
+  "zlib",
+], optional = true }
+
+[features]
+native = [
+  "llrt_modules",
+]
