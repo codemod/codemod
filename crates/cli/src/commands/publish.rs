@@ -42,7 +42,7 @@ pub struct Command {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct CodemodManifest {
+pub struct CodemodManifest {
     schema_version: String,
     name: String,
     version: String,
@@ -77,6 +77,7 @@ struct CodemodManifest {
     documentation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     validation: Option<ValidationConfig>,
+    pub capabilities: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
