@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+<<<<<<< HEAD
 use anyhow::Result;
 
 use crate::{
@@ -13,6 +14,14 @@ use crate::{
 
 pub type CapabilitiesSecurityCallback =
     Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+=======
+use crate::{
+    execution::{CodemodExecutionConfig, ProgressCallback},
+    registry::RegistryClient,
+};
+
+pub type CapabilitiesSecurityCallback = Arc<Box<dyn Fn(&CodemodExecutionConfig) + Send + Sync>>;
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
 /// Configuration for running a workflow

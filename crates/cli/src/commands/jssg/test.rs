@@ -136,6 +136,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     // Create and run test runner
     let mut capabilities = Vec::new();
     if args.allow_fs {
+<<<<<<< HEAD
         capabilities.push(LlrtSupportedModules::Fs);
     }
     if args.allow_fetch {
@@ -143,12 +144,30 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
     if args.allow_child_process {
         capabilities.push(LlrtSupportedModules::ChildProcess);
+=======
+        capabilities.push("fs".to_string());
+    }
+    if args.allow_fetch {
+        capabilities.push("fetch".to_string());
+    }
+    if args.allow_child_process {
+        capabilities.push("child_process".to_string());
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
     }
     let capabilities = if capabilities.is_empty() {
         None
     } else {
+<<<<<<< HEAD
         Some(capabilities.into_iter().collect())
     };
+=======
+        Some(capabilities)
+    };
+    let mut runner = TestRunner::new(options, test_directory);
+    let summary = runner
+        .run_tests(&[&args.language], capabilities.clone())
+        .await?;
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 
     let tsconfig_path = find_tsconfig(&script_base_dir);
     let resolver = Arc::new(OxcResolver::new(script_base_dir, tsconfig_path)?);
@@ -184,6 +203,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
                 let language_enum: SupportLang = language_str.parse()?;
 
+<<<<<<< HEAD
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
                     resolver,
@@ -196,6 +216,20 @@ pub async fn handler(args: &Command) -> Result<()> {
                     capabilities: capabilities.clone(),
                 };
                 let execution_output = execute_codemod_with_quickjs(options).await?;
+=======
+            let options = JssgExecutionOptions {
+                script_path: &codemod_path,
+                resolver,
+                language: language_enum,
+                file_path: &input_path,
+                content: &input_code,
+                selector_config: None,
+                params: test_config.params,
+                matrix_values: None,
+                capabilities: capabilities.clone(),
+            };
+            let execution_output = execute_codemod_with_quickjs(options).await?;
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 
                 match execution_output {
                     ExecutionResult::Modified(content) => {

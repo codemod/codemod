@@ -1,45 +1,33 @@
 use inquire::Confirm;
-use std::collections::HashSet;
+use log::error;
 use std::sync::{Arc, Mutex};
 
 use butterflow_core::execution::CodemodExecutionConfig;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 
-type CapabilitiesSecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+type CapabilitiesSecurityCallback = Arc<Box<dyn Fn(&CodemodExecutionConfig) + Send + Sync>>;
 
 pub fn capabilities_security_callback() -> CapabilitiesSecurityCallback {
-    let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
+    let checked_capabilities = Arc::new(Mutex::new(Vec::<String>::new()));
 
     Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
-        let checked = checked_capabilities.lock().unwrap();
-        let need_to_check = config
-            .capabilities
-            .as_ref()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .filter(|c| !checked.contains(c))
-            .cloned()
-            .collect::<Vec<_>>();
-        drop(checked);
-        if need_to_check.is_empty() {
-            return Ok(());
-        }
-        let answer = Confirm::new(&format!(
-            "🛡️  \x1b[31mSecurity Notice\x1b[0m: This action will grant access to `{}`, which may perform sensitive operations. Are you sure you want to continue?", 
-            need_to_check.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>().join(", ")
+        for capability in config.capabilities.as_ref().unwrap_or(&Vec::new()) {
+            let answer = Confirm::new(&format!(
+            "🛡️  \x1b[31mSecurity Notice\x1b[0m: This action will grant access to `{capability}`, which may perform sensitive operations. Are you sure you want to continue?"
         ))
         .with_default(false)
         .with_help_message("Press 'y' to continue or 'n' to abort")
-        .prompt().map_err(|e| anyhow::anyhow!("Failed to get user input: {e}"))?;
+        .prompt().unwrap_or_else(|e| {
+            error!("Failed to get user input: {e}");
+            std::process::exit(1);
+        });
 
-        let mut checked = checked_capabilities.lock().unwrap();
-        checked.extend(need_to_check);
-        drop(checked);
-
-        if !answer {
-            return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
+            if !answer {
+                error!("Aborting due to capabilities warning");
+                std::process::exit(1);
+            } else {
+                let mut checked_capabilities = checked_capabilities.lock().unwrap();
+                checked_capabilities.push(capability.to_string());
+            }
         }
-        Ok(())
     }))
 }
