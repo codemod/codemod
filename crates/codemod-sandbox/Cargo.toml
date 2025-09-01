@@ -40,9 +40,9 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 ast-grep-core = { workspace = true, default-features = false, optional = true }
 ast-grep-config = { workspace = true, default-features = false, optional = true }
 ast-grep-language = { workspace = true, default-features = true, optional = true }
-llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features = true, optional = true }
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
+codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -68,11 +68,11 @@ native = [
   "ast-grep-core/tree-sitter",
   "ast-grep-config/tree-sitter",
   "ast-grep-language",
-  "llrt_modules",
   "rquickjs",
   "rquickjs/full-async",
   "tokio",
   "serde_yaml",
+  "codemod-llrt-capabilities",
 ]
 real-fs = ["tokio", "ignore"]
 mock-fs = []

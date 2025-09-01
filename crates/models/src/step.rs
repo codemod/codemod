@@ -132,6 +132,11 @@ pub struct UseJSAstGrep {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub language: Option<String>,
+
+    /// Capabilities to use (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub capabilities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]

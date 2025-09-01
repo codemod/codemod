@@ -1051,6 +1051,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemod-llrt-capabilities"
+version = "1.0.12"
+dependencies = [
+ "llrt_modules",
+]
+
+[[package]]
 name = "codemod-mcp"
 version = "1.0.18"
 dependencies = [
@@ -1075,9 +1082,9 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-language",
  "bytes",
+ "codemod-llrt-capabilities",
  "ignore",
  "js-sys",
- "llrt_modules",
  "oxc_resolver",
  "regex",
  "rquickjs",
@@ -3412,16 +3419,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_dns"
-version = "0.5.1-beta"
-dependencies = [
- "llrt_context",
- "llrt_dns_cache",
- "llrt_utils",
- "rquickjs",
-]
-
-[[package]]
 name = "llrt_dns_cache"
 version = "0.5.1-beta"
 dependencies = [
@@ -3546,13 +3543,10 @@ dependencies = [
  "llrt_child_process",
  "llrt_console",
  "llrt_crypto",
- "llrt_dns",
  "llrt_events",
  "llrt_exceptions",
  "llrt_fetch",
  "llrt_fs",
- "llrt_navigator",
- "llrt_net",
  "llrt_os",
  "llrt_path",
  "llrt_perf_hooks",
@@ -3566,28 +3560,6 @@ dependencies = [
  "llrt_utils",
  "llrt_zlib",
  "rquickjs",
-]
-
-[[package]]
-name = "llrt_navigator"
-version = "0.5.1-beta"
-dependencies = [
- "rquickjs",
-]
-
-[[package]]
-name = "llrt_net"
-version = "0.5.1-beta"
-dependencies = [
- "itoa",
- "llrt_buffer",
- "llrt_context",
- "llrt_events",
- "llrt_stream",
- "llrt_utils",
- "rquickjs",
- "tokio",
- "tracing",
 ]
 
 [[package]]
