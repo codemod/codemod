@@ -1,8 +1,10 @@
 use crate::dirty_git_check;
 use crate::engine::create_progress_callback;
 use crate::TelemetrySenderMutex;
+use crate::CLI_VERSION;
 use anyhow::Result;
 use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
@@ -10,7 +12,6 @@ use codemod_sandbox::sandbox::{
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, info, warn};
-use rand::Rng;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -164,12 +165,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     println!("✨ Done in {seconds:.3}s");
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
-    let execution_id: [u8; 20] = rand::thread_rng().gen();
-    let execution_id = base64::Engine::encode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        execution_id,
-    );
-    let cli_version = env!("CARGO_PKG_VERSION");
+    let execution_id = generate_execution_id();
 
     telemetry
         .send_event(
@@ -181,7 +177,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     ("language".to_string(), args.language.clone()),
                     ("dirtyRun".to_string(), args.allow_dirty.to_string()),
                     ("dryRun".to_string(), args.dry_run.to_string()),
-                    ("cliVersion".to_string(), cli_version.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
                 ]),

@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use walkdir::WalkDir;
 
 use crate::auth::TokenStorage;
-use crate::TelemetrySenderMutex;
+use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
 
 #[derive(Args, Debug)]
@@ -206,8 +206,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         return Err(anyhow!("Failed to publish package"));
     }
 
-    let cli_version = env!("CARGO_PKG_VERSION");
-
     telemetry
         .send_event(
             BaseEvent {
@@ -215,7 +213,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 properties: HashMap::from([
                     ("codemodName".to_string(), manifest.name.clone()),
                     ("version".to_string(), manifest.version.clone()),
-                    ("cliVersion".to_string(), cli_version.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
                 ]),
