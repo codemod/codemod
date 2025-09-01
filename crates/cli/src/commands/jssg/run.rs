@@ -163,6 +163,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
 
+    // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     let execution_id: [u8; 20] = rand::thread_rng().gen();
     let execution_id = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,

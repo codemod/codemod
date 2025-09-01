@@ -59,6 +59,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Run workflow using the extracted workflow runner
     let (_, seconds) = run_workflow(&engine, config).await?;
 
+    // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     let execution_id: [u8; 20] = rand::thread_rng().gen();
     let execution_id = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,

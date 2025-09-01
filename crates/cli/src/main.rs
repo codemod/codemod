@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use log::info;
+use std::sync::Arc;
 mod ascii_art;
 mod auth;
 mod auth_provider;
@@ -11,14 +12,10 @@ mod progress_bar;
 mod workflow_runner;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
-use chrono::Utc;
 use codemod_telemetry::{
-    send_event::{BaseEvent, PostHogSender, TelemetrySender, TelemetrySenderOptions},
+    send_event::{PostHogSender, TelemetrySender, TelemetrySenderOptions},
     send_null::NullSender,
 };
-use std::collections::HashMap;
-use std::panic;
-use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "codemod")]
@@ -236,64 +233,7 @@ async fn main() -> Result<()> {
             ))
         };
 
-    let panic_telemetry_sender = telemetry_sender.clone();
-    panic::set_hook(Box::new(move |panic_info| {
-        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-
-        let panic_message: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic occurred".to_string()
-        };
-
-        let location = if let Some(location) = panic_info.location() {
-            format!(
-                "{}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            )
-        } else {
-            "Unknown location".to_string()
-        };
-
-        let sender = panic_telemetry_sender.clone();
-        let cli_version = env!("CARGO_PKG_VERSION");
-
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                let _ = sender
-                    .send_event(
-                        BaseEvent {
-                            kind: "cliPanic".to_string(),
-                            properties: HashMap::from([
-                                ("timestamp".to_string(), timestamp.to_string()),
-                                ("message".to_string(), panic_message),
-                                ("location".to_string(), location),
-                                ("cliVersion".to_string(), cli_version.to_string()),
-                                ("os".to_string(), std::env::consts::OS.to_string()),
-                                ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                            ]),
-                        },
-                        None,
-                    )
-                    .await;
-            });
-        })
-        .join()
-        .unwrap();
-
-        std::panic::resume_unwind(Box::new(
-            panic_info
-                .payload()
-                .downcast_ref::<String>()
-                .unwrap_or(&"Unknown panic".to_string())
-                .clone(),
-        ));
-    }));
+    telemetry_sender.initialize_panic_telemetry().await;
 
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {

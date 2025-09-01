@@ -911,8 +911,10 @@ name = "codemod-telemetry"
 version = "1.0.2"
 dependencies = [
  "async-trait",
+ "chrono",
  "posthog-rs",
  "serde",
+ "tokio",
 ]
 
 [[package]]
