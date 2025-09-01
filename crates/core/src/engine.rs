@@ -1556,7 +1556,12 @@ impl Engine {
             let parsed = serde_yaml::Deserializer::from_str(content);
             let rule = Rule::deserialize(parsed)
                 .map_err(|e| Error::StepExecution(format!("Failed to parse rule: {e:?}")))?;
-            languages.push(SupportedLanguage::from_str(&rule.language).unwrap());
+            languages.push(SupportedLanguage::from_str(&rule.language).map_err(|e| {
+                Error::StepExecution(format!(
+                    "Unsupported language '{}': {:?}",
+                    &rule.language, e
+                ))
+            })?);
         }
 
         let execution_config = CodemodExecutionConfig::new(
@@ -1725,7 +1730,7 @@ impl Engine {
                     .clone(),
             },
             Some(self.workflow_run_config.target_path.clone()),
-            None,
+            js_ast_grep.base_path.as_deref().map(PathBuf::from),
             GlobsCodemodExecutionConfig {
                 include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
                 exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),

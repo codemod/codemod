@@ -2412,6 +2412,7 @@ export default function transform(ast) {
     );
 }
 
+#[tokio::test]
 #[serial]
 
 async fn test_execute_js_ast_grep_step_invalid_language() {
@@ -2461,10 +2462,9 @@ export default function transform(ast) {
         )
         .await;
 
-    // Currently the implementation doesn't validate language strings, so just test that it doesn't panic
-    // Note: This test was updated because the current implementation doesn't validate language strings
-    // If validation is needed, it should be added to the execute_js_ast_grep_step method
-    assert!(result.is_err(), "Should fail with invalid language");
+    // Test that invalid language is properly rejected
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("invalid-language"));
 }
 
 // Helper function to create a workflow with JSAstGrep step

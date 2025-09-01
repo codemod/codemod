@@ -44,7 +44,7 @@ ast-grep-language = { workspace = true, default-features = true, optional = true
 codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
-codemod-ast-grep-dynamic-lang = { path = "../codemod-ast-grep-dynamic-lang", optional = true }
+codemod-ast-grep-dynamic-lang = { path = "../ast-grep-dynamic-lang", optional = true }
 reqwest.workspace = true
 tokio-stream = "0.1.17"
 dirs.workspace = true
