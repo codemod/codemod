@@ -109,6 +109,7 @@ fn create_test_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -171,6 +172,7 @@ fn create_manual_trigger_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -231,6 +233,7 @@ fn create_manual_node_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -308,6 +311,7 @@ fn create_matrix_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -391,6 +395,7 @@ fn create_template_workflow() -> Workflow {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -460,6 +465,7 @@ fn create_matrix_from_state_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -822,6 +828,7 @@ fn create_env_var_workflow() -> Workflow {
                 ("NODE_SPECIFIC_VAR".to_string(), "node-value".to_string()),
             ]),
         }],
+        capabilities: None,
     }
 }
 
@@ -862,6 +869,7 @@ fn create_variable_resolution_workflow() -> Workflow {
                 ("DEBUG".to_string(), "${env.CI}".to_string()),
             ]),
         }],
+        capabilities: None,
     }
 }
 
@@ -903,6 +911,7 @@ echo "workflow_run_id_valid=$(if [ "$CODEMOD_WORKFLOW_RUN_ID" != "" ] && [ ${#CO
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -1410,6 +1419,7 @@ echo "env_vars_in_matrix=true""#
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -1527,6 +1537,7 @@ async fn test_cyclic_dependency_workflow() {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -1576,6 +1587,7 @@ async fn test_invalid_template_reference() {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -2360,6 +2372,7 @@ fn create_js_ast_grep_workflow() -> Workflow {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
