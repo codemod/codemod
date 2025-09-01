@@ -1,3 +1,4 @@
+/// <reference types="./types/index.d.ts" />
 declare module "codemod:ast-grep" {
   export * from "@codemod.com/jssg-types/main";
 }
