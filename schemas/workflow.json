@@ -1001,17 +1001,6 @@
           ],
           "default": null
         },
-        "capabilities": {
-          "description": "Capabilities to use (optional)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
-        },
         "dry_run": {
           "description": "Perform a dry run without making changes (optional, defaults to false)",
           "type": [

@@ -148,6 +148,7 @@ fn create_test_workflow(nodes: Vec<Node>) -> Workflow {
         templates: vec![],
         nodes,
         params: None,
+        capabilities: None,
     }
 }
 
