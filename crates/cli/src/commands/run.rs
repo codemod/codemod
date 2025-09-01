@@ -1,21 +1,22 @@
+use crate::commands::publish::CodemodManifest;
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
-use codemod_telemetry::send_event::BaseEvent;
+use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
 use console::style;
 use log::info;
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Package name with optional version (e.g., @org/package@1.0.0)
@@ -106,8 +107,25 @@ pub async fn handler(
 
     let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
-    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
+    let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+
+    let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
+    let codemod_config: Option<CodemodManifest> = if codemod_config_path.exists() {
+        let codemod_config_content = fs::read_to_string(&codemod_config_path)?;
+        let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
+            .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
+        Some(codemod_config)
+    } else {
+        None
+    };
+
+    let capabilities = codemod_config.and_then(|config| config.capabilities);
+
+    if let Some(capabilities) = capabilities {
+        let capabilities_str = capabilities.join(",");
+        params.insert("capabilities".to_string(), capabilities_str);
+    }
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(
