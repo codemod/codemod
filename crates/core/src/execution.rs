@@ -61,7 +61,11 @@ pub struct CodemodExecutionConfig {
     /// Number of threads to use
     pub threads: Option<usize>,
     /// Capabilities
+<<<<<<< HEAD
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
+=======
+    pub capabilities: Option<Vec<String>>,
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 }
 
 impl CodemodExecutionConfig {

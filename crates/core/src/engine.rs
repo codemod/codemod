@@ -1460,6 +1460,7 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
+<<<<<<< HEAD
                 let capabilities = if let Some(cap_str) = params.clone().get("capabilities") {
                     let cap_vec = cap_str
                         .split(",")
@@ -1481,6 +1482,12 @@ impl Engine {
                 } else {
                     None
                 };
+=======
+                let capabilities = params
+                    .clone()
+                    .get("capabilities")
+                    .map(|v| vec![v.to_string()]);
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     js_ast_grep,
@@ -1635,7 +1642,11 @@ impl Engine {
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, String>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
+<<<<<<< HEAD
         capabilities: Option<Vec<LlrtSupportedModules>>,
+=======
+        capabilities: Option<Vec<String>>,
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
         capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
     ) -> Result<()> {
         let js_file_path = self
@@ -1678,10 +1689,14 @@ impl Engine {
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
+<<<<<<< HEAD
                     callback(config).unwrap_or_else(|e| {
                         error!("Failed to check capabilities: {e}");
                         std::process::exit(1);
                     });
+=======
+                    callback(config);
+>>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
                 }
             })),
         };
