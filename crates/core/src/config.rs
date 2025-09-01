@@ -4,8 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use crate::{execution::ProgressCallback, registry::RegistryClient};
+use crate::{
+    execution::{CodemodExecutionConfig, ProgressCallback},
+    registry::RegistryClient,
+};
 
+pub type CapabilitiesSecurityCallback = Arc<Box<dyn Fn(&CodemodExecutionConfig) + Send + Sync>>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
 /// Configuration for running a workflow
@@ -20,6 +24,7 @@ pub struct WorkflowRunConfig {
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
     pub registry_client: RegistryClient,
     pub dry_run: bool,
+    pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
 }
 
 impl Default for WorkflowRunConfig {
@@ -34,6 +39,7 @@ impl Default for WorkflowRunConfig {
             pre_run_callback: Arc::new(None),
             registry_client: RegistryClient::default(),
             dry_run: false,
+            capabilities_security_callback: None,
         }
     }
 }

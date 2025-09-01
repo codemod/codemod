@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use butterflow_core::utils::parse_params;
 use clap::Args;
 use console::style;
@@ -9,11 +9,13 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
 
+use crate::commands::publish::CodemodManifest;
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use butterflow_core::registry::RegistryError;
 use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
+use std::fs;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -101,7 +103,24 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
 
     let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
-    let params = parse_params(&args.params).context("Failed to parse parameters")?;
+    let mut params = parse_params(&args.params).context("Failed to parse parameters")?;
+
+    let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
+    let codemod_config: Option<CodemodManifest> = if codemod_config_path.exists() {
+        let codemod_config_content = fs::read_to_string(&codemod_config_path)?;
+        let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
+            .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
+        Some(codemod_config)
+    } else {
+        None
+    };
+
+    let capabilities = codemod_config.and_then(|config| config.capabilities);
+
+    if let Some(capabilities) = capabilities {
+        let capabilities_str = capabilities.join(",");
+        params.insert("capabilities".to_string(), capabilities_str);
+    }
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(

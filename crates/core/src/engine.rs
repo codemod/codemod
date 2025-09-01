@@ -5,8 +5,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::WorkflowRunConfig;
-use crate::execution::CodemodExecutionConfig;
+use crate::config::{CapabilitiesSecurityCallback, WorkflowRunConfig};
+use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
@@ -1196,8 +1196,20 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
-                self.execute_js_ast_grep_step(node.id.clone(), js_ast_grep)
-                    .await
+                let capabilities = params
+                    .clone()
+                    .get("capabilities")
+                    .map(|v| vec![v.to_string()]);
+                self.execute_js_ast_grep_step(
+                    node.id.clone(),
+                    js_ast_grep,
+                    capabilities,
+                    self.workflow_run_config
+                        .capabilities_security_callback
+                        .as_ref()
+                        .map(|callback| Arc::new(callback.clone())),
+                )
+                .await
             }
             StepAction::Codemod(codemod) => {
                 Box::pin(self.execute_codemod_step(
@@ -1251,6 +1263,7 @@ impl Engine {
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
                     dry_run: self.workflow_run_config.dry_run,
                     languages: Some(languages.iter().map(|l| l.to_string()).collect()),
+                    capabilities: None,
                 };
 
                 // Clone variables needed in the closure
@@ -1332,6 +1345,8 @@ impl Engine {
         &self,
         id: String,
         js_ast_grep: &UseJSAstGrep,
+        capabilities: Option<Vec<String>>,
+        capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
     ) -> Result<()> {
         let js_file_path = self
             .workflow_run_config
@@ -1370,8 +1385,16 @@ impl Engine {
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
         );
 
+        let capabilities_security_callback_clone = capabilities_security_callback.clone();
+        let pre_run_callback = PreRunCallback {
+            callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
+                if let Some(callback) = &capabilities_security_callback_clone {
+                    callback(config);
+                }
+            })),
+        };
         let config = CodemodExecutionConfig {
-            pre_run_callback: None,
+            pre_run_callback: Some(pre_run_callback),
             progress_callback: self.workflow_run_config.progress_callback.clone(),
             target_path: Some(self.workflow_run_config.target_path.clone()),
             base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
@@ -1382,6 +1405,7 @@ impl Engine {
                 .language
                 .clone()
                 .unwrap_or("typescript".to_string())]),
+            capabilities: capabilities.clone(),
         };
 
         // Set language first to get default extensions
@@ -1433,6 +1457,7 @@ impl Engine {
                         language,
                         file_path,
                         &content,
+                        config.capabilities.as_deref().map(|v| v.to_vec()),
                     )
                     .await
                 });
