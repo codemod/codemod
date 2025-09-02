@@ -96,7 +96,7 @@
   "dependencies": {
     "@ast-grep/cli": "catalog:",
     "@ast-grep/napi": "catalog:",
-    "@codemod.com/workflow": "workspace:*",
+    "@codemod.com/workflow": "0.0.31",
     "@octokit/rest": "catalog:",
     "blessed": "catalog:",
     "esbuild": "^0.23.0",

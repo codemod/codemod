@@ -800,7 +800,7 @@ importers:
     dependencies:
       langchain:
         specifier: 'catalog:'
-        version: 0.3.6(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))(axios@1.8.2)(handlebars@4.7.8)(openai@4.76.0(zod@3.24.1))
+        version: 0.3.6(@langchain/core@0.2.36(openai@4.76.0))(axios@1.8.2)(handlebars@4.7.8)(openai@4.76.0)
       react-use:
         specifier: 'catalog:'
         version: 17.5.1(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
@@ -1105,8 +1105,8 @@ importers:
         specifier: 'catalog:'
         version: 0.32.3
       '@codemod.com/workflow':
-        specifier: workspace:*
-        version: link:../../packages/workflow
+        specifier: 0.0.31
+        version: 0.0.31(@babel/preset-env@7.24.7)
       '@octokit/rest':
         specifier: 'catalog:'
         version: 20.1.1
@@ -1332,7 +1332,7 @@ importers:
         version: 1.1.1(@types/react-dom@18.3.0)(@types/react@18.2.55)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@sanity/client':
         specifier: 'catalog:'
-        version: 6.21.0
+        version: 6.21.0(debug@3.2.7)
       '@sanity/code-input':
         specifier: 'catalog:'
         version: 4.1.4(@babel/runtime@7.24.7)(@codemirror/lint@6.8.1)(@codemirror/theme-one-dark@6.1.2)(@lezer/common@1.2.1)(codemirror@6.0.1(@lezer/common@1.2.1))(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(sanity@3.47.1(@types/node@22.16.0)(@types/react@18.2.55)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(terser@5.38.1))(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
@@ -1889,8 +1889,6 @@ importers:
         specifier: ^4.11.0
         version: 4.15.7
 
-  packages/deprecated: {}
-
   packages/filemod:
     devDependencies:
       '@types/node':
@@ -2362,10 +2360,22 @@ packages:
   '@asamuzakjp/dom-selector@2.0.2':
     resolution: {integrity: sha512-x1KXOatwofR6ZAYzXRBL5wrdV0vwNxlTCK9NCuLqAzQYARqGcvFwiJA6A1ERuh+dgeA4Dxm3JBYictIes+SqUQ==}
 
+  '@ast-grep/cli-darwin-arm64@0.25.7':
+    resolution: {integrity: sha512-dkj8hy32mWuQwCJUEpnKwTS8tLE+e7dhvu6is+v5Q6AumOVlcL6PJWQsyaA4vedDm6XOGK9+WnyFpCnV3b5ouA==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@ast-grep/cli-darwin-arm64@0.32.3':
     resolution: {integrity: sha512-o7H/zofqbJ2Mqyig1GOdsRAbJlaMjBCnH7QjKzYEstuAI5JmvLa8dl9H6zoShs/17XThYDW9opYFtRCEscxNYg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
+    os: [darwin]
+
+  '@ast-grep/cli-darwin-x64@0.25.7':
+    resolution: {integrity: sha512-FBdv7GH3llH5LI0S2yeqgQM5QEUHeoYMhw1pv+C439UeL5BBFFjI+LYVALciwsYzuq/DQDTnT2cM0JhYGajDLQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
     os: [darwin]
 
   '@ast-grep/cli-darwin-x64@0.32.3':
@@ -2374,10 +2384,22 @@ packages:
     cpu: [x64]
     os: [darwin]
 
+  '@ast-grep/cli-linux-arm64-gnu@0.25.7':
+    resolution: {integrity: sha512-lsE+cSe4rFO8rvLhMM7PM3T83LlmV60H9dOH+1hq8thkWhLCL6vAJijEVWgAQDDvvZf3xnNVgG2GG4jOMfTuTQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
   '@ast-grep/cli-linux-arm64-gnu@0.32.3':
     resolution: {integrity: sha512-1zw2DY3a4ZW71DmPLpbOwmb7LrsXvBRVcDg1a++0yI9EPkLDPpX9wtssQOugh5i830ouBkySTS5WEfKC7Ir3Cg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
+    os: [linux]
+
+  '@ast-grep/cli-linux-x64-gnu@0.25.7':
+    resolution: {integrity: sha512-uuF5GXgeUZtBrftJJYuQU7PvDT7Q9fJkKKwpIscEfQqLndri1tdYzzT9jKj2taWFlhiCVqLaDEHsdfTeWaVjZQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
     os: [linux]
 
   '@ast-grep/cli-linux-x64-gnu@0.32.3':
@@ -2386,10 +2408,22 @@ packages:
     cpu: [x64]
     os: [linux]
 
+  '@ast-grep/cli-win32-arm64-msvc@0.25.7':
+    resolution: {integrity: sha512-GSWRjOnWybzNP5rnvPb6lQ7lSPoEIl64gk4uHE1h+a2nnFhT9REWTKFcmNB2aG8VmKEz1gu0pxpg9HmBe2OUBA==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
   '@ast-grep/cli-win32-arm64-msvc@0.32.3':
     resolution: {integrity: sha512-WFELr1aSNWCwE+Pe6fwYggQ46DO741sUUSnM6Ep91fQ5qnYvHNeb7GZFkgO4bUiDMGPzwASz27oV+4fWj1uzkQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
+    os: [win32]
+
+  '@ast-grep/cli-win32-ia32-msvc@0.25.7':
+    resolution: {integrity: sha512-5p9PWbTeXaivQYixB+JkkpFKgY7G1Tm6R46Dhq6cHvKksiQ6lWlTOOmhl0QARtY7y3XP0MWuvjDEWCYrvYtO4A==}
+    engines: {node: '>= 10'}
+    cpu: [ia32]
     os: [win32]
 
   '@ast-grep/cli-win32-ia32-msvc@0.32.3':
@@ -2398,21 +2432,44 @@ packages:
     cpu: [ia32]
     os: [win32]
 
+  '@ast-grep/cli-win32-x64-msvc@0.25.7':
+    resolution: {integrity: sha512-WjsRuyKTCeGWpMhvobzU/6HaWbseENPl5mNMZIKs8gsCpkUyTUfvV8/A2W29oHCgbDWRtixYppWtd87Qjpm6cg==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
   '@ast-grep/cli-win32-x64-msvc@0.32.3':
     resolution: {integrity: sha512-yBeQQsOvcjOTsfQcHuuQeV45KkICwqcc0ddAPmqCjmuTOiPCBRZxdG6j2iKOwbW1kmmlgDmvDf6gUxXKxK5/2g==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
 
+  '@ast-grep/cli@0.25.7':
+    resolution: {integrity: sha512-vklcPRFHPHkwHq05nb2Fuaj4BYNWxhr8GIdB6la090jWob9FdbM/Jz86vlQp2tRELb2rKzuHeksG8qDrbX4REg==}
+    engines: {node: '>= 12.0.0'}
+    hasBin: true
+
   '@ast-grep/cli@0.32.3':
     resolution: {integrity: sha512-K8zt7dKeFFAGHJewjJyMpx6UGxh1iYSB5OSv/h9HZb1eGBFv9PPJ1x+hFvUDLLdzvlNDxmAfvl6t5nZQRlrezg==}
     engines: {node: '>= 12.0.0'}
     hasBin: true
 
+  '@ast-grep/napi-darwin-arm64@0.25.7':
+    resolution: {integrity: sha512-qqI1JvB6ULgOUOVE3YviQNQ6KAYOnkiE8W5fNwVJGUgMkUuM8tUm1Nal3vfKCI7dnYgpcNlKxdTWGlbt7aHKNg==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@ast-grep/napi-darwin-arm64@0.32.3':
     resolution: {integrity: sha512-Ifh25Ra38+5TGvO48NVcJsRarBSqJ2ppN6J+Qc8Z19rKALYb61tsWj6oh0W1CTbsYQ/HJbIff//WkUDkY0wMMg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
+    os: [darwin]
+
+  '@ast-grep/napi-darwin-x64@0.25.7':
+    resolution: {integrity: sha512-gq1Cf7US322ZJYPrVnAnn6eBLS6xi5catb5t99Wu6Rbm67XadEc81gtPTbPeNIu8FGgPjvKUc010rts2ZZbJeA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
     os: [darwin]
 
   '@ast-grep/napi-darwin-x64@0.32.3':
@@ -2421,8 +2478,20 @@ packages:
     cpu: [x64]
     os: [darwin]
 
+  '@ast-grep/napi-linux-arm64-gnu@0.25.7':
+    resolution: {integrity: sha512-q+BzEC7wB7pkK+pQKbn4TVJThrEtvxjObz0okscPtxTNYvSJGv9jr3Nde5SYjdkfk8Ab4NgDMshVjKWVz2TSbQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
   '@ast-grep/napi-linux-arm64-gnu@0.32.3':
     resolution: {integrity: sha512-Kso32W1K/+guK1Jkk33MpvVHhulaGF7lf6HW9Bc4VxRHWyZBXuhwwPOtf7+89qa2nEb0YyUxgQTnMUXbCKyYAQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@ast-grep/napi-linux-arm64-musl@0.25.7':
+    resolution: {integrity: sha512-SEqZ6y0UhzmvZS938jIgR04kgHAW70hJ8yF4x9AkcqEhbeyqgElxIE7ve50ukDzs70fAKccdV8zYmebYN/7iPg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
@@ -2433,8 +2502,20 @@ packages:
     cpu: [arm64]
     os: [linux]
 
+  '@ast-grep/napi-linux-x64-gnu@0.25.7':
+    resolution: {integrity: sha512-8YuE/zTywTBb/iTm601JXTdWV2Redy9L9ab27aRD0hwX8FLmKUy8gK0fSo3xx+FyvSET49xkoR9tYdNaG2Wrkw==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
   '@ast-grep/napi-linux-x64-gnu@0.32.3':
     resolution: {integrity: sha512-XwUjw+W1QWDAPjx+Hsa8ZwONN3MDPINdRkRM6Q1vV3pl0p9YrMpwL72xrWQA1G7r7ej9BI1fLiXWB4YEOeYzJw==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@ast-grep/napi-linux-x64-musl@0.25.7':
+    resolution: {integrity: sha512-sT3eslR50IU6lHfqvq/c7vpxksJiB3h1NjEy1LpG+CYPuoLsQaB8j9OQlX8TqgVlDty/d/13cSls1Y3n/pm9xw==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
@@ -2445,10 +2526,22 @@ packages:
     cpu: [x64]
     os: [linux]
 
+  '@ast-grep/napi-win32-arm64-msvc@0.25.7':
+    resolution: {integrity: sha512-pDi9vyXzUbpiRwFTif6+R7ZIIVB1ZKcRUJLKSIPyYb39DcSX7aOuxQcSZderWnBrwPGxZKzdgztdQ16TuAz2IQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
   '@ast-grep/napi-win32-arm64-msvc@0.32.3':
     resolution: {integrity: sha512-T8nrZm3E+h2VgHuQ3THQLvqhou4MkSbNcyIOgLZ0l2NatHIckeHuly5fmnkd6KQsGP/AqAEGxZBoOVYvoDl7DA==}
     engines: {node: '>= 10'}
     cpu: [arm64]
+    os: [win32]
+
+  '@ast-grep/napi-win32-ia32-msvc@0.25.7':
+    resolution: {integrity: sha512-WFSNDMI5L9N9dK5zFQ6N900nhraOSYtKns/2p/EKZIKPBDXJSzzhT/jBakCSDix1GUs8K0XgkDoq2rXmuiBqXA==}
+    engines: {node: '>= 10'}
+    cpu: [ia32]
     os: [win32]
 
   '@ast-grep/napi-win32-ia32-msvc@0.32.3':
@@ -2457,11 +2550,21 @@ packages:
     cpu: [ia32]
     os: [win32]
 
+  '@ast-grep/napi-win32-x64-msvc@0.25.7':
+    resolution: {integrity: sha512-HlsoVwQ9XrgNZ0JAmXgV5t8Ltx9tGyWZNS2UMY/2cvNU/SG9EpJLm1Bu9Mlk5seiJLbl28QTTbhZdfPKBzGTVQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
   '@ast-grep/napi-win32-x64-msvc@0.32.3':
     resolution: {integrity: sha512-4VKmBFhT0M8s1LbAXemPDnHyAjEi5owkqkz85akvic9u6vRI0evRk8j2sHmgEBXwyySLUHf0NfI0XqwZ0mAl7g==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
+
+  '@ast-grep/napi@0.25.7':
+    resolution: {integrity: sha512-kDw/JNyOLttVbm2hl+55C9lXuUcuIFt31LQIpSptUkyTgI+2Cdqdeah2bNPe4/GQM2ysDjBDS4y1+9iQxMdJiw==}
+    engines: {node: '>= 10'}
 
   '@ast-grep/napi@0.32.3':
     resolution: {integrity: sha512-EdgX3gnDGkKMeofSYQlmPccjnxmGGQoEKL7pVQUmenLrsUBXXcjY//6J0LJApfIzNCknjQkfWpj1IbWDkl66Iw==}
@@ -3619,6 +3722,9 @@ packages:
 
   '@codemirror/view@6.28.2':
     resolution: {integrity: sha512-A3DmyVfjgPsGIjiJqM/zvODUAPQdQl3ci0ghehYNnbt5x+o76xq+dL5+mMBuysDXnI3kapgOkoeJ0sbtL/3qPw==}
+
+  '@codemod.com/workflow@0.0.31':
+    resolution: {integrity: sha512-8xmbxwjxr6d0ZUm3RS/eQqud2mUGXwQgf2v+YEjwQQVwOse6yShgoFljrg7ujvJlhzymivYloL0T0VSS9YubNw==}
 
   '@commitlint/config-validator@19.0.3':
     resolution: {integrity: sha512-2D3r4PKjoo59zBc2auodrSCaUnCSALCx54yveOFwwP/i2kfEAQrygwOleFWswLqK0UL/F9r07MFi5ev2ohyM4Q==}
@@ -14558,26 +14664,59 @@ snapshots:
       css-tree: 2.3.1
       is-potential-custom-element-name: 1.0.1
 
+  '@ast-grep/cli-darwin-arm64@0.25.7':
+    optional: true
+
   '@ast-grep/cli-darwin-arm64@0.32.3':
+    optional: true
+
+  '@ast-grep/cli-darwin-x64@0.25.7':
     optional: true
 
   '@ast-grep/cli-darwin-x64@0.32.3':
     optional: true
 
+  '@ast-grep/cli-linux-arm64-gnu@0.25.7':
+    optional: true
+
   '@ast-grep/cli-linux-arm64-gnu@0.32.3':
+    optional: true
+
+  '@ast-grep/cli-linux-x64-gnu@0.25.7':
     optional: true
 
   '@ast-grep/cli-linux-x64-gnu@0.32.3':
     optional: true
 
+  '@ast-grep/cli-win32-arm64-msvc@0.25.7':
+    optional: true
+
   '@ast-grep/cli-win32-arm64-msvc@0.32.3':
+    optional: true
+
+  '@ast-grep/cli-win32-ia32-msvc@0.25.7':
     optional: true
 
   '@ast-grep/cli-win32-ia32-msvc@0.32.3':
     optional: true
 
+  '@ast-grep/cli-win32-x64-msvc@0.25.7':
+    optional: true
+
   '@ast-grep/cli-win32-x64-msvc@0.32.3':
     optional: true
+
+  '@ast-grep/cli@0.25.7':
+    dependencies:
+      detect-libc: 2.0.3
+    optionalDependencies:
+      '@ast-grep/cli-darwin-arm64': 0.25.7
+      '@ast-grep/cli-darwin-x64': 0.25.7
+      '@ast-grep/cli-linux-arm64-gnu': 0.25.7
+      '@ast-grep/cli-linux-x64-gnu': 0.25.7
+      '@ast-grep/cli-win32-arm64-msvc': 0.25.7
+      '@ast-grep/cli-win32-ia32-msvc': 0.25.7
+      '@ast-grep/cli-win32-x64-msvc': 0.25.7
 
   '@ast-grep/cli@0.32.3':
     dependencies:
@@ -14591,32 +14730,71 @@ snapshots:
       '@ast-grep/cli-win32-ia32-msvc': 0.32.3
       '@ast-grep/cli-win32-x64-msvc': 0.32.3
 
+  '@ast-grep/napi-darwin-arm64@0.25.7':
+    optional: true
+
   '@ast-grep/napi-darwin-arm64@0.32.3':
+    optional: true
+
+  '@ast-grep/napi-darwin-x64@0.25.7':
     optional: true
 
   '@ast-grep/napi-darwin-x64@0.32.3':
     optional: true
 
+  '@ast-grep/napi-linux-arm64-gnu@0.25.7':
+    optional: true
+
   '@ast-grep/napi-linux-arm64-gnu@0.32.3':
+    optional: true
+
+  '@ast-grep/napi-linux-arm64-musl@0.25.7':
     optional: true
 
   '@ast-grep/napi-linux-arm64-musl@0.32.3':
     optional: true
 
+  '@ast-grep/napi-linux-x64-gnu@0.25.7':
+    optional: true
+
   '@ast-grep/napi-linux-x64-gnu@0.32.3':
+    optional: true
+
+  '@ast-grep/napi-linux-x64-musl@0.25.7':
     optional: true
 
   '@ast-grep/napi-linux-x64-musl@0.32.3':
     optional: true
 
+  '@ast-grep/napi-win32-arm64-msvc@0.25.7':
+    optional: true
+
   '@ast-grep/napi-win32-arm64-msvc@0.32.3':
+    optional: true
+
+  '@ast-grep/napi-win32-ia32-msvc@0.25.7':
     optional: true
 
   '@ast-grep/napi-win32-ia32-msvc@0.32.3':
     optional: true
 
+  '@ast-grep/napi-win32-x64-msvc@0.25.7':
+    optional: true
+
   '@ast-grep/napi-win32-x64-msvc@0.32.3':
     optional: true
+
+  '@ast-grep/napi@0.25.7':
+    optionalDependencies:
+      '@ast-grep/napi-darwin-arm64': 0.25.7
+      '@ast-grep/napi-darwin-x64': 0.25.7
+      '@ast-grep/napi-linux-arm64-gnu': 0.25.7
+      '@ast-grep/napi-linux-arm64-musl': 0.25.7
+      '@ast-grep/napi-linux-x64-gnu': 0.25.7
+      '@ast-grep/napi-linux-x64-musl': 0.25.7
+      '@ast-grep/napi-win32-arm64-msvc': 0.25.7
+      '@ast-grep/napi-win32-ia32-msvc': 0.25.7
+      '@ast-grep/napi-win32-x64-msvc': 0.25.7
 
   '@ast-grep/napi@0.32.3':
     optionalDependencies:
@@ -16547,6 +16725,35 @@ snapshots:
       style-mod: 4.1.2
       w3c-keyname: 2.2.8
 
+  '@codemod.com/workflow@0.0.31(@babel/preset-env@7.24.7)':
+    dependencies:
+      '@ast-grep/cli': 0.25.7
+      '@ast-grep/napi': 0.25.7
+      '@octokit/rest': 20.1.1
+      '@sindresorhus/slugify': 2.2.1
+      '@types/jscodeshift': 0.11.11
+      colors-cli: 1.0.33
+      detect-indent: 7.0.1
+      detect-newline: 4.0.1
+      diff: 5.2.0
+      filenamify: 6.0.0
+      git-url-parse: 14.0.0
+      glob: 10.4.5
+      inquirer: 9.2.23
+      jscodeshift: 0.15.2(@babel/preset-env@7.24.7(@babel/core@7.24.7))
+      lodash-es: 4.17.21
+      magic-string: 0.30.17
+      openai: 4.23.0
+      prettier: 3.3.2
+      simple-git: 3.25.0
+      tree-kill: 1.2.2
+      ts-invariant: 0.10.3
+      yaml: 2.4.5
+    transitivePeerDependencies:
+      - '@babel/preset-env'
+      - encoding
+      - supports-color
+
   '@commitlint/config-validator@19.0.3':
     dependencies:
       '@commitlint/types': 19.0.3
@@ -17370,13 +17577,13 @@ snapshots:
     transitivePeerDependencies:
       - openai
 
-  '@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1))':
+  '@langchain/core@0.2.36(openai@4.76.0)':
     dependencies:
       ansi-styles: 5.2.0
       camelcase: 6.3.0
       decamelize: 1.2.0
       js-tiktoken: 1.0.18
-      langsmith: 0.1.68(openai@4.76.0(zod@3.24.1))
+      langsmith: 0.1.68(openai@4.76.0)
       mustache: 4.2.0
       p-queue: 6.6.2
       p-retry: 4.6.2
@@ -17396,9 +17603,9 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@langchain/openai@0.3.14(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))':
+  '@langchain/openai@0.3.14(@langchain/core@0.2.36(openai@4.76.0))':
     dependencies:
-      '@langchain/core': 0.2.36(openai@4.76.0(zod@3.24.1))
+      '@langchain/core': 0.2.36(openai@4.76.0)
       js-tiktoken: 1.0.18
       openai: 4.76.0(zod@3.24.1)
       zod: 3.24.1
@@ -17411,9 +17618,9 @@ snapshots:
       '@langchain/core': 0.2.36(openai@4.23.0)
       js-tiktoken: 1.0.18
 
-  '@langchain/textsplitters@0.1.0(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))':
+  '@langchain/textsplitters@0.1.0(@langchain/core@0.2.36(openai@4.76.0))':
     dependencies:
-      '@langchain/core': 0.2.36(openai@4.76.0(zod@3.24.1))
+      '@langchain/core': 0.2.36(openai@4.76.0)
       js-tiktoken: 1.0.18
 
   '@lezer/common@1.2.1': {}
@@ -18538,14 +18745,6 @@ snapshots:
       - react
       - supports-color
 
-  '@sanity/client@6.21.0':
-    dependencies:
-      '@sanity/eventsource': 5.0.2
-      get-it: 8.6.3
-      rxjs: 7.8.1
-    transitivePeerDependencies:
-      - debug
-
   '@sanity/client@6.21.0(debug@3.2.7)':
     dependencies:
       '@sanity/eventsource': 5.0.2
@@ -18630,7 +18829,7 @@ snapshots:
 
   '@sanity/core-loader@1.6.19(@sanity/client@6.21.0)':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
 
   '@sanity/diff-match-patch@3.1.1': {}
 
@@ -18732,7 +18931,7 @@ snapshots:
   '@sanity/insert-menu@1.0.6(@sanity/types@3.47.1(debug@4.3.5))(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))':
     dependencies:
       '@sanity/icons': 3.2.0(react@18.2.0)
-      '@sanity/types': 3.47.1
+      '@sanity/types': 3.47.1(debug@3.2.7)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
       lodash.startcase: 4.4.0
       react: 18.2.0
@@ -18746,7 +18945,7 @@ snapshots:
       '@sanity/icons': 2.11.8(react@18.2.0)
       '@sanity/incompatible-plugin': 1.0.4(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
-      '@sanity/util': 3.47.1
+      '@sanity/util': 3.47.1(debug@3.2.7)
       lodash: 4.17.21
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
@@ -18828,9 +19027,32 @@ snapshots:
       - react-dom
       - supports-color
 
+  '@sanity/presentation@1.16.0(@sanity/client@6.21.0(debug@4.3.5))(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))':
+    dependencies:
+      '@sanity/client': 6.21.0(debug@4.3.5)
+      '@sanity/icons': 3.2.0(react@18.2.0)
+      '@sanity/preview-url-secret': 1.6.17(@sanity/client@6.21.0(debug@4.3.5))
+      '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
+      '@sanity/uuid': 3.0.2
+      '@types/lodash.isequal': 4.5.8
+      fast-deep-equal: 3.1.3
+      framer-motion: 11.0.8(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      lodash.get: 4.4.2
+      lodash.isequal: 4.5.0
+      mendoza: 3.0.7
+      mnemonist: 0.39.8
+      path-to-regexp: 6.2.2
+      rxjs: 7.8.1
+      suspend-react: 0.1.3(react@18.2.0)
+    transitivePeerDependencies:
+      - react
+      - react-dom
+      - react-is
+      - styled-components
+
   '@sanity/presentation@1.16.0(@sanity/client@6.21.0)(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       '@sanity/icons': 3.2.0(react@18.2.0)
       '@sanity/preview-url-secret': 1.6.17(@sanity/client@6.21.0)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
@@ -18853,12 +19075,12 @@ snapshots:
 
   '@sanity/preview-kit-compat@1.4.15(@sanity/client@6.21.0)(react@18.2.0)':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       react: 18.2.0
 
   '@sanity/preview-kit@5.0.41(@sanity/client@6.21.0)(react@18.2.0)':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       '@sanity/preview-kit-compat': 1.4.15(@sanity/client@6.21.0)(react@18.2.0)
       '@vercel/stega': 0.1.0
       lru-cache: 10.2.0
@@ -18868,14 +19090,19 @@ snapshots:
     optionalDependencies:
       react: 18.2.0
 
+  '@sanity/preview-url-secret@1.6.17(@sanity/client@6.21.0(debug@4.3.5))':
+    dependencies:
+      '@sanity/client': 6.21.0(debug@4.3.5)
+      '@sanity/uuid': 3.0.2
+
   '@sanity/preview-url-secret@1.6.17(@sanity/client@6.21.0)':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       '@sanity/uuid': 3.0.2
 
   '@sanity/react-loader@1.10.3(@sanity/client@6.21.0)(react@18.2.0)':
     dependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       '@sanity/core-loader': 1.6.19(@sanity/client@6.21.0)
       react: 18.2.0
 
@@ -18933,13 +19160,6 @@ snapshots:
     transitivePeerDependencies:
       - debug
 
-  '@sanity/types@3.47.1':
-    dependencies:
-      '@sanity/client': 6.21.0
-      '@types/react': 18.2.55
-    transitivePeerDependencies:
-      - debug
-
   '@sanity/types@3.47.1(debug@3.2.7)':
     dependencies:
       '@sanity/client': 6.21.0(debug@3.2.7)
@@ -18991,16 +19211,6 @@ snapshots:
     dependencies:
       '@sanity/client': 6.21.0(debug@4.4.0)
       '@sanity/types': 3.37.2(debug@4.4.0)
-      get-random-values-esm: 1.0.2
-      moment: 2.30.1
-      rxjs: 7.8.1
-    transitivePeerDependencies:
-      - debug
-
-  '@sanity/util@3.47.1':
-    dependencies:
-      '@sanity/client': 6.21.0
-      '@sanity/types': 3.47.1
       get-random-values-esm: 1.0.2
       moment: 2.30.1
       rxjs: 7.8.1
@@ -19085,7 +19295,7 @@ snapshots:
       scroll-into-view-if-needed: 3.1.0
       valibot: 0.30.0
     optionalDependencies:
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       next: 14.2.28(@babel/core@7.24.7)(@opentelemetry/api@1.9.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       svelte: 4.2.18
 
@@ -19640,7 +19850,7 @@ snapshots:
       '@sanity/incompatible-plugin': 1.0.4(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@sanity/presentation': 1.16.0(@sanity/client@6.21.0)(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
-      '@sanity/util': 3.47.1
+      '@sanity/util': 3.47.1(debug@3.2.7)
       '@tanstack/react-virtual': 3.7.0(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@tinloof/sanity-web': 0.4.1(@types/node@22.16.0)(@types/react@18.2.55)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(terser@5.38.1)
       lodash: 4.17.21
@@ -23044,16 +23254,6 @@ snapshots:
       has-symbols: 1.0.3
       hasown: 2.0.2
 
-  get-it@8.6.3:
-    dependencies:
-      decompress-response: 7.0.0
-      follow-redirects: 1.15.9(debug@3.2.7)
-      is-retry-allowed: 2.2.0
-      progress-stream: 2.0.0
-      tunnel-agent: 0.6.0
-    transitivePeerDependencies:
-      - debug
-
   get-it@8.6.3(debug@3.2.7):
     dependencies:
       decompress-response: 7.0.0
@@ -24089,15 +24289,15 @@ snapshots:
       - encoding
       - openai
 
-  langchain@0.3.6(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))(axios@1.8.2)(handlebars@4.7.8)(openai@4.76.0(zod@3.24.1)):
+  langchain@0.3.6(@langchain/core@0.2.36(openai@4.76.0))(axios@1.8.2)(handlebars@4.7.8)(openai@4.76.0):
     dependencies:
-      '@langchain/core': 0.2.36(openai@4.76.0(zod@3.24.1))
-      '@langchain/openai': 0.3.14(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))
-      '@langchain/textsplitters': 0.1.0(@langchain/core@0.2.36(openai@4.76.0(zod@3.24.1)))
+      '@langchain/core': 0.2.36(openai@4.76.0)
+      '@langchain/openai': 0.3.14(@langchain/core@0.2.36(openai@4.76.0))
+      '@langchain/textsplitters': 0.1.0(@langchain/core@0.2.36(openai@4.76.0))
       js-tiktoken: 1.0.18
       js-yaml: 4.1.0
       jsonpointer: 5.0.1
-      langsmith: 0.2.10(openai@4.76.0(zod@3.24.1))
+      langsmith: 0.2.10(openai@4.76.0)
       openapi-types: 12.1.3
       p-retry: 4.6.2
       uuid: 10.0.0
@@ -24122,7 +24322,7 @@ snapshots:
     optionalDependencies:
       openai: 4.23.0
 
-  langsmith@0.1.68(openai@4.76.0(zod@3.24.1)):
+  langsmith@0.1.68(openai@4.76.0):
     dependencies:
       '@types/uuid': 10.0.0
       commander: 10.0.1
@@ -24144,7 +24344,7 @@ snapshots:
     optionalDependencies:
       openai: 4.23.0
 
-  langsmith@0.2.10(openai@4.76.0(zod@3.24.1)):
+  langsmith@0.2.10(openai@4.76.0):
     dependencies:
       '@types/uuid': 10.0.0
       commander: 10.0.1
@@ -25293,10 +25493,10 @@ snapshots:
   next-sanity@8.5.5(@sanity/client@6.21.0)(@sanity/icons@3.2.0(react@18.2.0))(@sanity/types@3.47.1)(@sanity/ui@2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0)))(next@14.2.28(@babel/core@7.24.7)(@opentelemetry/api@1.9.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(react@18.2.0)(sanity@3.47.1(@types/node@22.16.0)(@types/react@18.2.55)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(terser@5.38.1))(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(svelte@4.2.18):
     dependencies:
       '@portabletext/react': 3.1.0(react@18.2.0)
-      '@sanity/client': 6.21.0
+      '@sanity/client': 6.21.0(debug@3.2.7)
       '@sanity/icons': 3.2.0(react@18.2.0)
       '@sanity/preview-kit': 5.0.41(@sanity/client@6.21.0)(react@18.2.0)
-      '@sanity/types': 3.47.1
+      '@sanity/types': 3.47.1(debug@3.2.7)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
       '@sanity/visual-editing': 1.8.7(@sanity/client@6.21.0)(next@14.2.28(@babel/core@7.24.7)(@opentelemetry/api@1.9.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(svelte@4.2.18)
       '@sanity/webhook': 4.0.2-bc
@@ -26952,7 +27152,7 @@ snapshots:
       '@sanity/icons': 2.11.8(react@18.2.0)
       '@sanity/incompatible-plugin': 1.0.4(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
-      '@sanity/util': 3.47.1
+      '@sanity/util': 3.47.1(debug@3.2.7)
       '@sanity/uuid': 3.0.2
       dlv: 1.1.3
       react: 18.2.0
@@ -27082,10 +27282,10 @@ snapshots:
       '@sanity/migrate': 3.47.1
       '@sanity/mutator': 3.47.1
       '@sanity/portable-text-editor': 3.47.1(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(rxjs@7.8.1)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
-      '@sanity/presentation': 1.16.0(@sanity/client@6.21.0)(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
+      '@sanity/presentation': 1.16.0(@sanity/client@6.21.0(debug@4.3.5))(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
       '@sanity/schema': 3.47.1(debug@4.3.5)
       '@sanity/telemetry': 0.7.9(react@18.2.0)
-      '@sanity/types': 3.47.1
+      '@sanity/types': 3.47.1(debug@3.2.7)
       '@sanity/ui': 2.4.0(react-dom@18.2.0(react@18.2.0))(react-is@18.3.1)(react@18.2.0)(styled-components@6.1.11(react-dom@18.2.0(react@18.2.0))(react@18.2.0))
       '@sanity/util': 3.47.1(debug@4.3.5)
       '@sanity/uuid': 3.0.2
