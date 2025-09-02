@@ -17,8 +17,7 @@
   ],
   "scripts": {
     "build": "tsc && node ./build.js",
-    "prepublish": "cp package.json package.json.bak && jq 'del(.devDependencies)' package.json.bak > package.json",
-    "postpublish": "rm package.json && mv package.json.bak package.json"
+    "prepublishOnly": "turbo run build:publish --filter @codemod-com/workflow && cp package.json package.json.bak && jq 'del(.devDependencies)' package.json.bak > package.json"
   },
   "keywords": [],
   "license": "Apache-2.0",
