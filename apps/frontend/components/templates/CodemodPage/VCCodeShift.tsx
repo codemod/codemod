@@ -1,6 +1,6 @@
 import Icon from "@/components/shared/Icon";
 import RunCTAButton from "@/components/shared/RunCTAButton";
-import { CURSOR_PREFIX, VSCODE_PREFIX } from "../../../../../constants";
+import { CURSOR_PREFIX, VSCODE_PREFIX } from "@/constants";
 
 import type { CodemodPagePayload } from "@/types";
 import type { AutomationResponseVersion } from "@/types/object.types";
