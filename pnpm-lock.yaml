@@ -1889,8 +1889,6 @@ importers:
         specifier: ^4.11.0
         version: 4.15.7
 
-  packages/database/generated/client: {}
-
   packages/deprecated: {}
 
   packages/filemod:
