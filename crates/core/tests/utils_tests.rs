@@ -922,13 +922,15 @@ fn test_parse_workflow_file_complex() {
 version: "1"
 state:
   schema:
-    - name: testState
-      type: array
-      items:
-        type: object
-        properties:
-          key:
-            type: string
+    type: object
+    properties:
+      testState:
+        type: array
+        items:
+          type: object
+          properties:
+            key:
+              type: string
 templates:
   - id: template1
     name: Template 1

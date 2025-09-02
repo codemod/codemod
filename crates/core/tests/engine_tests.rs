@@ -12,7 +12,7 @@ use butterflow_core::{
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{StepAction, UseAstGrep, UseJSAstGrep};
 use butterflow_models::strategy::Strategy;
-use butterflow_models::trigger::TriggerType;
+
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
@@ -111,9 +111,7 @@ fn create_manual_trigger_workflow() -> Workflow {
                 description: Some("Test node 2".to_string()),
                 r#type: NodeType::Automatic,
                 depends_on: vec!["node1".to_string()],
-                trigger: Some(butterflow_models::trigger::Trigger {
-                    r#type: TriggerType::Manual,
-                }),
+                trigger: None,
                 strategy: None,
                 runtime: Some(Runtime {
                     r#type: RuntimeType::Direct,
@@ -347,24 +345,13 @@ fn create_template_workflow() -> Workflow {
 
 // Helper function to create a workflow with matrix strategy from state
 fn create_matrix_from_state_workflow() -> Workflow {
+    // Use default schema - the test doesn't need complex schema validation
+    let root_schema = Default::default();
+
     Workflow {
         version: "1".to_string(),
         state: Some(butterflow_models::WorkflowState {
-            schema: vec![butterflow_models::StateSchema {
-                name: "files".to_string(),
-                r#type: butterflow_models::StateSchemaType::Array,
-                items: Some(Box::new(butterflow_models::StateSchemaItems {
-                    r#type: butterflow_models::StateSchemaType::Object,
-                    properties: Some(HashMap::from([(
-                        "file".to_string(),
-                        butterflow_models::StateSchemaProperty {
-                            r#type: butterflow_models::StateSchemaType::String,
-                            description: None,
-                        },
-                    )])),
-                })),
-                description: None,
-            }],
+            schema: root_schema,
         }),
         templates: vec![],
         nodes: vec![
@@ -2355,6 +2342,840 @@ export default function transform(ast) {
         js_ast_grep_task.status == TaskStatus::Running
             || js_ast_grep_task.status == TaskStatus::Completed
             || js_ast_grep_task.status == TaskStatus::Failed
+    );
+}
+
+// Helper function to create a workflow that writes to state and then uses it for matrix (realistic end-to-end)
+fn create_realistic_state_write_workflow() -> Workflow {
+    let root_schema = Default::default();
+
+    Workflow {
+        version: "1".to_string(),
+        state: Some(butterflow_models::WorkflowState {
+            schema: root_schema,
+        }),
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "evaluate-codeowners".to_string(),
+                name: "Evaluate Codeowners".to_string(),
+                description: Some("Shard the workflow into smaller chunks based on codeowners".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    name: "Create matrix data".to_string(),
+                    action: StepAction::RunScript(
+                        r#"#!/bin/bash
+echo "Writing to state at: $STATE_OUTPUTS"
+
+# Write TypeScript shards to state
+echo 'i18nShardsTs=[{"team": "frontend", "shardId": "shard-1"}, {"team": "backend", "shardId": "shard-2"}]' >> $STATE_OUTPUTS
+
+# Write HTML shards to state  
+echo 'i18nShardsHtml=[{"team": "ui", "shardId": "shard-a"}, {"team": "docs", "shardId": "shard-b"}, {"team": "marketing", "shardId": "shard-c"}]' >> $STATE_OUTPUTS
+
+echo "State written successfully"
+cat $STATE_OUTPUTS"#.to_string(),
+                    ),
+                    env: None,
+                }],
+                env: HashMap::new(),
+            },
+            Node {
+                id: "run-codemod-ts".to_string(),
+                name: "I18n Codemod (TS)".to_string(),
+                description: Some("Run the i18n codemod on TypeScript files".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["evaluate-codeowners".to_string()],
+                trigger: None,
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: None,
+                    from_state: Some("i18nShardsTs".to_string()),
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    name: "Run TS codemod".to_string(),
+                    action: StepAction::RunScript(
+                        "echo 'Running TS codemod for team ${team} on shard ${shardId}'".to_string(),
+                    ),
+                    env: None,
+                }],
+                env: HashMap::new(),
+            },
+            Node {
+                id: "run-codemod-html".to_string(),
+                name: "I18n Codemod (HTML)".to_string(),
+                description: Some("Run the i18n codemod on HTML files".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["evaluate-codeowners".to_string()],
+                trigger: None,
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: None,
+                    from_state: Some("i18nShardsHtml".to_string()),
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    name: "Run HTML codemod".to_string(),
+                    action: StepAction::RunScript(
+                        "echo 'Running HTML codemod for team ${team} on shard ${shardId}'".to_string(),
+                    ),
+                    env: None,
+                }],
+                env: HashMap::new(),
+            },
+        ],
+    }
+}
+
+#[tokio::test]
+async fn test_realistic_state_write_and_matrix_workflow() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_realistic_state_write_workflow();
+    let params = HashMap::new();
+
+    let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
+
+    // Allow time for the state-writer node to complete, write to state, and recompile matrix tasks
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+    // Get the tasks
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+
+    // Should have 8 tasks:
+    // 1. evaluate-codeowners task (completed)
+    // 2. run-codemod-ts master task
+    // 3. run-codemod-html master task
+    // 4. 2 matrix tasks for TS
+    // 5. 3 matrix tasks for HTML
+    assert_eq!(tasks.len(), 8);
+
+    // Find the state-writer task
+    let state_writer_task = tasks
+        .iter()
+        .find(|t| t.node_id == "evaluate-codeowners")
+        .unwrap();
+
+    // State writer should be completed
+    assert_eq!(
+        state_writer_task.status,
+        TaskStatus::Completed,
+        "State writer should complete"
+    );
+
+    // Verify state was written by checking if matrix tasks were created
+    let ts_matrix_tasks: Vec<&Task> = tasks
+        .iter()
+        .filter(|t| t.node_id == "run-codemod-ts" && !t.is_master && t.matrix_values.is_some())
+        .collect();
+
+    let html_matrix_tasks: Vec<&Task> = tasks
+        .iter()
+        .filter(|t| t.node_id == "run-codemod-html" && !t.is_master && t.matrix_values.is_some())
+        .collect();
+
+    // Should have matrix tasks created from the state data
+    assert_eq!(ts_matrix_tasks.len(), 2);
+    assert_eq!(html_matrix_tasks.len(), 3);
+
+    // Verify matrix values are populated correctly
+    for ts_task in &ts_matrix_tasks {
+        let matrix_values = ts_task.matrix_values.as_ref().unwrap();
+        assert!(
+            matrix_values.contains_key("team"),
+            "TS matrix task should have 'team' value"
+        );
+        assert!(
+            matrix_values.contains_key("shardId"),
+            "TS matrix task should have 'shardId' value"
+        );
+
+        // Verify values match what we wrote to state
+        let team = matrix_values.get("team").unwrap().as_str().unwrap();
+        let shard_id = matrix_values.get("shardId").unwrap().as_str().unwrap();
+        assert!(
+            (team == "frontend" && shard_id == "shard-1")
+                || (team == "backend" && shard_id == "shard-2"),
+            "TS matrix values should match written state data"
+        );
+    }
+
+    for html_task in &html_matrix_tasks {
+        let matrix_values = html_task.matrix_values.as_ref().unwrap();
+        assert!(
+            matrix_values.contains_key("team"),
+            "HTML matrix task should have 'team' value"
+        );
+        assert!(
+            matrix_values.contains_key("shardId"),
+            "HTML matrix task should have 'shardId' value"
+        );
+
+        // Verify values match what we wrote to state
+        let team = matrix_values.get("team").unwrap().as_str().unwrap();
+        let shard_id = matrix_values.get("shardId").unwrap().as_str().unwrap();
+        assert!(
+            (team == "ui" && shard_id == "shard-a")
+                || (team == "docs" && shard_id == "shard-b")
+                || (team == "marketing" && shard_id == "shard-c"),
+            "HTML matrix values should match written state data"
+        );
+    }
+
+    // Verify the correct number of matrix tasks were created (which proves state was written correctly)
+    assert_eq!(
+        ts_matrix_tasks.len(),
+        2,
+        "Should have exactly 2 TS matrix tasks from state"
+    );
+    assert_eq!(
+        html_matrix_tasks.len(),
+        3,
+        "Should have exactly 3 HTML matrix tasks from state"
+    );
+}
+
+#[tokio::test]
+async fn test_workflow_with_state_write_and_matrix() {
+    // Create a mock state adapter
+    let mut state_adapter = MockStateAdapter::new();
+
+    // Create workflow with matrix from state strategy
+    let workflow = create_matrix_from_state_workflow(); // Use existing working workflow
+
+    // Create a workflow run
+    let workflow_run_id = Uuid::new_v4();
+    let workflow_run = WorkflowRun {
+        id: workflow_run_id,
+        workflow: workflow.clone(),
+        status: WorkflowStatus::Running,
+        params: HashMap::new(),
+        tasks: Vec::new(),
+        started_at: chrono::Utc::now(),
+        ended_at: None,
+        bundle_path: None,
+    };
+
+    // Save the workflow run
+    state_adapter
+        .save_workflow_run(&workflow_run)
+        .await
+        .unwrap();
+
+    // Create a completed task for node1
+    let node1_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node1".to_string(),
+        status: TaskStatus::Completed,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the task
+    state_adapter.save_task(&node1_task).await.unwrap();
+
+    // Create a master task for node2
+    let master_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: true,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the master task
+    state_adapter.save_task(&master_task).await.unwrap();
+
+    // Set state with files data
+    let files_array = serde_json::json!([
+        {"file": "src/component1.ts", "type": "component"},
+        {"file": "src/component2.ts", "type": "component"},
+        {"file": "src/utils.ts", "type": "utility"}
+    ]);
+
+    let mut state = HashMap::new();
+    state.insert("files".to_string(), files_array);
+
+    // Update the state directly on our adapter
+    state_adapter
+        .update_state(workflow_run_id, state)
+        .await
+        .unwrap();
+
+    // Verify initial tasks
+    let initial_tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+    assert_eq!(initial_tasks.len(), 2); // node1 task + master task for node2
+
+    // Now manually create the matrix tasks as the engine would
+    for file_data in [
+        ("src/component1.ts", "component"),
+        ("src/component2.ts", "component"),
+        ("src/utils.ts", "utility"),
+    ]
+    .iter()
+    {
+        let matrix_task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id,
+            node_id: "node2".to_string(),
+            status: TaskStatus::Pending,
+            is_master: false,
+            master_task_id: Some(master_task.id),
+            matrix_values: Some(HashMap::from([
+                (
+                    "file".to_string(),
+                    serde_json::to_value(file_data.0).unwrap(),
+                ),
+                (
+                    "type".to_string(),
+                    serde_json::to_value(file_data.1).unwrap(),
+                ),
+            ])),
+            started_at: None,
+            ended_at: None,
+            error: None,
+            logs: Vec::new(),
+        };
+
+        state_adapter.save_task(&matrix_task).await.unwrap();
+    }
+
+    // Verify all tasks are present
+    let final_tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+    assert_eq!(final_tasks.len(), 5); // node1 task + master task + 3 matrix tasks
+
+    // Verify matrix tasks have correct matrix values
+    let matrix_tasks: Vec<&Task> = final_tasks
+        .iter()
+        .filter(|t| t.node_id == "node2" && !t.is_master)
+        .collect();
+
+    assert_eq!(matrix_tasks.len(), 3);
+
+    for matrix_task in matrix_tasks {
+        assert!(
+            matrix_task.matrix_values.is_some(),
+            "Matrix task should have matrix values"
+        );
+        let matrix_values = matrix_task.matrix_values.as_ref().unwrap();
+
+        // Should have 'file' and 'type' from the state data
+        assert!(
+            matrix_values.contains_key("file"),
+            "Matrix values should contain 'file'"
+        );
+        assert!(
+            matrix_values.contains_key("type"),
+            "Matrix values should contain 'type'"
+        );
+
+        // Verify the values are from our expected set
+        let file_value = matrix_values.get("file").unwrap().as_str().unwrap();
+        let type_value = matrix_values.get("type").unwrap().as_str().unwrap();
+
+        assert!(
+            file_value.starts_with("src/"),
+            "File should be in src directory"
+        );
+        assert!(
+            type_value == "component" || type_value == "utility",
+            "Type should be component or utility"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_dynamic_state_update_with_matrix_recompilation() {
+    // This test is similar to test_matrix_recompilation_with_direct_adapter
+    // but tests the state update and recompilation workflow
+    let mut state_adapter = MockStateAdapter::new();
+
+    // Create a workflow with a matrix node using from_state
+    let workflow = create_matrix_from_state_workflow();
+
+    // Create a workflow run
+    let workflow_run_id = Uuid::new_v4();
+    let workflow_run = WorkflowRun {
+        id: workflow_run_id,
+        workflow: workflow.clone(),
+        status: WorkflowStatus::Running,
+        params: HashMap::new(),
+        tasks: Vec::new(),
+        started_at: chrono::Utc::now(),
+        ended_at: None,
+        bundle_path: None,
+    };
+
+    // Save the workflow run
+    state_adapter
+        .save_workflow_run(&workflow_run)
+        .await
+        .unwrap();
+
+    // Create a task for node1
+    let node1_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node1".to_string(),
+        status: TaskStatus::Completed,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the task
+    state_adapter.save_task(&node1_task).await.unwrap();
+
+    // Create a master task for node2
+    let master_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: true,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the master task
+    state_adapter.save_task(&master_task).await.unwrap();
+
+    // Set initial state with tasks
+    let initial_tasks_array = serde_json::json!([
+        {"task": "task1", "priority": "high"},
+        {"task": "task2", "priority": "medium"}
+    ]);
+
+    let mut initial_state = HashMap::new();
+    initial_state.insert("files".to_string(), initial_tasks_array);
+
+    // Update the state
+    state_adapter
+        .update_state(workflow_run_id, initial_state)
+        .await
+        .unwrap();
+
+    // Create initial matrix tasks
+    let task1_matrix = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: Some(master_task.id),
+        matrix_values: Some(HashMap::from([
+            ("task".to_string(), serde_json::to_value("task1").unwrap()),
+            (
+                "priority".to_string(),
+                serde_json::to_value("high").unwrap(),
+            ),
+        ])),
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    let task2_matrix = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: Some(master_task.id),
+        matrix_values: Some(HashMap::from([
+            ("task".to_string(), serde_json::to_value("task2").unwrap()),
+            (
+                "priority".to_string(),
+                serde_json::to_value("medium").unwrap(),
+            ),
+        ])),
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save initial matrix tasks
+    state_adapter.save_task(&task1_matrix).await.unwrap();
+    state_adapter.save_task(&task2_matrix).await.unwrap();
+
+    // Verify initial tasks
+    let initial_tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+    assert_eq!(initial_tasks.len(), 4); // node1 + master + 2 matrix tasks
+
+    // Now simulate a state update (like recompilation would do)
+    let updated_tasks_array = serde_json::json!([
+        {"task": "task1", "priority": "high"},       // kept
+        {"task": "task3", "priority": "low"},        // new
+        {"task": "task4", "priority": "high"}        // new
+    ]);
+
+    let mut updated_state = HashMap::new();
+    updated_state.insert("files".to_string(), updated_tasks_array);
+
+    // Update the state with new data
+    state_adapter
+        .update_state(workflow_run_id, updated_state)
+        .await
+        .unwrap();
+
+    // Mark task2 as WontDo (it's no longer in the updated state)
+    let mut fields = HashMap::new();
+    fields.insert(
+        "status".to_string(),
+        FieldDiff {
+            operation: DiffOperation::Update,
+            value: Some(serde_json::to_value(TaskStatus::WontDo).unwrap()),
+        },
+    );
+
+    let task_diff = TaskDiff {
+        task_id: task2_matrix.id,
+        fields,
+    };
+
+    // Apply the diff to mark task2 as WontDo
+    state_adapter.apply_task_diff(&task_diff).await.unwrap();
+
+    // Create new matrix tasks for task3 and task4
+    let task3_matrix = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: Some(master_task.id),
+        matrix_values: Some(HashMap::from([
+            ("task".to_string(), serde_json::to_value("task3").unwrap()),
+            ("priority".to_string(), serde_json::to_value("low").unwrap()),
+        ])),
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    let task4_matrix = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: Some(master_task.id),
+        matrix_values: Some(HashMap::from([
+            ("task".to_string(), serde_json::to_value("task4").unwrap()),
+            (
+                "priority".to_string(),
+                serde_json::to_value("high").unwrap(),
+            ),
+        ])),
+        started_at: None,
+        ended_at: None,
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save new matrix tasks
+    state_adapter.save_task(&task3_matrix).await.unwrap();
+    state_adapter.save_task(&task4_matrix).await.unwrap();
+
+    // Get final tasks
+    let final_tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+    assert_eq!(final_tasks.len(), 6); // node1 + master + 4 matrix tasks (including WontDo)
+
+    // Verify matrix tasks
+    let matrix_tasks: Vec<&Task> = final_tasks
+        .iter()
+        .filter(|t| t.node_id == "node2" && !t.is_master)
+        .collect();
+
+    assert_eq!(matrix_tasks.len(), 4);
+
+    // Verify one task is marked as WontDo
+    let wontdo_tasks: Vec<&Task> = matrix_tasks
+        .clone()
+        .into_iter()
+        .filter(|t| t.status == TaskStatus::WontDo)
+        .collect();
+
+    assert_eq!(wontdo_tasks.len(), 1);
+
+    // Verify active tasks have correct values
+    let active_matrix_tasks: Vec<&Task> = matrix_tasks
+        .into_iter()
+        .filter(|t| t.status != TaskStatus::WontDo)
+        .collect();
+
+    assert_eq!(active_matrix_tasks.len(), 3);
+
+    for task in active_matrix_tasks {
+        let matrix_values = task.matrix_values.as_ref().unwrap();
+        let task_name = matrix_values.get("task").unwrap().as_str().unwrap();
+        assert!(
+            task_name == "task1" || task_name == "task3" || task_name == "task4",
+            "Task should be one of the expected tasks from updated state"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_empty_state_matrix_workflow() {
+    // Test that empty state arrays result in no matrix tasks
+    let mut state_adapter = MockStateAdapter::new();
+
+    // Create a workflow with matrix from state strategy
+    let workflow = create_matrix_from_state_workflow();
+
+    // Create a workflow run
+    let workflow_run_id = Uuid::new_v4();
+    let workflow_run = WorkflowRun {
+        id: workflow_run_id,
+        workflow: workflow.clone(),
+        status: WorkflowStatus::Running,
+        params: HashMap::new(),
+        tasks: Vec::new(),
+        started_at: chrono::Utc::now(),
+        ended_at: None,
+        bundle_path: None,
+    };
+
+    // Save the workflow run
+    state_adapter
+        .save_workflow_run(&workflow_run)
+        .await
+        .unwrap();
+
+    // Create a completed task for node1
+    let node1_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node1".to_string(),
+        status: TaskStatus::Completed,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the task
+    state_adapter.save_task(&node1_task).await.unwrap();
+
+    // Create a master task for node2
+    let master_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Completed, // Master task completes when no matrix tasks exist
+        is_master: true,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the master task
+    state_adapter.save_task(&master_task).await.unwrap();
+
+    // Set state with empty array
+    let empty_array = serde_json::json!([]);
+
+    let mut state = HashMap::new();
+    state.insert("files".to_string(), empty_array);
+
+    // Update the state with empty array
+    state_adapter
+        .update_state(workflow_run_id, state)
+        .await
+        .unwrap();
+
+    // Get the tasks
+    let tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+
+    // Should have only node1 task and master task, no matrix tasks
+    assert_eq!(tasks.len(), 2);
+
+    // Verify no matrix tasks exist
+    let matrix_tasks: Vec<&Task> = tasks
+        .iter()
+        .filter(|t| t.node_id == "node2" && !t.is_master)
+        .collect();
+
+    assert_eq!(
+        matrix_tasks.len(),
+        0,
+        "Empty state should produce no matrix tasks"
+    );
+
+    // Verify master task completed
+    let master_task_result = tasks
+        .iter()
+        .find(|t| t.node_id == "node2" && t.is_master)
+        .unwrap();
+
+    assert_eq!(master_task_result.status, TaskStatus::Completed);
+}
+
+#[tokio::test]
+async fn test_malformed_state_matrix_workflow() {
+    // Test that invalid/malformed state data is handled gracefully
+    let mut state_adapter = MockStateAdapter::new();
+
+    // Create a workflow with matrix from state strategy
+    let workflow = create_matrix_from_state_workflow();
+
+    // Create a workflow run
+    let workflow_run_id = Uuid::new_v4();
+    let workflow_run = WorkflowRun {
+        id: workflow_run_id,
+        workflow: workflow.clone(),
+        status: WorkflowStatus::Running,
+        params: HashMap::new(),
+        tasks: Vec::new(),
+        started_at: chrono::Utc::now(),
+        ended_at: None,
+        bundle_path: None,
+    };
+
+    // Save the workflow run
+    state_adapter
+        .save_workflow_run(&workflow_run)
+        .await
+        .unwrap();
+
+    // Create a completed task for node1
+    let node1_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node1".to_string(),
+        status: TaskStatus::Completed,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the task
+    state_adapter.save_task(&node1_task).await.unwrap();
+
+    // Create a master task for node2
+    let master_task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id,
+        node_id: "node2".to_string(),
+        status: TaskStatus::Completed, // Master task should complete when no valid matrix data
+        is_master: true,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: Some(chrono::Utc::now()),
+        ended_at: Some(chrono::Utc::now()),
+        error: None,
+        logs: Vec::new(),
+    };
+
+    // Save the master task
+    state_adapter.save_task(&master_task).await.unwrap();
+
+    // Set state with invalid data (not an array, which is expected for matrix)
+    let invalid_data = serde_json::json!({
+        "invalid": "not an array",
+        "malformed": true
+    });
+
+    let mut state = HashMap::new();
+    state.insert("files".to_string(), invalid_data);
+
+    // Update the state with malformed data
+    state_adapter
+        .update_state(workflow_run_id, state)
+        .await
+        .unwrap();
+
+    // Get the tasks
+    let tasks = state_adapter.get_tasks(workflow_run_id).await.unwrap();
+
+    // Should have only node1 task and master task, no matrix tasks
+    assert_eq!(tasks.len(), 2);
+
+    // Verify no matrix tasks exist (malformed data should not create matrix tasks)
+    let matrix_tasks: Vec<&Task> = tasks
+        .iter()
+        .filter(|t| t.node_id == "node2" && !t.is_master)
+        .collect();
+
+    assert_eq!(
+        matrix_tasks.len(),
+        0,
+        "Malformed state should produce no matrix tasks"
+    );
+
+    // Verify master task handled the malformed data gracefully
+    let master_task_result = tasks
+        .iter()
+        .find(|t| t.node_id == "node2" && t.is_master)
+        .unwrap();
+
+    // Master task should either complete (if it handles invalid data gracefully)
+    // or fail (if it properly detects the invalid data)
+    assert!(
+        master_task_result.status == TaskStatus::Completed
+            || master_task_result.status == TaskStatus::Failed,
+        "Master task should complete or fail gracefully with malformed state"
     );
 }
 

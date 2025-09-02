@@ -223,117 +223,10 @@
         }
       ]
     },
-    "StateSchema": {
-      "description": "Represents a state schema definition",
-      "type": "object",
-      "properties": {
-        "description": {
-          "description": "Description of the state schema",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "type": {
-          "description": "Type of the state schema",
-          "$ref": "#/$defs/StateSchemaType"
-        },
-        "items": {
-          "description": "For array types, the schema of the items",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StateSchemaItems"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "name": {
-          "description": "Name of the state schema",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type"
-      ]
-    },
-    "StateSchemaItems": {
-      "description": "Represents the schema for items in an array",
-      "type": "object",
-      "properties": {
-        "type": {
-          "description": "Type of the items",
-          "$ref": "#/$defs/StateSchemaType"
-        },
-        "properties": {
-          "description": "For object types, the properties of the object",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/StateSchemaProperty"
-          },
-          "default": null
-        }
-      },
-      "required": [
-        "type"
-      ]
-    },
-    "StateSchemaProperty": {
-      "description": "Represents a state schema property",
-      "type": "object",
-      "properties": {
-        "description": {
-          "description": "Description of the property",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "type": {
-          "description": "Type of the property",
-          "$ref": "#/$defs/StateSchemaType"
-        }
-      },
-      "required": [
-        "type"
-      ]
-    },
-    "StateSchemaType": {
-      "description": "Type of state schema property",
-      "oneOf": [
-        {
-          "description": "Array type",
-          "type": "string",
-          "const": "array"
-        },
-        {
-          "description": "Object type",
-          "type": "string",
-          "const": "object"
-        },
-        {
-          "description": "String type",
-          "type": "string",
-          "const": "string"
-        },
-        {
-          "description": "Number type",
-          "type": "string",
-          "const": "number"
-        },
-        {
-          "description": "Boolean type",
-          "type": "string",
-          "const": "boolean"
-        }
+    "Schema": {
+      "type": [
+        "object",
+        "boolean"
       ]
     },
     "Step": {
@@ -814,12 +707,9 @@
       "type": "object",
       "properties": {
         "schema": {
-          "description": "Schema definitions",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/StateSchema"
-          }
+          "description": "Object schema definition (enforced to be object type)",
+          "$ref": "#/$defs/Schema",
+          "default": {}
         }
       }
     }
