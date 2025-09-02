@@ -1,7 +1,5 @@
-export {
-  VSCODE_PREFIX,
-  CURSOR_PREFIX,
-} from "../../../constants";
+export const VSCODE_PREFIX = "vscode://";
+export const CURSOR_PREFIX = "cursor://";
 
 export const CUSTOMER_STORY_TAG = {
   value: "customer-stories",
