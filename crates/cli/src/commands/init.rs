@@ -56,11 +56,13 @@ pub struct Command {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum ProjectType {
-    /// Shell command workflow codemod
-    Shell,
     /// JavaScript ast-grep codemod
     AstGrepJs,
-    /// YAML ast-grep codemod
+    /// Multi-step workflow: Shell + YAML + jssg
+    Hybrid,
+    /// Shell command workflow codemod (legacy)
+    Shell,
+    /// YAML ast-grep codemod (legacy)
     AstGrepYaml,
 }
 
@@ -83,6 +85,7 @@ const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
     include_str!("../templates/astgrep-yaml/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
+const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
 
 // Shell project templates
 const SHELL_SETUP_SCRIPT: &str = include_str!("../templates/shell/scripts/setup.sh");
@@ -186,11 +189,21 @@ pub fn handler(args: &Command) -> Result<()> {
             .project_type
             .clone()
             .ok_or_else(|| anyhow!("Project type is required --project-type"))?;
-        let package_manager = match (&project_type, args.package_manager.clone()) {
-            (ProjectType::AstGrepJs, Some(pm)) => Some(pm),
-            (ProjectType::AstGrepJs, None) => {
+        let normalized_project_type = match project_type {
+            ProjectType::Shell | ProjectType::AstGrepYaml => {
+                println!(
+                    "{} Deprecated project type selected; scaffolding a Hybrid (Shell + YAML + jssg) package",
+                    style("ℹ").cyan(),
+                );
+                ProjectType::Hybrid
+            }
+            other => other,
+        };
+        let package_manager = match (&normalized_project_type, args.package_manager.clone()) {
+            (ProjectType::AstGrepJs, Some(pm)) | (ProjectType::Hybrid, Some(pm)) => Some(pm),
+            (ProjectType::AstGrepJs, None) | (ProjectType::Hybrid, None) => {
                 return Err(anyhow!(
-                    "--package-manager is required when --project-type is ast-grep-js"
+                    "--package-manager is required when --project-type is ast-grep-js or hybrid"
                 ));
             }
             _ => None,
@@ -209,7 +222,7 @@ pub fn handler(args: &Command) -> Result<()> {
                 .license
                 .clone()
                 .ok_or_else(|| anyhow!("License is required --license"))?,
-            project_type: project_type.clone(),
+            project_type: normalized_project_type.clone(),
             language: args
                 .language
                 .clone()
@@ -308,19 +321,17 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
 
 fn select_project_type() -> Result<ProjectType> {
     let options = vec![
-        "Shell command workflow codemod",
-        "JavaScript ast-grep codemod",
-        "YAML ast-grep codemod",
+        "jssg codemod (covers most use cases)",
+        "multi-step workflow (shell command, YAML & jssg)",
     ];
 
     let selection =
         Select::new("What type of codemod would you like to create?", options).prompt()?;
 
     match selection {
-        "Shell command workflow codemod" => Ok(ProjectType::Shell),
-        "JavaScript ast-grep codemod" => Ok(ProjectType::AstGrepJs),
-        "YAML ast-grep codemod" => Ok(ProjectType::AstGrepYaml),
-        _ => Ok(ProjectType::Shell), // Default fallback
+        "jssg codemod (covers most use cases)" => Ok(ProjectType::AstGrepJs),
+        "multi-step workflow (shell command, YAML & jssg)" => Ok(ProjectType::Hybrid),
+        _ => Ok(ProjectType::AstGrepJs),
     }
 }
 
@@ -367,6 +378,11 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         ProjectType::Shell => create_shell_project(project_path, config)?,
         ProjectType::AstGrepJs => create_js_astgrep_project(project_path, config)?,
         ProjectType::AstGrepYaml => create_astgrep_yaml_project(project_path, config)?,
+        ProjectType::Hybrid => {
+            create_shell_project(project_path, config)?;
+            create_astgrep_yaml_project(project_path, config)?;
+            create_js_astgrep_project(project_path, config)?;
+        }
     }
 
     // Create common files
@@ -402,6 +418,7 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
         ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
         ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
+        ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
     }
     .replace("{language}", &config.language);
 
@@ -535,6 +552,7 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         ProjectType::Shell => "bash scripts/transform.sh",
         ProjectType::AstGrepJs => "npm test",
         ProjectType::AstGrepYaml => "ast-grep test rules/",
+        ProjectType::Hybrid => "npm test",
     };
 
     let readme_content = README_TEMPLATE
@@ -554,7 +572,7 @@ fn run_post_init_commands(
     no_interactive: bool,
 ) -> Result<()> {
     match config.project_type {
-        ProjectType::AstGrepJs => {
+        ProjectType::AstGrepJs | ProjectType::Hybrid => {
             let package_manager = if no_interactive {
                 config.package_manager.clone().unwrap_or("npm".to_string())
             } else {
@@ -596,6 +614,26 @@ fn run_post_init_commands(
                         "  You can run {} manually later",
                         style("npm install").cyan()
                     );
+                }
+            }
+            if let ProjectType::Hybrid = config.project_type {
+                println!("{} Making scripts executable...", style("⏳").yellow());
+                let scripts_dir = project_path.join("scripts");
+                if let Ok(entries) = fs::read_dir(&scripts_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("sh") {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions())
+                                {
+                                    perms.set_mode(0o755);
+                                    let _ = fs::set_permissions(&path, perms);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
