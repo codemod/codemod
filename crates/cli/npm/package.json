@@ -38,5 +38,5 @@
   "bin": {
     "codemod": "codemod"
   },
-  "license": "MIT"
+  "license": "Apache-2.0"
 }
