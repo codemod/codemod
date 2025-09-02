@@ -22,8 +22,8 @@ use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 use butterflow_models::step::{StepAction, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
-    resolve_variables, DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Task, TaskDiff,
-    TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
+    resolve_variables, DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task,
+    TaskDiff, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -698,24 +698,41 @@ impl Engine {
                 .get_tasks(workflow_run_id)
                 .await?;
 
-            // --- Recompile matrix tasks based on current state ---
+            // --- Recompile matrix tasks based on current state (only if workflow has matrix strategies) ---
             // This ensures the task list reflects the latest state before scheduling
-            if let Err(e) = self
-                .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
-                .await
-            {
-                error!("Failed during matrix task recompilation for run {workflow_run_id}: {e}");
-                // Decide how to handle recompilation errors, e.g., fail the workflow?
-                // For now, we log and continue, but this might need refinement.
+            let has_matrix_strategies = current_workflow_run.workflow.nodes.iter().any(|n| {
+                matches!(
+                    n.strategy,
+                    Some(Strategy {
+                        r#type: butterflow_models::strategy::StrategyType::Matrix,
+                        ..
+                    })
+                )
+            });
+
+            if has_matrix_strategies {
+                if let Err(e) = self
+                    .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
+                    .await
+                {
+                    error!(
+                        "Failed during matrix task recompilation for run {workflow_run_id}: {e}"
+                    );
+                    // Decide how to handle recompilation errors, e.g., fail the workflow?
+                    // For now, we log and continue, but this might need refinement.
+                }
             }
 
-            // Get potentially updated tasks after recompilation
-            let tasks_after_recompilation = self
-                .state_adapter
-                .lock()
-                .await
-                .get_tasks(workflow_run_id)
-                .await?;
+            // Get potentially updated tasks after recompilation (only if we ran recompilation)
+            let tasks_after_recompilation = if has_matrix_strategies {
+                self.state_adapter
+                    .lock()
+                    .await
+                    .get_tasks(workflow_run_id)
+                    .await?
+            } else {
+                current_tasks
+            };
             // --- End of Recompilation ---
 
             // Check if all tasks are completed or failed

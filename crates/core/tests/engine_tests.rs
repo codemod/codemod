@@ -12,6 +12,7 @@ use butterflow_core::{
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{StepAction, UseAstGrep, UseJSAstGrep};
 use butterflow_models::strategy::Strategy;
+use butterflow_models::trigger::TriggerType;
 
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
@@ -111,7 +112,9 @@ fn create_manual_trigger_workflow() -> Workflow {
                 description: Some("Test node 2".to_string()),
                 r#type: NodeType::Automatic,
                 depends_on: vec!["node1".to_string()],
-                trigger: None,
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
                 strategy: None,
                 runtime: Some(Runtime {
                     r#type: RuntimeType::Direct,
@@ -552,15 +555,14 @@ async fn test_manual_trigger_workflow() {
 
     let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Allow some time for the workflow to start and scheduler to process
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Get the tasks
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
 
     // Find the task for node2 which should be awaiting trigger
     let node2_task = tasks.iter().find(|t| t.node_id == "node2").unwrap();
-
     // Check that the task is awaiting trigger
     assert_eq!(node2_task.status, TaskStatus::AwaitingTrigger);
 
