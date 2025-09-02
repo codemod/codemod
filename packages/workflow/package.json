@@ -2,7 +2,7 @@
   "name": "@codemod.com/workflow",
   "author": "Codemod, Inc.",
   "type": "module",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "description": "Workflow Engine for Codemod",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
