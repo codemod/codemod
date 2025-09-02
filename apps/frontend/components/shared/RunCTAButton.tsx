@@ -1,9 +1,9 @@
 "use client";
 
+import { VSCODE_PREFIX } from "@/constants";
 import { openLink } from "@/utils";
 import type { ReactNode } from "react";
 import { type ExternalToast, toast } from "sonner";
-import { VSCODE_PREFIX } from "../../../../constants";
 import Button from "./Button";
 
 type RunCTAButtonProps = {

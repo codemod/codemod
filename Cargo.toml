@@ -19,9 +19,9 @@ authors = ["Codemod.com"]
 description = "A self-hostable workflow engine for code transformations"
 documentation = "https://docs.rs/butterflow"
 repository = "https://github.com/codemod-com/butterflow"
-license = "MIT"
+license = "Apache-2.0"
 rust-version = "1.70"
-version = "1.0.2"
+version = "1.0.3"
 
 [workspace.dependencies]
 butterflow-models = { path = "crates/models" }
