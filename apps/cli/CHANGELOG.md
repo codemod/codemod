@@ -1,5 +1,11 @@
 # codemod
 
+## 0.18.12
+
+### Patch Changes
+
+- 5ab2ca8: fix: pin workflow package version
+
 ## 0.18.11
 
 ### Patch Changes
