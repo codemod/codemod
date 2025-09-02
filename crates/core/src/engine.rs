@@ -1754,8 +1754,8 @@ impl Engine {
 
         // Add temp file var for step outputs
         let temp_dir = std::env::temp_dir();
-        let step_outputs_path = temp_dir.join(task.id.to_string());
-        File::create(&step_outputs_path)?;
+        let state_outputs_path = temp_dir.join(task.id.to_string());
+        File::create(&state_outputs_path)?;
 
         if let Some(bundle_path) = bundle_path {
             env.insert(
@@ -1766,7 +1766,7 @@ impl Engine {
 
         env.insert(
             String::from("STATE_OUTPUTS"),
-            step_outputs_path
+            state_outputs_path
                 .canonicalize()?
                 .to_str()
                 .expect("File path should be valid UTF-8")
@@ -1802,10 +1802,10 @@ impl Engine {
 
         debug!("Command output: {output}");
 
-        let outputs = read_to_string(&step_outputs_path).await?;
+        let outputs = read_to_string(&state_outputs_path).await?;
 
         // Clean up the temporary file
-        std::fs::remove_file(&step_outputs_path).ok();
+        std::fs::remove_file(&state_outputs_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();
@@ -1817,8 +1817,12 @@ impl Engine {
 
             // Determine if this is an append operation (@=) or a regular assignment (=)
             let (key, operation, value_str) = if let Some((k, v)) = line.split_once("@=") {
+                serde_json::from_str::<serde_json::Value>(v)
+                    .unwrap_or(serde_json::Value::String(v.to_string()));
                 (k, DiffOperation::Append, v)
             } else if let Some((k, v)) = line.split_once('=') {
+                serde_json::from_str::<serde_json::Value>(v)
+                    .unwrap_or(serde_json::Value::String(v.to_string()));
                 (k, DiffOperation::Update, v)
             } else {
                 // Malformed line, log and skip

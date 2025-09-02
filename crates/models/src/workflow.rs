@@ -1,12 +1,11 @@
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema as JsonSchemaSchema};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::node::Node;
-use crate::state::StateSchema;
 use crate::template::Template;
 use ts_rs::TS;
 
@@ -34,9 +33,10 @@ pub struct Workflow {
 /// Represents the state schema for a workflow
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema, TS)]
 pub struct WorkflowState {
-    /// Schema definitions
+    /// Object schema definition (enforced to be object type)
     #[serde(default)]
-    pub schema: Vec<StateSchema>,
+    #[ts(type = "Record<string, any>")]
+    pub schema: JsonSchemaSchema,
 }
 
 /// Represents a workflow run
