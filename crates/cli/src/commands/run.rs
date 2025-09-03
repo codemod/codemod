@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
 
-use crate::engine::{create_engine, create_registry_client};
+use crate::engine::{create_download_progress_callback, create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use butterflow_core::registry::RegistryError;
@@ -111,6 +111,7 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
         args.allow_dirty,
         params,
         args.registry.clone(),
+        Some(create_download_progress_callback()),
     )?;
 
     run_workflow(&engine, config).await?;

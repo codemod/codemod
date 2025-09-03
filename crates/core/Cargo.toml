@@ -35,6 +35,8 @@ ignore = { workspace = true }
 bytes = "1.10.1"
 futures-util = "0.3.31"
 rayon = "1.10"
+codemod-ast-grep-dynamic-lang = { workspace = true }
+serial_test = "3.2.0"
 
 [dev-dependencies]
 tempfile = { workspace = true }

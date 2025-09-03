@@ -1,5 +1,7 @@
 use anyhow::Result;
-use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use clap::Args;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
@@ -7,12 +9,14 @@ use codemod_sandbox::sandbox::{
 use log::{debug, error, info, warn};
 use std::{
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
     time::Instant,
 };
 
 use crate::dirty_git_check;
-use crate::engine::create_progress_callback;
+use crate::engine::{create_download_progress_callback, create_progress_callback};
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
 #[derive(Args, Debug)]
@@ -70,16 +74,22 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
-    let config = CodemodExecutionConfig {
-        pre_run_callback: None,
-        progress_callback: Arc::new(Some(create_progress_callback())),
-        target_path: Some(target_directory.to_path_buf()),
-        base_path: None,
-        include_globs: None,
-        exclude_globs: None,
-        dry_run: args.dry_run,
-        languages: Some(vec![args.language.clone()]),
-    };
+    let config = CodemodExecutionConfig::new(
+        None,
+        ProgressCallbackCodemodExecutionConfig {
+            progress_callback: Arc::new(Some(create_progress_callback())),
+            download_progress_callback: Some(create_download_progress_callback()),
+        },
+        Some(target_directory.to_path_buf()),
+        None,
+        GlobsCodemodExecutionConfig {
+            include_globs: None,
+            exclude_globs: None,
+        },
+        args.dry_run,
+        Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
+    )
+    .await;
 
     let started = Instant::now();
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::engine::create_engine;
+use crate::engine::{create_download_progress_callback, create_engine};
 use crate::workflow_runner::resolve_workflow_source;
 use anyhow::{Context, Result};
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
@@ -63,6 +63,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         // TODO: Load params from workflow run
         HashMap::new(),
         None,
+        Some(create_download_progress_callback()),
     )?;
 
     if args.trigger_all {

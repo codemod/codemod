@@ -9,6 +9,7 @@ members = [
     "crates/codemod-sandbox/build",
     "crates/telemetry",
     "xtask",
+    "crates/ast-grep-dynamic-lang",
 ]
 resolver = "2"
 
@@ -31,9 +32,9 @@ butterflow-runners = { path = "crates/runners" }
 butterflow-scheduler = { path = "crates/scheduler" }
 codemod-sandbox = { path = "crates/codemod-sandbox" }
 codemod-telemetry = { path = "crates/telemetry" }
+codemod-ast-grep-dynamic-lang = { path = "crates/ast-grep-dynamic-lang" }
 
 anyhow = "1.0"
-ast-grep-language = "0.38.6"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }

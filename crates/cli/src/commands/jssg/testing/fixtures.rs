@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +57,7 @@ impl TestCase {
     /// Discover all test cases in a directory
     pub fn discover_in_directory(
         test_dir: &Path,
-        language: SupportLang,
+        language: DynamicLang,
     ) -> Result<Vec<TestCase>, TestError> {
         let mut test_cases = Vec::new();
 
@@ -77,7 +77,7 @@ impl TestCase {
     }
 
     /// Create a test case from a directory
-    fn from_directory(test_dir: &Path, language: SupportLang) -> Result<TestCase, TestError> {
+    fn from_directory(test_dir: &Path, language: DynamicLang) -> Result<TestCase, TestError> {
         let name = test_dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -188,8 +188,8 @@ impl TestFile {
 }
 
 /// Find input files based on language extensions
-fn find_input_files(test_dir: &Path, language: SupportLang) -> Result<Vec<PathBuf>, TestError> {
-    let extensions = get_extensions_for_language(language);
+fn find_input_files(test_dir: &Path, language: DynamicLang) -> Result<Vec<PathBuf>, TestError> {
+    let extensions = get_extensions_for_language(language.name());
     let mut candidates = Vec::new();
 
     // Look for input.{ext} files
@@ -245,9 +245,9 @@ fn find_expected_files(
 /// Collect files in a directory that match the language extensions
 fn collect_files_in_directory(
     dir: &Path,
-    language: SupportLang,
+    language: DynamicLang,
 ) -> Result<Vec<TestFile>, TestError> {
-    let extensions = get_extensions_for_language(language);
+    let extensions = get_extensions_for_language(language.name());
     let mut files = Vec::new();
 
     for entry in std::fs::read_dir(dir)? {

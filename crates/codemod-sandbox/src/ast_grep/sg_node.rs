@@ -5,7 +5,7 @@ use ast_grep_core::tree_sitter::StrDoc as TreeSitterStrDoc;
 use ast_grep_core::{AstGrep, Node, NodeMatch};
 
 #[cfg(not(feature = "wasm"))]
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 
 use rquickjs::{class, class::Trace, methods, Ctx, Exception, JsLifetime, Result, Value};
 use std::marker::PhantomData;
@@ -17,7 +17,7 @@ use crate::ast_grep::types::JsNodeRange;
 use crate::ast_grep::utils::{convert_matcher, JsMatcherRjs};
 
 #[cfg(not(feature = "wasm"))]
-type StrDoc = TreeSitterStrDoc<SupportLang>;
+type StrDoc = TreeSitterStrDoc<DynamicLang>;
 #[cfg(feature = "wasm")]
 type StrDoc = WasmDoc;
 
@@ -100,7 +100,7 @@ impl<'js> SgRootRjs<'js> {
 
         #[cfg(not(feature = "wasm"))]
         {
-            let lang = SupportLang::from_str(&lang_str)
+            let lang = DynamicLang::from_str(&lang_str)
                 .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
             let grep = AstGrep::new(src, lang);
             Ok(SgRootRjs {

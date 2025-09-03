@@ -1,4 +1,7 @@
-use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
+use codemod_sandbox::{
+    sandbox::engine::language_data::get_extensions_for_language,
+    tree_sitter::{load_tree_sitter, SupportedLanguage},
+};
 use ignore::{
     overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
@@ -26,6 +29,13 @@ pub struct ProgressCallback {
     pub callback: Arc<ProgressCallbackFn>,
 }
 
+type DownloadProgressCallbackFn = Box<dyn Fn(u64, u64) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct DownloadProgressCallback {
+    pub callback: Arc<DownloadProgressCallbackFn>,
+}
+
 /// Shared execution context to minimize Arc cloning in parallel processing
 struct SharedExecutionContext<'a, F>
 where
@@ -45,6 +55,8 @@ pub struct CodemodExecutionConfig {
     pub pre_run_callback: Option<PreRunCallback>,
     /// Callback to report progress
     pub progress_callback: Arc<Option<ProgressCallback>>,
+    /// Download progress callback
+    pub download_progress_callback: Option<DownloadProgressCallback>,
     /// Path to the target file or directory
     pub target_path: Option<PathBuf>,
     /// Path to the base directory relative to the target path
@@ -56,10 +68,57 @@ pub struct CodemodExecutionConfig {
     /// Dry run mode
     pub dry_run: bool,
     /// Language
-    pub languages: Option<Vec<String>>,
+    pub languages: Option<Vec<SupportedLanguage>>,
+}
+
+pub struct GlobsCodemodExecutionConfig {
+    pub include_globs: Option<Vec<String>>,
+    pub exclude_globs: Option<Vec<String>>,
+}
+
+pub struct ProgressCallbackCodemodExecutionConfig {
+    pub progress_callback: Arc<Option<ProgressCallback>>,
+    pub download_progress_callback: Option<DownloadProgressCallback>,
 }
 
 impl CodemodExecutionConfig {
+    pub async fn new(
+        pre_run_callback: Option<PreRunCallback>,
+        callbacks: ProgressCallbackCodemodExecutionConfig,
+        target_path: Option<PathBuf>,
+        base_path: Option<PathBuf>,
+        globs: GlobsCodemodExecutionConfig,
+        dry_run: bool,
+        languages: Option<Vec<SupportedLanguage>>,
+    ) -> Self {
+        let languages = languages.clone().unwrap_or_default();
+        let _ = load_tree_sitter(
+            &languages,
+            callbacks
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to load tree-sitter language: {e:?}"),
+            ))
+        });
+
+        Self {
+            pre_run_callback,
+            progress_callback: callbacks.progress_callback,
+            target_path,
+            base_path,
+            include_globs: globs.include_globs,
+            exclude_globs: globs.exclude_globs,
+            dry_run,
+            languages: Some(languages),
+            download_progress_callback: callbacks.download_progress_callback,
+        }
+    }
     /// Execute the codemod by iterating through files and calling the provided callback
     pub fn execute<F>(&self, callback: F) -> Result<(), Box<dyn Error>>
     where
@@ -231,13 +290,10 @@ impl CodemodExecutionConfig {
             }
         } else if let Some(languages) = &self.languages {
             for language in languages {
-                let language = language.parse();
-                if let Ok(language) = language {
-                    for extension in get_extensions_for_language(language) {
-                        builder
-                            .add(format!("**/*{extension}").as_str())
-                            .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
-                    }
+                for extension in get_extensions_for_language(language.to_string().as_str()) {
+                    builder
+                        .add(format!("**/*{extension}").as_str())
+                        .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
                 }
             }
         } else {
