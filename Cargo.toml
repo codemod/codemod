@@ -21,7 +21,7 @@ documentation = "https://docs.rs/butterflow"
 repository = "https://github.com/codemod-com/butterflow"
 license = "Apache-2.0"
 rust-version = "1.70"
-version = "1.0.4"
+version = "1.0.5"
 
 [workspace.dependencies]
 butterflow-models = { path = "crates/models" }
