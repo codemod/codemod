@@ -7,10 +7,10 @@ use ast_grep_core::{AstGrep, Node, NodeMatch};
 #[cfg(not(feature = "wasm"))]
 use ast_grep_language::SupportLang;
 
-use rquickjs::{class, class::Trace, methods, Ctx, Exception, JsLifetime, Result, Value};
+use rquickjs::{class, class::Trace, methods, Ctx, Exception, IntoJs, JsLifetime, Result, Value};
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
@@ -21,16 +21,16 @@ type StrDoc = TreeSitterStrDoc<SupportLang>;
 #[cfg(feature = "wasm")]
 type StrDoc = WasmDoc;
 
-// No manual Trace for PhantomData - orphan rule violation
+pub(crate) struct SgRootInner {
+    grep: AstGrep<StrDoc>,
+    filename: Option<String>,
+}
 
 #[derive(Trace)]
 #[class(rename_all = "camelCase")]
 pub struct SgRootRjs<'js> {
     #[qjs(skip_trace)]
-    // AstGrep is not Trace, Arc<T> is Trace if T is Send+Sync+'static or skipped
-    pub(crate) inner_arc: Arc<AstGrep<StrDoc>>,
-    #[qjs(skip_trace)]
-    pub(crate) filename: Option<String>,
+    pub(crate) inner: Arc<SgRootInner>,
     #[qjs(skip_trace)]
     _phantom: PhantomData<&'js ()>,
 }
@@ -50,19 +50,19 @@ impl<'js> SgRootRjs<'js> {
     }
 
     pub fn root(&self, _ctx: Ctx<'js>) -> Result<SgNodeRjs<'js>> {
-        let node = self.inner_arc.root();
+        let node = self.inner.grep.root();
         let node_match: NodeMatch<_> = node.into();
         let static_node_match: NodeMatch<'static, StrDoc> =
             unsafe { std::mem::transmute(node_match) };
         Ok(SgNodeRjs {
-            grep_arc: self.inner_arc.clone(),
+            root: Arc::downgrade(&self.inner),
             inner_node: static_node_match,
             _phantom: PhantomData,
         })
     }
 
     pub fn filename(&self) -> Result<String> {
-        Ok(self.filename.clone().unwrap_or_default())
+        Ok(self.inner.filename.clone().unwrap_or_default())
     }
 
     pub fn source(&self) -> Result<String> {
@@ -92,8 +92,10 @@ impl<'js> SgRootRjs<'js> {
                 .map_err(|e| e.to_string())?;
 
             Ok(SgRootRjs {
-                inner_arc: Arc::new(unsafe { std::mem::transmute(doc) }),
-                filename,
+                inner: Arc::new(SgRootInner {
+                    grep: unsafe { std::mem::transmute(doc) },
+                    filename,
+                }),
                 _phantom: PhantomData,
             })
         }
@@ -104,9 +106,8 @@ impl<'js> SgRootRjs<'js> {
                 .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
             let grep = AstGrep::new(src, lang);
             Ok(SgRootRjs {
-                inner_arc: Arc::new(grep),
+                inner: Arc::new(SgRootInner { grep, filename }),
                 _phantom: PhantomData,
-                filename,
             })
         }
     }
@@ -115,8 +116,8 @@ impl<'js> SgRootRjs<'js> {
 #[derive(Trace, Clone)]
 #[class(rename_all = "camelCase")]
 pub struct SgNodeRjs<'js> {
-    #[qjs(skip_trace)] // AstGrep is not Trace
-    pub(crate) grep_arc: Arc<AstGrep<StrDoc>>,
+    #[qjs(skip_trace)] // Weak reference to the root
+    pub(crate) root: Weak<SgRootInner>,
     #[qjs(skip_trace)] // NodeMatch is not Trace
     pub(crate) inner_node: NodeMatch<'static, StrDoc>,
     #[qjs(skip_trace)]
@@ -180,29 +181,38 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self.inner_node.is_named_leaf())
     }
 
-    pub fn parent(&self) -> Result<Option<SgNodeRjs<'js>>> {
-        Ok(self.inner_node.parent().map(|node: Node<StrDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                grep_arc: self.grep_arc.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
+    pub fn parent(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.parent() {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, StrDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
             }
-        }))
+            None => Ok(Value::new_null(ctx)),
+        }
     }
-    pub fn child(&self, nth: usize) -> Result<Option<SgNodeRjs<'js>>> {
-        Ok(self.inner_node.child(nth).map(|node: Node<StrDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                grep_arc: self.grep_arc.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
+
+    pub fn child(&self, nth: usize, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.child(nth) {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, StrDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
             }
-        }))
+            None => Ok(Value::new_null(ctx)),
+        }
     }
 
     pub fn children(&self) -> Result<Vec<SgNodeRjs<'js>>> {
@@ -214,7 +224,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -231,7 +241,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -239,17 +249,21 @@ impl<'js> SgNodeRjs<'js> {
             .collect())
     }
 
-    pub fn next(&self) -> Result<Option<SgNodeRjs<'js>>> {
-        Ok(self.inner_node.next().map(|node: Node<StrDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                grep_arc: self.grep_arc.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
+    pub fn next(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.next() {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, StrDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
             }
-        }))
+            None => Ok(Value::new_null(ctx)),
+        }
     }
 
     #[qjs(rename = "nextAll")]
@@ -262,7 +276,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -270,17 +284,21 @@ impl<'js> SgNodeRjs<'js> {
             .collect())
     }
 
-    pub fn prev(&self) -> Result<Option<SgNodeRjs<'js>>> {
-        Ok(self.inner_node.prev().map(|node: Node<StrDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                grep_arc: self.grep_arc.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
+    pub fn prev(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.prev() {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, StrDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
             }
-        }))
+            None => Ok(Value::new_null(ctx)),
+        }
     }
 
     #[qjs(rename = "prevAll")]
@@ -293,7 +311,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -301,17 +319,21 @@ impl<'js> SgNodeRjs<'js> {
             .collect())
     }
 
-    pub fn field(&self, name: String) -> Result<Option<SgNodeRjs<'js>>> {
-        Ok(self.inner_node.field(&name).map(|node: Node<StrDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                grep_arc: self.grep_arc.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
+    pub fn field(&self, name: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.field(&name) {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, StrDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
             }
-        }))
+            None => Ok(Value::new_null(ctx)),
+        }
     }
 
     #[qjs(rename = "fieldChildren")]
@@ -324,7 +346,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -332,49 +354,33 @@ impl<'js> SgNodeRjs<'js> {
             .collect())
     }
 
-    pub fn find(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<Option<SgNodeRjs<'js>>> {
+    pub fn find(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let lang = *self.inner_node.lang();
         let matcher = convert_matcher(value, lang, &ctx)?;
 
+        let create_sg_node = |node: NodeMatch<StrDoc>| -> Result<Value<'js>> {
+            let static_node_match: NodeMatch<'static, StrDoc> =
+                unsafe { std::mem::transmute(node) };
+            let sg_node = SgNodeRjs {
+                root: self.root.clone(),
+                inner_node: static_node_match,
+                _phantom: PhantomData,
+            };
+            sg_node.into_js(&ctx)
+        };
+
         match matcher {
             JsMatcherRjs::Pattern(pattern) => match self.inner_node.find(pattern) {
-                Some(node) => {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    Ok(Some(SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }))
-                }
-                None => Ok(None),
+                Some(node) => create_sg_node(node),
+                None => Ok(Value::new_null(ctx)),
             },
             JsMatcherRjs::Kind(kind_matcher) => match self.inner_node.find(kind_matcher) {
-                Some(node) => {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    Ok(Some(SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }))
-                }
-                None => Ok(None),
+                Some(node) => create_sg_node(node),
+                None => Ok(Value::new_null(ctx)),
             },
             JsMatcherRjs::Config(config) => match self.inner_node.find(config) {
-                Some(node) => {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    Ok(Some(SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }))
-                }
-                None => Ok(None),
+                Some(node) => create_sg_node(node),
+                None => Ok(Value::new_null(ctx)),
             },
         }
     }
@@ -393,7 +399,7 @@ impl<'js> SgNodeRjs<'js> {
                     let static_node_match: NodeMatch<'static, StrDoc> =
                         unsafe { std::mem::transmute(node_match) };
                     SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
+                        root: self.root.clone(),
                         inner_node: static_node_match,
                         _phantom: PhantomData,
                     }
@@ -407,7 +413,7 @@ impl<'js> SgNodeRjs<'js> {
                     let static_node_match: NodeMatch<'static, StrDoc> =
                         unsafe { std::mem::transmute(node_match) };
                     SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
+                        root: self.root.clone(),
                         inner_node: static_node_match,
                         _phantom: PhantomData,
                     }
@@ -421,7 +427,7 @@ impl<'js> SgNodeRjs<'js> {
                     let static_node_match: NodeMatch<'static, StrDoc> =
                         unsafe { std::mem::transmute(node_match) };
                     SgNodeRjs {
-                        grep_arc: self.grep_arc.clone(),
+                        root: self.root.clone(),
                         inner_node: static_node_match,
                         _phantom: PhantomData,
                     }
@@ -464,24 +470,26 @@ impl<'js> SgNodeRjs<'js> {
     }
 
     #[qjs(rename = "getMatch")]
-    pub fn get_match(&self, m: String) -> Result<Option<SgNodeRjs<'js>>> {
-        let node = self
+    pub fn get_match(&self, m: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self
             .inner_node
             .get_env()
             .get_match(&m)
             .cloned()
             .map(NodeMatch::from)
-            .map(|node_match| {
+        {
+            Some(node_match) => {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
-                }
-            });
-
-        Ok(node)
+                };
+                sg_node.into_js(&ctx)
+            }
+            None => Ok(Value::new_null(ctx)),
+        }
     }
 
     #[qjs(rename = "getMultipleMatches")]
@@ -496,7 +504,7 @@ impl<'js> SgNodeRjs<'js> {
                 let static_node_match: NodeMatch<'static, StrDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
-                    grep_arc: self.grep_arc.clone(),
+                    root: self.root.clone(),
                     inner_node: static_node_match,
                     _phantom: PhantomData,
                 }
@@ -540,5 +548,16 @@ impl<'js> SgNodeRjs<'js> {
         // Add trailing content
         new_content.push_str(&old_content[start..]);
         Ok(new_content)
+    }
+
+    #[qjs(rename = "getRoot")]
+    pub fn get_root(&self, ctx: Ctx<'js>) -> Result<SgRootRjs<'js>> {
+        match self.root.upgrade() {
+            Some(inner) => Ok(SgRootRjs {
+                inner,
+                _phantom: PhantomData,
+            }),
+            None => Err(Exception::throw_reference(&ctx, "Root has been dropped")),
+        }
     }
 }
