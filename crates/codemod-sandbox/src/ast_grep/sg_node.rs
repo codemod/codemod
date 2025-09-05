@@ -358,7 +358,7 @@ impl<'js> SgNodeRjs<'js> {
         let lang = *self.inner_node.lang();
         let matcher = convert_matcher(value, lang, &ctx)?;
 
-        let create_sg_node = |node: NodeMatch<StrDoc>| -> Result<Value<'js>> {
+        let create_sg_node = |node: NodeMatch<StrDoc>, ctx: &Ctx<'js>| -> Result<Value<'js>> {
             let static_node_match: NodeMatch<'static, StrDoc> =
                 unsafe { std::mem::transmute(node) };
             let sg_node = SgNodeRjs {
@@ -366,20 +366,20 @@ impl<'js> SgNodeRjs<'js> {
                 inner_node: static_node_match,
                 _phantom: PhantomData,
             };
-            sg_node.into_js(&ctx)
+            sg_node.into_js(ctx)
         };
 
         match matcher {
             JsMatcherRjs::Pattern(pattern) => match self.inner_node.find(pattern) {
-                Some(node) => create_sg_node(node),
+                Some(node) => create_sg_node(node, &ctx),
                 None => Ok(Value::new_null(ctx)),
             },
             JsMatcherRjs::Kind(kind_matcher) => match self.inner_node.find(kind_matcher) {
-                Some(node) => create_sg_node(node),
+                Some(node) => create_sg_node(node, &ctx),
                 None => Ok(Value::new_null(ctx)),
             },
             JsMatcherRjs::Config(config) => match self.inner_node.find(config) {
-                Some(node) => create_sg_node(node),
+                Some(node) => create_sg_node(node, &ctx),
                 None => Ok(Value::new_null(ctx)),
             },
         }
@@ -390,48 +390,31 @@ impl<'js> SgNodeRjs<'js> {
         let lang = *self.inner_node.lang();
         let matcher = convert_matcher(value, lang, &ctx)?;
 
+        let create_sg_node = |node: NodeMatch<StrDoc>| -> SgNodeRjs<'js> {
+            let static_node_match: NodeMatch<'static, StrDoc> =
+                unsafe { std::mem::transmute(node) };
+            SgNodeRjs {
+                root: self.root.clone(),
+                inner_node: static_node_match,
+                _phantom: PhantomData,
+            }
+        };
+
         match matcher {
             JsMatcherRjs::Pattern(pattern) => Ok(self
                 .inner_node
                 .find_all(pattern)
-                .map(|node| {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    SgNodeRjs {
-                        root: self.root.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }
-                })
+                .map(create_sg_node)
                 .collect()),
             JsMatcherRjs::Kind(kind_matcher) => Ok(self
                 .inner_node
                 .find_all(kind_matcher)
-                .map(|node| {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    SgNodeRjs {
-                        root: self.root.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }
-                })
+                .map(create_sg_node)
                 .collect()),
             JsMatcherRjs::Config(config) => Ok(self
                 .inner_node
                 .find_all(config)
-                .map(|node| {
-                    let node_match: NodeMatch<_> = node;
-                    let static_node_match: NodeMatch<'static, StrDoc> =
-                        unsafe { std::mem::transmute(node_match) };
-                    SgNodeRjs {
-                        root: self.root.clone(),
-                        inner_node: static_node_match,
-                        _phantom: PhantomData,
-                    }
-                })
+                .map(create_sg_node)
                 .collect()),
         }
     }
