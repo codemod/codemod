@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.0.7
+
+### Patch Changes
+
+- be28e51: feat: add parse and parseAsync to jssg-types
+
 ## 1.0.6
 
 ### Patch Changes
