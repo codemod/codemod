@@ -223,15 +223,18 @@ impl CodemodExecutionConfig {
         let mut builder = OverrideBuilder::new(base_path);
         let mut has_patterns = false;
 
-        if let Some(languages) = &self.languages {
-            if !languages.is_empty() {
-                for language in languages {
-                    for extension in get_extensions_for_language(language.parse().unwrap()) {
-                        builder
-                            .add(format!("**/*{extension}").as_str())
-                            .map_err(|e| format!("Failed to add language pattern: {e}"))?;
-                        has_patterns = true;
-                    }
+        if self.include_globs.is_none()
+            && self
+                .languages
+                .as_ref()
+                .is_some_and(|langs| !langs.is_empty())
+        {
+            for language in self.languages.as_ref().unwrap() {
+                for extension in get_extensions_for_language(language.parse().unwrap()) {
+                    builder
+                        .add(format!("**/*{extension}").as_str())
+                        .map_err(|e| format!("Failed to add language pattern: {e}"))?;
+                    has_patterns = true;
                 }
             }
         }
