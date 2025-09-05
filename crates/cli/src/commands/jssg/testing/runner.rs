@@ -116,15 +116,28 @@ impl TestRunner {
         }
     }
 
-    pub async fn run_tests(&mut self, codemod_path: &Path, language: &str) -> Result<TestSummary> {
+    pub async fn run_tests(
+        &mut self,
+        codemod_path: &Path,
+        language: &str,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<TestSummary> {
         if self.options.watch {
-            return self.run_with_watch(codemod_path, language).await;
+            return self
+                .run_with_watch(codemod_path, language, capabilities)
+                .await;
         }
 
-        self.run_tests_once(codemod_path, language).await
+        self.run_tests_once(codemod_path, language, capabilities)
+            .await
     }
 
-    async fn run_tests_once(&mut self, codemod_path: &Path, language: &str) -> Result<TestSummary> {
+    async fn run_tests_once(
+        &mut self,
+        codemod_path: &Path,
+        language: &str,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<TestSummary> {
         // Parse language
         let language_enum: SupportLang = language.parse()?;
 
@@ -179,6 +192,7 @@ impl TestRunner {
                     &resolver,
                     test_case,
                     &self.options,
+                    capabilities.clone(),
                 ),
             )
             .await;
@@ -230,6 +244,7 @@ impl TestRunner {
         resolver: &Arc<OxcResolver>,
         test_case: &TestCase,
         options: &TestOptions,
+        capabilities: Option<Vec<String>>,
     ) -> Result<()> {
         let should_expect_error = test_case.should_expect_error(&options.expect_errors);
 
@@ -247,6 +262,7 @@ impl TestRunner {
                     filesystem,
                     resolver,
                     test_case,
+                    capabilities.clone(),
                 )
                 .await;
             } else {
@@ -272,6 +288,7 @@ impl TestRunner {
                 language,
                 &input_file.path,
                 &input_file.content,
+                capabilities.clone(),
             )
             .await
             .map_err(|e| anyhow::anyhow!("{}", Self::format_execution_error(&e)))?;
@@ -331,6 +348,7 @@ impl TestRunner {
         filesystem: &Arc<RealFileSystem>,
         resolver: &Arc<OxcResolver>,
         test_case: &TestCase,
+        capabilities: Option<Vec<String>>,
     ) -> Result<()> {
         for input_file in &test_case.input_files {
             let execution_output = execute_codemod_with_quickjs(
@@ -340,6 +358,7 @@ impl TestRunner {
                 language,
                 &input_file.path,
                 &input_file.content,
+                capabilities.clone(),
             )
             .await
             .map_err(|e| anyhow::anyhow!("{}", Self::format_execution_error(&e)))?;
@@ -424,11 +443,18 @@ impl TestRunner {
         result
     }
 
-    async fn run_with_watch(&mut self, codemod_path: &Path, language: &str) -> Result<TestSummary> {
+    async fn run_with_watch(
+        &mut self,
+        codemod_path: &Path,
+        language: &str,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
 
         // Run tests initially
-        let initial_summary = self.run_tests_once(codemod_path, language).await?;
+        let initial_summary = self
+            .run_tests_once(codemod_path, language, capabilities.clone())
+            .await?;
 
         // For now, just return the initial summary
         // TODO: Implement file watching with notify crate

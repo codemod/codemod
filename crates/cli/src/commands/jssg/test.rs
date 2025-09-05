@@ -66,6 +66,18 @@ pub struct Command {
     /// Test patterns that are expected to produce errors (comma-separated)
     #[arg(long)]
     pub expect_errors: Option<String>,
+
+    /// Allow fs access
+    #[arg(long)]
+    pub allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    pub allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    pub allow_child_process: bool,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
@@ -107,8 +119,25 @@ pub async fn handler(args: &Command) -> Result<()> {
     };
 
     // Create and run test runner
+    let mut capabilities = Vec::new();
+    if args.allow_fs {
+        capabilities.push("fs".to_string());
+    }
+    if args.allow_fetch {
+        capabilities.push("fetch".to_string());
+    }
+    if args.allow_child_process {
+        capabilities.push("child_process".to_string());
+    }
+    let capabilities = if capabilities.is_empty() {
+        None
+    } else {
+        Some(capabilities)
+    };
     let mut runner = TestRunner::new(options, test_directory);
-    let summary = runner.run_tests(codemod_path, &args.language).await?;
+    let summary = runner
+        .run_tests(codemod_path, &args.language, capabilities.clone())
+        .await?;
 
     // Display test summary
     summary.display_summary();

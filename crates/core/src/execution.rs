@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-type PreRunCallbackFn = Box<dyn Fn(&Path, bool) + Send + Sync>;
+type PreRunCallbackFn = Box<dyn Fn(&Path, bool, &CodemodExecutionConfig) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PreRunCallback {
@@ -57,6 +57,8 @@ pub struct CodemodExecutionConfig {
     pub dry_run: bool,
     /// Language
     pub languages: Option<Vec<String>>,
+    /// Capabilities
+    pub capabilities: Option<Vec<String>>,
 }
 
 impl CodemodExecutionConfig {
@@ -76,7 +78,7 @@ impl CodemodExecutionConfig {
         let search_base = self.get_search_base()?;
 
         if let Some(ref pre_run_cb) = self.pre_run_callback {
-            (pre_run_cb.callback)(&search_base, !self.dry_run);
+            (pre_run_cb.callback)(&search_base, !self.dry_run, self);
         }
 
         let globs = self.build_globs(&search_base)?;

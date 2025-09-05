@@ -4,7 +4,8 @@ use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::filesystem::FileSystem;
 use crate::sandbox::resolvers::ModuleResolver;
 use ast_grep_language::SupportLang;
-use llrt_modules::module_builder::ModuleBuilder;
+#[cfg(feature = "native")]
+use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::fmt;
@@ -133,6 +134,7 @@ pub async fn execute_codemod_with_quickjs<F, R>(
     language: SupportLang,
     file_path: &Path,
     content: &str,
+    capabilities: Option<Vec<String>>,
 ) -> Result<ExecutionOutput, ExecutionError>
 where
     F: FileSystem,
@@ -158,9 +160,49 @@ where
     })?;
 
     // Set up built-in modules
-    let module_builder = ModuleBuilder::default();
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) = module_builder.build();
-
+    let mut module_builder = LlrtModuleBuilder::build();
+    if let Some(capabilities) = capabilities {
+        for capability in capabilities {
+            match capability.as_str() {
+                "fetch" => {
+                    module_builder.enable_fetch();
+                }
+                "fs" => {
+                    module_builder.enable_fs();
+                }
+                "child_process" => {
+                    module_builder.enable_child_process();
+                }
+                "abort" => {}
+                "assert" => {}
+                "buffer" => {}
+                "console" => {}
+                "crypto" => {}
+                "events" => {}
+                "exceptions" => {}
+                "os" => {}
+                "path" => {}
+                "perf_hooks" => {}
+                "process" => {}
+                "stream_web" => {}
+                "string_decoder" => {}
+                "timers" => {}
+                "tty" => {}
+                "url" => {}
+                "util" => {}
+                "zlib" => {}
+                _ => {
+                    return Err(ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: format!("Unknown capability: {capability:?}"),
+                        },
+                    });
+                }
+            }
+        }
+    }
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
     // Add AstGrepModule
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);

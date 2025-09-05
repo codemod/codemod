@@ -4,6 +4,7 @@ use log::info;
 mod ascii_art;
 mod auth;
 mod auth_provider;
+mod capabilities_security_callback;
 mod commands;
 mod dirty_git_check;
 mod engine;
