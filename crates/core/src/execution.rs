@@ -73,21 +73,16 @@ impl CodemodExecutionConfig {
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
     {
-        // Determine the search base path
         let search_base = self.get_search_base()?;
 
-        // Call pre-run callback if provided
         if let Some(ref pre_run_cb) = self.pre_run_callback {
             (pre_run_cb.callback)(&search_base, !self.dry_run);
         }
 
-        // Build glob overrides
         let globs = self.build_globs(&search_base)?;
 
-        // Pre-scan to count total files for accurate progress reporting
         let total_files = self.count_files(&search_base, &globs)?;
 
-        // Report start of processing
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
         }
@@ -96,17 +91,11 @@ impl CodemodExecutionConfig {
             .map_or(1, |n| n.get())
             .min(12);
 
-        // Create WalkBuilder with the same configuration
-        let walker = WalkBuilder::new(&search_base)
-            .follow_links(false)
-            .git_ignore(true)
-            .ignore(true)
-            .hidden(false)
-            .overrides(globs)
+        let walker = self
+            .create_walk_builder(&search_base, globs)
             .threads(num_threads)
             .build_parallel();
 
-        // Create shared execution context to minimize cloning overhead
         let shared_context = Arc::new(SharedExecutionContext {
             task_id: Arc::from(task_id),
             progress_callback: self.progress_callback.clone(),
@@ -116,9 +105,7 @@ impl CodemodExecutionConfig {
             total_files,
         });
 
-        // Use WalkParallel's run method for parallel processing
         walker.run(|| {
-            // Single Arc clone per worker thread instead of multiple individual clones
             let ctx = Arc::clone(&shared_context);
 
             Box::new(move |entry| match entry {
@@ -160,7 +147,6 @@ impl CodemodExecutionConfig {
             })
         });
 
-        // Report completion
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             let final_count = shared_context.processed_count.load(Ordering::Relaxed);
             (progress_cb.callback)(task_id, "", "finish", Some(&total_files), &final_count);
@@ -170,14 +156,10 @@ impl CodemodExecutionConfig {
     }
 
     /// Count total files that will be processed
-    fn count_files(&self, search_base: &Path, globs: &Override) -> Result<u64, String> {
-        let walker = WalkBuilder::new(search_base)
-            .follow_links(false)
-            .git_ignore(true)
-            .ignore(true)
-            .hidden(false)
-            .overrides(globs.clone())
-            .threads(1) // Single-threaded for counting
+    fn count_files(&self, search_base: &Path, globs: &Option<Override>) -> Result<u64, String> {
+        let walker = self
+            .create_walk_builder(search_base, globs.clone())
+            .threads(1)
             .build();
 
         let mut count = 0u64;
@@ -189,13 +171,33 @@ impl CodemodExecutionConfig {
                     }
                 }
                 Err(_) => {
-                    // Skip errors during counting
                     continue;
                 }
             }
         }
 
         Ok(count)
+    }
+
+    /// Create a configured WalkBuilder with all the standard settings
+    fn create_walk_builder(&self, base_path: &Path, overrides: Option<Override>) -> WalkBuilder {
+        let mut builder = WalkBuilder::new(base_path);
+
+        if let Some(overrides) = overrides {
+            builder.overrides(overrides);
+        }
+
+        builder
+            .follow_links(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .require_git(false)
+            .parents(true)
+            .ignore(true)
+            .hidden(false);
+
+        builder
     }
 
     /// Get the search base path by combining target_path and base_path
@@ -206,47 +208,43 @@ impl CodemodExecutionConfig {
             .ok_or_else(|| "target_path is required".to_string())?;
 
         if let Some(base) = &self.base_path {
-            // If base_path is provided, combine it with target_path
             if base.is_absolute() {
                 Err(format!("base_path is absolute: {}", base.display()))
             } else {
                 Ok(target.join(base))
             }
         } else {
-            // Use target_path as the search base
             Ok(target.clone())
         }
     }
 
     /// Build glob overrides for include/exclude patterns
-    fn build_globs(&self, base_path: &Path) -> Result<Override, String> {
+    fn build_globs(&self, base_path: &Path) -> Result<Option<Override>, String> {
         let mut builder = OverrideBuilder::new(base_path);
+        let mut has_patterns = false;
 
-        // Add include patterns
+        if let Some(languages) = &self.languages {
+            if !languages.is_empty() {
+                for language in languages {
+                    for extension in get_extensions_for_language(language.parse().unwrap()) {
+                        builder
+                            .add(format!("**/*{extension}").as_str())
+                            .map_err(|e| format!("Failed to add language pattern: {e}"))?;
+                        has_patterns = true;
+                    }
+                }
+            }
+        }
+
         if let Some(ref include_globs) = self.include_globs {
             for glob in include_globs {
                 builder
                     .add(glob)
                     .map_err(|e| format!("Invalid include glob '{glob}': {e}"))?;
+                has_patterns = true;
             }
-        } else if let Some(languages) = &self.languages {
-            for language in languages {
-                let language = language.parse();
-                if let Ok(language) = language {
-                    for extension in get_extensions_for_language(language) {
-                        builder
-                            .add(format!("**/*{extension}").as_str())
-                            .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
-                    }
-                }
-            }
-        } else {
-            builder
-                .add("**/*")
-                .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
         }
 
-        // Add exclude patterns (prefixed with !)
         if let Some(ref exclude_globs) = self.exclude_globs {
             for glob in exclude_globs {
                 let exclude_pattern = if glob.starts_with('!') {
@@ -257,11 +255,16 @@ impl CodemodExecutionConfig {
                 builder
                     .add(&exclude_pattern)
                     .map_err(|e| format!("Invalid exclude glob '{exclude_pattern}': {e}"))?;
+                has_patterns = true;
             }
         }
 
-        builder
-            .build()
-            .map_err(|e| format!("Failed to build glob overrides: {e}"))
+        if has_patterns {
+            Ok(Some(builder.build().map_err(|e| {
+                format!("Failed to build glob overrides: {e}")
+            })?))
+        } else {
+            Ok(None)
+        }
     }
 }
