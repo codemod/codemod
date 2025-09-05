@@ -12,6 +12,7 @@ targets:
   languages: ["{language}"]
 
 keywords: ["transformation", "migration"]
+{repository_line} 
 
 registry:
   access: "{access}"
