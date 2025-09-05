@@ -12,4 +12,7 @@ impl TelemetrySender for NullSender {
     ) {
         // Do nothing
     }
+    async fn initialize_panic_telemetry(&self) {
+        // Do nothing
+    }
 }

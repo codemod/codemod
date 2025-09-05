@@ -1,19 +1,23 @@
+use crate::dirty_git_check;
+use crate::engine::create_progress_callback;
+use crate::TelemetrySenderMutex;
+use crate::CLI_VERSION;
 use anyhow::Result;
 use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
+use codemod_sandbox::utils::project_discovery::find_tsconfig;
+use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, info, warn};
+use std::sync::Arc;
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Instant,
 };
-
-use crate::dirty_git_check;
-use crate::engine::create_progress_callback;
-use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -41,7 +45,7 @@ pub struct Command {
     pub allow_dirty: bool,
 }
 
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path
@@ -159,6 +163,28 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
+    let execution_id = generate_execution_id();
+
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "localJssgExecuted".to_string(),
+                properties: HashMap::from([
+                    ("executionId".to_string(), execution_id.clone()),
+                    ("runTimeSeconds".to_string(), seconds.to_string()),
+                    ("language".to_string(), args.language.clone()),
+                    ("dirtyRun".to_string(), args.allow_dirty.to_string()),
+                    ("dryRun".to_string(), args.dry_run.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
 
     Ok(())
 }

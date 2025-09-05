@@ -1,8 +1,13 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use posthog_rs;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env;
+use std::panic;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::OnceCell;
 
 #[derive(Debug, Clone)]
 pub struct TelemetrySenderOptions {
@@ -23,17 +28,20 @@ pub struct BaseEvent {
     pub properties: HashMap<String, String>,
 }
 
+static RUNTIME_HANDLE: OnceCell<tokio::runtime::Handle> = OnceCell::const_new();
+
 #[async_trait]
-pub trait TelemetrySender {
+pub trait TelemetrySender: Send + Sync + 'static {
     async fn send_event(
         &self,
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
     );
+    async fn initialize_panic_telemetry(&self);
 }
 
 pub struct PostHogSender {
-    client: posthog_rs::Client,
+    client: Arc<posthog_rs::Client>,
     options: TelemetrySenderOptions,
 }
 
@@ -42,7 +50,10 @@ pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
 impl PostHogSender {
     pub async fn new(options: TelemetrySenderOptions) -> Self {
         let client = posthog_rs::client(POSTHOG_API_KEY).await;
-        Self { client, options }
+        Self {
+            client: Arc::new(client),
+            options,
+        }
     }
 }
 
@@ -77,5 +88,79 @@ impl TelemetrySender for PostHogSender {
         if let Err(e) = self.client.capture(posthog_event).await {
             eprintln!("Failed to send PostHog event: {e}");
         }
+    }
+
+    async fn initialize_panic_telemetry(&self) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _ = RUNTIME_HANDLE.set(handle);
+        }
+
+        let client = self.client.clone();
+        let options = self.options.clone();
+
+        panic::set_hook(Box::new(move |panic_info| {
+            let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+
+            let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic occurred".to_string()
+            };
+
+            let location = if let Some(location) = panic_info.location() {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            } else {
+                "Unknown location".to_string()
+            };
+
+            if let Some(handle) = RUNTIME_HANDLE.get() {
+                let client = client.clone();
+                let options = options.clone();
+
+                handle.spawn(async move {
+                    let mut posthog_event = posthog_rs::Event::new(
+                        format!("codemod.{}.cliPanic", options.cloud_role),
+                        options.distinct_id.clone(),
+                    );
+
+                    let properties = HashMap::from([
+                        ("timestamp".to_string(), timestamp),
+                        ("message".to_string(), panic_message),
+                        ("location".to_string(), location),
+                        (
+                            "cliVersion".to_string(),
+                            env!("CARGO_PKG_VERSION").to_string(),
+                        ),
+                        ("os".to_string(), std::env::consts::OS.to_string()),
+                        ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                    ]);
+
+                    for (key, value) in properties {
+                        let _ = posthog_event.insert_prop(key, value);
+                    }
+
+                    let _ =
+                        tokio::time::timeout(Duration::from_secs(5), client.capture(posthog_event))
+                            .await;
+                });
+
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                std::panic::resume_unwind(Box::new(*s));
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                std::panic::resume_unwind(Box::new(s.clone()));
+            } else {
+                std::panic::resume_unwind(Box::new("Unknown panic"));
+            }
+        }));
     }
 }

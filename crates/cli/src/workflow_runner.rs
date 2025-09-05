@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Run a workflow with the given configuration
-pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<String> {
+pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
     // Parse workflow file
     let workflow = utils::parse_workflow_file(engine.get_workflow_file_path()).context(format!(
         "Failed to parse workflow file: {}",
@@ -32,7 +32,7 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
 
-    Ok(workflow_run_id.to_string())
+    Ok((workflow_run_id.to_string(), seconds))
 }
 
 /// Wait for workflow to complete or pause

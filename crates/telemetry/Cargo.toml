@@ -12,5 +12,7 @@ build = "build.rs"
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 posthog-rs = "0.3.7"
 serde.workspace = true
+tokio.workspace = true

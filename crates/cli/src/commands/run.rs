@@ -1,19 +1,20 @@
+use crate::engine::{create_engine, create_registry_client};
+use crate::progress_bar::download_progress_bar;
+use crate::workflow_runner::run_workflow;
+use crate::TelemetrySenderMutex;
+use crate::CLI_VERSION;
 use anyhow::{Context, Result};
+use butterflow_core::registry::RegistryError;
+use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
+use codemod_telemetry::send_event::BaseEvent;
 use console::style;
 use log::info;
-use rand::Rng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
-
-use crate::engine::{create_engine, create_registry_client};
-use crate::progress_bar::download_progress_bar;
-use crate::workflow_runner::run_workflow;
-use butterflow_core::registry::RegistryError;
-use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -46,7 +47,7 @@ pub struct Command {
     target_path: Option<PathBuf>,
 }
 
-pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve the package (local path or registry package)
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
@@ -115,14 +116,13 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
 
     run_workflow(&engine, config).await?;
 
-    let cli_version = env!("CARGO_PKG_VERSION");
     telemetry
         .send_event(
             BaseEvent {
                 kind: "failedToExecuteCommand".to_string(),
                 properties: HashMap::from([
                     ("codemodName".to_string(), args.package.clone()),
-                    ("cliVersion".to_string(), cli_version.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     (
                         "commandName".to_string(),
                         "codemod.executeCodemod".to_string(),
@@ -143,14 +143,9 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
     println!("✅ Unmodified files: {files_unmodified}");
     println!("❌ Files with errors: {files_with_errors}");
 
-    let cli_version = env!("CARGO_PKG_VERSION");
-    let execution_id: [u8; 20] = rand::thread_rng().gen();
-    let execution_id = base64::Engine::encode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        execution_id,
-    );
+    let execution_id = generate_execution_id();
 
-    let _ = telemetry
+    telemetry
         .send_event(
             BaseEvent {
                 kind: "codemodExecuted".to_string(),
@@ -158,7 +153,7 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
                     ("codemodName".to_string(), args.package.clone()),
                     ("executionId".to_string(), execution_id.clone()),
                     ("fileCount".to_string(), files_modified.to_string()),
-                    ("cliVersion".to_string(), cli_version.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
                 ]),

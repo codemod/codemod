@@ -35,6 +35,8 @@ ignore = { workspace = true }
 bytes = "1.10.1"
 futures-util = "0.3.31"
 rayon = "1.10"
+base64 = "0.22.1"
+rand = "0.9.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
