@@ -7,6 +7,5 @@ pub mod filesystem;
 #[cfg(feature = "native")]
 pub mod resolvers;
 
-// Platform-specific modules
 #[cfg(feature = "wasm")]
 pub mod wasm_exports;
