@@ -369,6 +369,7 @@ impl Bundler {
         // Convert module path to valid variable name
         match module_path {
             "fs" => "__builtin_fs".to_string(),
+            "fs/promises" => "__builtin_fs_promises".to_string(),
             "path" => "__builtin_path".to_string(),
             "os" => "__builtin_os".to_string(),
             "child_process" => "__builtin_child_process".to_string(),
@@ -382,7 +383,10 @@ impl Bundler {
             }
             _ => format!(
                 "__builtin_{}",
-                module_path.replace("-", "_").replace(":", "_")
+                module_path
+                    .replace("-", "_")
+                    .replace(":", "_")
+                    .replace("/", "_")
             ),
         }
     }
