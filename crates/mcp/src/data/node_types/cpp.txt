@@ -1,0 +1,166 @@
+call_expression: arguments=argument_list, function=expression,primitive_type
+switch_statement: body=compound_statement, condition=condition_clause
+friend_declaration: children=declaration, function_definition, qualified_identifier, template_type, type_identifier
+reference_declarator: children=_declarator, _field_declarator, _type_declarator, variadic_declarator
+using_declaration: children=identifier, qualified_identifier
+abstract_parenthesized_declarator: children=_abstract_declarator, ms_call_modifier*
+preproc_elif: condition=binary_expression,call_expression,char_literal,identifier,number_literal,parenthesized_expression,preproc_defined,unary_expression, alternative=preproc_elif,preproc_elifdef,preproc_else?, children=access_specifier, alias_declaration, concept_definition, declaration, enumerator, field_declaration, friend_declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+co_return_statement: children=expression?
+parameter_declaration: type=type_specifier, declarator=_abstract_declarator,_declarator?, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+template_type: arguments=template_argument_list, name=type_identifier
+alias_declaration: name=type_identifier, type=type_descriptor, children=attribute_declaration*?
+for_statement: initializer=comma_expression,declaration,expression?, body=statement, update=comma_expression,expression?, condition=comma_expression,expression?
+subscript_expression: indices=subscript_argument_list, argument=expression
+optional_parameter_declaration: declarator=_declarator,abstract_reference_declarator?, default_value=expression, type=type_specifier, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+user_defined_literal: children=char_literal, concatenated_string, literal_suffix, number_literal, raw_string_literal, string_literal*
+case_statement: value=expression?, children=attributed_statement, break_statement, co_return_statement, co_yield_statement, compound_statement, continue_statement, declaration, do_statement, expression_statement, for_range_loop, for_statement, goto_statement, if_statement, labeled_statement, return_statement, seh_leave_statement, seh_try_statement, switch_statement, throw_statement, try_statement, type_definition, while_statement*?
+type_descriptor: declarator=_abstract_declarator?, type=type_specifier, children=type_qualifier*?
+function_definition: body=compound_statement,try_statement?, type=type_specifier?, declarator=_declarator,_field_declarator,operator_cast, children=attribute_declaration, attribute_specifier, default_method_clause, delete_method_clause, explicit_function_specifier, field_initializer_list, ms_call_modifier, ms_declspec_modifier, pure_virtual_clause, storage_class_specifier, try_statement, type_qualifier*?
+field_expression: field=dependent_name,destructor_name,field_identifier,qualified_identifier,template_method, argument=expression
+sizeof_expression: type=type_descriptor?, value=expression?
+gnu_asm_clobber_list: register=concatenated_string,raw_string_literal,string_literal*?
+function_declarator: parameters=parameter_list, declarator=_declarator,_field_declarator,_type_declarator, children=attribute_declaration, attribute_specifier, gnu_asm_expression, noexcept, ref_qualifier, requires_clause, throw_specifier, trailing_return_type, type_qualifier, virtual_specifier*?
+ms_based_modifier: children=argument_list
+subscript_designator: children=expression
+init_statement: children=alias_declaration, declaration, expression_statement, type_definition
+if_statement: alternative=else_clause?, condition=condition_clause, consequence=statement
+variadic_declarator: children=identifier?
+declaration_list: children=alias_declaration, concept_definition, declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+raw_string_literal: delimiter=raw_string_delimiter?, children=raw_string_content, raw_string_delimiter*
+variadic_type_parameter_declaration: children=type_identifier?
+parenthesized_expression: children=comma_expression, compound_statement, expression, preproc_defined
+comma_expression: left=expression, right=comma_expression,expression
+seh_finally_clause: body=compound_statement
+condition_clause: initializer=init_statement?, value=comma_expression,declaration,expression
+new_expression: placement=argument_list?, declarator=new_declarator?, type=type_specifier, arguments=argument_list,initializer_list?
+delete_expression: children=expression
+dependent_type: children=type_specifier
+field_declaration_list: children=access_specifier, alias_declaration, declaration, field_declaration, friend_declaration, function_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, static_assert_declaration, template_declaration, type_definition, using_declaration*?
+preproc_include: path=call_expression,identifier,string_literal,system_lib_string
+template_method: arguments=template_argument_list, name=field_identifier,operator_name
+extension_expression: children=expression
+subscript_argument_list: children=expression, initializer_list*?
+cast_expression: type=type_descriptor, value=expression
+gnu_asm_input_operand: symbol=identifier?, constraint=string_literal, value=expression
+preproc_if: alternative=preproc_elif,preproc_elifdef,preproc_else?, condition=binary_expression,call_expression,char_literal,identifier,number_literal,parenthesized_expression,preproc_defined,unary_expression, children=access_specifier, alias_declaration, concept_definition, declaration, enumerator, field_declaration, friend_declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+attribute_declaration: children=attribute*
+destructor_name: children=identifier
+union_specifier: body=field_declaration_list?, name=qualified_identifier,template_type,type_identifier?, children=alignas_qualifier, attribute_declaration, attribute_specifier, base_class_clause, ms_declspec_modifier, virtual_specifier*?
+simple_requirement: children=comma_expression, expression?
+expression_statement: children=comma_expression, expression?
+type_requirement: children=qualified_identifier, template_type, type_identifier
+preproc_elifdef: name=identifier, alternative=preproc_elif,preproc_elifdef,preproc_else?, children=access_specifier, alias_declaration, concept_definition, declaration, enumerator, field_declaration, friend_declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+pointer_declarator: declarator=_declarator,_field_declarator,_type_declarator, children=ms_based_modifier, ms_pointer_modifier, type_qualifier*?
+constraint_disjunction: right=constraint_conjunction,constraint_disjunction,expression,template_type,type_identifier*, left=constraint_conjunction,constraint_disjunction,expression,template_type,type_identifier*
+update_expression: argument=expression
+field_initializer: children=argument_list, field_identifier, initializer_list, qualified_identifier, template_method*
+structured_binding_declarator: children=identifier*
+type_parameter_declaration: children=type_identifier?
+attributed_statement: children=attribute_declaration, statement*
+fold_expression: right=expression, left=expression
+unary_expression: argument=expression,preproc_defined
+optional_type_parameter_declaration: default_type=type_specifier, name=type_identifier?
+while_statement: body=statement, condition=condition_clause
+assignment_expression: left=expression, right=expression,initializer_list
+namespace_definition: name=namespace_identifier,nested_namespace_specifier?, body=declaration_list, children=attribute_declaration?
+initializer_pair: designator=field_designator,field_identifier,subscript_designator,subscript_range_designator*, value=expression,initializer_list
+noexcept: children=expression?
+linkage_specification: value=string_literal, body=declaration,declaration_list,function_definition
+binary_expression: right=expression,preproc_defined, left=expression,preproc_defined
+field_declaration: default_value=expression,initializer_list*?, type=type_specifier, declarator=_field_declarator*?, children=attribute_declaration, attribute_specifier, bitfield_clause, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+enum_specifier: base=primitive_type,qualified_identifier,sized_type_specifier,type_identifier?, body=enumerator_list?, name=qualified_identifier,template_type,type_identifier?, children=attribute_specifier?
+preproc_defined: children=identifier
+declaration: declarator=_declarator,gnu_asm_expression,init_declarator,operator_cast*, type=type_specifier?, default_value=expression?, value=expression,initializer_list?, children=attribute_declaration, attribute_specifier, explicit_function_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+concatenated_string: children=identifier, raw_string_literal, string_literal*
+operator_cast: type=type_specifier, declarator=_abstract_declarator, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+requires_expression: requirements=requirement_seq, parameters=parameter_list?
+goto_statement: label=statement_identifier
+try_statement: body=compound_statement, children=catch_clause, field_initializer_list*
+parameter_pack_expansion: pattern=expression,type_descriptor
+sized_type_specifier: type=primitive_type,type_identifier?
+trailing_return_type: children=type_descriptor
+alignof_expression: type=type_descriptor
+compound_literal_expression: value=initializer_list, type=primitive_type,qualified_identifier,template_type,type_descriptor,type_identifier
+nested_namespace_specifier: children=namespace_identifier, nested_namespace_specifier*?
+gnu_asm_goto_list: label=identifier*?
+qualified_identifier: scope=decltype,dependent_name,namespace_identifier,template_type?, name=dependent_name,destructor_name,field_identifier,identifier,operator_cast,operator_name,pointer_type_declarator,qualified_identifier,template_function,template_method,template_type,type_identifier*
+lambda_capture_specifier: children=expression, lambda_default_capture*?
+placeholder_type_specifier: constraint=type_specifier?, children=auto, decltype
+offsetof_expression: member=field_identifier, type=type_descriptor
+ms_declspec_modifier: children=identifier
+throw_statement: children=expression?
+pointer_expression: argument=expression
+field_designator: children=field_identifier
+preproc_ifdef: alternative=preproc_elif,preproc_elifdef,preproc_else?, name=identifier, children=access_specifier, alias_declaration, concept_definition, declaration, enumerator, field_declaration, friend_declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+enumerator: name=identifier, value=expression?
+attribute: prefix=identifier?, name=identifier, children=argument_list?
+dependent_name: children=template_function, template_method, template_type
+new_declarator: length=expression, children=new_declarator?
+seh_except_clause: body=compound_statement, filter=parenthesized_expression
+field_initializer_list: children=field_initializer*
+for_range_loop: body=statement, initializer=init_statement?, right=expression,initializer_list, declarator=_declarator, type=type_specifier, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+constraint_conjunction: left=constraint_conjunction,constraint_disjunction,expression,template_type,type_identifier*, right=constraint_conjunction,constraint_disjunction,expression,template_type,type_identifier*
+decltype: children=auto, expression
+array_declarator: declarator=_declarator,_field_declarator,_type_declarator, size=expression?, children=type_qualifier*?
+generic_expression: children=expression, type_descriptor*
+abstract_pointer_declarator: declarator=_abstract_declarator?, children=ms_pointer_modifier, type_qualifier*?
+argument_list: children=compound_statement, expression, initializer_list, preproc_defined*?
+attribute_specifier: children=argument_list
+compound_statement: children=alias_declaration, concept_definition, declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+ms_pointer_modifier: children=ms_restrict_modifier, ms_signed_ptr_modifier, ms_unaligned_ptr_modifier, ms_unsigned_ptr_modifier
+requires_clause: constraint=constraint_conjunction,constraint_disjunction,expression,template_type,type_identifier*
+preproc_def: value=preproc_arg?, name=identifier
+template_parameter_list: children=optional_parameter_declaration, optional_type_parameter_declaration, parameter_declaration, template_template_parameter_declaration, type_parameter_declaration, variadic_parameter_declaration, variadic_type_parameter_declaration*?
+explicit_function_specifier: children=expression?
+labeled_statement: label=statement_identifier, children=declaration, statement
+enumerator_list: children=enumerator, preproc_call, preproc_if, preproc_ifdef*?
+catch_clause: parameters=parameter_list, body=compound_statement
+abstract_reference_declarator: children=_abstract_declarator?
+else_clause: children=statement
+base_class_clause: children=access_specifier, attribute_declaration, qualified_identifier, template_type, type_identifier*
+abstract_array_declarator: declarator=_abstract_declarator?, size=expression?, children=type_qualifier*?
+bitfield_clause: children=expression
+char_literal: children=character, escape_sequence*
+alignas_qualifier: children=expression, type_descriptor
+co_await_expression: argument=expression
+compound_requirement: children=expression, trailing_return_type*
+namespace_alias_definition: name=namespace_identifier, children=namespace_identifier, nested_namespace_specifier
+initializer_list: children=expression, initializer_list, initializer_pair*?
+gnu_asm_input_operand_list: operand=gnu_asm_input_operand*?
+preproc_function_def: parameters=preproc_params, value=preproc_arg?, name=identifier
+requirement_seq: children=compound_requirement, simple_requirement, type_requirement*?
+init_declarator: value=argument_list,expression,initializer_list, declarator=_declarator
+return_statement: children=comma_expression, expression, initializer_list?
+template_declaration: parameters=template_parameter_list, children=alias_declaration, concept_definition, declaration, friend_declaration, function_definition, requires_clause, template_declaration, type_specifier*
+template_function: name=identifier, arguments=template_argument_list
+template_instantiation: declarator=_declarator, type=type_specifier?, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+template_template_parameter_declaration: parameters=template_parameter_list, children=optional_type_parameter_declaration, type_parameter_declaration, variadic_type_parameter_declaration
+abstract_function_declarator: parameters=parameter_list, declarator=_abstract_declarator?, children=attribute_declaration, attribute_specifier, gnu_asm_expression, noexcept, ref_qualifier, requires_clause, throw_specifier, trailing_return_type, type_qualifier, virtual_specifier*?
+co_yield_statement: children=expression
+type_qualifier: children=alignas_qualifier?
+gnu_asm_output_operand: symbol=identifier?, value=identifier, constraint=string_literal
+gnu_asm_expression: goto_labels=gnu_asm_goto_list?, output_operands=gnu_asm_output_operand_list?, assembly_code=concatenated_string,raw_string_literal,string_literal, clobbers=gnu_asm_clobber_list?, input_operands=gnu_asm_input_operand_list?, children=gnu_asm_qualifier*?
+variadic_parameter_declaration: declarator=reference_declarator,variadic_declarator, type=type_specifier, children=attribute_declaration, attribute_specifier, ms_declspec_modifier, storage_class_specifier, type_qualifier*?
+do_statement: condition=parenthesized_expression, body=statement
+static_assert_declaration: message=concatenated_string,raw_string_literal,string_literal?, condition=expression
+attributed_declarator: children=_declarator, _field_declarator, _type_declarator, attribute_declaration*
+struct_specifier: body=field_declaration_list?, name=qualified_identifier,template_type,type_identifier?, children=alignas_qualifier, attribute_declaration, attribute_specifier, base_class_clause, ms_declspec_modifier, virtual_specifier*?
+preproc_params: children=identifier*?
+template_argument_list: children=expression, type_descriptor*?
+operator_name: children=identifier?
+preproc_else: children=access_specifier, alias_declaration, concept_definition, declaration, enumerator, field_declaration, friend_declaration, function_definition, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, statement, static_assert_declaration, template_declaration, template_instantiation, type_definition, type_specifier, using_declaration*?
+pointer_type_declarator: declarator=_type_declarator, children=ms_based_modifier, ms_pointer_modifier, type_qualifier*?
+preproc_call: argument=preproc_arg?, directive=preproc_directive
+string_literal: children=escape_sequence, string_content*?
+class_specifier: name=qualified_identifier,template_type,type_identifier?, body=field_declaration_list?, children=alignas_qualifier, attribute_declaration, attribute_specifier, base_class_clause, ms_declspec_modifier, virtual_specifier*?
+translation_unit: children=alias_declaration, attributed_statement, break_statement, case_statement, co_return_statement, co_yield_statement, compound_statement, concept_definition, continue_statement, declaration, do_statement, expression_statement, for_range_loop, for_statement, function_definition, goto_statement, if_statement, labeled_statement, linkage_specification, namespace_alias_definition, namespace_definition, preproc_call, preproc_def, preproc_function_def, preproc_if, preproc_ifdef, preproc_include, return_statement, static_assert_declaration, switch_statement, template_declaration, template_instantiation, throw_statement, try_statement, type_definition, type_specifier, using_declaration, while_statement*?
+parameter_list: children=identifier, optional_parameter_declaration, parameter_declaration, variadic_parameter, variadic_parameter_declaration*?
+parenthesized_declarator: children=_declarator, _field_declarator, _type_declarator, ms_call_modifier*
+seh_try_statement: body=compound_statement, children=seh_except_clause, seh_finally_clause
+lambda_expression: constraint=requires_clause?, captures=lambda_capture_specifier, body=compound_statement, declarator=abstract_function_declarator?, template_parameters=template_parameter_list?
+throw_specifier: children=type_descriptor*?
+concept_definition: name=identifier, children=expression
+gnu_asm_output_operand_list: operand=gnu_asm_output_operand*?
+conditional_expression: consequence=comma_expression,expression?, alternative=expression, condition=expression
+subscript_range_designator: start=expression, end=expression
+type_definition: declarator=_type_declarator*, type=type_specifier, children=attribute_specifier, type_qualifier*?

@@ -1,0 +1,102 @@
+match_statement: subject=expression*, body=block
+assert_statement: children=expression*
+binary_operator: right=primary_expression, left=primary_expression
+generator_expression: body=expression, children=for_in_clause, if_clause*
+subscript: value=primary_expression, subscript=expression,slice*
+exec_statement: code=identifier,string, children=expression*?
+if_statement: consequence=block, alternative=elif_clause,else_clause*?, condition=expression
+constrained_type: children=type*
+lambda_parameters: children=parameter*
+class_pattern: children=case_pattern, dotted_name*
+decorated_definition: definition=class_definition,function_definition, children=decorator*
+print_statement: argument=expression*?, children=chevron?
+splat_pattern: children=identifier?
+case_pattern: children=as_pattern, class_pattern, complex_pattern, concatenated_string, dict_pattern, dotted_name, false, float, integer, keyword_pattern, list_pattern, none, splat_pattern, string, true, tuple_pattern, union_pattern?
+delete_statement: children=expression, expression_list
+except_group_clause: children=block, expression*
+format_expression: format_specifier=format_specifier?, expression=expression,expression_list,pattern_list,yield, type_conversion=type_conversion?
+module: children=_compound_statement, _simple_statement*?
+parenthesized_list_splat: children=list_splat, parenthesized_expression
+tuple: children=expression, list_splat, parenthesized_list_splat, yield*?
+attribute: attribute=identifier, object=primary_expression
+comparison_operator: children=primary_expression*
+type_alias_statement: children=type*
+while_statement: alternative=else_clause?, body=block, condition=expression
+for_in_clause: right=expression*, left=pattern,pattern_list
+block: alternative=case_clause*?, children=_compound_statement, _simple_statement*?
+dictionary_splat: children=expression
+elif_clause: condition=expression, consequence=block
+boolean_operator: left=expression, right=expression
+interpolation: format_specifier=format_specifier?, type_conversion=type_conversion?, expression=expression,expression_list,pattern_list,yield
+keyword_argument: value=expression, name=identifier
+else_clause: body=block
+member_type: children=identifier, type*
+concatenated_string: children=string*
+conditional_expression: children=expression*
+parenthesized_expression: children=expression, list_splat, parenthesized_expression, yield
+typed_default_parameter: name=identifier, value=expression, type=type
+unary_operator: argument=primary_expression
+list_splat_pattern: children=attribute, identifier, subscript
+parameters: children=parameter*?
+try_statement: body=block, children=else_clause, except_clause, except_group_clause, finally_clause*
+keyword_pattern: children=class_pattern, complex_pattern, concatenated_string, dict_pattern, dotted_name, false, float, identifier, integer, list_pattern, none, splat_pattern, string, true, tuple_pattern, union_pattern*
+global_statement: children=identifier*
+as_pattern: alias=as_pattern_target?, children=case_pattern, expression, identifier*
+nonlocal_statement: children=identifier*
+dict_pattern: key=class_pattern,complex_pattern,concatenated_string,dict_pattern,dotted_name,false,float,integer,list_pattern,none,splat_pattern,string,true,tuple_pattern,union_pattern*?, value=case_pattern*?, children=splat_pattern*?
+set_comprehension: body=expression, children=for_in_clause, if_clause*
+assignment: left=pattern,pattern_list, right=assignment,augmented_assignment,expression,expression_list,pattern_list,yield?, type=type?
+list_splat: children=attribute, expression, identifier, subscript
+with_clause: children=with_item*
+default_parameter: value=expression, name=identifier,tuple_pattern
+tuple_pattern: children=case_pattern, pattern*?
+dictionary: children=dictionary_splat, pair*?
+format_specifier: children=format_expression*?
+decorator: children=expression
+set: children=expression, list_splat, parenthesized_list_splat, yield*
+slice: children=expression*?
+type_parameter: children=type*
+argument_list: children=dictionary_splat, expression, keyword_argument, list_splat, parenthesized_expression*?
+splat_type: children=identifier
+finally_clause: children=block
+chevron: children=expression
+import_statement: name=aliased_import,dotted_name*
+list: children=expression, list_splat, parenthesized_list_splat, yield*?
+with_statement: body=block, children=with_clause
+generic_type: children=identifier, type_parameter*
+aliased_import: alias=identifier, name=dotted_name
+augmented_assignment: left=pattern,pattern_list, right=assignment,augmented_assignment,expression,expression_list,pattern_list,yield
+raise_statement: cause=expression?, children=expression, expression_list?
+return_statement: children=expression, expression_list?
+string_content: children=escape_interpolation, escape_sequence*?
+if_clause: children=expression
+dictionary_comprehension: body=pair, children=for_in_clause, if_clause*
+for_statement: alternative=else_clause?, left=pattern,pattern_list, right=expression,expression_list, body=block
+future_import_statement: name=aliased_import,dotted_name*
+expression_statement: children=assignment, augmented_assignment, expression, yield*
+typed_parameter: type=type, children=dictionary_splat_pattern, identifier, list_splat_pattern
+union_pattern: children=class_pattern, complex_pattern, concatenated_string, dict_pattern, dotted_name, false, float, integer, list_pattern, none, splat_pattern, string, true, tuple_pattern, union_pattern*?
+list_comprehension: body=expression, children=for_in_clause, if_clause*
+except_clause: children=block, expression*
+union_type: children=type*
+lambda: body=expression, parameters=lambda_parameters?
+call: arguments=argument_list,generator_expression, function=primary_expression
+expression_list: children=expression*
+dotted_name: children=identifier*
+function_definition: type_parameters=type_parameter?, body=block, parameters=parameters, name=identifier, return_type=type?
+import_from_statement: name=aliased_import,dotted_name*?, module_name=dotted_name,relative_import, children=wildcard_import?
+list_pattern: children=case_pattern, pattern*?
+dictionary_splat_pattern: children=attribute, identifier, subscript
+not_operator: argument=expression
+class_definition: type_parameters=type_parameter?, name=identifier, body=block, superclasses=argument_list?
+pair: key=expression, value=expression
+pattern_list: children=pattern*
+case_clause: consequence=block, guard=if_clause?, children=case_pattern*
+type: children=constrained_type, expression, generic_type, member_type, splat_type, union_type
+named_expression: value=expression, name=identifier
+relative_import: children=dotted_name, import_prefix*
+string: children=interpolation, string_content, string_end, string_start*
+await: children=primary_expression
+with_item: value=expression
+yield: children=expression, expression_list?
+complex_pattern: children=float, integer*

@@ -1,0 +1,19 @@
+block_node: children=anchor, block_mapping, block_scalar, block_sequence, tag*
+alias: children=alias_name
+reserved_directive: children=directive_name, directive_parameter*
+block_mapping: children=block_mapping_pair*
+flow_node: children=alias, anchor, double_quote_scalar, flow_mapping, flow_sequence, plain_scalar, single_quote_scalar, tag*
+single_quote_scalar: children=escape_sequence*?
+anchor: children=anchor_name
+stream: children=document*?
+block_sequence: children=block_sequence_item*
+document: children=block_node, flow_node, reserved_directive, tag_directive, yaml_directive*?
+double_quote_scalar: children=escape_sequence*?
+block_sequence_item: children=block_node, flow_node?
+flow_pair: value=flow_node?, key=flow_node?
+tag_directive: children=tag_handle, tag_prefix*
+flow_mapping: children=flow_node, flow_pair*?
+flow_sequence: children=flow_node, flow_pair*?
+yaml_directive: children=yaml_version
+plain_scalar: children=boolean_scalar, float_scalar, integer_scalar, null_scalar, string_scalar, timestamp_scalar
+block_mapping_pair: key=block_node,flow_node?, value=block_node,flow_node?

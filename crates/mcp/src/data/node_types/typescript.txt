@@ -1,0 +1,145 @@
+return_statement: children=expression, sequence_expression?
+flow_maybe_type: children=primary_type
+class: type_parameters=type_parameters?, name=type_identifier?, body=class_body, decorator=decorator*?, children=class_heritage?
+as_expression: children=expression, type*
+string: children=escape_sequence, string_fragment*?
+pair: value=expression, key=computed_property_name,number,private_property_identifier,property_identifier,string
+call_signature: type_parameters=type_parameters?, parameters=formal_parameters, return_type=asserts_annotation,type_annotation,type_predicate_annotation?
+interface_declaration: body=interface_body, type_parameters=type_parameters?, name=type_identifier, children=extends_type_clause?
+computed_property_name: children=expression
+type_parameters: children=type_parameter*
+enum_body: name=computed_property_name,number,private_property_identifier,property_identifier,string*?, children=enum_assignment*?
+export_specifier: alias=identifier,string?, name=identifier,string
+for_in_statement: right=expression,sequence_expression, value=expression?, body=statement, left=array_pattern,identifier,member_expression,non_null_expression,object_pattern,parenthesized_expression,subscript_expression,undefined
+function_type: return_type=asserts,type,type_predicate, parameters=formal_parameters, type_parameters=type_parameters?
+await_expression: children=expression
+parenthesized_expression: type=type_annotation?, children=call_expression, expression, identifier, member_expression, sequence_expression
+member_expression: optional_chain=optional_chain?, object=expression,import, property=private_property_identifier,property_identifier
+call_expression: arguments=arguments,template_string, type_arguments=type_arguments?, function=expression,import
+array_pattern: children=assignment_pattern, pattern*?
+abstract_class_declaration: body=class_body, name=type_identifier, decorator=decorator*?, type_parameters=type_parameters?, children=class_heritage?
+asserts: children=identifier, this, type_predicate
+lookup_type: children=type*
+sequence_expression: children=expression*
+function_signature: parameters=formal_parameters, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, name=identifier, type_parameters=type_parameters?
+rest_pattern: children=array_pattern, identifier, member_expression, non_null_expression, object_pattern, subscript_expression, undefined
+regex: flags=regex_flags?, pattern=regex_pattern
+switch_body: children=switch_case, switch_default*?
+switch_statement: value=parenthesized_expression, body=switch_body
+import_require_clause: source=string, children=identifier
+type_assertion: children=expression, type_arguments*
+import_alias: children=identifier, nested_identifier*
+required_parameter: name=identifier,rest_pattern?, decorator=decorator*?, pattern=pattern,this?, value=expression?, type=type_annotation?, children=accessibility_modifier, override_modifier*?
+class_static_block: body=statement_block
+variable_declarator: type=type_annotation?, name=array_pattern,identifier,object_pattern, value=expression?
+export_statement: decorator=decorator*?, declaration=declaration?, value=expression?, source=string?, children=export_clause, expression, identifier, namespace_export?
+function_declaration: name=identifier, body=statement_block, parameters=formal_parameters, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, type_parameters=type_parameters?
+with_statement: object=parenthesized_expression, body=statement
+opting_type_annotation: children=type
+default_type: children=type
+variable_declaration: children=variable_declarator*
+template_substitution: children=expression, sequence_expression
+type_arguments: children=type*
+method_signature: name=computed_property_name,number,private_property_identifier,property_identifier,string, type_parameters=type_parameters?, parameters=formal_parameters, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, children=accessibility_modifier, override_modifier*?
+ambient_declaration: children=declaration, property_identifier, statement_block, type*
+break_statement: label=statement_identifier?
+enum_assignment: value=expression, name=computed_property_name,number,private_property_identifier,property_identifier,string
+array_type: children=primary_type
+finally_clause: body=statement_block
+method_definition: type_parameters=type_parameters?, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, name=computed_property_name,number,private_property_identifier,property_identifier,string, body=statement_block, parameters=formal_parameters, children=accessibility_modifier, override_modifier*?
+readonly_type: children=type
+export_clause: children=export_specifier*?
+generic_type: name=nested_type_identifier,type_identifier, type_arguments=type_arguments
+update_expression: argument=expression
+for_statement: increment=expression,sequence_expression?, body=statement, condition=empty_statement,expression,sequence_expression*, initializer=empty_statement,expression,lexical_declaration,sequence_expression,variable_declaration
+else_clause: children=statement
+implements_clause: children=type*
+switch_case: value=expression,sequence_expression, body=statement*?
+index_signature: index_type=type?, name=identifier?, type=adding_type_annotation,omitting_type_annotation,opting_type_annotation,type_annotation, children=mapped_type_clause?
+import_attribute: children=object
+object: children=method_definition, pair, shorthand_property_identifier, spread_element*?
+program: children=hash_bang_line, statement*?
+template_literal_type: children=string_fragment, template_type*?
+augmented_assignment_expression: right=expression, left=identifier,member_expression,non_null_expression,parenthesized_expression,subscript_expression
+assignment_pattern: left=pattern, right=expression
+constraint: children=type
+extends_type_clause: type=generic_type,nested_type_identifier,type_identifier*
+labeled_statement: body=statement, label=statement_identifier
+type_alias_declaration: name=type_identifier, value=type, type_parameters=type_parameters?
+arguments: children=expression, spread_element*?
+mapped_type_clause: alias=type?, type=type, name=type_identifier
+continue_statement: label=statement_identifier?
+parenthesized_type: children=type
+binary_expression: right=expression, left=expression,private_property_identifier
+while_statement: body=statement, condition=parenthesized_expression
+internal_module: name=identifier,nested_identifier,string, body=statement_block?
+enum_declaration: name=identifier, body=enum_body
+subscript_expression: index=expression,number,predefined_type,sequence_expression,string, object=expression, optional_chain=optional_chain?
+type_annotation: children=type
+import_clause: children=identifier, named_imports, namespace_import*
+infer_type: children=type, type_identifier*
+new_expression: arguments=arguments?, type_arguments=type_arguments?, constructor=primary_expression
+try_statement: handler=catch_clause?, body=statement_block, finalizer=finally_clause?
+intersection_type: children=type*
+arrow_function: parameters=formal_parameters?, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, type_parameters=type_parameters?, parameter=identifier?, body=expression,statement_block
+expression_statement: children=expression, sequence_expression
+type_predicate_annotation: children=type_predicate
+type_parameter: name=type_identifier, value=default_type?, constraint=constraint?
+type_query: children=call_expression, identifier, instantiation_expression, member_expression, subscript_expression, this
+template_type: children=infer_type, primary_type
+template_string: children=escape_sequence, string_fragment, template_substitution*?
+rest_type: children=type
+named_imports: children=import_specifier*?
+public_field_definition: decorator=decorator*?, name=computed_property_name,number,private_property_identifier,property_identifier,string, value=expression?, type=type_annotation?, children=accessibility_modifier, override_modifier*?
+do_statement: body=statement, condition=parenthesized_expression
+pair_pattern: value=assignment_pattern,pattern, key=computed_property_name,number,private_property_identifier,property_identifier,string
+conditional_type: consequence=type, right=type, left=type, alternative=type
+generator_function: type_parameters=type_parameters?, body=statement_block, name=identifier?, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, parameters=formal_parameters
+constructor_type: parameters=formal_parameters, type=type, type_parameters=type_parameters?
+function_expression: type_parameters=type_parameters?, parameters=formal_parameters, body=statement_block, return_type=asserts_annotation,type_annotation,type_predicate_annotation?, name=identifier?
+generator_function_declaration: type_parameters=type_parameters?, body=statement_block, name=identifier, parameters=formal_parameters, return_type=asserts_annotation,type_annotation,type_predicate_annotation?
+interface_body: children=call_signature, construct_signature, export_statement, index_signature, method_signature, property_signature*?
+non_null_expression: children=expression
+optional_type: children=type
+catch_clause: parameter=array_pattern,identifier,object_pattern?, type=type_annotation?, body=statement_block
+formal_parameters: children=optional_parameter, required_parameter*?
+ternary_expression: alternative=expression, condition=expression, consequence=expression
+namespace_export: children=identifier, string
+construct_signature: type=type_annotation?, type_parameters=type_parameters?, parameters=formal_parameters
+assignment_expression: right=expression, left=array_pattern,identifier,member_expression,non_null_expression,object_pattern,parenthesized_expression,subscript_expression,undefined
+nested_identifier: property=property_identifier, object=identifier,member_expression
+type_predicate: type=type, name=identifier,this
+class_body: decorator=decorator*?, children=abstract_method_signature, class_static_block, index_signature, method_definition, method_signature, public_field_definition*?
+object_pattern: children=object_assignment_pattern, pair_pattern, rest_pattern, shorthand_property_identifier_pattern*?
+namespace_import: children=identifier
+switch_default: body=statement*?
+nested_type_identifier: name=type_identifier, module=identifier,nested_identifier
+yield_expression: children=expression?
+abstract_method_signature: return_type=asserts_annotation,type_annotation,type_predicate_annotation?, type_parameters=type_parameters?, name=computed_property_name,number,private_property_identifier,property_identifier,string, parameters=formal_parameters, children=accessibility_modifier, override_modifier*?
+throw_statement: children=expression, sequence_expression
+optional_parameter: decorator=decorator*?, pattern=pattern,this?, name=identifier?, type=type_annotation?, value=expression?, children=accessibility_modifier, override_modifier*?
+if_statement: alternative=else_clause?, condition=parenthesized_expression, consequence=statement
+asserts_annotation: children=asserts
+class_heritage: children=extends_clause, implements_clause*
+tuple_type: children=optional_parameter, optional_type, required_parameter, rest_type, type*?
+decorator: children=call_expression, identifier, member_expression, parenthesized_expression
+object_assignment_pattern: left=array_pattern,object_pattern,shorthand_property_identifier_pattern, right=expression
+object_type: children=call_signature, construct_signature, export_statement, index_signature, method_signature, property_signature*?
+satisfies_expression: children=expression, type*
+instantiation_expression: type_arguments=type_arguments, function=identifier,import,member_expression,subscript_expression?, children=expression?
+literal_type: children=false, null, number, string, true, unary_expression, undefined
+module: body=statement_block?, name=identifier,nested_identifier,string
+array: children=expression, spread_element*?
+class_declaration: type_parameters=type_parameters?, body=class_body, decorator=decorator*?, name=type_identifier, children=class_heritage?
+omitting_type_annotation: children=type
+union_type: children=type*
+lexical_declaration: children=variable_declarator*
+spread_element: children=expression
+adding_type_annotation: children=type
+import_statement: source=string?, children=import_attribute, import_clause, import_require_clause*?
+unary_expression: argument=expression,number
+extends_clause: type_arguments=type_arguments*?, value=expression*
+import_specifier: alias=identifier?, name=identifier,string
+index_type_query: children=primary_type
+property_signature: name=computed_property_name,number,private_property_identifier,property_identifier,string, type=type_annotation?, children=accessibility_modifier, override_modifier*?
+statement_block: children=statement*?

@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use serde_json::to_writer_pretty;
 use ts_export::export_recursive;
 
+mod tree_sitter_compress;
 mod ts_export;
 
 #[derive(Parser)]
@@ -25,9 +26,12 @@ enum Commands {
     Schema,
     /// Generate a TypeScript definition for the workflow object.
     Ts,
+    /// Compress tree-sitter grammar node types to AI-friendly format.
+    CompressTreeSitter,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
 
     match args.command {
@@ -68,6 +72,12 @@ fn main() {
             for (_, ts_def) in type_hash_map {
                 ts_file.write_all(ts_def.as_bytes()).unwrap();
                 ts_file.write_all(b"\n").unwrap();
+            }
+        }
+        Commands::CompressTreeSitter => {
+            if let Err(e) = tree_sitter_compress::compress_tree_sitter_grammar().await {
+                eprintln!("Error compressing tree-sitter grammar: {e}");
+                std::process::exit(1);
             }
         }
     }

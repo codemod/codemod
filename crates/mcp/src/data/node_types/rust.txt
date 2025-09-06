@@ -1,0 +1,134 @@
+await_expression: children=_expression
+loop_expression: body=block, children=label?
+function_modifiers: children=extern_modifier*?
+bounded_type: children=_type, lifetime*
+mut_pattern: children=_pattern, mutable_specifier*
+ref_pattern: children=_pattern
+return_expression: children=_expression?
+shorthand_field_initializer: children=attribute_item, identifier*
+array_type: length=_expression?, element=_type
+field_declaration_list: children=attribute_item, field_declaration*?
+range_expression: children=_expression*?
+unary_expression: children=_expression
+use_declaration: argument=crate,identifier,metavariable,scoped_identifier,scoped_use_list,self,super,use_as_clause,use_list,use_wildcard, children=visibility_modifier?
+raw_string_literal: children=string_content
+higher_ranked_trait_bound: type=_type, type_parameters=type_parameters
+type_item: type=_type, name=type_identifier, type_parameters=type_parameters?, children=visibility_modifier, where_clause*?
+qualified_type: type=_type, alias=_type
+abstract_type: trait=function_type,generic_type,removed_trait_bound,scoped_type_identifier,tuple_type,type_identifier, children=type_parameters?
+extern_crate_declaration: alias=identifier?, name=identifier, children=crate, visibility_modifier*
+let_condition: value=_expression, pattern=_pattern
+declaration_list: children=_declaration_statement*?
+block: children=_declaration_statement, _expression, expression_statement, label*?
+trait_item: name=type_identifier, type_parameters=type_parameters?, bounds=trait_bounds?, body=declaration_list, children=visibility_modifier, where_clause*?
+bracketed_type: children=_type, qualified_type
+extern_modifier: children=string_literal?
+reference_pattern: children=_pattern, mutable_specifier*
+compound_assignment_expr: left=_expression, right=_expression
+static_item: value=_expression?, name=identifier, type=_type, children=mutable_specifier, visibility_modifier*?
+inner_attribute_item: children=attribute
+tuple_type: children=_type*
+token_repetition: children=_literal, crate, identifier, metavariable, mutable_specifier, primitive_type, self, super, token_repetition, token_tree*?
+trait_bounds: children=_type, higher_ranked_trait_bound, lifetime*
+call_expression: function=_literal,array_expression,assignment_expression,async_block,await_expression,binary_expression,block,break_expression,call_expression,closure_expression,compound_assignment_expr,const_block,continue_expression,field_expression,for_expression,generic_function,identifier,if_expression,index_expression,loop_expression,macro_invocation,match_expression,metavariable,parenthesized_expression,reference_expression,return_expression,scoped_identifier,self,struct_expression,try_block,try_expression,tuple_expression,type_cast_expression,unary_expression,unit_expression,unsafe_block,while_expression,yield_expression, arguments=arguments
+match_arm: pattern=match_pattern, value=_expression, children=attribute_item, inner_attribute_item*?
+const_parameter: name=identifier, type=_type
+enum_variant: value=_expression?, name=identifier, body=field_declaration_list,ordered_field_declaration_list?, children=visibility_modifier?
+captured_pattern: children=_pattern*
+base_field_initializer: children=_expression
+impl_item: type_parameters=type_parameters?, trait=generic_type,scoped_type_identifier,type_identifier?, type=_type, body=declaration_list?, children=where_clause?
+generic_function: type_arguments=type_arguments, function=field_expression,identifier,scoped_identifier
+macro_invocation: macro=identifier,scoped_identifier, children=token_tree
+lifetime: children=identifier
+const_item: name=identifier, type=_type, value=_expression?, children=visibility_modifier?
+field_pattern: name=field_identifier,shorthand_field_identifier, pattern=_pattern?, children=mutable_specifier?
+generic_type_with_turbofish: type=scoped_identifier,type_identifier, type_arguments=type_arguments
+negative_literal: children=float_literal, integer_literal
+pointer_type: type=_type, children=mutable_specifier?
+field_declaration: type=_type, name=field_identifier, children=visibility_modifier?
+struct_expression: name=generic_type_with_turbofish,scoped_type_identifier,type_identifier, body=field_initializer_list
+union_item: type_parameters=type_parameters?, body=field_declaration_list, name=type_identifier, children=visibility_modifier, where_clause*?
+self_parameter: children=lifetime, mutable_specifier, self*
+scoped_use_list: list=use_list, path=crate,identifier,metavariable,scoped_identifier,self,super?
+attribute_item: children=attribute
+enum_variant_list: children=attribute_item, enum_variant*?
+source_file: children=_declaration_statement, expression_statement, shebang*?
+variadic_parameter: pattern=_pattern?, children=mutable_specifier?
+for_lifetimes: children=lifetime*
+tuple_struct_pattern: type=generic_type,identifier,scoped_identifier, children=_pattern*?
+tuple_pattern: children=_pattern, closure_expression*?
+foreign_mod_item: body=declaration_list?, children=extern_modifier, visibility_modifier*
+generic_type: type=identifier,scoped_identifier,scoped_type_identifier,type_identifier, type_arguments=type_arguments
+parenthesized_expression: children=_expression
+if_expression: alternative=else_clause?, consequence=block, condition=_expression,let_chain,let_condition
+constrained_type_parameter: left=lifetime,type_identifier, bounds=trait_bounds
+associated_type: name=type_identifier, bounds=trait_bounds?, type_parameters=type_parameters?, children=where_clause?
+function_item: parameters=parameters, body=block, type_parameters=type_parameters?, return_type=_type?, name=identifier,metavariable, children=function_modifiers, visibility_modifier, where_clause*?
+use_wildcard: children=crate, identifier, metavariable, scoped_identifier, self, super?
+visibility_modifier: children=crate, identifier, metavariable, scoped_identifier, self, super?
+expression_statement: children=_expression
+line_comment: doc=doc_comment?, outer=outer_doc_comment_marker?, inner=inner_doc_comment_marker?
+type_parameters: children=attribute_item, const_parameter, constrained_type_parameter, lifetime, metavariable, optional_type_parameter, type_identifier*
+tuple_expression: children=_expression, attribute_item*
+macro_rule: right=token_tree, left=token_tree_pattern
+token_tree: children=_literal, crate, identifier, metavariable, mutable_specifier, primitive_type, self, super, token_repetition, token_tree*?
+mod_item: name=identifier, body=declaration_list?, children=visibility_modifier?
+use_list: children=crate, identifier, metavariable, scoped_identifier, scoped_use_list, self, super, use_as_clause, use_list, use_wildcard*?
+closure_expression: body=_expression, parameters=closure_parameters, return_type=_type?
+binary_expression: right=_expression, left=_expression
+field_initializer_list: children=base_field_initializer, field_initializer, shorthand_field_initializer*?
+parameters: children=_type, attribute_item, parameter, self_parameter, variadic_parameter*?
+try_block: children=block
+arguments: children=_expression, attribute_item*?
+use_as_clause: alias=identifier, path=crate,identifier,metavariable,scoped_identifier,self,super
+parameter: pattern=_pattern,self, type=_type, children=mutable_specifier?
+where_predicate: bounds=trait_bounds, left=array_type,generic_type,higher_ranked_trait_bound,lifetime,pointer_type,primitive_type,reference_type,scoped_type_identifier,tuple_type,type_identifier
+const_block: body=block
+else_clause: children=block, if_expression
+field_initializer: field=field_identifier,integer_literal, value=_expression, children=attribute_item*?
+attribute: arguments=token_tree?, value=_expression?, children=crate, identifier, metavariable, scoped_identifier, self, super
+type_arguments: children=_literal, _type, block, lifetime, trait_bounds, type_binding*
+reference_type: type=_type, children=lifetime, mutable_specifier*?
+scoped_type_identifier: name=type_identifier, path=bracketed_type,crate,generic_type,identifier,metavariable,scoped_identifier,self,super?
+token_tree_pattern: children=_literal, crate, identifier, metavariable, mutable_specifier, primitive_type, self, super, token_binding_pattern, token_repetition_pattern, token_tree_pattern*?
+where_clause: children=where_predicate*
+match_block: children=match_arm*?
+struct_item: body=field_declaration_list,ordered_field_declaration_list?, name=type_identifier, type_parameters=type_parameters?, children=visibility_modifier, where_clause*?
+match_expression: body=match_block, value=_expression
+break_expression: children=_expression, label*?
+token_repetition_pattern: children=_literal, crate, identifier, metavariable, mutable_specifier, primitive_type, self, super, token_binding_pattern, token_repetition_pattern, token_tree_pattern*?
+dynamic_type: trait=function_type,generic_type,higher_ranked_trait_bound,scoped_type_identifier,type_identifier
+ordered_field_declaration_list: type=_type*?, children=attribute_item, visibility_modifier*?
+let_chain: children=_expression, let_condition*
+unsafe_block: children=block
+reference_expression: value=_expression, children=mutable_specifier?
+slice_pattern: children=_pattern*?
+type_cast_expression: type=_type, value=_expression
+closure_parameters: children=_pattern, parameter*?
+field_expression: field=field_identifier,integer_literal, value=_expression
+or_pattern: children=_pattern*
+let_declaration: type=_type?, alternative=block?, pattern=_pattern, value=_expression?, children=mutable_specifier?
+string_literal: children=escape_sequence, string_content*?
+struct_pattern: type=scoped_type_identifier,type_identifier, children=field_pattern, remaining_field_pattern*?
+array_expression: length=_expression?, children=_expression, attribute_item*?
+assignment_expression: left=_expression, right=_expression
+match_pattern: condition=_expression,let_chain,let_condition?, children=_pattern
+index_expression: children=_expression*
+label: children=identifier
+optional_type_parameter: default_type=_type, name=constrained_type_parameter,type_identifier
+range_pattern: children=_literal_pattern, crate, identifier, metavariable, scoped_identifier, self, super*
+async_block: children=block
+block_comment: inner=inner_doc_comment_marker?, outer=outer_doc_comment_marker?, doc=doc_comment?
+token_binding_pattern: name=metavariable, type=fragment_specifier
+function_type: return_type=_type?, parameters=parameters, trait=scoped_type_identifier,type_identifier?, children=for_lifetimes, function_modifiers*?
+for_expression: value=_expression, body=block, pattern=_pattern, children=label?
+function_signature_item: name=identifier,metavariable, return_type=_type?, parameters=parameters, type_parameters=type_parameters?, children=function_modifiers, visibility_modifier, where_clause*?
+while_expression: body=block, condition=_expression,let_chain,let_condition, children=label?
+enum_item: body=enum_variant_list, name=type_identifier, type_parameters=type_parameters?, children=visibility_modifier, where_clause*?
+try_expression: children=_expression
+type_binding: type_arguments=type_arguments?, type=_type, name=type_identifier
+continue_expression: children=label?
+macro_definition: name=identifier, children=macro_rule*?
+removed_trait_bound: children=_type
+scoped_identifier: name=identifier,super, path=bracketed_type,crate,generic_type,identifier,metavariable,scoped_identifier,self,super?
+yield_expression: children=_expression?

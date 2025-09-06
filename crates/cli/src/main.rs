@@ -70,6 +70,9 @@ enum Commands {
 
     /// Manage package cache
     Cache(commands::cache::Command),
+
+    /// Start MCP (Model Context Protocol) server
+    Mcp(commands::mcp::Command),
 }
 
 #[derive(Args, Debug)]
@@ -282,6 +285,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Cache(args)) => {
             commands::cache::handler(args).await?;
+        }
+        Some(Commands::Mcp(args)) => {
+            args.run().await?;
         }
         None => {
             // Try to parse as implicit run command

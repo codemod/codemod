@@ -1,0 +1,116 @@
+enhanced_for_statement: dimensions=dimensions?, name=identifier,underscore_pattern, type=_unannotated_type, value=expression, body=statement, children=modifiers?
+marker_annotation: name=identifier,scoped_identifier
+array_access: index=expression, array=primary_expression
+static_initializer: children=block
+ternary_expression: consequence=expression, condition=expression, alternative=expression
+assignment_expression: left=array_access,field_access,identifier, right=expression
+yield_statement: children=expression
+enum_body: children=enum_body_declarations, enum_constant*?
+switch_block_statement_group: children=statement, switch_label*
+compact_constructor_declaration: body=block, name=identifier, children=modifiers?
+finally_clause: children=block
+scoped_type_identifier: children=annotation, generic_type, marker_annotation, scoped_type_identifier, type_identifier*
+superclass: children=_type
+throw_statement: children=expression
+instanceof_expression: right=_type?, name=identifier?, left=expression, pattern=record_pattern?
+assert_statement: children=expression*
+provides_module_directive: provided=identifier,scoped_identifier, provider=identifier,scoped_identifier*?, children=identifier, scoped_identifier
+synchronized_statement: body=block, children=parenthesized_expression
+switch_label: children=expression, guard, pattern*?
+interface_declaration: name=identifier, permits=permits?, body=interface_body, type_parameters=type_parameters?, children=extends_interfaces, modifiers*?
+type_arguments: children=_type, wildcard*?
+interface_body: children=annotation_type_declaration, class_declaration, constant_declaration, enum_declaration, interface_declaration, method_declaration, record_declaration*?
+labeled_statement: children=identifier, statement*
+constant_declaration: declarator=variable_declarator*, type=_unannotated_type, children=modifiers?
+class_declaration: body=class_body, type_parameters=type_parameters?, interfaces=super_interfaces?, name=identifier, permits=permits?, superclass=superclass?, children=modifiers?
+template_expression: template_argument=string_literal, template_processor=primary_expression
+import_declaration: children=asterisk, identifier, scoped_identifier*
+method_invocation: type_arguments=type_arguments?, name=identifier, arguments=argument_list, object=primary_expression,super?, children=super?
+record_declaration: type_parameters=type_parameters?, body=class_body, name=identifier, interfaces=super_interfaces?, parameters=formal_parameters, children=modifiers?
+argument_list: children=expression*?
+type_pattern: children=_unannotated_type, identifier*
+explicit_constructor_invocation: constructor=super,this, arguments=argument_list, object=primary_expression?, type_arguments=type_arguments?
+array_type: element=_unannotated_type, dimensions=dimensions
+class_body: children=annotation_type_declaration, block, class_declaration, compact_constructor_declaration, constructor_declaration, enum_declaration, field_declaration, interface_declaration, method_declaration, record_declaration, static_initializer*?
+constructor_declaration: body=constructor_body, name=identifier, parameters=formal_parameters, type_parameters=type_parameters?, children=modifiers, throws*?
+update_expression: children=expression
+field_declaration: declarator=variable_declarator*, type=_unannotated_type, children=modifiers?
+switch_rule: children=block, expression_statement, switch_label, throw_statement*
+type_bound: children=_type*
+annotation: arguments=annotation_argument_list, name=identifier,scoped_identifier
+local_variable_declaration: type=_unannotated_type, declarator=variable_declarator*, children=modifiers?
+array_initializer: children=array_initializer, expression*?
+try_with_resources_statement: body=block, resources=resource_specification, children=catch_clause, finally_clause*?
+cast_expression: value=expression, type=_type*
+parenthesized_expression: children=expression
+receiver_parameter: children=_unannotated_type, annotation, identifier, marker_annotation, this*
+dimensions_expr: children=annotation, expression, marker_annotation*
+inferred_parameters: children=identifier*
+string_literal: children=escape_sequence, multiline_string_fragment, string_fragment, string_interpolation*?
+exports_module_directive: package=identifier,scoped_identifier, modules=identifier,scoped_identifier*?
+scoped_identifier: name=identifier, scope=identifier,scoped_identifier
+super_interfaces: children=type_list
+field_access: object=primary_expression,super, field=identifier,this, children=super?
+binary_expression: left=expression, right=expression
+record_pattern_component: children=_unannotated_type, identifier, underscore_pattern*
+element_value_pair: key=identifier, value=annotation,element_value_array_initializer,expression,marker_annotation
+record_pattern_body: children=record_pattern, record_pattern_component*?
+pattern: children=record_pattern, type_pattern
+method_declaration: body=block?, type=_unannotated_type, dimensions=dimensions?, name=identifier, parameters=formal_parameters, type_parameters=type_parameters?, children=annotation, marker_annotation, modifiers, throws*?
+annotation_argument_list: children=annotation, element_value_array_initializer, element_value_pair, expression, marker_annotation*?
+element_value_array_initializer: children=annotation, element_value_array_initializer, expression, marker_annotation*?
+guard: children=expression
+package_declaration: children=annotation, identifier, marker_annotation, scoped_identifier*
+resource_specification: children=resource*
+catch_type: children=_unannotated_type*
+annotation_type_declaration: name=identifier, body=annotation_type_body, children=modifiers?
+type_parameters: children=type_parameter*
+opens_module_directive: modules=identifier,scoped_identifier*?, package=identifier,scoped_identifier
+break_statement: children=identifier?
+annotation_type_element_declaration: dimensions=dimensions?, type=_unannotated_type, name=identifier, value=annotation,element_value_array_initializer,expression,marker_annotation?, children=modifiers?
+method_reference: children=_type, primary_expression, super, type_arguments*
+catch_formal_parameter: dimensions=dimensions?, name=identifier,underscore_pattern, children=catch_type, modifiers*
+unary_expression: operand=expression
+switch_expression: body=switch_block, condition=parenthesized_expression
+enum_constant: arguments=argument_list?, body=class_body?, name=identifier, children=modifiers?
+expression_statement: children=expression
+variable_declarator: dimensions=dimensions?, name=identifier,underscore_pattern, value=array_initializer,expression?
+array_creation_expression: value=array_initializer?, type=_simple_type, dimensions=dimensions,dimensions_expr*, children=annotation, marker_annotation*?
+spread_parameter: children=_unannotated_type, modifiers, variable_declarator*
+string_interpolation: children=expression
+wildcard: children=_type, annotation, marker_annotation, super*?
+uses_module_directive: type=identifier,scoped_identifier
+do_statement: condition=parenthesized_expression, body=statement
+formal_parameters: children=formal_parameter, receiver_parameter, spread_parameter*?
+enum_body_declarations: children=annotation_type_declaration, block, class_declaration, compact_constructor_declaration, constructor_declaration, enum_declaration, field_declaration, interface_declaration, method_declaration, record_declaration, static_initializer*?
+program: children=method_declaration, statement*?
+type_parameter: children=annotation, marker_annotation, type_bound, type_identifier*
+block: children=statement*?
+return_statement: children=expression?
+dimensions: children=annotation, marker_annotation*?
+throws: children=_type*
+module_declaration: body=module_body, name=identifier,scoped_identifier, children=annotation, marker_annotation*?
+record_pattern: children=generic_type, identifier, record_pattern_body*
+enum_declaration: interfaces=super_interfaces?, body=enum_body, name=identifier, children=modifiers?
+modifiers: children=annotation, marker_annotation*?
+class_literal: children=_unannotated_type
+while_statement: body=statement, condition=parenthesized_expression
+catch_clause: body=block, children=catch_formal_parameter
+try_statement: body=block, children=catch_clause, finally_clause*
+type_list: children=_type*
+lambda_expression: body=block,expression, parameters=formal_parameters,identifier,inferred_parameters
+resource: dimensions=dimensions?, type=_unannotated_type?, name=identifier,underscore_pattern?, value=expression?, children=field_access, identifier, modifiers?
+permits: children=type_list
+extends_interfaces: children=type_list
+annotated_type: children=_unannotated_type, annotation, marker_annotation*
+if_statement: alternative=statement?, condition=parenthesized_expression, consequence=statement
+switch_block: children=switch_block_statement_group, switch_rule*?
+continue_statement: children=identifier?
+formal_parameter: dimensions=dimensions?, type=_unannotated_type, name=identifier,underscore_pattern, children=modifiers?
+generic_type: children=scoped_type_identifier, type_arguments, type_identifier*
+module_body: children=module_directive*?
+requires_module_directive: modifiers=requires_modifier*?, module=identifier,scoped_identifier
+annotation_type_body: children=annotation_type_declaration, annotation_type_element_declaration, class_declaration, constant_declaration, enum_declaration, interface_declaration*?
+constructor_body: children=explicit_constructor_invocation, statement*?
+object_creation_expression: arguments=argument_list, type=_simple_type, type_arguments=type_arguments?, children=annotation, class_body, marker_annotation, primary_expression*?
+for_statement: condition=expression?, body=statement, update=expression*?, init=expression,local_variable_declaration*?

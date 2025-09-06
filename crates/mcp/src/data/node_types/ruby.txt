@@ -1,0 +1,104 @@
+if_guard: condition=_expression
+do_block: body=body_statement?, parameters=block_parameters?
+else: children=_statement, empty_statement*?
+method_parameters: children=block_parameter, destructured_parameter, forward_parameter, hash_splat_nil, hash_splat_parameter, identifier, keyword_parameter, optional_parameter, splat_parameter*?
+binary: left=_expression,_simple_numeric, right=_expression
+block_parameter: name=identifier?
+regex: children=escape_sequence, interpolation, string_content*?
+elsif: alternative=else,elsif?, condition=_statement, consequence=then?
+conditional: condition=_arg, consequence=_arg, alternative=_arg
+rest_assignment: children=_lhs?
+splat_parameter: name=identifier?
+match_pattern: value=_arg, pattern=_pattern_top_expr_body
+until_modifier: condition=_expression, body=_statement
+exceptions: children=_arg, splat_argument*
+array_pattern: class=_pattern_constant?, children=_pattern_expr, splat_parameter*?
+in: children=_arg
+parenthesized_pattern: children=_pattern_expr
+redo: children=argument_list?
+until: body=do, condition=_statement
+hash: children=hash_splat_argument, pair*?
+begin: children=_statement, else, empty_statement, ensure, rescue*?
+case_match: clauses=in_clause*, else=else?, value=_statement
+unary: operand=_expression,_simple_numeric,parenthesized_statements
+block_parameters: locals=identifier*?, children=block_parameter, destructured_parameter, forward_parameter, hash_splat_nil, hash_splat_parameter, identifier, keyword_parameter, optional_parameter, splat_parameter*?
+symbol_array: children=bare_symbol*?
+unless: consequence=then?, alternative=else,elsif?, condition=_statement
+array: children=_expression, block_argument, forward_argument, hash_splat_argument, pair, splat_argument*?
+begin_block: children=_statement, empty_statement*?
+heredoc_body: children=escape_sequence, heredoc_content, heredoc_end, interpolation*
+undef: children=_method_name*
+body_statement: children=_statement, else, empty_statement, ensure, rescue*
+expression_reference_pattern: value=_expression
+if: condition=_statement, alternative=else,elsif?, consequence=then?
+then: children=_statement, empty_statement*?
+argument_list: children=_expression, block_argument, forward_argument, hash_splat_argument, pair, splat_argument*?
+element_reference: object=_primary, block=block,do_block?, children=_expression, block_argument, forward_argument, hash_splat_argument, pair, splat_argument*?
+as_pattern: value=_pattern_expr, name=identifier
+break: children=argument_list?
+module: name=constant,scope_resolution, body=body_statement?
+right_assignment_list: children=_arg, splat_argument*
+retry: children=argument_list?
+keyword_parameter: value=_arg?, name=identifier
+end_block: children=_statement, empty_statement*?
+singleton_class: body=body_statement?, value=_arg
+lambda_parameters: children=block_parameter, destructured_parameter, forward_parameter, hash_splat_nil, hash_splat_parameter, identifier, keyword_parameter, optional_parameter, splat_parameter*?
+singleton_method: name=_method_name, body=_arg,body_statement,rescue_modifier?, parameters=method_parameters?, object=_arg,_variable
+variable_reference_pattern: name=_nonlocal_variable,identifier
+while: condition=_statement, body=do
+program: children=_statement, empty_statement, uninterpreted*?
+bare_string: children=escape_sequence, interpolation, string_content*
+alias: alias=_method_name, name=_method_name
+setter: name=identifier
+assignment: right=_expression,rescue_modifier,right_assignment_list,splat_argument, left=_lhs,left_assignment_list
+string_array: children=bare_string*?
+when: body=then?, pattern=pattern*
+in_clause: pattern=_pattern_top_expr_body, guard=if_guard,unless_guard?, body=then?
+keyword_pattern: key=hash_key_symbol,string, value=_pattern_expr?
+lambda: body=block,do_block, parameters=lambda_parameters?
+operator_assignment: left=_lhs, right=_expression,rescue_modifier
+pattern: children=_arg, splat_argument
+delimited_symbol: children=escape_sequence, interpolation, string_content*?
+exception_variable: children=_lhs
+destructured_left_assignment: children=_lhs, destructured_left_assignment, rest_assignment*
+for: body=do, pattern=_lhs,left_assignment_list, value=in
+do: children=_statement, empty_statement*?
+optional_parameter: value=_arg, name=identifier
+complex: children=float, integer, rational
+range: begin=_arg,_pattern_primitive?, end=_arg,_pattern_primitive?
+rational: children=float, integer
+return: children=argument_list?
+superclass: children=_expression
+unless_guard: condition=_expression
+block_argument: children=_arg?
+hash_pattern: class=_pattern_constant?, children=hash_splat_nil, hash_splat_parameter, keyword_pattern*?
+case: value=_statement?, children=else, when*?
+chained_string: children=string*
+splat_argument: children=_arg?
+string: children=escape_sequence, interpolation, string_content*?
+block_body: children=_statement, empty_statement*
+hash_splat_parameter: name=identifier?
+parenthesized_statements: children=_statement, empty_statement*?
+pair: key=_arg,hash_key_symbol,string, value=_arg?
+hash_splat_argument: children=_arg?
+bare_symbol: children=escape_sequence, interpolation, string_content*
+class: superclass=superclass?, body=body_statement?, name=constant,scope_resolution
+block: body=block_body?, parameters=block_parameters?
+call: receiver=_primary?, arguments=argument_list?, operator=_call_operator?, block=block,do_block?, method=_variable,operator?
+destructured_parameter: children=block_parameter, destructured_parameter, forward_parameter, hash_splat_nil, hash_splat_parameter, identifier, keyword_parameter, optional_parameter, splat_parameter*?
+find_pattern: class=_pattern_constant?, children=_pattern_expr, splat_parameter*
+alternative_pattern: alternatives=_pattern_expr_basic*
+left_assignment_list: children=_lhs, destructured_left_assignment, rest_assignment*
+rescue: exceptions=exceptions?, variable=exception_variable?, body=then?
+rescue_modifier: handler=_expression, body=_arg,_statement
+next: children=argument_list?
+unless_modifier: body=_statement, condition=_expression
+subshell: children=escape_sequence, interpolation, string_content*?
+method: name=_method_name, parameters=method_parameters?, body=_arg,body_statement,rescue_modifier?
+interpolation: children=_nonlocal_variable, _statement, empty_statement*?
+while_modifier: body=_statement, condition=_expression
+scope_resolution: name=constant, scope=_pattern_constant,_primary?
+test_pattern: pattern=_pattern_top_expr_body, value=_arg
+ensure: children=_statement, empty_statement*?
+yield: children=argument_list?
+if_modifier: condition=_expression, body=_statement
