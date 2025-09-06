@@ -1,0 +1,30 @@
+arguments: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, keywords, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+body: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+dot: right=alias,charlist,identifier,operator_identifier,string,tuple?, left=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator
+charlist: children=escape_sequence, interpolation, quoted_content*?
+unary_operator: operand=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator*
+source: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+list: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, keywords, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+access_call: target=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator, key=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator
+map: children=map_content, struct*?
+struct: children=alias, atom, call, dot, identifier, quoted_atom, unary_operator
+string: children=escape_sequence, interpolation, quoted_content*?
+call: target=call,dot,identifier, children=arguments, do_block*?
+else_block: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, stab_clause, string, tuple, unary_operator*?
+interpolation: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator?
+map_content: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, keywords, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*
+rescue_block: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, stab_clause, string, tuple, unary_operator*?
+block: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, stab_clause, string, tuple, unary_operator*?
+quoted_atom: children=escape_sequence, interpolation, quoted_content*?
+catch_block: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, stab_clause, string, tuple, unary_operator*?
+tuple: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, keywords, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+bitstring: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, keywords, list, map, nil, operator_identifier, quoted_atom, sigil, string, tuple, unary_operator*?
+anonymous_function: children=stab_clause*?
+keywords: children=pair*
+quoted_keyword: children=escape_sequence, interpolation, quoted_content*?
+binary_operator: left=access_call,alias,anonymous_function,arguments,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator, right=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,keywords,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator
+do_block: children=access_call, after_block, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, catch_block, char, charlist, dot, else_block, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, rescue_block, sigil, stab_clause, string, tuple, unary_operator*?
+pair: key=keyword,quoted_keyword, value=access_call,alias,anonymous_function,atom,binary_operator,bitstring,block,boolean,call,char,charlist,dot,float,identifier,integer,list,map,nil,operator_identifier,quoted_atom,sigil,string,tuple,unary_operator
+after_block: children=access_call, alias, anonymous_function, atom, binary_operator, bitstring, block, boolean, call, char, charlist, dot, float, identifier, integer, list, map, nil, operator_identifier, quoted_atom, sigil, stab_clause, string, tuple, unary_operator*?
+sigil: children=escape_sequence, interpolation, quoted_content, sigil_modifiers, sigil_name*
+stab_clause: left=arguments,binary_operator?, right=body?

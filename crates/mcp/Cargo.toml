@@ -1,0 +1,23 @@
+[package]
+name = "codemod-mcp"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rmcp = { workspace = true, features = ["transport-io"] }
+anyhow.workspace = true
+tokio.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"
+serde.workspace = true
+serde_json.workspace = true
+ast-grep-core.workspace = true
+ast-grep-language.workspace = true
+codemod-sandbox.workspace = true
+testing-utils.workspace = true

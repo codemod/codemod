@@ -8,6 +8,8 @@ members = [
     "crates/codemod-sandbox",
     "crates/codemod-sandbox/build",
     "crates/telemetry",
+    "crates/mcp",
+    "crates/testing-utils",
     "xtask",
 ]
 resolver = "2"
@@ -20,8 +22,9 @@ description = "A self-hostable workflow engine for code transformations"
 documentation = "https://docs.rs/butterflow"
 repository = "https://github.com/codemod-com/butterflow"
 license = "Apache-2.0"
-rust-version = "1.70"
+rust-version = "1.76"
 version = "1.0.5"
+edition = "2021"
 
 [workspace.dependencies]
 butterflow-models = { path = "crates/models" }
@@ -31,8 +34,13 @@ butterflow-runners = { path = "crates/runners" }
 butterflow-scheduler = { path = "crates/scheduler" }
 codemod-sandbox = { path = "crates/codemod-sandbox" }
 codemod-telemetry = { path = "crates/telemetry" }
+codemod-mcp = { path = "crates/mcp" }
+testing-utils = { path = "crates/testing-utils" }
+rmcp = { version = "0.6", features = ["server"] }
 
 anyhow = "1.0"
+ast-grep-core = "0.38.6"
+ast-grep-config = "0.38.6"
 ast-grep-language = "0.38.6"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

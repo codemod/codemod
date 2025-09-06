@@ -1,0 +1,87 @@
+template_substitution: children=expression, sequence_expression
+arrow_function: parameters=formal_parameters?, body=expression,statement_block, parameter=identifier?
+arguments: children=expression, spread_element*?
+class: decorator=decorator*?, name=identifier?, body=class_body, children=class_heritage?
+namespace_export: children=identifier, string
+call_expression: function=expression,import, arguments=arguments,template_string, optional_chain=optional_chain?
+jsx_self_closing_element: attribute=jsx_attribute,jsx_expression*?, name=identifier,jsx_namespace_name,member_expression
+lexical_declaration: children=variable_declarator*
+switch_case: value=expression,sequence_expression, body=statement*?
+for_in_statement: body=statement, left=array_pattern,identifier,member_expression,object_pattern,parenthesized_expression,subscript_expression,undefined, value=expression?, right=expression,sequence_expression
+sequence_expression: children=expression*
+while_statement: body=statement, condition=parenthesized_expression
+import_statement: source=string, children=import_attribute, import_clause*?
+jsx_attribute: children=jsx_element, jsx_expression, jsx_namespace_name, jsx_self_closing_element, property_identifier, string*
+with_statement: body=statement, object=parenthesized_expression
+array: children=expression, spread_element*?
+break_statement: label=statement_identifier?
+generator_function: name=identifier?, body=statement_block, parameters=formal_parameters
+jsx_element: open_tag=jsx_opening_element, close_tag=jsx_closing_element, children=html_character_reference, jsx_element, jsx_expression, jsx_self_closing_element, jsx_text*?
+new_expression: arguments=arguments?, constructor=new_expression,primary_expression
+class_body: member=class_static_block,field_definition,method_definition*?, template=glimmer_template*?
+await_expression: children=expression
+else_clause: children=statement
+jsx_namespace_name: children=identifier*
+pair: key=computed_property_name,number,private_property_identifier,property_identifier,string, value=expression
+ternary_expression: consequence=expression, alternative=expression, condition=expression
+switch_default: body=statement*?
+function_expression: name=identifier?, body=statement_block, parameters=formal_parameters
+variable_declarator: value=expression?, name=array_pattern,identifier,object_pattern
+class_heritage: children=expression
+regex: pattern=regex_pattern, flags=regex_flags?
+decorator: children=call_expression, identifier, member_expression
+function_declaration: name=identifier, body=statement_block, parameters=formal_parameters
+import_attribute: children=object
+program: children=hash_bang_line, statement*?
+subscript_expression: index=expression,sequence_expression, object=expression, optional_chain=optional_chain?
+assignment_pattern: right=expression, left=pattern
+throw_statement: children=expression, sequence_expression
+if_statement: alternative=else_clause?, condition=parenthesized_expression, consequence=statement
+export_clause: children=export_specifier*?
+rest_pattern: children=array_pattern, identifier, member_expression, object_pattern, subscript_expression, undefined
+unary_expression: argument=expression
+string: children=escape_sequence, html_character_reference, string_fragment*?
+yield_expression: children=expression?
+object_pattern: children=object_assignment_pattern, pair_pattern, rest_pattern, shorthand_property_identifier_pattern*?
+generator_function_declaration: body=statement_block, parameters=formal_parameters, name=identifier
+statement_block: children=statement*?
+expression_statement: children=expression, sequence_expression
+field_definition: property=computed_property_name,number,private_property_identifier,property_identifier,string, value=expression?, decorator=decorator*?
+spread_element: children=expression
+jsx_opening_element: attribute=jsx_attribute,jsx_expression*?, name=identifier,jsx_namespace_name,member_expression?
+object: children=method_definition, pair, shorthand_property_identifier, spread_element*?
+return_statement: children=expression, sequence_expression?
+namespace_import: children=identifier
+method_definition: decorator=decorator*?, parameters=formal_parameters, name=computed_property_name,number,private_property_identifier,property_identifier,string, body=statement_block
+continue_statement: label=statement_identifier?
+member_expression: optional_chain=optional_chain?, object=expression,import, property=private_property_identifier,property_identifier
+parenthesized_expression: children=expression, sequence_expression
+jsx_expression: children=expression, sequence_expression, spread_element?
+try_statement: body=statement_block, handler=catch_clause?, finalizer=finally_clause?
+array_pattern: children=assignment_pattern, pattern*?
+named_imports: children=import_specifier*?
+object_assignment_pattern: left=array_pattern,object_pattern,shorthand_property_identifier_pattern, right=expression
+export_specifier: alias=identifier,string?, name=identifier,string
+switch_body: children=switch_case, switch_default*?
+binary_expression: right=expression, left=expression,private_property_identifier
+class_static_block: body=statement_block
+finally_clause: body=statement_block
+variable_declaration: children=variable_declarator*
+for_statement: condition=empty_statement,expression,sequence_expression*, increment=expression,sequence_expression?, body=statement, initializer=empty_statement,expression,lexical_declaration,sequence_expression,variable_declaration
+import_specifier: alias=identifier?, name=identifier,string
+assignment_expression: left=array_pattern,identifier,member_expression,object_pattern,parenthesized_expression,subscript_expression,undefined, right=expression
+switch_statement: body=switch_body, value=parenthesized_expression
+update_expression: argument=expression
+do_statement: body=statement, condition=parenthesized_expression
+augmented_assignment_expression: right=expression, left=identifier,member_expression,parenthesized_expression,subscript_expression
+catch_clause: body=statement_block, parameter=array_pattern,identifier,object_pattern?
+class_declaration: decorator=decorator*?, body=class_body, name=identifier, children=class_heritage?
+computed_property_name: children=expression
+formal_parameters: children=assignment_pattern, pattern*?
+glimmer_template: close_tag=glimmer_closing_tag, open_tag=glimmer_opening_tag
+jsx_closing_element: name=identifier,jsx_namespace_name,member_expression?
+import_clause: children=identifier, named_imports, namespace_import*
+pair_pattern: key=computed_property_name,number,private_property_identifier,property_identifier,string, value=assignment_pattern,pattern
+labeled_statement: label=statement_identifier, body=statement
+export_statement: source=string?, declaration=declaration?, value=expression?, decorator=decorator*?, children=export_clause, namespace_export?
+template_string: children=escape_sequence, string_fragment, template_substitution*?

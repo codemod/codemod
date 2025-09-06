@@ -1,0 +1,84 @@
+package_clause: children=package_identifier
+communication_case: communication=receive_statement,send_statement, children=_statement*?
+generic_type: type_arguments=type_arguments, type=negated_type,qualified_type,type_identifier
+call_expression: type_arguments=type_arguments?, arguments=argument_list, function=_expression
+negated_type: children=_type
+expression_statement: children=_expression
+parenthesized_expression: children=_expression
+type_arguments: children=type_elem*
+variadic_parameter_declaration: name=identifier?, type=_type
+go_statement: children=_expression
+index_expression: index=_expression, operand=_expression
+parameter_declaration: name=identifier*?, type=_type
+if_statement: initializer=_simple_statement?, condition=_expression, alternative=block,if_statement?, consequence=block
+type_instantiation_expression: type=_type, children=_type*
+var_declaration: children=var_spec, var_spec_list
+channel_type: value=_type
+type_elem: children=_type*
+function_declaration: type_parameters=type_parameter_list?, parameters=parameter_list, body=block?, name=identifier, result=_simple_type,parameter_list?
+array_type: element=_type, length=_expression
+import_spec_list: children=import_spec*?
+parenthesized_type: children=_type
+type_assertion_expression: operand=_expression, type=_type
+field_declaration: tag=interpreted_string_literal,raw_string_literal?, type=_type,generic_type,qualified_type,type_identifier, name=field_identifier*?
+interpreted_string_literal: children=escape_sequence*?
+return_statement: children=expression_list?
+select_statement: children=communication_case, default_case*?
+type_case: type=_type*, children=_statement*?
+receive_statement: right=_expression, left=expression_list?
+literal_element: children=_expression, literal_value
+argument_list: children=_expression, _type, variadic_argument*?
+interface_type: children=method_elem, type_elem*?
+implicit_length_array_type: element=_type
+type_conversion_expression: type=_type, operand=_expression
+for_statement: body=block, children=_expression, for_clause, range_clause?
+default_case: children=_statement*?
+source_file: children=_statement, function_declaration, import_declaration, method_declaration, package_clause*?
+type_switch_statement: value=_expression, alias=expression_list?, initializer=_simple_statement?, children=default_case, type_case*?
+method_declaration: body=block?, name=field_identifier, receiver=parameter_list, result=_simple_type,parameter_list?, parameters=parameter_list
+map_type: value=_type, key=_type
+labeled_statement: label=label_name, children=_statement?
+type_constraint: children=_type*
+keyed_element: children=literal_element*
+qualified_type: package=package_identifier, name=type_identifier
+dec_statement: children=_expression
+for_clause: update=_simple_statement?, condition=_expression?, initializer=_simple_statement?
+expression_switch_statement: value=_expression?, initializer=_simple_statement?, children=default_case, expression_case*?
+continue_statement: children=label_name?
+type_alias: name=type_identifier, type=_type
+variadic_argument: children=_expression
+expression_case: value=expression_list, children=_statement*?
+var_spec_list: children=var_spec*?
+import_declaration: children=import_spec, import_spec_list
+parameter_list: children=parameter_declaration, variadic_parameter_declaration*?
+goto_statement: children=label_name
+range_clause: right=_expression, left=expression_list?
+type_spec: name=type_identifier, type=_type, type_parameters=type_parameter_list?
+field_declaration_list: children=field_declaration*?
+selector_expression: operand=_expression, field=field_identifier
+short_var_declaration: right=expression_list, left=expression_list
+binary_expression: left=_expression, right=_expression
+assignment_statement: right=expression_list, left=expression_list
+struct_type: children=field_declaration_list
+send_statement: channel=_expression, value=_expression
+var_spec: value=expression_list?, name=identifier*, type=_type?
+block: children=_statement*?
+defer_statement: children=_expression
+const_declaration: children=const_spec*?
+inc_statement: children=_expression
+pointer_type: children=_type
+slice_type: element=_type
+type_declaration: children=type_alias, type_spec*?
+literal_value: children=keyed_element, literal_element*?
+type_parameter_list: children=type_parameter_declaration*
+break_statement: children=label_name?
+unary_expression: operand=_expression
+const_spec: type=_type?, name=identifier*, value=expression_list?
+expression_list: children=_expression*
+slice_expression: capacity=_expression?, end=_expression?, operand=_expression, start=_expression?
+composite_literal: body=literal_value, type=array_type,generic_type,implicit_length_array_type,map_type,qualified_type,slice_type,struct_type,type_identifier
+method_elem: result=_simple_type,parameter_list?, parameters=parameter_list, name=field_identifier
+import_spec: name=blank_identifier,dot,package_identifier?, path=interpreted_string_literal,raw_string_literal
+type_parameter_declaration: name=identifier*, type=type_constraint
+func_literal: parameters=parameter_list, body=block, result=_simple_type,parameter_list?
+function_type: parameters=parameter_list, result=_simple_type,parameter_list?

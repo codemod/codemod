@@ -1,0 +1,66 @@
+arguments: children=binary_expression, expression, unary_expression*
+attribute: children=animation_binding, attribute_name, event_binding, interpolation, property_binding, string_content, structural_directive, two_way_binding*
+empty_statement: body=statement_block, children=control_keyword
+placeholder_statement: body=statement_block, children=control_keyword, placeholder_minimum*
+static_member_expression: children=binary_expression, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression
+statement_block: empty=empty_statement*?, error=error_statement*?, loading=loading_statement*?, alternative_condition=else_if_statement*?, placeholder=placeholder_statement*?, alternative=else_statement*?, children=at_sign, defer_statement, doctype, element, entity, erroneous_end_tag, for_statement, icu_expression, if_statement, interpolation, let_statement, script_element, style_element, switch_statement, text*?
+icu_expression: children=binary_expression, conditional_expression, expression, icu_case, icu_clause, nullish_coalescing_expression, ternary_expression, unary_expression*
+pipe_arguments: argument=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression*
+event_binding: children=assignment_expression, binary_expression, binding_name, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression*
+two_way_binding: children=assignment_expression, binary_expression, binding_name, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression*
+ternary_expression: condition=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression, alternative=binary_expression,conditional_expression,expression,group,nullish_coalescing_expression,ternary_expression,unary_expression, consequence=binary_expression,conditional_expression,expression,group,nullish_coalescing_expression,ternary_expression,unary_expression, children=ternary_operator*
+defer_statement: body=statement_block, children=control_keyword, defer_trigger*
+defer_trigger: condition=defer_trigger_condition*
+call_expression: function=identifier, arguments=arguments?
+binary_expression: left=binary_expression,expression, right=expression
+pair: value=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression?, key=identifier,string
+switch_statement: body=switch_body, value=expression, children=control_keyword
+switch_body: children=case_statement, default_statement*
+if_reference: children=identifier, special_keyword*
+placeholder_minimum: minimum=timed_expression
+pipe_sequence: children=pipe_call, pipe_operator*
+script_element: children=end_tag, raw_text, start_tag*
+self_closing_tag: children=attribute, tag_name*
+structural_directive: children=identifier, structural_declaration, structural_expression*
+binding_name: children=identifier, member_expression
+defer_trigger_condition: trigger=array,binary_expression,bracket_expression,call_expression,conditional_expression,expression,group,identifier,member_expression,nullish_coalescing_expression,number,object,string,ternary_expression,unary_expression, children=prefetch_keyword, special_keyword*
+error_statement: body=statement_block, children=control_keyword
+style_element: children=end_tag, raw_text, start_tag*
+if_condition: children=binary_expression, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression
+expression: pipes=pipe_sequence?, children=array, bracket_expression, call_expression, group, identifier, member_expression, number, object, string
+loading_condition: condition=timed_expression*
+unary_expression: value=expression,unary_expression, operator=unary_operator
+if_statement: empty=empty_statement*?, error=error_statement*?, consequence=statement_block, condition=if_condition, reference=if_reference?, loading=loading_statement*?, placeholder=placeholder_statement*?, alternative=else_statement*?, alternative_condition=else_if_statement*?, children=control_keyword
+array: children=binary_expression, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression*?
+bracket_expression: property=bracket_expression,identifier,member_expression,static_member_expression, object=array,bracket_expression,call_expression,group,identifier,member_expression,number,object,string
+icu_case: placeholder=placeholder_statement*?, alternative=else_statement*?, error=error_statement*?, empty=empty_statement*?, loading=loading_statement*?, alternative_condition=else_if_statement*?, children=at_sign, defer_statement, doctype, element, entity, erroneous_end_tag, for_statement, icu_category, icu_expression, if_statement, interpolation, let_statement, script_element, style_element, switch_statement, text*
+assignment_expression: name=identifier, value=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression
+else_statement: body=statement_block, children=control_keyword
+let_statement: children=assignment_expression, control_keyword*
+default_statement: body=statement_block, children=control_keyword
+timed_expression: value=number, children=special_keyword
+end_tag: children=tag_name
+conditional_expression: right=binary_expression,conditional_expression,expression,unary_expression, left=array,binary_expression,bracket_expression,call_expression,group,identifier,member_expression,number,object,string,unary_expression, children=conditional_operator
+loading_statement: body=statement_block, children=control_keyword, loading_condition*
+for_reference: alias=assignment_expression*, children=special_keyword
+member_expression: property=identifier?, call=call_expression?, object=array,bracket_expression,call_expression,group,identifier,member_expression,number,object,string
+pipe_call: name=identifier, arguments=pipe_arguments?
+for_statement: body=statement_block, declaration=for_declaration, references=for_references?, children=control_keyword
+for_declaration: value=expression, name=identifier, track=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression, children=special_keyword*
+number: children=number_fragment, unit*
+animation_binding: trigger=assignment_expression,binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression*?, children=binding_name
+case_statement: body=statement_block, value=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression, children=control_keyword
+group: children=binary_expression, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression
+object: children=pair*?
+structural_assignment: alias=identifier?, name=identifier, value=expression,identifier?, children=special_keyword*?
+element: alternative_condition=else_if_statement*?, empty=empty_statement*?, alternative=else_statement*?, error=error_statement*?, placeholder=placeholder_statement*?, loading=loading_statement*?, children=at_sign, defer_statement, doctype, element, end_tag, entity, erroneous_end_tag, for_statement, icu_expression, if_statement, interpolation, let_statement, script_element, self_closing_tag, start_tag, style_element, switch_statement, text*
+else_if_statement: reference=if_reference?, consequence=statement_block, condition=if_condition, children=control_keyword
+for_references: reference=for_reference*
+document: empty=empty_statement*?, error=error_statement*?, placeholder=placeholder_statement*?, alternative_condition=else_if_statement*?, alternative=else_statement*?, loading=loading_statement*?, children=at_sign, defer_statement, doctype, element, entity, erroneous_end_tag, for_statement, icu_expression, if_statement, interpolation, let_statement, script_element, style_element, switch_statement, text*?
+interpolation: children=binary_expression, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression
+property_binding: children=assignment_expression, binary_expression, binding_name, conditional_expression, expression, nullish_coalescing_expression, ternary_expression, unary_expression*
+nullish_coalescing_expression: condition=binary_expression,conditional_expression,expression,nullish_coalescing_expression,ternary_expression,unary_expression, default=array,bracket_expression,call_expression,group,identifier,member_expression,number,object,string, children=coalescing_operator
+structural_declaration: children=special_keyword, structural_assignment*
+erroneous_end_tag: children=erroneous_end_tag_name
+start_tag: children=attribute, tag_name*
+structural_expression: named=identifier?, name=identifier?, alias=identifier*?, children=binary_expression, conditional_expression, expression, identifier, nullish_coalescing_expression, special_keyword, ternary_expression, unary_expression*

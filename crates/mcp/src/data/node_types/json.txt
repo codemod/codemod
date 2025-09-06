@@ -1,0 +1,5 @@
+object: children=pair*?
+document: children=_value*?
+pair: value=_value, key=string
+string: children=escape_sequence, string_content*?
+array: children=_value*?

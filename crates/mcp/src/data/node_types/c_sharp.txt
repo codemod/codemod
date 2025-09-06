@@ -1,0 +1,178 @@
+property_declaration: name=identifier, accessors=accessor_list?, type=type, value=arrow_expression_clause,expression?, children=attribute_list, explicit_interface_specifier, modifier*?
+using_directive: name=identifier?, children=type
+while_statement: body=statement, condition=expression
+postfix_unary_expression: children=expression
+method_declaration: body=arrow_expression_clause,block?, type_parameters=type_parameter_list?, parameters=parameter_list, returns=type, name=identifier, children=attribute_list, explicit_interface_specifier, modifier, type_parameter_constraints_clause*?
+array_creation_expression: type=array_type, children=initializer_expression?
+property_pattern_clause: children=subpattern*?
+range_expression: children=expression*?
+destructor_declaration: parameters=parameter_list, name=identifier, body=arrow_expression_clause,block?, children=attribute_list*?
+bracketed_parameter_list: type=array_type,nullable_type*?, name=identifier*?, children=attribute_list, parameter*?
+join_clause: type=type?, children=expression, identifier, join_into_clause*
+preproc_endregion: content=preproc_arg?
+sizeof_expression: type=type
+struct_declaration: name=identifier, body=declaration_list, children=attribute_list, base_list, modifier, parameter_list, type_parameter_constraints_clause, type_parameter_list*?
+type_argument_list: children=type*?
+alias_qualified_name: name=generic_name,identifier, alias=identifier
+catch_declaration: type=type, name=identifier?
+delegate_declaration: name=identifier, type=type, type_parameters=type_parameter_list?, parameters=parameter_list, children=attribute_list, modifier, type_parameter_constraints_clause*?
+typeof_expression: type=type
+variable_declaration: type=type, children=variable_declarator*
+invocation_expression: arguments=argument_list, function=expression
+attribute_list: children=attribute, attribute_target_specifier*
+record_declaration: name=identifier, body=declaration_list?, children=attribute_list, base_list, modifier, parameter_list, type_parameter_constraints_clause, type_parameter_list*?
+pointer_type: type=alias_qualified_name,function_pointer_type,generic_name,identifier,nullable_type,pointer_type,predefined_type,qualified_name,tuple_type
+interpolation_alignment_clause: children=expression
+implicit_object_creation_expression: children=argument_list, initializer_expression*
+refvalue_expression: value=expression, type=type
+initializer_expression: children=expression*?
+anonymous_method_expression: parameters=parameter_list?, children=block, modifier*
+array_rank_specifier: children=expression*?
+object_creation_expression: initializer=initializer_expression?, type=type, arguments=argument_list?
+nullable_type: type=alias_qualified_name,array_type,generic_name,identifier,predefined_type,qualified_name,tuple_type
+query_expression: children=from_clause, group_clause, identifier, join_clause, let_clause, order_by_clause, select_clause, where_clause*
+enum_declaration: name=identifier, body=enum_member_declaration_list, children=attribute_list, base_list, modifier*?
+return_statement: children=expression?
+type_parameter: name=identifier, children=attribute_list*?
+enum_member_declaration_list: children=enum_member_declaration, preproc_if*?
+member_access_expression: name=generic_name,identifier, expression=alias_qualified_name,expression,generic_name,identifier,predefined_type,qualified_name
+primary_constructor_base_type: type=alias_qualified_name,generic_name,identifier,qualified_name, children=argument_list
+type_parameter_constraint: type=type?, children=constructor_constraint?
+argument: name=identifier?, children=declaration_expression, expression
+default_expression: type=type?
+global_attribute: children=attribute*
+variable_declarator: name=identifier?, children=bracketed_argument_list, expression, tuple_pattern*?
+makeref_expression: children=expression
+is_expression: right=type, left=expression
+attribute_argument: children=expression, identifier*
+conditional_expression: consequence=expression, alternative=expression, condition=expression
+catch_clause: body=block, children=catch_declaration, catch_filter_clause*?
+prefix_unary_expression: children=expression
+unary_expression: argument=binary_expression,boolean_literal,character_literal,identifier,integer_literal,parenthesized_expression,unary_expression
+where_clause: children=expression
+binary_expression: left=binary_expression,boolean_literal,character_literal,expression,identifier,integer_literal,parenthesized_expression,unary_expression, right=binary_expression,boolean_literal,character_literal,expression,identifier,integer_literal,parenthesized_expression,unary_expression
+preproc_region: content=preproc_arg?
+accessor_declaration: body=arrow_expression_clause,block?, name=identifier, children=attribute_list, modifier*?
+interpolation: children=expression, interpolation_alignment_clause, interpolation_brace, interpolation_format_clause*
+cast_expression: type=type, value=expression
+ref_type: type=type
+unsafe_statement: children=block
+anonymous_object_creation_expression: children=expression, identifier*?
+interpolated_string_expression: children=escape_sequence, interpolation, interpolation_quote, interpolation_start, string_content*
+var_pattern: name=identifier?, children=discard, parenthesized_variable_designation?
+parameter: type=type?, name=identifier, children=attribute_list, expression, modifier*?
+let_clause: children=expression, identifier*
+as_expression: right=type, left=expression
+type_parameter_list: children=type_parameter*
+conditional_access_expression: condition=expression, children=element_binding_expression, member_binding_expression
+or_pattern: right=pattern, left=pattern
+arrow_expression_clause: children=expression
+argument_list: children=argument*?
+switch_expression: children=expression, switch_expression_arm*
+function_pointer_parameter: type=alias_qualified_name,array_type,function_pointer_type,generic_name,identifier,implicit_type,nullable_type,pointer_type,predefined_type,qualified_name,tuple_type
+preproc_elif: condition=binary_expression,boolean_literal,character_literal,identifier,integer_literal,parenthesized_expression,unary_expression, alternative=preproc_elif,preproc_else?, children=declaration, enum_member_declaration, expression, extern_alias_directive, file_scoped_namespace_declaration, global_attribute, statement, type_declaration*?
+preproc_else: children=declaration, enum_member_declaration, expression, extern_alias_directive, file_scoped_namespace_declaration, global_attribute, statement, type_declaration*?
+scoped_type: type=alias_qualified_name,generic_name,identifier,qualified_name,ref_type
+switch_section: children=expression, pattern, statement, when_clause*?
+await_expression: children=expression
+assignment_expression: left=lvalue_expression, right=expression
+namespace_declaration: body=declaration_list, name=alias_qualified_name,generic_name,identifier,qualified_name
+negated_pattern: children=pattern
+catch_filter_clause: children=expression
+conversion_operator_declaration: body=arrow_expression_clause,block?, type=type, parameters=parameter_list, children=attribute_list, explicit_interface_specifier, modifier*?
+reftype_expression: children=expression
+string_literal: children=escape_sequence, string_literal_content, string_literal_encoding*?
+positional_pattern_clause: children=subpattern*?
+parenthesized_pattern: children=pattern
+declaration_pattern: name=identifier?, type=type, children=discard, parenthesized_variable_designation?
+type_pattern: type=type
+parenthesized_expression: children=boolean_literal, character_literal, integer_literal, lvalue_expression, non_lvalue_expression, unary_expression
+element_access_expression: expression=expression, subscript=bracketed_argument_list
+global_statement: children=statement
+array_type: rank=array_rank_specifier, type=alias_qualified_name,array_type,function_pointer_type,generic_name,identifier,nullable_type,pointer_type,predefined_type,qualified_name,tuple_type
+extern_alias_directive: name=identifier
+constant_pattern: children=binary_expression, cast_expression, default_expression, generic_name, identifier, interpolated_string_expression, invocation_expression, literal, member_access_expression, parenthesized_expression, postfix_unary_expression, prefix_unary_expression, sizeof_expression, tuple_expression, typeof_expression
+file_scoped_namespace_declaration: name=alias_qualified_name,generic_name,identifier,qualified_name
+interface_declaration: body=declaration_list, name=identifier, type_parameters=type_parameter_list?, children=attribute_list, base_list, modifier, type_parameter_constraints_clause*?
+parenthesized_variable_designation: name=identifier*?, children=discard, parenthesized_variable_designation*?
+yield_statement: children=expression?
+function_pointer_type: returns=type, children=calling_convention, function_pointer_parameter*?
+is_pattern_expression: pattern=pattern, expression=expression
+preproc_line: children=integer_literal, string_literal*?
+generic_name: children=identifier, type_argument_list*
+type_parameter_constraints_clause: children=identifier, type_parameter_constraint*
+list_pattern: children=pattern*?
+preproc_error: children=preproc_arg
+bracketed_argument_list: children=argument*
+for_statement: update=expression*?, condition=expression?, initializer=expression,variable_declaration*?, body=statement
+implicit_array_creation_expression: children=initializer_expression
+base_list: children=argument_list, primary_constructor_base_type, type*
+expression_statement: children=assignment_expression, await_expression, invocation_expression, object_creation_expression, parenthesized_expression, postfix_unary_expression, prefix_unary_expression
+attribute_argument_list: children=attribute_argument*?
+group_clause: children=expression*
+enum_member_declaration: value=expression?, name=identifier, children=attribute_list*?
+tuple_expression: children=argument*
+with_initializer: children=expression, identifier*
+declaration_list: children=declaration*?
+preproc_define: children=preproc_arg
+foreach_statement: right=expression, type=type?, body=statement, left=expression,identifier,tuple_pattern
+block: children=statement*?
+constructor_declaration: body=arrow_expression_clause,block?, name=identifier, parameters=parameter_list, children=attribute_list, constructor_initializer, modifier*?
+field_declaration: children=attribute_list, modifier, variable_declaration*
+throw_expression: children=expression
+tuple_element: type=type, name=identifier?
+using_statement: body=statement, children=expression, variable_declaration
+fixed_statement: children=statement, variable_declaration*
+accessor_list: children=accessor_declaration*?
+subpattern: children=expression, pattern*
+recursive_pattern: name=identifier?, type=type?, children=discard, parenthesized_variable_designation, positional_pattern_clause, property_pattern_clause*
+lock_statement: children=expression, statement*
+event_declaration: type=type, accessors=accessor_list?, name=identifier, children=attribute_list, explicit_interface_specifier, modifier*?
+attribute: name=alias_qualified_name,generic_name,identifier,qualified_name, children=attribute_argument_list?
+join_into_clause: children=identifier
+switch_expression_arm: children=expression, pattern, when_clause*
+tuple_type: children=tuple_element*
+stackalloc_expression: type=array_type, children=initializer_expression?
+from_clause: name=identifier, type=type?, children=expression
+with_expression: children=expression, with_initializer*
+when_clause: children=expression
+finally_clause: children=block
+checked_expression: children=expression
+preproc_if: alternative=preproc_elif,preproc_else?, condition=binary_expression,boolean_literal,character_literal,identifier,integer_literal,parenthesized_expression,unary_expression, children=declaration, enum_member_declaration, expression, extern_alias_directive, file_scoped_namespace_declaration, global_attribute, statement, type_declaration*?
+raw_string_literal: children=raw_string_content, raw_string_end, raw_string_start*
+switch_statement: body=switch_body, value=expression,tuple_expression
+throw_statement: children=expression?
+preproc_pragma: children=identifier, integer_literal, string_literal*?
+calling_convention: children=identifier*?
+class_declaration: name=identifier, body=declaration_list, children=attribute_list, base_list, modifier, parameter_list, type_parameter_constraints_clause, type_parameter_list*?
+goto_statement: children=expression?
+implicit_stackalloc_expression: children=initializer_expression
+local_declaration_statement: children=modifier, variable_declaration*
+checked_statement: children=block
+lambda_expression: parameters=implicit_parameter,parameter_list, body=block,expression, type=type?, children=attribute_list, modifier*?
+element_binding_expression: children=argument*
+try_statement: body=block, children=catch_clause, finally_clause*?
+declaration_expression: type=type, name=identifier
+explicit_interface_specifier: children=alias_qualified_name, generic_name, identifier, qualified_name
+indexer_declaration: value=arrow_expression_clause?, parameters=bracketed_parameter_list, type=type, accessors=accessor_list?, children=attribute_list, explicit_interface_specifier, modifier*?
+compilation_unit: children=extern_alias_directive, file_scoped_namespace_declaration, global_attribute, global_statement, namespace_declaration, preproc_if, shebang_directive, type_declaration, using_directive*?
+member_binding_expression: name=generic_name,identifier
+operator_declaration: parameters=parameter_list, body=arrow_expression_clause,block?, type=type, children=attribute_list, explicit_interface_specifier, modifier*?
+labeled_statement: children=identifier, statement*
+preproc_undef: children=preproc_arg
+tuple_pattern: name=identifier*?, children=discard, tuple_pattern*?
+select_clause: children=expression
+local_function_statement: type_parameters=type_parameter_list?, parameters=parameter_list, name=identifier, body=arrow_expression_clause,block?, type=type, children=attribute_list, modifier, type_parameter_constraints_clause*?
+preproc_warning: children=preproc_arg
+constructor_initializer: children=argument_list
+ref_expression: children=expression
+relational_pattern: children=expression
+if_statement: alternative=statement?, condition=expression, consequence=statement
+qualified_name: qualifier=alias_qualified_name,generic_name,identifier,qualified_name, name=generic_name,identifier
+switch_body: children=switch_section*?
+event_field_declaration: children=attribute_list, modifier, variable_declaration*
+parameter_list: name=identifier*?, type=array_type,nullable_type*?, children=attribute_list, parameter*?
+order_by_clause: children=expression*
+do_statement: body=statement, condition=expression
+and_pattern: right=pattern, left=pattern
+character_literal: children=character_literal_content, escape_sequence

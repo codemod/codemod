@@ -16,3 +16,7 @@ schemars = "1.0.0-alpha.17"
 serde_json.workspace = true
 ts-rs = "10.1.0"
 regex.workspace = true
+tokio = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+anyhow.workspace = true

@@ -1,0 +1,118 @@
+self_type: children=annotated_type, compound_type, function_type, generic_type, identifier, infix_type, literal_type, match_type, operator_identifier, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*
+parameters: children=annotated_type, compound_type, function_type, generic_type, infix_type, lazy_parameter_type, literal_type, match_type, parameter, projected_type, repeated_parameter_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*?
+arrow_renamed_identifier: name=identifier,operator_identifier, alias=identifier,operator_identifier,wildcard
+generic_type: type=generic_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard, type_arguments=type_arguments
+lazy_parameter_type: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+object_definition: body=template_body*?, extend=extends_clause?, derive=derives_clause?, name=identifier,operator_identifier, children=annotation, modifiers*?
+while_expression: body=expression,indented_block,indented_cases, condition=expression,indented_block,indented_cases*
+splice_expression: children=_definition, annotated_type, compound_type, expression, function_type, generic_type, infix_type, literal_type, match_type, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda*?
+enum_definition: body=enum_body, class_parameters=class_parameters*?, extend=extends_clause?, name=identifier,operator_identifier, derive=derives_clause?, type_parameters=type_parameters?, children=access_modifier, annotation*?
+guard: condition=block,boolean_literal,call_expression,case_block,character_literal,field_expression,floating_point_literal,generic_function,identifier,infix_expression,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,postfix_expression,prefix_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard
+match_expression: body=case_block,indented_cases, value=expression, children=inline_modifier?
+enum_body: children=_definition, enum_case_definitions, expression*?
+try_expression: body=expression,indented_block,indented_cases, children=catch_clause, finally_clause*?
+macro_body: children=block, boolean_literal, call_expression, case_block, character_literal, field_expression, floating_point_literal, generic_function, identifier, infix_expression, instance_expression, integer_literal, interpolated_string_expression, null_literal, operator_identifier, parenthesized_expression, prefix_expression, quote_expression, splice_expression, string, tuple_expression, unit, wildcard
+interpolated_string: children=interpolation*?
+binding: type=annotated_type,compound_type,function_type,generic_type,infix_type,lazy_parameter_type,literal_type,match_type,projected_type,repeated_parameter_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, name=identifier,operator_identifier?, children=wildcard?
+parenthesized_expression: children=expression
+val_definition: value=expression,indented_block,indented_cases, pattern=_pattern,identifiers, type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, children=annotation, modifiers*?
+simple_enum_case: extend=extends_clause?, name=identifier,operator_identifier
+case_clause: body=_definition,expression*?, pattern=_pattern, children=guard?
+extends_clause: type=annotated_type,arguments,compound_type,generic_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,wildcard*, arguments=arguments*?, children=arguments?
+function_type: parameter_types=parameter_types, return_type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+using_directive: children=using_directive_key, using_directive_value*
+full_enum_case: class_parameters=class_parameters*, extend=extends_clause?, type_parameters=type_parameters?, name=identifier,operator_identifier
+case_class_pattern: pattern=_pattern*?, type=stable_type_identifier,type_identifier
+compilation_unit: children=_definition, comment, expression, package_clause, package_object*?
+given_pattern: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+modifiers: children=access_modifier, infix_modifier, inline_modifier, open_modifier, transparent_modifier*?
+typed_pattern: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard, pattern=_pattern
+projected_type: type=generic_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard, selector=type_identifier
+indented_cases: children=case_clause*
+trait_definition: type_parameters=type_parameters?, body=template_body*?, extend=extends_clause?, class_parameters=class_parameters*?, derive=derives_clause?, name=identifier,operator_identifier, children=access_modifier, annotation, modifiers*?
+lower_bound: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+given_definition: type_parameters=type_parameters?, body=expression,indented_block,indented_cases,with_template_body?, arguments=arguments?, return_type=annotated_type,arguments,compound_type,generic_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,wildcard,with_template_body*, name=identifier,operator_identifier?, parameters=parameters*?, children=annotation, modifiers*?
+var_declaration: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard, name=identifier,operator_identifier*, children=annotation, modifiers*?
+refinement: children=_definition, expression, self_type*?
+namespace_selectors: children=annotated_type, arrow_renamed_identifier, as_renamed_identifier, compound_type, function_type, generic_type, identifier, infix_type, literal_type, match_type, namespace_wildcard, operator_identifier, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*?
+do_while_expression: condition=parenthesized_expression, body=expression
+enum_case_definitions: children=annotation, full_enum_case, simple_enum_case*
+singleton_type: children=identifier, operator_identifier, stable_identifier
+if_expression: condition=expression,indented_block,indented_cases*, alternative=expression,indented_block,indented_cases?, consequence=expression,indented_block,indented_cases, children=inline_modifier?
+interpolated_string_expression: interpolator=identifier, children=interpolated_string
+access_modifier: children=access_qualifier?
+tuple_type: children=annotated_type, compound_type, function_type, generic_type, infix_type, literal_type, match_type, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*
+class_parameter: default_value=expression?, name=identifier,operator_identifier, type=annotated_type,compound_type,function_type,generic_type,infix_type,lazy_parameter_type,literal_type,match_type,projected_type,repeated_parameter_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, children=annotation, modifiers*?
+field_expression: field=identifier,operator_identifier, value=block,boolean_literal,call_expression,case_block,character_literal,field_expression,floating_point_literal,generic_function,identifier,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard
+finally_clause: children=expression, indented_block, indented_cases
+repeated_parameter_type: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+function_declaration: return_type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, name=identifier,operator_identifier, parameters=parameters*?, type_parameters=type_parameters?, children=annotation, modifiers*?
+package_object: extend=extends_clause?, derive=derives_clause?, name=identifier,operator_identifier, body=template_body*?
+stable_type_identifier: children=identifier, operator_identifier, stable_identifier, type_identifier*
+view_bound: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+package_identifier: children=identifier, operator_identifier*
+colon_argument: lambda_start=bindings,identifier,operator_identifier,wildcard*?, children=indented_block, indented_cases
+tuple_pattern: children=_pattern*
+parameter_types: children=annotated_type, compound_type, function_type, generic_type, infix_type, lazy_parameter_type, literal_type, match_type, projected_type, repeated_parameter_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*?
+ascription_expression: children=annotated_type, annotation, block, boolean_literal, call_expression, case_block, character_literal, compound_type, field_expression, floating_point_literal, function_type, generic_function, generic_type, identifier, infix_expression, infix_type, instance_expression, integer_literal, interpolated_string_expression, lazy_parameter_type, literal_type, match_type, null_literal, operator_identifier, parenthesized_expression, postfix_expression, prefix_expression, projected_type, quote_expression, repeated_parameter_type, singleton_type, splice_expression, stable_type_identifier, string, structural_type, tuple_expression, tuple_type, type_identifier, type_lambda, unit, wildcard*
+prefix_expression: children=block, boolean_literal, call_expression, case_block, character_literal, field_expression, floating_point_literal, generic_function, identifier, instance_expression, integer_literal, interpolated_string_expression, null_literal, operator_identifier, parenthesized_expression, quote_expression, splice_expression, string, tuple_expression, unit, wildcard
+infix_expression: right=block,boolean_literal,call_expression,case_block,character_literal,colon_argument,field_expression,floating_point_literal,generic_function,identifier,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,prefix_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard*, operator=identifier,operator_identifier, left=block,boolean_literal,call_expression,case_block,character_literal,field_expression,floating_point_literal,generic_function,identifier,infix_expression,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,prefix_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard
+postfix_expression: children=block, boolean_literal, call_expression, case_block, character_literal, field_expression, floating_point_literal, generic_function, identifier, infix_expression, instance_expression, integer_literal, interpolated_string_expression, null_literal, operator_identifier, parenthesized_expression, prefix_expression, quote_expression, splice_expression, string, tuple_expression, unit, wildcard*
+type_case_clause: return_type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard, body=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard*, children=annotated_type, compound_type, generic_type, infix_type, literal_type, projected_type, singleton_type, stable_type_identifier, tuple_type, type_identifier, wildcard
+access_qualifier: children=identifier, operator_identifier
+var_definition: value=expression,indented_block,indented_cases, type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, pattern=_pattern,identifiers, children=annotation, modifiers*?
+literal_type: children=boolean_literal, character_literal, floating_point_literal, integer_literal, string
+type_definition: bound=lower_bound,upper_bound*?, type_parameters=type_parameters?, type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, name=type_identifier, children=annotation, modifiers, opaque_modifier*?
+annotated_type: children=annotation, generic_type, projected_type, singleton_type, stable_type_identifier, tuple_type, type_identifier, wildcard*
+annotation: arguments=arguments*?, name=generic_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard
+derives_clause: type=stable_type_identifier,type_identifier*
+generic_function: type_arguments=type_arguments, function=expression
+alternative_pattern: children=_pattern*
+instance_expression: arguments=arguments?, children=annotated_type, compound_type, generic_type, projected_type, singleton_type, stable_type_identifier, structural_type, template_body, tuple_type, type_identifier, wildcard*
+match_type: children=annotated_type, compound_type, generic_type, infix_type, literal_type, projected_type, singleton_type, stable_type_identifier, tuple_type, type_case_clause, type_identifier, wildcard*
+comment: children=using_directive?
+covariant_type_parameter: name=identifier,operator_identifier,wildcard, type_parameters=type_parameters?, bound=context_bound,lower_bound,upper_bound,view_bound*?
+type_lambda: name=identifier,operator_identifier,wildcard*, type_parameters=type_parameters*?, bound=context_bound,lower_bound,upper_bound,view_bound*?, return_type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+class_definition: body=template_body*?, derive=derives_clause?, extend=extends_clause?, name=identifier,operator_identifier, type_parameters=type_parameters?, class_parameters=class_parameters*?, children=access_modifier, annotation, modifiers*?
+parameter: type=annotated_type,compound_type,function_type,generic_type,infix_type,lazy_parameter_type,literal_type,match_type,projected_type,repeated_parameter_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard, default_value=expression?, name=identifier,operator_identifier, children=annotation, inline_modifier*?
+throw_expression: children=expression
+type_arguments: children=annotated_type, compound_type, function_type, generic_type, infix_type, literal_type, match_type, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*
+extension_definition: body=_definition,expression*, parameters=parameters*?, type_parameters=type_parameters?
+import_selectors: children=annotated_type, arrow_renamed_identifier, as_renamed_identifier, compound_type, function_type, generic_type, identifier, infix_type, literal_type, match_type, namespace_wildcard, operator_identifier, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda, wildcard*?
+catch_clause: body=expression?, pattern=_pattern?, children=expression, guard, indented_block, indented_cases?
+compound_type: extra=annotated_type,generic_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard*?, base=annotated_type,generic_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard, children=refinement?
+lambda_expression: parameters=bindings,identifier,operator_identifier,wildcard*, children=expression, indented_block, indented_cases
+repeat_pattern: pattern=_pattern
+context_bound: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+template_body: children=_definition, expression, self_type*?
+val_declaration: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard, name=identifier,operator_identifier*, children=annotation, modifiers*?
+bindings: children=binding*?
+contravariant_type_parameter: bound=context_bound,lower_bound,upper_bound,view_bound*?, name=identifier,operator_identifier,wildcard, type_parameters=type_parameters?
+class_parameters: children=class_parameter*?
+package_clause: name=package_identifier, body=template_body?
+quote_expression: children=_definition, annotated_type, compound_type, expression, function_type, generic_type, infix_type, literal_type, match_type, projected_type, singleton_type, stable_type_identifier, structural_type, tuple_type, type_identifier, type_lambda*?
+assignment_expression: left=block,boolean_literal,call_expression,case_block,character_literal,field_expression,floating_point_literal,generic_function,identifier,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,prefix_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard, right=expression
+type_parameters: bound=context_bound,lower_bound,upper_bound,view_bound*?, name=identifier,operator_identifier,wildcard*?, type_parameters=type_parameters*?, children=annotation, contravariant_type_parameter, covariant_type_parameter, type_lambda*?
+capture_pattern: name=identifier,operator_identifier,wildcard, pattern=_pattern
+with_template_body: children=_definition, expression, self_type*?
+for_expression: body=expression,indented_block,indented_cases, enumerators=enumerators*
+indented_block: children=_definition, expression*?
+upper_bound: type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard
+return_expression: children=expression?
+stable_identifier: children=identifier, operator_identifier, stable_identifier*
+arguments: children=expression*?
+block: children=_definition, expression*?
+function_definition: parameters=parameters*?, body=expression,indented_block,indented_cases, return_type=annotated_type,compound_type,function_type,generic_type,infix_type,literal_type,match_type,projected_type,singleton_type,stable_type_identifier,structural_type,tuple_type,type_identifier,type_lambda,wildcard?, name=identifier,operator_identifier, type_parameters=type_parameters?, children=annotation, modifiers*?
+infix_pattern: operator=identifier,operator_identifier, left=_pattern, right=_pattern
+export_declaration: path=identifier,operator_identifier*, children=as_renamed_identifier, namespace_selectors, namespace_wildcard*?
+enumerators: children=enumerator*
+tuple_expression: children=expression*
+as_renamed_identifier: alias=identifier,operator_identifier,wildcard, name=identifier,operator_identifier
+interpolation: children=block, identifier
+enumerator: children=_pattern, expression, guard*
+import_declaration: path=identifier,operator_identifier*, children=as_renamed_identifier, namespace_selectors, namespace_wildcard*?
+identifiers: children=identifier*
+infix_type: right=annotated_type,compound_type,generic_type,infix_type,literal_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard, left=annotated_type,compound_type,generic_type,infix_type,literal_type,projected_type,singleton_type,stable_type_identifier,tuple_type,type_identifier,wildcard, operator=identifier,operator_identifier
+structural_type: children=_definition, expression, self_type*?
+case_block: children=case_clause*?
+call_expression: arguments=arguments,block,case_block,colon_argument, function=block,boolean_literal,call_expression,case_block,character_literal,field_expression,floating_point_literal,generic_function,identifier,infix_expression,instance_expression,integer_literal,interpolated_string_expression,null_literal,operator_identifier,parenthesized_expression,postfix_expression,prefix_expression,quote_expression,splice_expression,string,tuple_expression,unit,wildcard

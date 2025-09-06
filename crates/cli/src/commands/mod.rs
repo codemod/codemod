@@ -3,6 +3,7 @@ pub mod init;
 pub mod jssg;
 pub mod login;
 pub mod logout;
+pub mod mcp;
 pub mod publish;
 pub mod run;
 pub mod search;

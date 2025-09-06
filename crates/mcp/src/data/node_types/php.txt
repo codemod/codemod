@@ -1,0 +1,128 @@
+method_declaration: name=name, parameters=formal_parameters, attributes=attribute_list?, body=compound_statement?, return_type=bottom_type,type?, children=abstract_modifier, final_modifier, readonly_modifier, reference_modifier, static_modifier, var_modifier, visibility_modifier*?
+namespace_name: children=name*
+array_element_initializer: children=by_ref, expression, variadic_unpacking*
+nullsafe_member_access_expression: name=dynamic_variable_name,expression,name,variable_name, object=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name
+case_statement: value=expression, children=statement*?
+pair: children=by_ref, expression, list_literal*
+property_element: name=variable_name, default_value=expression?
+require_expression: children=expression
+update_expression: argument=cast_expression,dynamic_variable_name,function_call_expression,member_access_expression,member_call_expression,nullsafe_member_access_expression,nullsafe_member_call_expression,scoped_call_expression,scoped_property_access_expression,subscript_expression,variable_name
+type_list: children=named_type*
+const_declaration: type=type?, attributes=attribute_list?, children=abstract_modifier, const_element, final_modifier, readonly_modifier, static_modifier, var_modifier, visibility_modifier*
+include_expression: children=expression
+object_creation_expression: children=anonymous_class, arguments, dynamic_variable_name, member_access_expression, name, nullsafe_member_access_expression, parenthesized_expression, qualified_name, relative_name, scoped_property_access_expression, subscript_expression, variable_name*?
+array_creation_expression: children=array_element_initializer*?
+finally_clause: body=compound_statement
+namespace_use_group: children=namespace_use_clause*
+match_default_expression: return_expression=expression
+trait_declaration: body=declaration_list, attributes=attribute_list?, name=name
+enum_declaration_list: children=const_declaration, enum_case, method_declaration, use_declaration*?
+global_declaration: children=dynamic_variable_name, variable_name*
+class_declaration: attributes=attribute_list?, body=declaration_list, name=name, children=abstract_modifier, base_clause, class_interface_clause, final_modifier, readonly_modifier, static_modifier, var_modifier, visibility_modifier*?
+heredoc: value=heredoc_body?, end_tag=heredoc_end, identifier=heredoc_start
+anonymous_function: parameters=formal_parameters, static_modifier=static_modifier?, return_type=bottom_type,type?, reference_modifier=reference_modifier?, body=compound_statement, attributes=attribute_list?, children=anonymous_function_use_clause?
+match_expression: condition=parenthesized_expression, body=match_block
+arguments: children=argument, variadic_placeholder*?
+conditional_expression: condition=expression, alternative=expression, body=expression?
+dynamic_variable_name: children=dynamic_variable_name, expression, variable_name
+named_type: children=name, qualified_name, relative_name
+use_list: children=use_as_clause, use_instead_of_clause*?
+while_statement: body=colon_block,statement, condition=parenthesized_expression
+disjunctive_normal_form_type: children=intersection_type, named_type, optional_type, primitive_type*
+interface_declaration: name=name, attributes=attribute_list?, body=declaration_list, children=base_clause?
+unset_statement: children=cast_expression, dynamic_variable_name, function_call_expression, member_access_expression, member_call_expression, nullsafe_member_access_expression, nullsafe_member_call_expression, scoped_call_expression, scoped_property_access_expression, subscript_expression, variable_name*
+simple_parameter: default_value=expression?, reference_modifier=reference_modifier?, type=type?, name=variable_name, attributes=attribute_list?
+anonymous_function_use_clause: children=by_ref, variable_name*
+match_conditional_expression: conditional_expressions=match_condition_list, return_expression=expression
+variable_name: children=name
+heredoc_body: children=dynamic_variable_name, escape_sequence, expression, member_access_expression, string_content, subscript_expression, variable_name*
+anonymous_class: attributes=attribute_list?, body=declaration_list, children=abstract_modifier, arguments, base_clause, class_interface_clause, final_modifier, readonly_modifier, static_modifier, var_modifier, visibility_modifier*?
+default_statement: children=statement*?
+colon_block: children=statement*?
+else_clause: body=colon_block,statement
+variadic_unpacking: children=expression
+intersection_type: children=named_type, optional_type, primitive_type*
+print_intrinsic: children=expression
+encapsed_string: children=dynamic_variable_name, escape_sequence, expression, member_access_expression, string_content, subscript_expression, variable_name*?
+nowdoc_body: children=nowdoc_string*
+enum_case: name=name, value=expression?, attributes=attribute_list?
+visibility_modifier: children=operation?
+require_once_expression: children=expression
+for_statement: condition=expression,sequence_expression?, update=expression,sequence_expression?, initialize=expression,sequence_expression?, body=statement*?
+compound_statement: children=statement*?
+error_suppression_expression: children=expression
+do_statement: condition=parenthesized_expression, body=statement
+reference_assignment_expression: left=cast_expression,dynamic_variable_name,function_call_expression,list_literal,member_access_expression,member_call_expression,nullsafe_member_access_expression,nullsafe_member_call_expression,scoped_call_expression,scoped_property_access_expression,subscript_expression,variable_name, right=expression
+by_ref: children=cast_expression, dynamic_variable_name, function_call_expression, member_access_expression, member_call_expression, nullsafe_member_access_expression, nullsafe_member_call_expression, scoped_call_expression, scoped_property_access_expression, subscript_expression, variable_name
+program: children=php_end_tag, php_tag, statement*?
+arrow_function: return_type=bottom_type,type?, attributes=attribute_list?, parameters=formal_parameters, static_modifier=static_modifier?, reference_modifier=reference_modifier?, body=expression
+attribute: parameters=arguments?, children=name, qualified_name, relative_name
+echo_statement: children=expression, sequence_expression
+named_label_statement: children=name
+base_clause: children=name, qualified_name, relative_name*
+function_call_expression: function=array_creation_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_call_expression,name,nowdoc,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,scoped_call_expression,string,subscript_expression,variable_name, arguments=arguments
+property_hook: reference_modifier=reference_modifier?, body=compound_statement,expression?, attributes=attribute_list?, parameters=formal_parameters?, final=final_modifier?, children=name
+attribute_group: children=attribute*
+parenthesized_expression: children=expression
+class_interface_clause: children=name, qualified_name, relative_name*
+try_statement: body=compound_statement, children=catch_clause, finally_clause*
+declaration_list: children=const_declaration, method_declaration, property_declaration, use_declaration*?
+scoped_call_expression: name=dynamic_variable_name,expression,name,variable_name, arguments=arguments, scope=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,relative_scope,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name
+exit_statement: children=expression?
+qualified_name: prefix=namespace_name*, children=name
+member_access_expression: name=dynamic_variable_name,expression,name,variable_name, object=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name
+continue_statement: children=expression?
+namespace_definition: name=namespace_name?, body=compound_statement?
+static_variable_declaration: name=variable_name, value=expression?
+yield_expression: children=array_element_initializer, expression?
+subscript_expression: children=array_creation_expression, class_constant_access_expression, dynamic_variable_name, encapsed_string, expression, function_call_expression, heredoc, integer, member_access_expression, member_call_expression, name, nowdoc, nullsafe_member_access_expression, nullsafe_member_call_expression, object_creation_expression, parenthesized_expression, qualified_name, relative_name, scoped_call_expression, scoped_property_access_expression, string, subscript_expression, variable_name*
+function_static_declaration: children=static_variable_declaration*
+catch_clause: type=type_list, body=compound_statement, name=variable_name?
+include_once_expression: children=expression
+if_statement: body=colon_block,statement, condition=parenthesized_expression, alternative=else_clause,else_if_clause*?
+list_literal: children=by_ref, dynamic_variable_name, expression, function_call_expression, list_literal, member_access_expression, member_call_expression, nullsafe_member_access_expression, nullsafe_member_call_expression, scoped_call_expression, scoped_property_access_expression, subscript_expression, variable_name*?
+augmented_assignment_expression: left=cast_expression,dynamic_variable_name,function_call_expression,member_access_expression,member_call_expression,nullsafe_member_access_expression,nullsafe_member_call_expression,scoped_call_expression,scoped_property_access_expression,subscript_expression,variable_name, right=expression
+sequence_expression: children=expression, sequence_expression*
+match_condition_list: children=expression*
+declare_directive: children=literal
+assignment_expression: right=expression, left=cast_expression,dynamic_variable_name,function_call_expression,list_literal,member_access_expression,member_call_expression,nullsafe_member_access_expression,nullsafe_member_call_expression,scoped_call_expression,scoped_property_access_expression,subscript_expression,variable_name
+foreach_statement: body=colon_block,statement?, children=by_ref, expression, list_literal, pair*
+match_block: children=match_conditional_expression, match_default_expression*?
+return_statement: children=expression?
+switch_block: children=case_statement, default_statement*?
+argument: reference_modifier=reference_modifier?, name=name?, children=expression, name, variadic_unpacking
+clone_expression: children=primary_expression
+else_if_clause: body=colon_block,statement, condition=parenthesized_expression
+nullsafe_member_call_expression: name=dynamic_variable_name,expression,name,variable_name, object=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name, arguments=arguments
+unary_op_expression: argument=expression?, children=integer?
+cast_expression: value=clone_expression,error_suppression_expression,include_expression,include_once_expression,primary_expression,unary_op_expression, type=cast_type
+relative_name: prefix=namespace_name*, children=name
+enum_declaration: body=enum_declaration_list, name=name, attributes=attribute_list?, children=class_interface_clause, primitive_type*?
+member_call_expression: object=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name, name=dynamic_variable_name,expression,name,variable_name, arguments=arguments
+const_element: children=expression, name*
+break_statement: children=expression?
+variadic_parameter: name=variable_name, reference_modifier=reference_modifier?, type=type?, attributes=attribute_list?
+binary_expression: left=expression, right=dynamic_variable_name,expression,member_access_expression,name,nullsafe_member_access_expression,parenthesized_expression,qualified_name,relative_name,scoped_property_access_expression,subscript_expression,variable_name
+property_declaration: attributes=attribute_list?, type=type?, children=abstract_modifier, final_modifier, property_element, property_hook_list, readonly_modifier, static_modifier, var_modifier, visibility_modifier*
+scoped_property_access_expression: scope=array_creation_expression,cast_expression,class_constant_access_expression,dynamic_variable_name,encapsed_string,function_call_expression,heredoc,member_access_expression,member_call_expression,name,nowdoc,nullsafe_member_access_expression,nullsafe_member_call_expression,object_creation_expression,parenthesized_expression,qualified_name,relative_name,relative_scope,scoped_call_expression,scoped_property_access_expression,string,subscript_expression,variable_name, name=dynamic_variable_name,variable_name
+expression_statement: children=expression
+shell_command_expression: children=dynamic_variable_name, escape_sequence, expression, member_access_expression, string_content, subscript_expression, variable_name*?
+attribute_list: children=attribute_group*
+namespace_use_declaration: body=namespace_use_group?, children=namespace_name, namespace_use_clause*
+class_constant_access_expression: children=array_creation_expression, cast_expression, class_constant_access_expression, dynamic_variable_name, encapsed_string, function_call_expression, heredoc, member_access_expression, member_call_expression, name, nowdoc, nullsafe_member_access_expression, nullsafe_member_call_expression, object_creation_expression, parenthesized_expression, qualified_name, relative_name, relative_scope, scoped_call_expression, scoped_property_access_expression, string, subscript_expression, variable_name*
+namespace_use_clause: alias=name?, children=name, qualified_name
+property_hook_list: children=property_hook*?
+union_type: children=named_type, optional_type, primitive_type*
+use_declaration: children=name, qualified_name, relative_name, use_list*
+property_promotion_parameter: readonly=readonly_modifier?, default_value=expression?, visibility=visibility_modifier, type=type?, attributes=attribute_list?, name=by_ref,variable_name, children=property_hook_list?
+optional_type: children=named_type, primitive_type
+declare_statement: children=declare_directive, statement*
+throw_expression: children=expression
+use_as_clause: children=class_constant_access_expression, name, visibility_modifier*
+goto_statement: children=name
+switch_statement: body=switch_block, condition=parenthesized_expression
+nowdoc: identifier=heredoc_start, value=nowdoc_body?, end_tag=heredoc_end
+formal_parameters: children=property_promotion_parameter, simple_parameter, variadic_parameter*?
+use_instead_of_clause: children=class_constant_access_expression, name*
+string: children=escape_sequence, string_content*?
+function_definition: body=compound_statement, parameters=formal_parameters, name=name, return_type=bottom_type,type?, attributes=attribute_list?, children=reference_modifier?

@@ -1,0 +1,10 @@
+erroneous_end_tag: children=erroneous_end_tag_name
+attribute: children=attribute_name, attribute_value, quoted_attribute_value*
+document: children=doctype, element, entity, erroneous_end_tag, script_element, style_element, text*?
+style_element: children=end_tag, raw_text, start_tag*
+element: children=doctype, element, end_tag, entity, erroneous_end_tag, script_element, self_closing_tag, start_tag, style_element, text*
+quoted_attribute_value: children=attribute_value?
+self_closing_tag: children=attribute, tag_name*
+start_tag: children=attribute, tag_name*
+end_tag: children=tag_name
+script_element: children=end_tag, raw_text, start_tag*

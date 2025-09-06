@@ -1,10 +1,27 @@
 use anyhow::Result;
-use ast_grep_language::SupportLang;
-use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Represents a single transformation test case with input and expected output
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransformationTestCase {
+    pub name: String,
+    pub input_code: String,
+    pub expected_output_code: String,
+}
+
+/// Source of test cases - either from filesystem or provided directly
 #[derive(Debug, Clone)]
-pub struct TestCase {
+pub enum TestSource {
+    /// Test cases discovered from a directory structure
+    Directory(PathBuf),
+    /// Test cases provided directly as a vector
+    Cases(Vec<TransformationTestCase>),
+}
+
+/// A test case discovered from the filesystem
+#[derive(Debug, Clone)]
+pub struct FileSystemTestCase {
     pub name: String,
     pub input_files: Vec<TestFile>,
     pub expected_files: Vec<TestFile>,
@@ -12,11 +29,23 @@ pub struct TestCase {
     pub should_error: bool,
 }
 
+/// A test file with its content and metadata
 #[derive(Debug, Clone)]
 pub struct TestFile {
     pub path: PathBuf,
     pub content: String,
     pub relative_path: PathBuf,
+}
+
+/// Unified test case that can represent both filesystem and direct test cases
+#[derive(Debug, Clone)]
+pub struct UnifiedTestCase {
+    pub name: String,
+    pub input_code: String,
+    pub expected_output_code: String,
+    pub should_error: bool,
+    pub input_path: Option<PathBuf>,
+    pub expected_output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,16 +78,89 @@ pub enum TestError {
     #[error("Invalid file path: {0}")]
     InvalidFilePath(PathBuf),
 
+    #[error("Cannot update snapshots for test '{test_name}' - it's not a filesystem-based test")]
+    SnapshotUpdateNotSupported { test_name: String },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-impl TestCase {
+impl TestSource {
+    /// Convert test source to unified test cases
+    /// The extensions parameter should be a list of file extensions to look for (e.g., [".js", ".ts"])
+    pub fn to_unified_test_cases(
+        &self,
+        extensions: &[&str],
+    ) -> Result<Vec<UnifiedTestCase>, TestError> {
+        match self {
+            TestSource::Directory(dir) => {
+                let fs_test_cases = FileSystemTestCase::discover_in_directory(dir, extensions)?;
+                let mut unified_cases = Vec::new();
+
+                for fs_case in fs_test_cases {
+                    // For filesystem test cases, we need to handle multiple input/expected file pairs
+                    // Handle cases where expected files might be missing (for --update-snapshots)
+                    for (i, input_file) in fs_case.input_files.iter().enumerate() {
+                        let (expected_content, expected_path) = if i < fs_case.expected_files.len()
+                        {
+                            // Expected file exists
+                            let expected_file = &fs_case.expected_files[i];
+                            (
+                                expected_file.content.clone(),
+                                Some(expected_file.path.clone()),
+                            )
+                        } else {
+                            // Expected file doesn't exist - create placeholder path for snapshot updates
+                            let input_name = input_file
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("input");
+                            let expected_name = input_name.replace("input", "expected");
+                            let expected_path = fs_case.path.join(expected_name);
+                            ("".to_string(), Some(expected_path))
+                        };
+
+                        unified_cases.push(UnifiedTestCase {
+                            name: if fs_case.input_files.len() > 1 {
+                                format!("{}_{}", fs_case.name, input_file.relative_path.display())
+                            } else {
+                                fs_case.name.clone()
+                            },
+                            input_code: input_file.content.clone(),
+                            expected_output_code: expected_content,
+                            should_error: fs_case.should_error,
+                            input_path: Some(input_file.path.clone()),
+                            expected_output_path: expected_path,
+                        });
+                    }
+                }
+
+                Ok(unified_cases)
+            }
+            TestSource::Cases(cases) => {
+                Ok(cases
+                    .iter()
+                    .map(|case| UnifiedTestCase {
+                        name: case.name.clone(),
+                        input_code: case.input_code.clone(),
+                        expected_output_code: case.expected_output_code.clone(),
+                        should_error: false, // Direct cases don't have error expectations by default
+                        input_path: None,    // Direct cases don't have a file path
+                        expected_output_path: None, // Direct cases don't have an expected output file
+                    })
+                    .collect())
+            }
+        }
+    }
+}
+
+impl FileSystemTestCase {
     /// Discover all test cases in a directory
     pub fn discover_in_directory(
         test_dir: &Path,
-        language: SupportLang,
-    ) -> Result<Vec<TestCase>, TestError> {
+        extensions: &[&str],
+    ) -> Result<Vec<FileSystemTestCase>, TestError> {
         let mut test_cases = Vec::new();
 
         for entry in std::fs::read_dir(test_dir)? {
@@ -66,7 +168,7 @@ impl TestCase {
             let path = entry.path();
 
             if path.is_dir() {
-                if let Ok(test_case) = Self::from_directory(&path, language) {
+                if let Ok(test_case) = Self::from_directory(&path, extensions) {
                     test_cases.push(test_case);
                 }
             }
@@ -77,7 +179,10 @@ impl TestCase {
     }
 
     /// Create a test case from a directory
-    fn from_directory(test_dir: &Path, language: SupportLang) -> Result<TestCase, TestError> {
+    fn from_directory(
+        test_dir: &Path,
+        extensions: &[&str],
+    ) -> Result<FileSystemTestCase, TestError> {
         let name = test_dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -88,10 +193,10 @@ impl TestCase {
         let should_error = name.ends_with("_should_error");
 
         // Check for single file format (input.js + expected.js)
-        if let Ok(input_files) = find_input_files(test_dir, language) {
+        if let Ok(input_files) = find_input_files(test_dir, extensions) {
             let expected_files = find_expected_files(test_dir, &input_files)?;
 
-            return Ok(TestCase {
+            return Ok(FileSystemTestCase {
                 name,
                 input_files: input_files
                     .into_iter()
@@ -111,10 +216,10 @@ impl TestCase {
         let expected_dir = test_dir.join("expected");
 
         if input_dir.exists() && expected_dir.exists() {
-            let input_files = collect_files_in_directory(&input_dir, language)?;
-            let expected_files = collect_files_in_directory(&expected_dir, language)?;
+            let input_files = collect_files_in_directory(&input_dir, extensions)?;
+            let expected_files = collect_files_in_directory(&expected_dir, extensions)?;
 
-            return Ok(TestCase {
+            return Ok(FileSystemTestCase {
                 name,
                 input_files,
                 expected_files,
@@ -139,7 +244,9 @@ impl TestCase {
         }
         Ok(())
     }
+}
 
+impl UnifiedTestCase {
     /// Check if this test case should expect errors (either from naming or explicit configuration)
     pub fn should_expect_error(&self, expect_error_patterns: &[String]) -> bool {
         // Check explicit patterns first
@@ -149,6 +256,23 @@ impl TestCase {
 
         // Fall back to naming convention or explicit should_error field
         pattern_match || self.should_error
+    }
+
+    /// Update the expected output file with new content (only works for filesystem-based tests)
+    pub fn update_expected_output(&self, new_content: &str) -> Result<(), TestError> {
+        if let Some(expected_path) = &self.expected_output_path {
+            // Ensure the parent directory exists
+            if let Some(parent) = expected_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(expected_path, new_content)?;
+            Ok(())
+        } else {
+            // For direct/adhoc test cases, we can't update files
+            Err(TestError::SnapshotUpdateNotSupported {
+                test_name: self.name.clone(),
+            })
+        }
     }
 }
 
@@ -187,13 +311,12 @@ impl TestFile {
     }
 }
 
-/// Find input files based on language extensions
-fn find_input_files(test_dir: &Path, language: SupportLang) -> Result<Vec<PathBuf>, TestError> {
-    let extensions = get_extensions_for_language(language);
+/// Find input files based on extensions
+fn find_input_files(test_dir: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>, TestError> {
     let mut candidates = Vec::new();
 
     // Look for input.{ext} files
-    for ext in &extensions {
+    for ext in extensions {
         let input_file = test_dir.join(format!("input{ext}"));
         if input_file.exists() {
             candidates.push(input_file);
@@ -242,12 +365,8 @@ fn find_expected_files(
     Ok(expected_files)
 }
 
-/// Collect files in a directory that match the language extensions
-fn collect_files_in_directory(
-    dir: &Path,
-    language: SupportLang,
-) -> Result<Vec<TestFile>, TestError> {
-    let extensions = get_extensions_for_language(language);
+/// Collect files in a directory that match the extensions
+fn collect_files_in_directory(dir: &Path, extensions: &[&str]) -> Result<Vec<TestFile>, TestError> {
     let mut files = Vec::new();
 
     for entry in std::fs::read_dir(dir)? {
