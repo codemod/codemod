@@ -29,6 +29,10 @@ pub struct Command {
     #[arg(long)]
     language: Option<String>,
 
+    /// Git repository URL for the codemod source
+    #[arg(long)]
+    repository: Option<String>,
+
     /// Project description
     #[arg(long)]
     description: Option<String>,
@@ -75,6 +79,7 @@ struct ProjectConfig {
     language: String,
     private: bool,
     package_manager: Option<String>,
+    repository: Option<String>,
 }
 
 // Template constants using include_str!
@@ -208,6 +213,7 @@ pub fn handler(args: &Command) -> Result<()> {
             }
             _ => None,
         };
+        // In non-interactive mode, try to auto-detect repository if not provided
         ProjectConfig {
             name: project_name,
             description: args
@@ -229,9 +235,10 @@ pub fn handler(args: &Command) -> Result<()> {
                 .ok_or_else(|| anyhow!("Language is required --language"))?,
             private: args.private,
             package_manager,
+            repository: args.repository.clone().map(normalize_repository_url),
         }
     } else {
-        interactive_setup(&project_name, args)?
+        interactive_setup(&project_path, &project_name, args)?
     };
 
     create_project(&project_path, &config)?;
@@ -246,7 +253,7 @@ pub fn handler(args: &Command) -> Result<()> {
     Ok(())
 }
 
-fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
+fn interactive_setup(project_path: &Path, project_name: &str, args: &Command) -> Result<ProjectConfig> {
     println!(
         "{} {}",
         ROCKET,
@@ -316,6 +323,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         language,
         private,
         package_manager: args.package_manager.clone(),
+        repository: args.repository.clone().map(normalize_repository_url),
     })
 }
 
@@ -390,12 +398,19 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let repository_line = config
+        .repository
+        .as_ref()
+        .map(|url| format!("repository: \"{}\"", url))
+        .unwrap_or_else(|| "".to_string());
+
     let manifest_content = CODEMOD_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{author}", &config.author)
         .replace("{license}", &config.license)
         .replace("{language}", &config.language)
+        .replace("{repository_line}", &repository_line)
         .replace(
             "{access}",
             if config.private { "private" } else { "public" },
@@ -407,6 +422,17 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
     fs::write(project_path.join("codemod.yaml"), manifest_content)?;
     Ok(())
+}
+
+fn normalize_repository_url(url: String) -> String {
+    let trimmed = url.trim().trim_end_matches(".git").to_string();
+    if let Some(stripped) = trimmed.strip_prefix("git@github.com:") {
+        return format!("https://github.com/{}", stripped);
+    }
+    if let Some(stripped) = trimmed.strip_prefix("ssh://git@github.com/") {
+        return format!("https://github.com/{}", stripped);
+    }
+    trimmed
 }
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {

@@ -13,11 +13,13 @@ use serde_yaml;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
 use crate::auth::TokenStorage;
 use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
+use inquire::Text;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -137,6 +139,23 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
     // Load and validate manifest
     let mut manifest = load_manifest(&package_path)?;
 
+    // Backfill repository from local git if missing
+    if manifest.repository.is_none() {
+        if let Some(repo) = detect_git_repository_url(Some(&package_path)) {
+            let normalized = normalize_repository_url(repo);
+            info!("Using repository from local git: {}", &normalized);
+            manifest.repository = Some(normalized);
+        } else {
+            // Prompt user for repository if not detectable and not present
+            let entered = Text::new("Git repository URL (optional):")
+                .with_default("")
+                .prompt()?;
+            if !entered.trim().is_empty() {
+                manifest.repository = Some(normalize_repository_url(entered));
+            }
+        }
+    }
+
     // Override version if specified
     if let Some(version) = &args.version {
         manifest.version = version.clone();
@@ -235,6 +254,32 @@ pub async fn handler(args: &Command, telemetry: &dyn TelemetrySender) -> Result<
     }
 
     Ok(())
+}
+
+fn detect_git_repository_url(project_path: Option<&Path>) -> Option<String> {
+    let mut cmd = ProcessCommand::new("git");
+    if let Some(path) = project_path {
+        cmd.arg("-C").arg(path);
+    }
+    let output = cmd.arg("config").arg("--get").arg("remote.origin.url").output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if url.is_empty() { None } else { Some(url) }
+        }
+        _ => None,
+    }
+}
+
+fn normalize_repository_url(url: String) -> String {
+    let trimmed = url.trim().trim_end_matches(".git").to_string();
+    if let Some(stripped) = trimmed.strip_prefix("git@github.com:") {
+        return format!("https://github.com/{}", stripped);
+    }
+    if let Some(stripped) = trimmed.strip_prefix("ssh://git@github.com/") {
+        return format!("https://github.com/{}", stripped);
+    }
+    trimmed
 }
 
 fn load_manifest(package_path: &Path) -> Result<CodemodManifest> {
