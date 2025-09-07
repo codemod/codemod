@@ -174,16 +174,6 @@ impl TestRunner {
         let execution_result = execution_fn(&test_case.input_code, input_path).await?;
 
         if should_expect_error {
-            // if execution_result.is_error() {
-            //     return Err(anyhow::anyhow!(
-            //         "Test '{}' was expected to fail but succeeded",
-            //         test_case.name
-            //     ));
-            // } else {
-            //     println!("Test '{}' failed as expected", test_case.name);
-            //     return Ok(());
-            // }
-
             match execution_result {
                 TransformationResult::Error(_) => {
                     println!("Test '{}' failed as expected", test_case.name);

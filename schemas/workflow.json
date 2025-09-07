@@ -45,19 +45,6 @@
       "description": "Represents a node in a workflow",
       "type": "object",
       "properties": {
-        "description": {
-          "description": "Detailed description of what the node does",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "type": {
-          "description": "Type of node (automatic or manual)",
-          "$ref": "#/$defs/NodeType",
-          "default": "automatic"
-        },
         "depends_on": {
           "description": "IDs of nodes that must complete before this node can run",
           "type": "array",
@@ -65,6 +52,14 @@
           "items": {
             "type": "string"
           }
+        },
+        "description": {
+          "description": "Detailed description of what the node does",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "env": {
           "description": "Environment variables to inject into the container",
@@ -124,6 +119,11 @@
             }
           ],
           "default": null
+        },
+        "type": {
+          "description": "Type of node (automatic or manual)",
+          "$ref": "#/$defs/NodeType",
+          "default": "automatic"
         }
       },
       "required": [
@@ -151,10 +151,6 @@
       "description": "Represents a runtime configuration",
       "type": "object",
       "properties": {
-        "type": {
-          "description": "Type of runtime",
-          "$ref": "#/$defs/RuntimeType"
-        },
         "image": {
           "description": "Container image (for Docker and Podman)",
           "type": [
@@ -181,6 +177,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "type": {
+          "description": "Type of runtime",
+          "$ref": "#/$defs/RuntimeType"
         },
         "user": {
           "description": "User to run as inside the container",
@@ -319,10 +319,6 @@
       "description": "Represents a strategy configuration",
       "type": "object",
       "properties": {
-        "type": {
-          "description": "Type of strategy",
-          "$ref": "#/$defs/StrategyType"
-        },
         "from_state": {
           "description": "State key to get matrix values from (for matrix strategy)",
           "type": [
@@ -330,6 +326,10 @@
             "null"
           ],
           "default": null
+        },
+        "type": {
+          "description": "Type of strategy",
+          "$ref": "#/$defs/StrategyType"
         },
         "values": {
           "description": "Matrix values (for matrix strategy)",
@@ -432,21 +432,16 @@
       "description": "Represents a template input",
       "type": "object",
       "properties": {
-        "description": {
-          "description": "Description of the input",
+        "default": {
+          "description": "Default value for the input",
           "type": [
             "string",
             "null"
           ],
           "default": null
         },
-        "type": {
-          "description": "Type of the input (string, number, boolean)",
-          "type": "string",
-          "default": "string"
-        },
-        "default": {
-          "description": "Default value for the input",
+        "description": {
+          "description": "Description of the input",
           "type": [
             "string",
             "null"
@@ -461,6 +456,11 @@
           "description": "Whether the input is required",
           "type": "boolean",
           "default": false
+        },
+        "type": {
+          "description": "Type of the input (string, number, boolean)",
+          "type": "string",
+          "default": "string"
         }
       },
       "required": [

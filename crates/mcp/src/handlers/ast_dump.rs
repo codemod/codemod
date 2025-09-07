@@ -53,6 +53,7 @@ impl AstDumpHandler {
         Ok(self.dump_ast_for_ai_context(root.root(), 0))
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn dump_ast_for_ai_context<D>(&self, node: ast_grep_core::Node<D>, indent: usize) -> String
     where
         D: ast_grep_core::Doc,
