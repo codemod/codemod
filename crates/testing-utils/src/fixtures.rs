@@ -111,8 +111,8 @@ impl TestSource {
                                 ),
                                 None => {
                                     // Expected file doesn't exist - create placeholder path for snapshot updates
-                                    let input_name = input_file.path.to_string_lossy().to_string();
-                                    let expected_path = input_name.replace("input", "expected");
+                                    let input_path = input_file.path.to_string_lossy().to_string();
+                                    let expected_path = input_path.replace("input", "expected");
                                     ("".to_string(), Some(PathBuf::from(expected_path)))
                                 }
                             };
