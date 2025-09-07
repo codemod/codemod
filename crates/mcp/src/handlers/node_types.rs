@@ -15,7 +15,7 @@ impl NodeTypesHandler {
     }
 
     #[tool(
-        description = "Get compressed tree-sitter node types for a specific programming language in AI-friendly format"
+        description = "Get tree-sitter node types for a specific programming language in AI-friendly format. You should use this tool to get the node types for the language you are working in. You do not know the node types for the language you are working in, so you should use this tool to get them."
     )]
     pub async fn get_node_types(
         &self,
@@ -31,9 +31,26 @@ impl NodeTypesHandler {
             }
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
-            node_types.to_string(),
-        )]))
+        let result = format!(
+            r#"<TREE_SITTER_NODE_TYPES>
+{node_types}
+</TREE_SITTER_NODE_TYPES>
+
+<LEGEND>
+Legends for field notation:
+- \`?\` - optional field (may not be present in all instances)
+- \`*\` - multiple values allowed (array/list of values)
+
+In tree-sitter grammar:
+- Fields are named children with specific roles in the syntax tree
+- Format: \`fieldName=nodeType\` (e.g., "body=block")
+- When a field is not named, it's represented as \`children=nodeType\`
+- Multiple possible types are comma-separated (e.g., "value=string,number")
+</LEGEND>
+"#
+        );
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     fn get_node_types_for_language(&self, language: &str) -> Option<&'static str> {

@@ -1,5 +1,5 @@
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, service::RequestContext, tool,
+    handler::server::router::tool::ToolRouter, model::*, schemars, service::RequestContext, tool,
     tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::json;
@@ -32,8 +32,15 @@ impl CodemodMcpServer {
         Self::default()
     }
 
-    fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
-        RawResource::new(uri, name.to_string()).no_annotation()
+    fn _create_resource_text(&self, uri: &str, name: &str, description: Option<&str>) -> Resource {
+        RawResource {
+            uri: uri.to_string(),
+            name: name.to_string(),
+            description: description.map(|s| s.to_string()),
+            mime_type: None,
+            size: None,
+        }
+        .no_annotation()
     }
 
     // Delegate to AST dump handler
@@ -69,6 +76,39 @@ impl CodemodMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.jssg_test_handler.run_jssg_tests(params).await
     }
+
+    #[tool(description = "Get JSSG (JavaScript AST-grep) instructions for creating codemods")]
+    async fn get_jssg_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let instructions_content = include_str!("data/prompts/jssg-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(description = "Get AST-grep instructions for creating ast-grep rules")]
+    async fn get_ast_grep_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let instructions_content = include_str!("data/prompts/ast-grep-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(description = "Get Codemod CLI instructions for creating codemods")]
+    async fn get_codemod_cli_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
 }
 
 #[tool_handler]
@@ -81,7 +121,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG codemod testing tools, and resources for various programming languages. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for JSSG codemods). Available resources: jssg-instructions (instructions for creating JSSG codemods).".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG (ast-grep with JS bindings) codemod testing tools, and resources for various programming languages. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for JSSG codemods), get_jssg_instructions (get JSSG instructions), get_ast_grep_instructions (get ast-grep instructions), get_codemod_cli_instructions (get Codemod CLI instructions). Available resources (also available as tools for compatibility): jssg-instructions (instructions for creating JSSG codemods), ast-grep-instructions (instructions for creating ast-grep rules), codemod-cli-instructions (instructions for creating codemods). When you are asked to create a codemod or do a large refactor, you should use JSSG and read all the instructions from ast-grep-instructions, jssg-instructions, and codemod-cli-instructions.".to_string()),
         }
     }
 
@@ -100,7 +140,23 @@ impl ServerHandler for CodemodMcpServer {
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
-            resources: vec![self._create_resource_text("jssg://instructions", "jssg-instructions")],
+            resources: vec![
+                self._create_resource_text(
+                    "jssg://instructions",
+                    "jssg-instructions",
+                    Some("JSSG (JavaScript AST-grep) instructions for creating codemods"),
+                ),
+                self._create_resource_text(
+                    "ast-grep://instructions",
+                    "ast-grep-instructions",
+                    Some("AST-grep instructions for creating ast-grep rules"),
+                ),
+                self._create_resource_text(
+                    "codemod-cli://instructions",
+                    "codemod-cli-instructions",
+                    Some("Codemod CLI instructions for creating codemods"),
+                ),
+            ],
             next_cursor: None,
         })
     }
@@ -112,7 +168,19 @@ impl ServerHandler for CodemodMcpServer {
     ) -> Result<ReadResourceResult, McpError> {
         match uri.as_str() {
             "jssg://instructions" => {
-                let instructions_content = include_str!("data/prompts/jssg-instructions.txt");
+                let instructions_content = include_str!("data/prompts/jssg-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "ast-grep://instructions" => {
+                let instructions_content = include_str!("data/prompts/ast-grep-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-cli://instructions" => {
+                let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
                 Ok(ReadResourceResult {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
@@ -137,6 +205,9 @@ impl ServerHandler for CodemodMcpServer {
         })
     }
 }
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetInstructionsRequest {}
 
 #[cfg(test)]
 mod tests {
