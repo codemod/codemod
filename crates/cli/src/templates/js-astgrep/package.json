@@ -4,7 +4,7 @@
 	"description": "{description}",
 	"type": "module",
 	"devDependencies": {
-		"@codemod.com/jssg-types": "^1.0.3",
+		"@codemod.com/jssg-types": "^1.0.7",
 		"typescript": "^5.8.3"
 	},
 	"scripts": {

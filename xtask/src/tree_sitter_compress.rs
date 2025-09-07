@@ -174,7 +174,7 @@ fn process_node_types(node_types: Vec<NodeType>) -> HashMap<String, String> {
                         let types_str = types.join(",");
                         let optional = if field.required { "" } else { "?" };
                         let multiple = if field.multiple { "*" } else { "" };
-                        fields.push(format!("{}={}{}{}", key, types_str, multiple, optional));
+                        fields.push(format!("{key}={types_str}{multiple}{optional}"));
                     }
                 }
             }
@@ -187,7 +187,7 @@ fn process_node_types(node_types: Vec<NodeType>) -> HashMap<String, String> {
                     let types_str = types.join(", ");
                     let optional = if children.required { "" } else { "?" };
                     let multiple = if children.multiple { "*" } else { "" };
-                    fields.push(format!("children={}{}{}", types_str, multiple, optional));
+                    fields.push(format!("children={types_str}{multiple}{optional}"));
                 }
             }
 

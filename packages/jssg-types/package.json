@@ -1,7 +1,7 @@
 {
   "name": "@codemod.com/jssg-types",
   "author": "Codemod, Inc.",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
   "type": "module",
   "exports": {
