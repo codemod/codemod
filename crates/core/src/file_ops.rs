@@ -43,14 +43,10 @@ impl AsyncFileWriter {
         };
 
         if self.sender.send(operation).is_err() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "File writer channel closed",
-            ));
+            return Err(std::io::Error::other("File writer channel closed"));
         }
 
-        rx.await.map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "File write operation canceled")
-        })?
+        rx.await
+            .map_err(|_| std::io::Error::other("File write operation canceled"))?
     }
 }
