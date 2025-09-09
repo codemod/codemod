@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use log::info;
+use std::sync::Arc;
 mod ascii_art;
 mod auth;
 mod auth_provider;
@@ -9,20 +10,21 @@ mod dirty_git_check;
 mod engine;
 mod progress_bar;
 mod workflow_runner;
+use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
     send_event::{PostHogSender, TelemetrySender, TelemetrySenderOptions},
     send_null::NullSender,
 };
 
-use crate::auth::TokenStorage;
+pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(name = "codemod")]
 #[command(
     about = "A self-hostable workflow engine for code transformations",
     long_about = "\x1b[32m      __                  __                                    __         \x1b[0m\n\x1b[32m     / /                 /\\ \\                                  /\\ \\        \x1b[0m\n\x1b[32m    / /   ___     ___    \\_\\ \\      __     ___ ___      ___    \\_\\ \\       \x1b[0m\n\x1b[32m   / /   /'___\\  / __`\\  /'_` \\   /'__`\\ /' __` __`\\   / __`\\  /'_` \\      \x1b[0m\n\x1b[32m  / /   /\\ \\__/ /\\ \\L\\ \\/\\ \\L\\ \\ /\\  __/ /\\ \\/\\ \\/\\ \\ /\\ \\L\\ \\/\\ \\L\\ \\  __ \x1b[0m\n\x1b[32m /_/    \\ \\____\\\\ \\____/\\ \\___,_\\\\ \\____\\\\ \\_\\ \\_\\ \\_\\\\ \\____/\\ \\___,_\\/\\_\\\x1b[0m\n\x1b[32m/_/      \\/____/ \\/___/  \\/__,_ / \\/____/ \\/_/\\/_/\\/_/ \\/___/  \\/__,_ /\\/_/\x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\nA self-hostable workflow engine for code transformations",
-    version = env!("CARGO_PKG_VERSION")
+    version = CLI_VERSION
 )]
 struct Cli {
     #[command(subcommand)]
@@ -34,6 +36,10 @@ struct Cli {
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     trailing_args: Vec<String>,
+
+    /// Disable telemetry
+    #[arg(long, short)]
+    disable_analytics: bool,
 }
 
 #[derive(Subcommand)]
@@ -148,10 +154,12 @@ fn is_package_name(arg: &str) -> bool {
     !known_commands.contains(&arg)
 }
 
+type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
+
 /// Handle implicit run command from trailing arguments
 async fn handle_implicit_run_command(
     trailing_args: Vec<String>,
-    telemetry_sender: &dyn TelemetrySender,
+    telemetry_sender: TelemetrySenderMutex,
 ) -> Result<bool> {
     if trailing_args.is_empty() {
         return Ok(false);
@@ -170,7 +178,7 @@ async fn handle_implicit_run_command(
     match Cli::try_parse_from(&full_args) {
         Ok(new_cli) => {
             if let Some(Commands::Run(run_args)) = new_cli.command {
-                commands::run::handler(&run_args, telemetry_sender).await?;
+                commands::run::handler(&run_args, telemetry_sender.clone()).await?;
                 Ok(true)
             } else {
                 Ok(false)
@@ -202,11 +210,15 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let telemetry_sender: Box<dyn codemod_telemetry::send_event::TelemetrySender> =
+    if cli.disable_analytics {
+        std::env::set_var("DISABLE_ANALYTICS", "true");
+    }
+
+    let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
         if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
             || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
         {
-            Box::new(NullSender {})
+            Arc::new(Box::new(NullSender {}))
         } else {
             let storage = TokenStorage::new()?;
             let config = storage.load_config()?;
@@ -217,20 +229,21 @@ async fn main() -> Result<()> {
                 .map(|auth| auth.user.id)
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-            Box::new(
+            Arc::new(Box::new(
                 PostHogSender::new(TelemetrySenderOptions {
                     distinct_id,
                     cloud_role: "CLI".to_string(),
                 })
                 .await,
-            )
+            ))
         };
 
-    // Handle command or implicit run
+    telemetry_sender.initialize_panic_telemetry().await;
+
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {
             WorkflowCommands::Run(args) => {
-                commands::workflow::run::handler(args).await?;
+                commands::workflow::run::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Resume(args) => {
                 commands::workflow::resume::handler(args).await?;
@@ -253,7 +266,7 @@ async fn main() -> Result<()> {
                 args.clone().run().await?;
             }
             JssgCommands::Run(args) => {
-                commands::jssg::run::handler(args).await?;
+                commands::jssg::run::handler(args, telemetry_sender.clone()).await?;
             }
             JssgCommands::Test(args) => {
                 commands::jssg::test::handler(args).await?;
@@ -272,13 +285,13 @@ async fn main() -> Result<()> {
             commands::whoami::handler(args).await?;
         }
         Some(Commands::Publish(args)) => {
-            commands::publish::handler(args, telemetry_sender.as_ref()).await?;
+            commands::publish::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Search(args)) => {
             commands::search::handler(args).await?;
         }
         Some(Commands::Run(args)) => {
-            commands::run::handler(args, telemetry_sender.as_ref()).await?;
+            commands::run::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Unpublish(args)) => {
             commands::unpublish::handler(args).await?;
@@ -291,7 +304,7 @@ async fn main() -> Result<()> {
         }
         None => {
             // Try to parse as implicit run command
-            if !handle_implicit_run_command(cli.trailing_args, telemetry_sender.as_ref()).await? {
+            if !handle_implicit_run_command(cli.trailing_args, telemetry_sender.clone()).await? {
                 // No valid subcommand or package name provided, show help
                 print_ascii_art();
                 eprintln!("No command provided. Use --help for usage information.");

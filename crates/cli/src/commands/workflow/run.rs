@@ -1,8 +1,12 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{Context, Result};
 use butterflow_core::utils;
+use butterflow_core::utils::generate_execution_id;
 use clap::Args;
+use codemod_telemetry::send_event::BaseEvent;
 
 use crate::engine::create_engine;
 use crate::workflow_runner::{resolve_workflow_source, run_workflow};
@@ -31,7 +35,7 @@ pub struct Command {
 }
 
 /// Run a workflow
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve workflow file and bundle path
     let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
 
@@ -53,7 +57,26 @@ pub async fn handler(args: &Command) -> Result<()> {
     )?;
 
     // Run workflow using the extracted workflow runner
-    run_workflow(&engine, config).await?;
+    let (_, seconds) = run_workflow(&engine, config).await?;
+
+    // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "localWorkflowExecuted".to_string(),
+                properties: HashMap::from([
+                    ("executionId".to_string(), generate_execution_id()),
+                    ("runTimeSeconds".to_string(), seconds.to_string()),
+                    ("dirtyRun".to_string(), args.allow_dirty.to_string()),
+                    ("dryRun".to_string(), args.dry_run.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
 
     Ok(())
 }

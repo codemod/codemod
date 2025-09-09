@@ -1,3 +1,4 @@
+use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -225,4 +226,12 @@ pub fn get_cache_dir() -> Result<PathBuf> {
         .ok_or_else(|| Error::Other("Could not find home directory".to_string()))?;
     let cache_dir = home_dir.join("codemod").join("cache").join("packages");
     Ok(cache_dir)
+}
+
+pub fn generate_execution_id() -> String {
+    let execution_id: [u8; 20] = rand::rng().random();
+    base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        execution_id,
+    )
 }
