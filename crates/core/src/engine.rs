@@ -1817,7 +1817,8 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        debug!("Command output: {output}");
+        info!("Step output:");
+        info!("{output}");
 
         let outputs = read_to_string(&state_outputs_path).await?;
 
