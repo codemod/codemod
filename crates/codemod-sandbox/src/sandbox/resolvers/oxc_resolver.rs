@@ -22,11 +22,16 @@ pub struct OxcResolver {
 impl OxcResolver {
     pub fn new(base_dir: PathBuf, tsconfig_path: Option<PathBuf>) -> Result<Self, ResolverError> {
         let options = ResolveOptions {
-            extensions: vec![".js".into(), ".ts".into(), ".jsx".into(), ".tsx".into()],
-            condition_names: vec!["node".into(), "import".into()],
-            modules: vec!["node_modules".into()],
+            extensions: vec![
+                ".js".into(),
+                ".ts".into(),
+                ".jsx".into(),
+                ".tsx".into(),
+                ".mjs".into(),
+                ".mts".into(),
+            ],
+            condition_names: vec!["module".into(), "import".into(), "node".into()],
             main_fields: vec!["module".into(), "main".into()],
-            main_files: vec!["index".into()],
             tsconfig: tsconfig_path.map(|path| TsconfigOptions {
                 config_file: path,
                 references: TsconfigReferences::Auto,
