@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use butterflow_models::variable::resolve_state_path;
 use log::{debug, warn};
 #[cfg(feature = "wasm")]
 use serde::Serialize;
@@ -202,7 +203,7 @@ impl Scheduler {
             if let Some(Strategy {
                 r#type: StrategyType::Matrix,
                 values,
-                from_state: _, // Corrected variable name
+                from_state: _,
             }) = &node.strategy
             {
                 // Create a master task for the matrix
@@ -276,26 +277,29 @@ impl Scheduler {
                 }
 
                 // Get the current value from the state
-                let state_value = state.get(state_key);
+                let state_value = resolve_state_path(state, state_key);
 
                 // --- Calculate Values for Current State Items ---
                 let mut current_item_values = Vec::new();
 
                 match state_value {
-                    Some(serde_json::Value::Array(items)) => {
+                    Ok(serde_json::Value::Array(items)) => {
                         for item in items {
                             current_item_values.push(item.clone());
                         }
                         debug!("Found {} items in state array '{}'", items.len(), state_key);
                     }
-                    Some(serde_json::Value::Object(_obj)) => {
+                    Ok(serde_json::Value::Object(_obj)) => {
                         // Object mapping not fully supported yet
                         warn!("Matrix from_state for object key '{state_key}' is not yet fully supported, skipping.");
-                        continue; // Skip this node
+                        continue;
                     }
-                    _ => {
+                    Ok(_) => {
                         // State key not found or not an array/object
                         debug!("State key '{}' for matrix node '{}' is missing or not an array/object.", state_key, node.id);
+                    }
+                    Err(_) => {
+                        debug!("Could not resolve state path '{state_key}'");
                     }
                 }
 
