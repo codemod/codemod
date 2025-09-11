@@ -809,6 +809,7 @@ name = "codemod"
 version = "1.0.7"
 dependencies = [
  "anyhow",
+ "ast-grep-config",
  "ast-grep-language",
  "async-trait",
  "base64 0.22.1",

@@ -125,7 +125,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     let codemod_path_clone = codemod_path.to_path_buf();
     let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
         let codemod_path = codemod_path_clone.clone();
-        let filesystem = filesystem.clone();
+        let _filesystem = filesystem.clone();
         let resolver = resolver.clone();
         let input_code = input_code.to_string();
         let input_path = input_path.to_path_buf();
@@ -133,18 +133,20 @@ pub async fn handler(args: &Command) -> Result<()> {
         Box::pin(async move {
             let execution_output = execute_codemod_with_quickjs(
                 &codemod_path,
-                filesystem,
                 resolver,
                 language_enum,
                 &input_path,
                 &input_code,
+                None,
             )
             .await?;
 
             match execution_output {
                 ExecutionResult::Modified(content) => Ok(TransformationResult::Success(content)),
                 // use input code as the output if the codemod was unmodified
-                ExecutionResult::Unmodified => Ok(TransformationResult::Success(input_code)),
+                ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                    Ok(TransformationResult::Success(input_code))
+                }
             }
         })
             as Pin<

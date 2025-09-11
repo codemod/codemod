@@ -1,9 +1,8 @@
 import astGrep from "codemod:ast-grep";
 import transform from "./{script_name}";
 
-export function executeCodemod() {{
+export function executeCodemod(sgRoot) {{
     try {{
-        const sgRoot = astGrep.parseFile(CODEMOD_LANGUAGE, CODEMOD_TARGET_FILE_PATH);
         if (typeof transform !== "function") {{
             throw new Error("jssg codemod modules must export a function. " + typeof transform + " found.");
         }}

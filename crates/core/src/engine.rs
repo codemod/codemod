@@ -11,7 +11,7 @@ use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
-use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, ExecutionResult};
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -166,10 +166,13 @@ impl Engine {
             .await?;
 
         let engine = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                error!("Workflow execution failed: {e}");
-            }
+        let runtime_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(async move {
+                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
+                    error!("Workflow execution failed: {e}");
+                }
+            });
         });
 
         Ok(workflow_run_id)
@@ -212,10 +215,13 @@ impl Engine {
                     .await?;
 
                 let engine = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = engine.execute_task(task_id).await {
-                        error!("Task execution failed: {e}");
-                    }
+                let runtime_handle = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    runtime_handle.block_on(async move {
+                        if let Err(e) = engine.execute_task(task_id).await {
+                            error!("Task execution failed: {e}");
+                        }
+                    });
                 });
 
                 triggered = true;
@@ -249,10 +255,13 @@ impl Engine {
             .await?;
 
         let engine = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                error!("Workflow execution failed: {e}");
-            }
+        let runtime_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(async move {
+                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
+                    error!("Workflow execution failed: {e}");
+                }
+            });
         });
 
         Ok(())
@@ -342,10 +351,13 @@ impl Engine {
 
             let engine = self.clone();
             let task_id = task.id;
-            tokio::spawn(async move {
-                if let Err(e) = engine.execute_task(task_id).await {
-                    error!("Task execution failed: {e}");
-                }
+            let runtime_handle = tokio::runtime::Handle::current();
+            tokio::task::spawn_blocking(move || {
+                runtime_handle.block_on(async move {
+                    if let Err(e) = engine.execute_task(task_id).await {
+                        error!("Task execution failed: {e}");
+                    }
+                });
             });
 
             triggered = true;
@@ -378,10 +390,13 @@ impl Engine {
             .await?;
 
         let engine = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                error!("Workflow execution failed: {e}");
-            }
+        let runtime_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(async move {
+                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
+                    error!("Workflow execution failed: {e}");
+                }
+            });
         });
         Ok(true)
     }
@@ -873,10 +888,13 @@ impl Engine {
                 // Start task execution
                 let engine = self.clone();
                 let task_id = task.id;
-                tokio::spawn(async move {
-                    if let Err(e) = engine.execute_task(task_id).await {
-                        error!("Task execution failed: {e}");
-                    }
+                let runtime_handle = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    runtime_handle.block_on(async move {
+                        if let Err(e) = engine.execute_task(task_id).await {
+                            error!("Task execution failed: {e}");
+                        }
+                    });
                 });
             }
 
@@ -1414,14 +1432,20 @@ impl Engine {
             })?
         };
 
+        let selector_config =
+            extract_selector_with_quickjs(&js_file_path, language, Arc::clone(&resolver))
+                .await
+                .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+
         // Capture variables for use in parallel threads
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();
-        let filesystem_clone = filesystem.clone();
+        let _filesystem_clone = filesystem.clone();
         let resolver_clone = resolver.clone();
         let id_clone = Arc::new(id);
         let progress_callback = self.workflow_run_config.progress_callback.clone();
         let file_writer = Arc::clone(&self.file_writer);
+        let selector_config = selector_config.map(Arc::new);
 
         // Execute the codemod on each file using the config's multi-threading
         config
@@ -1446,11 +1470,11 @@ impl Engine {
                 let execution_result = runtime_handle.block_on(async {
                     execute_codemod_with_quickjs(
                         &js_file_path_clone,
-                        filesystem_clone.clone(),
                         resolver_clone.clone(),
                         language,
                         file_path,
                         &content,
+                        selector_config.clone(),
                     )
                     .await
                 });
@@ -1495,7 +1519,7 @@ impl Engine {
                                     }
                                 }
                             }
-                            ExecutionResult::Unmodified => {
+                            ExecutionResult::Unmodified | ExecutionResult::Skipped => {
                                 self.execution_stats
                                     .files_unmodified
                                     .fetch_add(1, Ordering::Relaxed);

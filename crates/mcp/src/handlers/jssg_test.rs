@@ -10,7 +10,6 @@ use ast_grep_language::SupportLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
-        filesystem::RealFileSystem,
         resolvers::OxcResolver,
     },
     utils::project_discovery::find_tsconfig,
@@ -153,7 +152,6 @@ impl JssgTestHandler {
             .map_err(|_| format!("Unsupported language: {}", request.language))?;
 
         // Set up execution components
-        let filesystem = Arc::new(RealFileSystem::new());
         let codemod_path = PathBuf::from(&request.codemod_file);
 
         let script_base_dir = codemod_path
@@ -203,7 +201,6 @@ impl JssgTestHandler {
         // Create execution function
         let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
             let codemod_path = codemod_path.clone();
-            let filesystem = filesystem.clone();
             let resolver = resolver.clone();
             let input_code = input_code.to_string();
             let input_path = input_path.to_path_buf();
@@ -211,11 +208,11 @@ impl JssgTestHandler {
             Box::pin(async move {
                 let execution_output = execute_codemod_with_quickjs(
                     &codemod_path,
-                    filesystem,
                     resolver,
                     language,
                     &input_path,
                     &input_code,
+                    None,
                 )
                 .await?;
 
@@ -223,7 +220,9 @@ impl JssgTestHandler {
                     ExecutionResult::Modified(content) => {
                         Ok(TransformationResult::Success(content))
                     }
-                    ExecutionResult::Unmodified => Ok(TransformationResult::Success(input_code)),
+                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                        Ok(TransformationResult::Success(input_code))
+                    }
                 }
             })
                 as Pin<

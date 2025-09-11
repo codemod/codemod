@@ -1,7 +1,7 @@
 #[cfg(feature = "wasm")]
 use crate::ast_grep::wasm_lang::WasmDoc;
 #[cfg(not(feature = "wasm"))]
-use ast_grep_core::tree_sitter::StrDoc as TreeSitterStrDoc;
+use ast_grep_core::tree_sitter::StrDoc as TSStrDoc;
 use ast_grep_core::{AstGrep, Node, NodeMatch};
 
 #[cfg(not(feature = "wasm"))]
@@ -17,12 +17,12 @@ use crate::ast_grep::types::JsNodeRange;
 use crate::ast_grep::utils::{convert_matcher, JsMatcherRjs};
 
 #[cfg(not(feature = "wasm"))]
-type StrDoc = TreeSitterStrDoc<SupportLang>;
+type TSDoc = TSStrDoc<SupportLang>;
 #[cfg(feature = "wasm")]
-type StrDoc = WasmDoc;
+type TSDoc = WasmDoc;
 
 pub(crate) struct SgRootInner {
-    grep: AstGrep<StrDoc>,
+    grep: AstGrep<TSDoc>,
     filename: Option<String>,
 }
 
@@ -52,7 +52,7 @@ impl<'js> SgRootRjs<'js> {
     pub fn root(&self, _ctx: Ctx<'js>) -> Result<SgNodeRjs<'js>> {
         let node = self.inner.grep.root();
         let node_match: NodeMatch<_> = node.into();
-        let static_node_match: NodeMatch<'static, StrDoc> =
+        let static_node_match: NodeMatch<'static, TSDoc> =
             unsafe { std::mem::transmute(node_match) };
         Ok(SgNodeRjs {
             root: Arc::downgrade(&self.inner),
@@ -111,6 +111,16 @@ impl<'js> SgRootRjs<'js> {
             })
         }
     }
+
+    pub fn try_new_from_ast_grep(
+        grep: AstGrep<TSDoc>,
+        filename: Option<String>,
+    ) -> std::result::Result<Self, String> {
+        Ok(SgRootRjs {
+            inner: Arc::new(SgRootInner { grep, filename }),
+            _phantom: PhantomData,
+        })
+    }
 }
 
 #[derive(Trace, Clone)]
@@ -119,7 +129,7 @@ pub struct SgNodeRjs<'js> {
     #[qjs(skip_trace)] // Weak reference to the root
     pub(crate) root: Weak<SgRootInner>,
     #[qjs(skip_trace)] // NodeMatch is not Trace
-    pub(crate) inner_node: NodeMatch<'static, StrDoc>,
+    pub(crate) inner_node: NodeMatch<'static, TSDoc>,
     #[qjs(skip_trace)]
     _phantom: PhantomData<&'js ()>,
 }
@@ -185,7 +195,7 @@ impl<'js> SgNodeRjs<'js> {
         match self.inner_node.parent() {
             Some(node) => {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -202,7 +212,7 @@ impl<'js> SgNodeRjs<'js> {
         match self.inner_node.child(nth) {
             Some(node) => {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -219,9 +229,9 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self
             .inner_node
             .children()
-            .map(|node: Node<StrDoc>| {
+            .map(|node: Node<TSDoc>| {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
@@ -236,9 +246,9 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self
             .inner_node
             .ancestors()
-            .map(|node: Node<StrDoc>| {
+            .map(|node: Node<TSDoc>| {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
@@ -253,7 +263,7 @@ impl<'js> SgNodeRjs<'js> {
         match self.inner_node.next() {
             Some(node) => {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -271,9 +281,9 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self
             .inner_node
             .next_all()
-            .map(|node: Node<StrDoc>| {
+            .map(|node: Node<TSDoc>| {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
@@ -288,7 +298,7 @@ impl<'js> SgNodeRjs<'js> {
         match self.inner_node.prev() {
             Some(node) => {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -306,9 +316,9 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self
             .inner_node
             .prev_all()
-            .map(|node: Node<StrDoc>| {
+            .map(|node: Node<TSDoc>| {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
@@ -323,7 +333,7 @@ impl<'js> SgNodeRjs<'js> {
         match self.inner_node.field(&name) {
             Some(node) => {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -341,9 +351,9 @@ impl<'js> SgNodeRjs<'js> {
         Ok(self
             .inner_node
             .field_children(&name)
-            .map(|node: Node<StrDoc>| {
+            .map(|node: Node<TSDoc>| {
                 let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
@@ -358,9 +368,8 @@ impl<'js> SgNodeRjs<'js> {
         let lang = *self.inner_node.lang();
         let matcher = convert_matcher(value, lang, &ctx)?;
 
-        let create_sg_node = |node: NodeMatch<StrDoc>, ctx: &Ctx<'js>| -> Result<Value<'js>> {
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node) };
+        let create_sg_node = |node: NodeMatch<TSDoc>, ctx: &Ctx<'js>| -> Result<Value<'js>> {
+            let static_node_match: NodeMatch<'static, TSDoc> = unsafe { std::mem::transmute(node) };
             let sg_node = SgNodeRjs {
                 root: self.root.clone(),
                 inner_node: static_node_match,
@@ -390,9 +399,8 @@ impl<'js> SgNodeRjs<'js> {
         let lang = *self.inner_node.lang();
         let matcher = convert_matcher(value, lang, &ctx)?;
 
-        let create_sg_node = |node: NodeMatch<StrDoc>| -> SgNodeRjs<'js> {
-            let static_node_match: NodeMatch<'static, StrDoc> =
-                unsafe { std::mem::transmute(node) };
+        let create_sg_node = |node: NodeMatch<TSDoc>| -> SgNodeRjs<'js> {
+            let static_node_match: NodeMatch<'static, TSDoc> = unsafe { std::mem::transmute(node) };
             SgNodeRjs {
                 root: self.root.clone(),
                 inner_node: static_node_match,
@@ -462,7 +470,7 @@ impl<'js> SgNodeRjs<'js> {
             .map(NodeMatch::from)
         {
             Some(node_match) => {
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
                     root: self.root.clone(),
@@ -484,7 +492,7 @@ impl<'js> SgNodeRjs<'js> {
             .into_iter()
             .map(|node| {
                 let node_match = NodeMatch::from(node);
-                let static_node_match: NodeMatch<'static, StrDoc> =
+                let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
                     root: self.root.clone(),
