@@ -3,6 +3,7 @@ use llrt_modules::{
     abort, assert, buffer, child_process, console, crypto, events, exceptions, fetch, fs, os, path,
     perf_hooks, process, stream_web, string_decoder, timers, tty, url, util, zlib,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub const UNSAFE_MODULES: &[LlrtSupportedModules] = &[
@@ -39,7 +40,8 @@ pub struct LlrtModuleBuilder {
     pub builder: ModuleBuilder,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LlrtSupportedModules {
     Abort,
     Assert,
@@ -64,31 +66,33 @@ pub enum LlrtSupportedModules {
     ChildProcess,
 }
 
-impl LlrtSupportedModules {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "abort" => Self::Abort,
-            "assert" => Self::Assert,
-            "buffer" => Self::Buffer,
-            "console" => Self::Console,
-            "crypto" => Self::Crypto,
-            "events" => Self::Events,
-            "exceptions" => Self::Exceptions,
-            "fetch" => Self::Fetch,
-            "fs" => Self::Fs,
-            "os" => Self::Os,
-            "path" => Self::Path,
-            "perf_hooks" => Self::PerfHooks,
-            "process" => Self::Process,
-            "stream_web" => Self::StreamWeb,
-            "string_decoder" => Self::StringDecoder,
-            "timers" => Self::Timers,
-            "tty" => Self::Tty,
-            "url" => Self::Url,
-            "util" => Self::Util,
-            "zlib" => Self::Zlib,
-            "child_process" => Self::ChildProcess,
-            _ => panic!("Unknown module: {}", s),
+impl std::str::FromStr for LlrtSupportedModules {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "abort" => Ok(Self::Abort),
+            "assert" => Ok(Self::Assert),
+            "buffer" => Ok(Self::Buffer),
+            "console" => Ok(Self::Console),
+            "crypto" => Ok(Self::Crypto),
+            "events" => Ok(Self::Events),
+            "exceptions" => Ok(Self::Exceptions),
+            "fetch" => Ok(Self::Fetch),
+            "fs" => Ok(Self::Fs),
+            "os" => Ok(Self::Os),
+            "path" => Ok(Self::Path),
+            "perf_hooks" => Ok(Self::PerfHooks),
+            "process" => Ok(Self::Process),
+            "stream_web" => Ok(Self::StreamWeb),
+            "string_decoder" => Ok(Self::StringDecoder),
+            "timers" => Ok(Self::Timers),
+            "tty" => Ok(Self::Tty),
+            "url" => Ok(Self::Url),
+            "util" => Ok(Self::Util),
+            "zlib" => Ok(Self::Zlib),
+            "child_process" => Ok(Self::ChildProcess),
+            _ => Err(format!("Unknown module: {}", s)),
         }
     }
 }
