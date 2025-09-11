@@ -34,7 +34,11 @@
           },
           {
             "group": "OSS & Community",
-            "pages": ["cli/cli-reference", "cli/workflows"]
+            "pages": [
+              "cli/cli-reference",
+              "cli/workflows",
+              "more-resources/codemod-mcp"
+            ]
           },
           {
             "group": "Quick Links",

@@ -1,0 +1,124 @@
+---
+title: "Codemod MCP"
+---
+
+Codemod MCP (Model Context Protocol) provides AI assistants with tools for code analysis, AST manipulation, and codemod creation. The MCP server enables AI tools like Claude, Cursor, and others to understand code structure, create codemods, and perform automated code transformations.
+
+## Prerequisites
+
+Before setting up Codemod MCP, ensure you have:
+- Node.js 16.0.0 or higher installed
+- An AI client that supports MCP (Claude Desktop, Cursor, etc.)
+- [Logging in](/cli/cli-reference#codemod-login) to Codemod with CLI
+
+## Quick setup
+
+<Steps>
+  <Step title="Open IDE settings">
+    **For Cursor IDE:**
+    - Open Cursor Settings
+    - Navigate to **MCP & Integrations**
+    - Click **New MCP Server** under MCP Tools
+  </Step>
+  <Step title="Add MCP server configuration">
+    Add the following configuration to your MCP settings:
+
+    ```json
+    {
+      "mcpServers": {
+        "codemod": {
+          "command": "npx",
+          "args": ["codemod@latest", "mcp"],
+          "cwd": "<your-project-directory>"
+        }
+      }
+    }
+    ```
+
+    Replace `<your-project-directory>` with the path to your project folder.
+  </Step>
+  <Step title="Restart your IDE">
+    Save the configuration file and restart your IDE to activate the Codemod MCP server.
+  </Step>
+</Steps>
+
+## Available tools
+
+The Codemod MCP server provides these tools for AI assistants:
+
+- **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
+- **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
+- **`run_jssg_tests`** - Run tests for jssg (JavaScript AST-grep) codemods with test cases
+- **`get_jssg_instructions`** - Get jssg instructions for creating codemods
+- **`get_ast_grep_instructions`** - Get ast-grep instructions for creating ast-grep rules
+- **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
+
+## Why use Codemod MCP?
+
+Codemod MCP democratizes code transformation by integrating robust deterministic engines into AI-powered development workflows:
+
+- **Individual Developers**: Take care of repetitive refactors without manual effort
+- **Accessibility**: Makes tackling tech debt more approachable for developers of all skill levels
+- **AI Integration**: Seamlessly integrates deterministic code transformation engines into AI IDE workflows
+
+## Codemod MCP vs Codemod Studio
+
+| | Codemod MCP | Codemod Studio |
+|---------|-------------|----------------|
+| **Interface** | Integrated into your IDE | Web-based interface |
+| **AI Model** | Your choice of AI model | Built-in AI assistant |
+| **Control** | Granular control over codemod creation | Quick prototyping and sharing |
+| **Iteration** | Direct, instant control in your IDE | Web-based iteration |
+| **Sharing** | Export and version control | Built-in sharing with peers |
+| **Best For** | Power users, framework maintainers, pro codemods | Quick codemod creation and collaboration |
+
+## Best practices
+
+When working with AI assistants through Codemod MCP, follow these guidelines for better results:
+
+<Steps>
+  <Step title="Be specific about output format">
+    Tell the AI exactly what type of codemod you want:
+    - **jssg** for JavaScript/TypeScript transformations
+    - **ast-grep YAML rule** for general-purpose transformations
+    - **shell workflow** for complex multi-step migrations
+  </Step>
+  <Step title="Provide clear requirements">
+    Describe your transformation in plain language with concrete examples:
+    - Show before/after code snippets
+    - Specify edge cases to handle or avoid
+    - Include any constraints or special conditions
+  </Step>
+  <Step title="Break down complex changes">
+    Instead of one large transformation, create focused codemods for specific patterns:
+    - One codemod per logical change
+    - Simpler codemods are more maintainable
+    - Easier to test and debug individual transformations
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Server won't start">
+    If the MCP server fails to start:
+    - Ensure you have Node.js installed
+    - Check that the `cwd` path exists and is accessible
+    - Verify the command path is correct
+    - Try running `npx codemod@latest mcp` manually to test
+  </Accordion>
+  <Accordion title="Tools not available">
+    If MCP tools aren't showing up:
+    - Restart your AI client after adding the MCP server
+    - Check the MCP server logs for error messages
+    - Ensure the working directory contains valid code files
+    - Verify the JSON configuration syntax is correct
+  </Accordion>
+  <Accordion title="Performance issues">
+    For slow performance:
+    - Large codebases may take longer to analyze
+    - Consider using specific file patterns to limit analysis scope
+    - Check system resources and network connectivity
+    - Use faster models if available
+  </Accordion>
+</AccordionGroup>
