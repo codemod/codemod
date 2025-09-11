@@ -18,7 +18,7 @@ pub struct CombinedScanWithRuleConfigs<'a> {
 
 pub fn with_combined_scan<T>(
     config_file_path: &str,
-    f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
+    f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>> + Send + Sync,
 ) -> Result<T, Box<dyn Error>> {
     let config_content = fs::read_to_string(config_file_path)?;
     let rule_configs = from_yaml_string(&config_content, &Default::default())
