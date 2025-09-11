@@ -15,7 +15,7 @@ use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, ExecutionResult};
-use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -1317,13 +1317,13 @@ impl Engine {
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
-            |combined_scan_with_rule| {
+            move |combined_scan_with_rule| {
                 // Clone variables needed in the closure
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                execution_config.execute(|path, config| {
+                execution_config.execute(move |path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
