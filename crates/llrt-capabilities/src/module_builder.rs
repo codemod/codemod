@@ -3,116 +3,180 @@ use llrt_modules::{
     abort, assert, buffer, child_process, console, crypto, events, exceptions, fetch, fs, os, path,
     perf_hooks, process, stream_web, string_decoder, timers, tty, url, util, zlib,
 };
+use std::collections::HashSet;
 
-pub const UNSAFE_MODULES: &[&str] = &["fetch", "child_process", "fs"];
-pub const DEFAULT_MODULES: &[&str] = &[
-    "abort",
-    "assert",
-    "buffer",
-    "console",
-    "crypto",
-    "events",
-    "exceptions",
-    "os",
-    "path",
-    "perf_hooks",
-    "process",
-    "stream_web",
-    "string_decoder",
-    "timers",
-    "tty",
-    "url",
-    "util",
-    "zlib",
+pub const UNSAFE_MODULES: &[LlrtSupportedModules] = &[
+    LlrtSupportedModules::Fetch,
+    LlrtSupportedModules::ChildProcess,
+    LlrtSupportedModules::Fs,
 ];
+pub const DEFAULT_MODULES: &[LlrtSupportedModules] = &[
+    LlrtSupportedModules::Abort,
+    LlrtSupportedModules::Assert,
+    LlrtSupportedModules::Buffer,
+    LlrtSupportedModules::Console,
+    LlrtSupportedModules::Crypto,
+    LlrtSupportedModules::Events,
+    LlrtSupportedModules::Exceptions,
+    LlrtSupportedModules::Os,
+    LlrtSupportedModules::Path,
+    LlrtSupportedModules::PerfHooks,
+    LlrtSupportedModules::Process,
+    LlrtSupportedModules::StreamWeb,
+    LlrtSupportedModules::StringDecoder,
+    LlrtSupportedModules::Timers,
+    LlrtSupportedModules::Tty,
+    LlrtSupportedModules::Url,
+    LlrtSupportedModules::Util,
+    LlrtSupportedModules::Zlib,
+];
+
+fn default_modules_set() -> HashSet<LlrtSupportedModules> {
+    DEFAULT_MODULES.iter().copied().collect()
+}
 
 pub struct LlrtModuleBuilder {
     pub builder: ModuleBuilder,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LlrtSupportedModules {
+    Abort,
+    Assert,
+    Buffer,
+    Console,
+    Crypto,
+    Events,
+    Exceptions,
+    Fetch,
+    Fs,
+    Os,
+    Path,
+    PerfHooks,
+    Process,
+    StreamWeb,
+    StringDecoder,
+    Timers,
+    Tty,
+    Url,
+    Util,
+    Zlib,
+    ChildProcess,
+}
+
+impl LlrtSupportedModules {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "abort" => Self::Abort,
+            "assert" => Self::Assert,
+            "buffer" => Self::Buffer,
+            "console" => Self::Console,
+            "crypto" => Self::Crypto,
+            "events" => Self::Events,
+            "exceptions" => Self::Exceptions,
+            "fetch" => Self::Fetch,
+            "fs" => Self::Fs,
+            "os" => Self::Os,
+            "path" => Self::Path,
+            "perf_hooks" => Self::PerfHooks,
+            "process" => Self::Process,
+            "stream_web" => Self::StreamWeb,
+            "string_decoder" => Self::StringDecoder,
+            "timers" => Self::Timers,
+            "tty" => Self::Tty,
+            "url" => Self::Url,
+            "util" => Self::Util,
+            "zlib" => Self::Zlib,
+            "child_process" => Self::ChildProcess,
+            _ => panic!("Unknown module: {}", s),
+        }
+    }
+}
+
 impl LlrtModuleBuilder {
     pub fn build() -> Self {
+        let default_modules = default_modules_set();
         let mut module_builder = ModuleBuilder::new();
 
-        if DEFAULT_MODULES.contains(&"abort") {
+        if default_modules.contains(&LlrtSupportedModules::Abort) {
             module_builder = module_builder.with_global(abort::init);
         }
 
-        if DEFAULT_MODULES.contains(&"assert") {
+        if default_modules.contains(&LlrtSupportedModules::Assert) {
             module_builder = module_builder.with_module(assert::AssertModule);
         }
 
-        if DEFAULT_MODULES.contains(&"buffer") {
+        if default_modules.contains(&LlrtSupportedModules::Buffer) {
             module_builder = module_builder.with_global(buffer::init);
             module_builder = module_builder.with_module(buffer::BufferModule);
         }
 
-        if DEFAULT_MODULES.contains(&"console") {
+        if default_modules.contains(&LlrtSupportedModules::Console) {
             module_builder = module_builder.with_global(console::init);
             module_builder = module_builder.with_module(console::ConsoleModule);
         }
 
-        if DEFAULT_MODULES.contains(&"crypto") {
+        if default_modules.contains(&LlrtSupportedModules::Crypto) {
             module_builder = module_builder.with_global(crypto::init);
             module_builder = module_builder.with_module(crypto::CryptoModule);
         }
 
-        if DEFAULT_MODULES.contains(&"events") {
+        if default_modules.contains(&LlrtSupportedModules::Events) {
             module_builder = module_builder.with_global(events::init);
             module_builder = module_builder.with_module(events::EventsModule);
         }
 
-        if DEFAULT_MODULES.contains(&"exceptions") {
+        if default_modules.contains(&LlrtSupportedModules::Exceptions) {
             module_builder = module_builder.with_global(exceptions::init);
         }
 
-        if DEFAULT_MODULES.contains(&"os") {
+        if default_modules.contains(&LlrtSupportedModules::Os) {
             module_builder = module_builder.with_module(os::OsModule);
         }
 
-        if DEFAULT_MODULES.contains(&"path") {
+        if default_modules.contains(&LlrtSupportedModules::Path) {
             module_builder = module_builder.with_module(path::PathModule);
         }
 
-        if DEFAULT_MODULES.contains(&"perf_hooks") {
+        if default_modules.contains(&LlrtSupportedModules::PerfHooks) {
             module_builder = module_builder.with_global(perf_hooks::init);
             module_builder = module_builder.with_module(perf_hooks::PerfHooksModule);
         }
 
-        if DEFAULT_MODULES.contains(&"process") {
+        if default_modules.contains(&LlrtSupportedModules::Process) {
             module_builder = module_builder.with_global(process::init);
             module_builder = module_builder.with_module(process::ProcessModule);
         }
 
-        if DEFAULT_MODULES.contains(&"stream_web") {
+        if default_modules.contains(&LlrtSupportedModules::StreamWeb) {
             module_builder = module_builder.with_global(stream_web::init);
             module_builder = module_builder.with_module(stream_web::StreamWebModule);
         }
 
-        if DEFAULT_MODULES.contains(&"string_decoder") {
+        if default_modules.contains(&LlrtSupportedModules::StringDecoder) {
             module_builder = module_builder.with_module(string_decoder::StringDecoderModule);
         }
 
-        if DEFAULT_MODULES.contains(&"timers") {
+        if default_modules.contains(&LlrtSupportedModules::Timers) {
             module_builder = module_builder.with_global(timers::init);
             module_builder = module_builder.with_module(timers::TimersModule);
         }
 
-        if DEFAULT_MODULES.contains(&"tty") {
+        if default_modules.contains(&LlrtSupportedModules::Tty) {
             module_builder = module_builder.with_module(tty::TtyModule);
         }
 
-        if DEFAULT_MODULES.contains(&"url") {
+        if default_modules.contains(&LlrtSupportedModules::Url) {
             module_builder = module_builder.with_global(url::init);
             module_builder = module_builder.with_module(url::UrlModule);
         }
 
-        if DEFAULT_MODULES.contains(&"util") {
+        if default_modules.contains(&LlrtSupportedModules::Util) {
             module_builder = module_builder.with_global(util::init);
             module_builder = module_builder.with_module(util::UtilModule);
         }
 
-        if DEFAULT_MODULES.contains(&"zlib") {
+        if default_modules.contains(&LlrtSupportedModules::Zlib) {
             module_builder = module_builder.with_module(zlib::ZlibModule);
         }
 
