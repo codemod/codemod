@@ -20,3 +20,4 @@ serde_json.workspace = true
 ast-grep-core.workspace = true
 codemod-sandbox.workspace = true
 testing-utils.workspace = true
+codemod-ast-grep-dynamic-lang = {workspace = true}

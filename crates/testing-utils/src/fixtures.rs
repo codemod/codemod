@@ -1,5 +1,4 @@
 use anyhow::Result;
-use codemod_ast_grep_dynamic_lang::DynamicLang;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -92,12 +91,10 @@ impl TestSource {
     pub fn to_unified_test_cases(
         &self,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<Vec<UnifiedTestCase>, TestError> {
         match self {
             TestSource::Directory(dir) => {
-                let fs_test_cases =
-                    FileSystemTestCase::discover_in_directory(dir, extensions, language)?;
+                let fs_test_cases = FileSystemTestCase::discover_in_directory(dir, extensions)?;
                 let mut unified_cases = Vec::new();
 
                 for fs_case in fs_test_cases {
@@ -163,7 +160,6 @@ impl FileSystemTestCase {
     pub fn discover_in_directory(
         test_dir: &Path,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<Vec<FileSystemTestCase>, TestError> {
         let mut test_cases = Vec::new();
 
@@ -172,7 +168,7 @@ impl FileSystemTestCase {
             let path = entry.path();
 
             if path.is_dir() {
-                if let Ok(test_case) = Self::from_directory(&path, extensions, language) {
+                if let Ok(test_case) = Self::from_directory(&path, extensions) {
                     test_cases.push(test_case);
                 }
             }
@@ -186,7 +182,6 @@ impl FileSystemTestCase {
     fn from_directory(
         test_dir: &Path,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<FileSystemTestCase, TestError> {
         let name = test_dir
             .file_name()
@@ -198,7 +193,7 @@ impl FileSystemTestCase {
         let should_error = name.ends_with("_should_error");
 
         // Check for single file format (input.js + expected.js)
-        if let Ok(input_files) = find_input_files(test_dir, extensions, language) {
+        if let Ok(input_files) = find_input_files(test_dir, extensions) {
             let expected_files = find_expected_files(test_dir, &input_files)?;
 
             return Ok(FileSystemTestCase {
@@ -221,8 +216,8 @@ impl FileSystemTestCase {
         let expected_dir = test_dir.join("expected");
 
         if input_dir.exists() && expected_dir.exists() {
-            let input_files = collect_files_in_directory(&input_dir, extensions, language)?;
-            let expected_files = collect_files_in_directory(&expected_dir, extensions, language)?;
+            let input_files = collect_files_in_directory(&input_dir, extensions)?;
+            let expected_files = collect_files_in_directory(&expected_dir, extensions)?;
 
             return Ok(FileSystemTestCase {
                 name,
@@ -317,11 +312,7 @@ impl TestFile {
 }
 
 /// Find input files based on extensions
-fn find_input_files(
-    test_dir: &Path,
-    extensions: &[&str],
-    language: DynamicLang,
-) -> Result<Vec<PathBuf>, TestError> {
+fn find_input_files(test_dir: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>, TestError> {
     let mut candidates = Vec::new();
 
     // Look for input.{ext} files
@@ -375,11 +366,7 @@ fn find_expected_files(
 }
 
 /// Collect files in a directory that match the extensions
-fn collect_files_in_directory(
-    dir: &Path,
-    extensions: &[&str],
-    language: DynamicLang,
-) -> Result<Vec<TestFile>, TestError> {
+fn collect_files_in_directory(dir: &Path, extensions: &[&str]) -> Result<Vec<TestFile>, TestError> {
     let mut files = Vec::new();
 
     for entry in std::fs::read_dir(dir)? {

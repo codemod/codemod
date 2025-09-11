@@ -227,7 +227,7 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use codemod_ast_grep_dynamic_lang::DynamicLang;
+    use crate::tree_sitter::load_tree_sitter;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -285,6 +285,8 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
@@ -321,6 +323,8 @@ function example() {
 }
         "#
         .trim();
+
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
 
         let result = execute_codemod_with_quickjs(
             &codemod_path,
@@ -360,6 +364,8 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let result = execute_codemod_with_quickjs(
             &codemod_path,
             resolver,
@@ -397,6 +403,8 @@ function example() {
 }
         "#
         .trim();
+
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
 
         let result = execute_codemod_with_quickjs(
             &codemod_path,
@@ -438,6 +446,8 @@ function example() {
 }
         "#
         .trim();
+
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
 
         let result = execute_codemod_with_quickjs(
             &codemod_path,

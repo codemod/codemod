@@ -1,11 +1,12 @@
 use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 
-use ast_grep_language::SupportLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -15,6 +16,8 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{ReporterType, TestOptions, TestRunner, TestSource, TransformationResult};
+
+use crate::engine::create_download_progress_callback;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -85,8 +88,6 @@ pub async fn handler(args: &Command) -> Result<()> {
         anyhow::bail!("Codemod file '{}' does not exist", codemod_path.display());
     }
 
-    let language_enum: SupportLang = args.language.parse()?;
-
     let reporter_type: ReporterType = args
         .reporter
         .parse()
@@ -111,6 +112,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         ignore_whitespace: args.ignore_whitespace,
         context_lines: args.context_lines,
         expect_errors,
+        language: Some(SupportedLanguage::from_str(&args.language).unwrap()),
+        download_progress_callback: Some(create_download_progress_callback()),
     };
 
     let filesystem = Arc::new(RealFileSystem::new());
@@ -134,7 +137,8 @@ pub async fn handler(args: &Command) -> Result<()> {
             let execution_output = execute_codemod_with_quickjs(
                 &codemod_path,
                 resolver,
-                language_enum,
+                SupportedLanguage::from_str(&args.language)
+                    .map_err(|e| anyhow::anyhow!("Invalid language: {}", e))?,
                 &input_path,
                 &input_code,
                 None,
@@ -156,9 +160,9 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let test_source = TestSource::Directory(test_directory);
 
-    let extensions = get_extensions_for_language(language_enum);
+    let extensions = get_extensions_for_language(&args.language);
 
-    let mut runner = TestRunner::new(options, test_source);
+    let mut runner = TestRunner::new(options, test_source).await;
     let summary = runner.run_tests(&extensions, execution_fn).await?;
 
     if !summary.is_success() {

@@ -1516,7 +1516,7 @@ impl Engine {
                     execute_codemod_with_quickjs(
                         &js_file_path_clone,
                         resolver_clone.clone(),
-                        SupportedLanguage::from_str(&language.name()).unwrap(),
+                        SupportedLanguage::from_str(language.name()).unwrap(),
                         file_path,
                         &content,
                         selector_config.clone(),

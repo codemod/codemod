@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codemod_ast_grep_dynamic_lang::DynamicLang;
+use codemod_sandbox::tree_sitter::load_tree_sitter;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::future::Future;
@@ -66,7 +66,21 @@ pub struct TestRunner {
 }
 
 impl TestRunner {
-    pub fn new(options: TestOptions, test_source: TestSource) -> Self {
+    pub async fn new(options: TestOptions, test_source: TestSource) -> Self {
+        let _ = load_tree_sitter(
+            &[options.language.unwrap()],
+            options
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| {
+            Box::new(std::io::Error::other(format!(
+                "Failed to load tree-sitter language: {e:?}"
+            )))
+        });
+
         Self {
             options,
             test_source,
@@ -79,27 +93,22 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        language: DynamicLang,
     ) -> Result<TestSummary> {
         if self.options.watch {
-            return self
-                .run_with_watch(extensions, execution_fn, language)
-                .await;
+            return self.run_with_watch(extensions, execution_fn).await;
         }
 
-        self.run_tests_once(extensions, execution_fn, language)
-            .await
+        self.run_tests_once(extensions, execution_fn).await
     }
 
     async fn run_tests_once<'a>(
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        language: DynamicLang,
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
-            .to_unified_test_cases(extensions, language)
+            .to_unified_test_cases(extensions)
             .map_err(|e| anyhow::anyhow!("Failed to load test cases: {}", e))?;
 
         if test_cases.is_empty() {
@@ -289,13 +298,10 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        language: DynamicLang,
     ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
 
-        let initial_summary = self
-            .run_tests_once(extensions, execution_fn, language)
-            .await?;
+        let initial_summary = self.run_tests_once(extensions, execution_fn).await?;
 
         println!("Watch mode not fully implemented yet. Use --no-watch for now.");
 

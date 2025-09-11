@@ -12,7 +12,7 @@ use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
-use codemod_sandbox::tree_sitter::{load_tree_sitter, SupportedLanguage};
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, info, warn};
@@ -21,8 +21,6 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
-    time::Instant,
     time::Instant,
 };
 #[derive(Args, Debug)]
@@ -122,7 +120,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(
                 js_file_path,
-                filesystem.clone(),
                 resolver.clone(),
                 args.language
                     .clone()
@@ -130,43 +127,31 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
                 file_path,
                 &content,
+                None,
             )
             .await
             {
                 Ok(execution_output) => {
                     // Handle the execution output (write back if modified and not dry run)
-                    if let Some(ref new_content) = execution_output.content {
-                        if new_content != &content {
-                            if !config.dry_run {
-                                if let Err(e) = tokio::fs::write(&file_path, new_content).await {
-                                    error!(
-                                        "Failed to write modified file {}: {}",
-                                        file_path.display(),
-                                        e
-                                    );
-                                } else {
-                                    debug!("Modified file: {}", file_path.display());
-                                }
-                            } else if config.dry_run {
-                                debug!("Would modify file (dry run): {}", file_path.display());
+                    if let ExecutionResult::Modified(ref new_content) = execution_output {
+                        if !config.dry_run {
+                            if let Err(e) = tokio::fs::write(&file_path, new_content).await {
+                                error!(
+                                    "Failed to write modified file {}: {}",
+                                    file_path.display(),
+                                    e
+                                );
+                            } else {
+                                debug!("Modified file: {}", file_path.display());
                             }
                         } else if config.dry_run {
                             debug!("Would modify file (dry run): {}", file_path.display());
                         }
                     }
-
-                    // Handle execution errors
-                    if let Some(ref error_msg) = execution_output.error {
-                        warn!(
-                            "Execution completed with error for {}: {}",
-                            file_path.display(),
-                            error_msg
-                        );
-                    }
                 }
                 Err(e) => {
                     error!(
-                        "Failed to execute codemod on {}: {:?}",
+                        "Failed to execute codemod on {}:\n{:?}",
                         file_path.display(),
                         e
                     );
