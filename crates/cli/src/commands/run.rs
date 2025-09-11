@@ -13,7 +13,7 @@ use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
-use codemod_telemetry::send_event::{BaseEvent, TelemetrySender};
+use codemod_telemetry::send_event::BaseEvent;
 use console::style;
 use log::info;
 use std::collections::HashMap;
