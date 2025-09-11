@@ -149,10 +149,6 @@ pub async fn handler(args: &Command) -> Result<()> {
     } else {
         Some(capabilities.into_iter().collect())
     };
-    let mut runner = TestRunner::new(options, test_directory);
-    let summary = runner
-        .run_tests(&[&args.language], capabilities.clone())
-        .await?;
 
     let tsconfig_path = find_tsconfig(&script_base_dir);
     let resolver = Arc::new(OxcResolver::new(script_base_dir, tsconfig_path)?);
@@ -162,60 +158,72 @@ pub async fn handler(args: &Command) -> Result<()> {
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
 
-    let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
-        let codemod_path = codemod_path_clone.clone();
-        let resolver = resolver.clone();
-        let input_code = input_code.to_string();
-        let input_path = input_path.to_path_buf();
-        let base_config = base_config_clone.clone();
-        let args = args_clone.clone();
-        let current_dir = current_dir_clone.clone();
+    let execution_fn = Box::new(
+        move |input_code: &str,
+              input_path: &Path,
+              capabilities: Option<Vec<LlrtSupportedModules>>| {
+            let codemod_path = codemod_path_clone.clone();
+            let resolver = resolver.clone();
+            let input_code = input_code.to_string();
+            let input_path = input_path.to_path_buf();
+            let base_config = base_config_clone.clone();
+            let args = args_clone.clone();
+            let current_dir = current_dir_clone.clone();
 
-        Box::pin(async move {
-            let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
-            let per_test_config =
-                TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
+            Box::pin(async move {
+                let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
+                let per_test_config =
+                    TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
 
-            let test_config =
-                ResolvedTestConfig::resolve(&args, &base_config, Some(&per_test_config))?;
+                let test_config =
+                    ResolvedTestConfig::resolve(&args, &base_config, Some(&per_test_config))?;
 
-            let language_str = test_config
-                .language
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
-            let language_enum: SupportLang = language_str.parse()?;
+                let language_str = test_config
+                    .language
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
+                let language_enum: SupportLang = language_str.parse()?;
 
-            let options = JssgExecutionOptions {
-                script_path: &codemod_path,
-                resolver,
-                language: language_enum,
-                file_path: &input_path,
-                content: &input_code,
-                selector_config: None,
-                params: test_config.params,
-                matrix_values: None,
-                capabilities: capabilities.clone(),
-            };
-            let execution_output = execute_codemod_with_quickjs(options).await?;
+                let options = JssgExecutionOptions {
+                    script_path: &codemod_path,
+                    resolver,
+                    language: language_enum,
+                    file_path: &input_path,
+                    content: &input_code,
+                    selector_config: None,
+                    params: test_config.params,
+                    matrix_values: None,
+                    capabilities: capabilities.clone(),
+                };
+                let execution_output = execute_codemod_with_quickjs(options).await?;
 
-            match execution_output {
-                ExecutionResult::Modified(content) => Ok(TransformationResult::Success(content)),
-                ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                    Ok(TransformationResult::Success(input_code))
+                match execution_output {
+                    ExecutionResult::Modified(content) => {
+                        Ok(TransformationResult::Success(content))
+                    }
+                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                        Ok(TransformationResult::Success(input_code))
+                    }
                 }
-            }
-        })
-            as Pin<
-                Box<dyn std::future::Future<Output = Result<TransformationResult, anyhow::Error>>>,
-            >
-    });
+            })
+                as Pin<
+                    Box<
+                        dyn std::future::Future<
+                            Output = Result<TransformationResult, anyhow::Error>,
+                        >,
+                    >,
+                >
+        },
+    );
 
     let test_source = TestSource::Directory(test_directory);
 
     let extensions = get_extensions_for_language(default_language_enum);
 
     let mut runner = TestRunner::new(options, test_source);
-    let summary = runner.run_tests(&extensions, execution_fn).await?;
+    let summary = runner
+        .run_tests(&extensions, execution_fn, capabilities.clone())
+        .await?;
 
     if !summary.is_success() {
         std::process::exit(1);
