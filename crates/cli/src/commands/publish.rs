@@ -122,7 +122,6 @@ struct PublishedPackage {
     name: String,
     version: String,
     scope: Option<String>,
-    download_url: String,
     published_at: String,
 }
 
@@ -163,16 +162,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let bundle_path =
         create_package_bundle(&package_path, &manifest, &js_files_to_bundle, args.dry_run)?;
 
-    if args.dry_run {
-        println!("✓ Package validation successful");
-        println!(
-            "✓ Bundle created: {} ({} bytes)",
-            bundle_path.display(),
-            fs::metadata(&bundle_path)?.len()
-        );
-        println!("📦 Package ready for publishing");
-        return Ok(());
-    }
+    println!("bundle_path: {}", bundle_path.display());
 
     // Get registry configuration
     let storage = TokenStorage::new()?;
@@ -226,7 +216,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     println!("📦 {}", format_package_name(&response.package));
     println!("🏷️  Version: {}", response.package.version);
     println!("📅 Published: {}", response.package.published_at);
-    println!("🔗 Download: {}", response.package.download_url);
 
     // Clean up temporary bundle
     if let Err(e) = fs::remove_file(&bundle_path) {
