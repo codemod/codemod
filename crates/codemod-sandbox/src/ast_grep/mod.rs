@@ -64,12 +64,12 @@ impl ModuleDef for AstGrepModule {
     }
 }
 
-fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs> {
+fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
     SgRootRjs::try_new(lang, src, None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }
 
-fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs> {
+fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
     #[cfg(feature = "wasm")]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
@@ -83,7 +83,7 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs>
 }
 
 #[cfg(feature = "native")]
-fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRootRjs> {
+fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRootRjs<'_>> {
     let file_content = std::fs::read_to_string(file_path.clone())
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?;
     SgRootRjs::try_new(lang, file_content, Some(file_path))

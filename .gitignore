@@ -11,6 +11,7 @@ build/
 out/
 /target/
 tsconfig.tsbuildinfo
+!crates/codemod-sandbox/build
 
 # Generated files
 generated/
