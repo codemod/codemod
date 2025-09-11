@@ -36,6 +36,7 @@ use butterflow_runners::Runner;
 use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
         engine::execution_engine::execute_codemod_with_quickjs, filesystem::RealFileSystem,
@@ -1235,7 +1236,13 @@ impl Engine {
                 let capabilities = params
                     .clone()
                     .get("capabilities")
-                    .map(|v| vec![v.to_string()]);
+                    .map(|v| v.to_string())
+                    .map(|s| s.split(",").map(|s| s.to_string()).collect::<Vec<_>>())
+                    .map(|v| {
+                        v.iter()
+                            .map(|v| LlrtSupportedModules::from_str(v))
+                            .collect::<Vec<_>>()
+                    });
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     js_ast_grep,
@@ -1381,7 +1388,7 @@ impl Engine {
         &self,
         id: String,
         js_ast_grep: &UseJSAstGrep,
-        capabilities: Option<Vec<String>>,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
         capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
     ) -> Result<()> {
         let js_file_path = self
@@ -1499,7 +1506,7 @@ impl Engine {
                         file_path,
                         &content,
                         selector_config.clone(),
-                        config.capabilities.as_deref().map(|v| v.to_vec()),
+                        config.capabilities.clone(),
                     )
                     .await
                 });

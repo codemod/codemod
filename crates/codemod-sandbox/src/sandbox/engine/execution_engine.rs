@@ -10,6 +10,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 #[cfg(feature = "native")]
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
@@ -34,7 +35,7 @@ pub async fn execute_codemod_with_quickjs<R>(
     file_path: &Path,
     content: &str,
     selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
-    capabilities: Option<Vec<String>>,
+    capabilities: Option<Vec<LlrtSupportedModules>>,
 ) -> Result<ExecutionResult, ExecutionError>
 where
     R: ModuleResolver + 'static,
@@ -77,41 +78,17 @@ where
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = capabilities {
         for capability in capabilities {
-            match capability.as_str() {
-                "fetch" => {
+            match capability {
+                LlrtSupportedModules::Fetch => {
                     module_builder.enable_fetch();
                 }
-                "fs" => {
+                LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
                 }
-                "child_process" => {
+                LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
                 }
-                "abort" => {}
-                "assert" => {}
-                "buffer" => {}
-                "console" => {}
-                "crypto" => {}
-                "events" => {}
-                "exceptions" => {}
-                "os" => {}
-                "path" => {}
-                "perf_hooks" => {}
-                "process" => {}
-                "stream_web" => {}
-                "string_decoder" => {}
-                "timers" => {}
-                "tty" => {}
-                "url" => {}
-                "util" => {}
-                "zlib" => {}
-                _ => {
-                    return Err(ExecutionError::Runtime {
-                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                            message: format!("Unknown capability: {capability:?}"),
-                        },
-                    });
-                }
+                _ => {}
             }
         }
     }
