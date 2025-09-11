@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use ast_grep_language::SupportLang;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -135,18 +136,18 @@ pub async fn handler(args: &Command) -> Result<()> {
     // Create and run test runner
     let mut capabilities = Vec::new();
     if args.allow_fs {
-        capabilities.push("fs".to_string());
+        capabilities.push(LlrtSupportedModules::Fs);
     }
     if args.allow_fetch {
-        capabilities.push("fetch".to_string());
+        capabilities.push(LlrtSupportedModules::Fetch);
     }
     if args.allow_child_process {
-        capabilities.push("child_process".to_string());
+        capabilities.push(LlrtSupportedModules::ChildProcess);
     }
     let capabilities = if capabilities.is_empty() {
         None
     } else {
-        Some(capabilities)
+        Some(capabilities.into_iter().collect())
     };
     let mut runner = TestRunner::new(options, test_directory);
     let summary = runner

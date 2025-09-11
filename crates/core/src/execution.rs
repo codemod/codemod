@@ -1,3 +1,4 @@
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use ignore::{
     overrides::{Override, OverrideBuilder},
@@ -60,7 +61,7 @@ pub struct CodemodExecutionConfig {
     /// Number of threads to use
     pub threads: Option<usize>,
     /// Capabilities
-    pub capabilities: Option<Vec<String>>,
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
 
 impl CodemodExecutionConfig {
