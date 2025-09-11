@@ -1587,13 +1587,13 @@ impl Engine {
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
-            |combined_scan_with_rule| {
+            move |combined_scan_with_rule| {
                 // Clone variables needed in the closure
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                execution_config.execute(|path, config| {
+                execution_config.execute(move |path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;

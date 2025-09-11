@@ -138,11 +138,7 @@ impl CodemodExecutionConfig {
     }
 
     /// Execute the codemod with a specific task ID for progress tracking
-    pub async fn execute_with_task_id<F>(
-        &self,
-        task_id: &str,
-        callback: F,
-    ) -> Result<(), Box<dyn Error>>
+    pub fn execute_with_task_id<F>(&self, task_id: &str, callback: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
     {
@@ -153,14 +149,6 @@ impl CodemodExecutionConfig {
         }
 
         let globs = self.build_globs(&search_base)?;
-
-        let _ = load_tree_sitter(
-            &self.languages.as_ref().unwrap_or(&vec![]),
-            self.download_progress_callback
-                .as_ref()
-                .map(|cb| cb.callback.clone()),
-        )
-        .await?;
 
         // Pre-scan to count total files for accurate progress reporting
         let total_files = self.count_files(&search_base, &globs)?;
@@ -314,7 +302,7 @@ impl CodemodExecutionConfig {
                 .is_some_and(|langs| !langs.is_empty())
         {
             for language in self.languages.as_ref().unwrap() {
-                for extension in get_extensions_for_language(language.parse().unwrap()) {
+                for extension in get_extensions_for_language(language.to_string().as_str()) {
                     builder
                         .add(format!("**/*{extension}").as_str())
                         .map_err(|e| format!("Failed to add language pattern: {e}"))?;
