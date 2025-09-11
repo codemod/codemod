@@ -7,6 +7,7 @@ use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
@@ -21,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
+
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
@@ -94,18 +96,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let mut capabilities = Vec::new();
     if args.allow_fs {
-        capabilities.push("fs".to_string());
+        capabilities.push(LlrtSupportedModules::Fs);
     }
     if args.allow_fetch {
-        capabilities.push("fetch".to_string());
+        capabilities.push(LlrtSupportedModules::Fetch);
     }
     if args.allow_child_process {
-        capabilities.push("child_process".to_string());
+        capabilities.push(LlrtSupportedModules::ChildProcess);
     }
     let capabilities = if capabilities.is_empty() {
         None
     } else {
-        Some(capabilities)
+        Some(capabilities.into_iter().collect())
     };
 
     let capabilities_security_callback = capabilities_security_callback();
