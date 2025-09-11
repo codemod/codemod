@@ -1,5 +1,4 @@
 use anyhow::Result;
-use codemod_ast_grep_dynamic_lang::DynamicLang;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,12 +92,10 @@ impl TestSource {
     pub fn to_unified_test_cases(
         &self,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<Vec<UnifiedTestCase>, TestError> {
         match self {
             TestSource::Directory(dir) => {
-                let fs_test_cases =
-                    FileSystemTestCase::discover_in_directory(dir, extensions, language)?;
+                let fs_test_cases = FileSystemTestCase::discover_in_directory(dir, extensions)?;
                 let mut unified_cases = Vec::new();
 
                 for fs_case in fs_test_cases {
@@ -166,7 +163,6 @@ impl FileSystemTestCase {
     pub fn discover_in_directory(
         test_dir: &Path,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<Vec<FileSystemTestCase>, TestError> {
         let mut test_cases = Vec::new();
 
@@ -175,7 +171,7 @@ impl FileSystemTestCase {
             let path = entry.path();
 
             if path.is_dir() {
-                if let Ok(test_case) = Self::from_directory(&path, extensions, language) {
+                if let Ok(test_case) = Self::from_directory(&path, extensions) {
                     test_cases.push(test_case);
                 }
             }
@@ -189,7 +185,6 @@ impl FileSystemTestCase {
     fn from_directory(
         test_dir: &Path,
         extensions: &[&str],
-        language: DynamicLang,
     ) -> Result<FileSystemTestCase, TestError> {
         let name = test_dir
             .file_name()
@@ -383,7 +378,7 @@ fn collect_files_in_directory(
     dir: &Path,
     extensions: &[&str],
 ) -> Result<HashMap<PathBuf, TestFile>, TestError> {
-    let mut files = HashMap::new();
+    let mut files: HashMap<_, _> = HashMap::new();
 
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

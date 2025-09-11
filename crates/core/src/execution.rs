@@ -38,6 +38,14 @@ pub struct DownloadProgressCallback {
     pub callback: Arc<DownloadProgressCallbackFn>,
 }
 
+impl std::fmt::Debug for DownloadProgressCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DownloadProgressCallback")
+            .field("callback", &"<function>")
+            .finish()
+    }
+}
+
 /// Shared execution context to minimize Arc cloning in parallel processing
 struct SharedExecutionContext<'a, F>
 where
@@ -109,10 +117,9 @@ impl CodemodExecutionConfig {
         )
         .await
         .map_err(|e| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to load tree-sitter language: {e:?}"),
-            ))
+            Box::new(std::io::Error::other(format!(
+                "Failed to load tree-sitter language: {e:?}"
+            )))
         });
 
         Self {

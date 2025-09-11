@@ -10,10 +10,9 @@ use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_ast_grep_dynamic_lang::DynamicLang;
-use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
@@ -74,14 +73,16 @@ where
 
     let ast_grep = AstGrep::new(
         options.content,
-        DynamicLang::from_str(&options.language.to_string()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
+        DynamicLang::from_str(&options.language.to_string()).map_err(|e| {
+            ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            }
         })?,
     );
 
-    if let Some(selector_config) = &selector_config {
+    if let Some(selector_config) = &options.selector_config {
         let matches: Vec<_> = ast_grep
             .root()
             .dfs()
@@ -92,7 +93,6 @@ where
             return Ok(ExecutionResult::Skipped);
         }
     }
->>>>>>> 7ca8c94e (feat: add dynamic link support)
 
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
@@ -407,7 +407,7 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use codemod_ast_grep_dynamic_lang::DynamicLang;
+    use crate::tree_sitter::load_tree_sitter;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -465,19 +465,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Modified(new_content)) => {
@@ -506,19 +507,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -548,19 +550,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -590,10 +593,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -635,10 +640,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,
@@ -677,7 +684,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: nonexistent_path,
             resolver,
-            SupportedLanguage::Javascript,
+            language: SupportedLanguage::Javascript,
             file_path,
             content,
             selector_config: None,

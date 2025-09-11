@@ -16,3 +16,5 @@ thiserror = "2.0.0"
 serde = { workspace = true, features = ["derive"] }
 codemod-llrt-capabilities.workspace = true
 codemod-ast-grep-dynamic-lang = {workspace = true}
+codemod-sandbox = {workspace = true}
+butterflow-core = {workspace = true}
