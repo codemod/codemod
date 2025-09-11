@@ -6,8 +6,10 @@ use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_language::SupportLang;
 use llrt_modules::module_builder::ModuleBuilder;
+use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,7 +22,6 @@ pub enum ExecutionResult {
 
 /// Execute a codemod on string content using QuickJS
 /// This is the core execution logic that doesn't touch the filesystem
-#[cfg(feature = "native")]
 pub async fn execute_codemod_with_quickjs<F, R>(
     script_path: &Path,
     _filesystem: Arc<F>,
@@ -42,6 +43,9 @@ where
         include_str!("scripts/main_script.js.txt"),
         script_name = script_name
     );
+
+    // TODO: Add params to the codemod
+    let params: HashMap<String, String> = HashMap::new();
 
     // Initialize QuickJS runtime and context
     let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
@@ -94,6 +98,17 @@ where
                     },
                 })?;
 
+
+            let params_qjs = params.into_js(&ctx);
+
+            ctx.globals()
+                .set("CODEMOD_PARAMS", params_qjs)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to set params global variable: {e}"),
+                    },
+                })?;
+
             // Set the current file path for the codemod
             let file_path_str = file_path.to_string_lossy();
             ctx.globals()
@@ -107,18 +122,18 @@ where
             // Set the language for the codemod
             let language_str = language.to_string();
             ctx.globals()
-                .set("CODEMOD_LANGUAGE", language_str)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: format!("Failed to set language global variable: {e}"),
-                    },
-                })?;
+                    .set("CODEMOD_LANGUAGE", language_str)
+                    .map_err(|e| ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: format!("Failed to set language global variable: {e}"),
+                        },
+                    })?;
 
-            // Evaluate module.
-            let (evaluated, _) = module
-                .eval()
-                .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
+                // Evaluate module.
+                let (evaluated, _) = module
+                    .eval()
+                    .catch(&ctx)
+                    .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
                     },
@@ -146,7 +161,7 @@ where
                 })?;
 
 
-            // Call it and return value.
+                // Call it and return value.
             let result_obj_promise = func.call(()).catch(&ctx).map_err(|e| {
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {

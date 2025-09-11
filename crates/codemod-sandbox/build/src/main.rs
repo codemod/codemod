@@ -302,6 +302,7 @@ impl JsTransformer {
 
 /// Handles WebAssembly optimization using binaryen
 struct WasmOptimizer<'a> {
+    #[cfg_attr(not(feature = "optimize"), allow(dead_code))]
     config: &'a BuildConfig,
 }
 
@@ -311,35 +312,46 @@ impl<'a> WasmOptimizer<'a> {
     }
 
     fn process(&self, wasm_data: Vec<u8>) -> Result<Vec<u8>> {
-        use binaryen::binaryen_sys;
+        #[cfg(feature = "optimize")]
+        {
+            use binaryen::binaryen_sys;
 
-        let mut data = wasm_data;
-        let module = unsafe {
-            let raw_module = binaryen_sys::BinaryenModuleReadWithFeatures(
-                data.as_mut_ptr() as *mut i8,
-                data.len(),
-                binaryen_sys::BinaryenFeatureMVP() | binaryen_sys::BinaryenFeatureReferenceTypes(),
-            );
-            binaryen::Module::from_raw(raw_module)
-        };
+            let mut data = wasm_data;
+            let module = unsafe {
+                let raw_module = binaryen_sys::BinaryenModuleReadWithFeatures(
+                    data.as_mut_ptr() as *mut i8,
+                    data.len(),
+                    binaryen_sys::BinaryenFeatureMVP()
+                        | binaryen_sys::BinaryenFeatureReferenceTypes(),
+                );
+                binaryen::Module::from_raw(raw_module)
+            };
 
-        let opt_level = self.determine_optimization_level();
-        let passes = self.collect_optimization_passes();
+            let opt_level = self.determine_optimization_level();
+            let passes = self.collect_optimization_passes();
 
-        let config = binaryen::CodegenConfig {
-            shrink_level: 0,
-            optimization_level: opt_level,
-            debug_info: !self.config.release,
-        };
+            let config = binaryen::CodegenConfig {
+                shrink_level: 0,
+                optimization_level: opt_level,
+                debug_info: !self.config.release,
+            };
 
-        let mut opt_module = module;
-        opt_module
-            .run_optimization_passes(passes, &config)
-            .map_err(|_| anyhow::anyhow!("Optimization process failed"))?;
+            let mut opt_module = module;
+            opt_module
+                .run_optimization_passes(passes, &config)
+                .map_err(|_| anyhow::anyhow!("Optimization process failed"))?;
 
-        Ok(opt_module.write())
+            Ok(opt_module.write())
+        }
+        #[cfg(not(feature = "optimize"))]
+        {
+            // Return the original WASM data without optimization
+            println!("Binaryen optimization disabled - returning original WASM");
+            Ok(wasm_data)
+        }
     }
 
+    #[cfg(feature = "optimize")]
     fn determine_optimization_level(&self) -> u32 {
         let base_level = if self.config.release { 3 } else { 0 };
 
@@ -351,6 +363,7 @@ impl<'a> WasmOptimizer<'a> {
         }
     }
 
+    #[cfg(feature = "optimize")]
     fn collect_optimization_passes(&self) -> Vec<&'static str> {
         let mut passes = Vec::new();
 
