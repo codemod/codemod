@@ -65,7 +65,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     // Set up the new modular system with OxcResolver
-    let filesystem = Arc::new(RealFileSystem::new());
+    let _filesystem = Arc::new(RealFileSystem::new());
     let script_base_dir = js_file_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -111,7 +111,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(
                 js_file_path,
-                filesystem.clone(),
                 resolver.clone(),
                 args.language
                     .clone()
@@ -119,6 +118,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
                 file_path,
                 &content,
+                None,
             )
             .await
             {

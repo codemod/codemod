@@ -1,0 +1,22 @@
+import astGrep from "codemod:ast-grep";
+import * as exports from "./{script_name}";
+
+export function runSelector() {{
+    try {{
+        if ('getSelector' in exports) {{
+            const getSelector  = exports.getSelector;
+            if (typeof getSelector !== "function") {{
+                throw new Error("jssg selector must be a function. " + typeof getSelector + " found.");
+            }}
+
+            return {{
+                id: "selector",
+                language: CODEMOD_LANGUAGE,
+                ...getSelector({{ params: CODEMOD_PARAMS }})
+            }};
+        }}
+    }} catch (e) {{
+        console.error(e);
+        return null;
+    }}
+}}

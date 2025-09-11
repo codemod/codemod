@@ -1,4 +1,4 @@
-mod sg_node;
+pub(crate) mod sg_node;
 mod types;
 mod utils;
 
@@ -23,7 +23,7 @@ use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
 use sg_node::{SgNodeRjs, SgRootRjs};
 
 pub(crate) mod scanner;
-mod serde;
+pub(crate) mod serde;
 
 #[cfg(feature = "native")]
 pub use native::{scan_file_with_combined_scan, with_combined_scan};
@@ -64,7 +64,7 @@ impl ModuleDef for AstGrepModule {
     }
 }
 
-fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
+pub(crate) fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
     SgRootRjs::try_new(lang, src, None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }

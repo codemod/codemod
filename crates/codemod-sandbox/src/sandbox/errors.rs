@@ -76,7 +76,7 @@ pub enum ExecutionError {
         source: FsError,
     },
 
-    #[error("Runtime error")]
+    #[error("Runtime error {source}")]
     Runtime {
         #[source]
         source: RuntimeError,

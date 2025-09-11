@@ -10,6 +10,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ast-grep-config = { workspace = true }
 butterflow-models = { workspace = true }
 butterflow-core = { workspace = true }
 butterflow-state = { workspace = true }

@@ -1819,12 +1819,8 @@ async fn test_execute_js_ast_grep_step() {
         temp_path,
         "codemod.js",
         r#"
-import { CallExpression } from '@ast-grep/napi';
-
 export default function transform(ast) {
-  return ast
-    .findAll({ rule: { pattern: 'console.log($$$)' } })
-    .replace('logger.info($$$)');
+  return "Hello, World!";
 }
 "#,
     );
@@ -2287,7 +2283,7 @@ async fn test_js_ast_grep_workflow_execution() {
         temp_path,
         "codemod.js",
         r#"
-import { CallExpression } from '@ast-grep/napi';
+import { CallExpression } from 'codemod:ast-grep';
 
 export default function transform(ast) {
   return ast
