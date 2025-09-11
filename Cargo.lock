@@ -1098,6 +1098,7 @@ version = "1.2.1"
 dependencies = [
  "anyhow",
  "ast-grep-core",
+ "codemod-ast-grep-dynamic-lang",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
  "rmcp",
@@ -8116,8 +8117,10 @@ name = "testing-utils"
 version = "1.2.1"
 dependencies = [
  "anyhow",
+ "butterflow-core",
  "codemod-ast-grep-dynamic-lang",
  "codemod-llrt-capabilities",
+ "codemod-sandbox",
  "libtest-mimic",
  "serde",
  "similar",

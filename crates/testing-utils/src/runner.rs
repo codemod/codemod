@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::tree_sitter::load_tree_sitter;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::pin::Pin;
@@ -68,7 +69,21 @@ pub struct TestRunner {
 }
 
 impl TestRunner {
-    pub fn new(options: TestOptions, test_source: TestSource) -> Self {
+    pub async fn new(options: TestOptions, test_source: TestSource) -> Self {
+        let _ = load_tree_sitter(
+            &[options.language.unwrap()],
+            options
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| {
+            Box::new(std::io::Error::other(format!(
+                "Failed to load tree-sitter language: {e:?}"
+            )))
+        });
+
         Self {
             options,
             test_source,
@@ -103,7 +118,7 @@ impl TestRunner {
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
-            .to_unified_test_cases(extensions, language)
+            .to_unified_test_cases(extensions)
             .map_err(|e| anyhow::anyhow!("Failed to load test cases: {}", e))?;
 
         if test_cases.is_empty() {

@@ -1,5 +1,5 @@
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -25,7 +25,7 @@ impl AstDumpHandler {
         &self,
         Parameters(request): Parameters<DumpAstRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let language = match request.language.parse() {
+        let language = match request.language.parse::<DynamicLang>() {
             Ok(lang) => lang,
             Err(e) => {
                 return Err(McpError::invalid_params(
@@ -47,7 +47,7 @@ impl AstDumpHandler {
     fn dump_ast_for_language(
         &self,
         source_code: &str,
-        language: SupportLang,
+        language: DynamicLang,
     ) -> Result<String, String> {
         let root = AstGrep::new(source_code, language);
         Ok(self.dump_ast_for_ai_context(root.root(), 0))

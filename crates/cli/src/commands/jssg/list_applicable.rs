@@ -1,12 +1,18 @@
+use crate::engine::{create_download_progress_callback, create_progress_callback};
 use anyhow::Result;
 use ast_grep_config::CombinedScan;
-use ast_grep_language::SupportLang;
-use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use clap::Args;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
+use log::info;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
@@ -80,18 +86,24 @@ pub async fn handler(args: &Command) -> Result<()> {
         Some(script_base_dir.to_path_buf()),
     );
 
-    let config = CodemodExecutionConfig {
-        pre_run_callback: None,
-        progress_callback: Arc::new(None),
-        target_path: Some(target_directory.to_path_buf()),
-        base_path: None,
-        include_globs: None,
-        exclude_globs: None,
-        dry_run: false,
-        languages: Some(vec![args.language.clone()]),
-        threads: args.max_threads,
-        capabilities: Some(capabilities),
-    };
+    let config = CodemodExecutionConfig::new(
+        None,
+        ProgressCallbackCodemodExecutionConfig {
+            progress_callback: Arc::new(Some(create_progress_callback())),
+            download_progress_callback: Some(create_download_progress_callback()),
+        },
+        Some(target_directory.to_path_buf()),
+        None,
+        GlobsCodemodExecutionConfig {
+            include_globs: None,
+            exclude_globs: None,
+        },
+        false,
+        Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
+        args.max_threads,
+        Some(capabilities),
+    )
+    .await;
 
     let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
         script_path: js_file_path,
@@ -100,7 +112,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         capabilities: config.capabilities.clone(),
     })
     .await?;
-    let combined_scan: Option<Arc<CombinedScan<SupportLang>>> = selector_config
+    let combined_scan: Option<Arc<CombinedScan<DynamicLang>>> = selector_config
         .as_ref()
         .map(|c| Arc::new(CombinedScan::new(vec![c])));
 

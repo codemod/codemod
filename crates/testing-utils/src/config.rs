@@ -1,3 +1,5 @@
+use butterflow_core::execution::DownloadProgressCallback;
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use libtest_mimic::Arguments;
 use std::str::FromStr;
 use std::time::Duration;
@@ -16,6 +18,8 @@ pub struct TestOptions {
     pub ignore_whitespace: bool,
     pub context_lines: usize,
     pub expect_errors: Vec<String>,
+    pub language: Option<SupportedLanguage>,
+    pub download_progress_callback: Option<DownloadProgressCallback>,
 }
 
 #[derive(Debug, Clone)]
