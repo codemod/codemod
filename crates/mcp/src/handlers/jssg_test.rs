@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ast_grep_language::SupportLang;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -199,40 +200,45 @@ impl JssgTestHandler {
         };
 
         // Create execution function
-        let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
-            let codemod_path = codemod_path.clone();
-            let resolver = resolver.clone();
-            let input_code = input_code.to_string();
-            let input_path = input_path.to_path_buf();
+        let execution_fn = Box::new(
+            move |input_code: &str,
+                  input_path: &Path,
+                  capabilities: Option<Vec<LlrtSupportedModules>>| {
+                let codemod_path = codemod_path.clone();
+                let resolver = resolver.clone();
+                let input_code = input_code.to_string();
+                let input_path = input_path.to_path_buf();
 
-            Box::pin(async move {
-                let execution_output = execute_codemod_with_quickjs(
-                    &codemod_path,
-                    resolver,
-                    language,
-                    &input_path,
-                    &input_code,
-                    None,
-                )
-                .await?;
+                Box::pin(async move {
+                    let execution_output = execute_codemod_with_quickjs(
+                        &codemod_path,
+                        resolver,
+                        language,
+                        &input_path,
+                        &input_code,
+                        None,
+                        capabilities,
+                    )
+                    .await?;
 
-                match execution_output {
-                    ExecutionResult::Modified(content) => {
-                        Ok(TransformationResult::Success(content))
+                    match execution_output {
+                        ExecutionResult::Modified(content) => {
+                            Ok(TransformationResult::Success(content))
+                        }
+                        ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                            Ok(TransformationResult::Success(input_code))
+                        }
                     }
-                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                        Ok(TransformationResult::Success(input_code))
-                    }
-                }
-            })
-                as Pin<
-                    Box<
-                        dyn std::future::Future<
-                            Output = Result<TransformationResult, anyhow::Error>,
+                })
+                    as Pin<
+                        Box<
+                            dyn std::future::Future<
+                                Output = Result<TransformationResult, anyhow::Error>,
+                            >,
                         >,
-                    >,
-                >
-        });
+                    >
+            },
+        );
 
         // Create test source from cases
         let test_source = TestSource::Cases(transformation_test_cases);
@@ -244,7 +250,7 @@ impl JssgTestHandler {
         let summary = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
                 let mut runner = TestRunner::new(test_options, test_source);
-                runner.run_tests(&extensions, execution_fn).await
+                runner.run_tests(&extensions, execution_fn, None).await
             })
         })
         .await

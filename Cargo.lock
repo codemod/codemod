@@ -820,8 +820,8 @@ dependencies = [
  "butterflow-state",
  "chrono",
  "clap",
- "codemod-mcp",
  "codemod-llrt-capabilities",
+ "codemod-mcp",
  "codemod-sandbox",
  "codemod-telemetry",
  "console 0.15.11",
@@ -870,6 +870,7 @@ name = "codemod-llrt-capabilities"
 version = "1.0.8"
 dependencies = [
  "llrt_modules",
+ "serde",
 ]
 
 [[package]]
@@ -879,6 +880,7 @@ dependencies = [
  "anyhow",
  "ast-grep-core",
  "ast-grep-language",
+ "codemod-llrt-capabilities",
  "codemod-sandbox",
  "rmcp",
  "serde",
@@ -6108,6 +6110,7 @@ name = "testing-utils"
 version = "1.0.8"
 dependencies = [
  "anyhow",
+ "codemod-llrt-capabilities",
  "libtest-mimic",
  "serde",
  "similar",

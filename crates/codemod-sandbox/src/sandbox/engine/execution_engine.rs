@@ -301,6 +301,7 @@ function example() {
             file_path,
             content,
             None,
+            None,
         )
         .await;
 
@@ -337,6 +338,7 @@ function example() {
             SupportLang::JavaScript,
             file_path,
             content,
+            None,
             None,
         )
         .await;
@@ -376,6 +378,7 @@ function example() {
             file_path,
             content,
             None,
+            None,
         )
         .await;
 
@@ -413,6 +416,7 @@ function example() {
             SupportLang::JavaScript,
             file_path,
             content,
+            None,
             None,
         )
         .await;
@@ -455,6 +459,7 @@ function example() {
             file_path,
             content,
             None,
+            None,
         )
         .await;
 
@@ -489,6 +494,7 @@ function example() {
             SupportLang::JavaScript,
             file_path,
             content,
+            None,
             None,
         )
         .await;

@@ -44,7 +44,7 @@ use codemod_sandbox::{
     },
     utils::project_discovery::find_tsconfig,
 };
-
+use std::str::FromStr;
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -1240,7 +1240,7 @@ impl Engine {
                     .map(|s| s.split(",").map(|s| s.to_string()).collect::<Vec<_>>())
                     .map(|v| {
                         v.iter()
-                            .map(|v| LlrtSupportedModules::from_str(v))
+                            .map(|v| LlrtSupportedModules::from_str(v).unwrap())
                             .collect::<Vec<_>>()
                     });
                 self.execute_js_ast_grep_step(

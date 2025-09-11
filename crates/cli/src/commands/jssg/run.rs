@@ -3,7 +3,6 @@ use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
