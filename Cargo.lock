@@ -664,6 +664,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codemod-ai",
+ "codemod-llrt-capabilities",
  "codemod-sandbox",
  "dirs",
  "flate2",
@@ -979,6 +980,7 @@ dependencies = [
  "butterflow-state",
  "chrono",
  "clap",
+ "codemod-llrt-capabilities",
  "codemod-mcp",
  "codemod-sandbox",
  "codemod-telemetry",
@@ -1052,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-llrt-capabilities"
-version = "1.0.12"
+version = "1.0.17"
 dependencies = [
  "llrt_modules",
 ]
