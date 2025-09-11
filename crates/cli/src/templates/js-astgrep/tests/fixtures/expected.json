@@ -1,0 +1,33 @@
+{
+  "userName": "john_doe",
+  "emailAddress": "john@example.com",
+  "phoneNumber": "+1234567890",
+  "homeAddress": {
+    "streetName": "123 Main St",
+    "cityName": "Springfield",
+    "zipCode": "12345",
+    "countryCode": "US"
+  },
+  "userPreferences": {
+    "themeColor": "dark",
+    "notificationSettings": {
+      "emailNotifications": true,
+      "pushNotifications": false,
+      "marketingEmails": false
+    },
+    "privacySettings": {
+      "profileVisibility": "public",
+      "dataSharingEnabled": false
+    }
+  },
+  "accountMetadata": {
+    "creationDate": "2023-01-15T10:30:00Z",
+    "lastLoginDate": "2024-01-20T14:45:00Z",
+    "subscriptionType": "premium",
+    "billingCycle": "monthly"
+  },
+  "alreadyCamelcase": {
+    "modernField": "this should not change",
+    "anotherField": "this is already correct"
+  }
+}

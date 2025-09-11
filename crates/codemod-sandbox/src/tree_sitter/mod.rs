@@ -158,6 +158,8 @@ pub enum SupportedLanguage {
     Php,
     Ruby,
     Elixir,
+    Json,
+    Yaml,
 }
 
 impl fmt::Display for SupportedLanguage {
@@ -180,6 +182,8 @@ impl fmt::Display for SupportedLanguage {
             SupportedLanguage::Php => "php",
             SupportedLanguage::Ruby => "ruby",
             SupportedLanguage::Elixir => "elixir",
+            SupportedLanguage::Json => "json",
+            SupportedLanguage::Yaml => "yaml",
         };
         write!(f, "{name}")
     }
@@ -222,6 +226,8 @@ impl FromStr for SupportedLanguage {
             "rb" => Ok(SupportedLanguage::Ruby),
             "elixir" => Ok(SupportedLanguage::Elixir),
             "ex" => Ok(SupportedLanguage::Elixir),
+            "json" => Ok(SupportedLanguage::Json),
+            "yaml" => Ok(SupportedLanguage::Yaml),
             _ => Err(format!("Unsupported language: {s}")),
         }
     }
