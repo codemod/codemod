@@ -3,124 +3,19 @@ use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::filesystem::FileSystem;
 use crate::sandbox::resolvers::ModuleResolver;
+use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_language::SupportLang;
 use llrt_modules::module_builder::ModuleBuilder;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
-use std::fmt;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-
-/// Statistics about the execution results
-#[derive(Debug, Default)]
-pub struct ExecutionStats {
-    pub files_modified: AtomicUsize,
-    pub files_unmodified: AtomicUsize,
-    pub files_with_errors: AtomicUsize,
-}
-
-impl ExecutionStats {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Total number of files processed
-    pub fn total_files(&self) -> usize {
-        self.files_modified.load(Ordering::Relaxed)
-            + self.files_unmodified.load(Ordering::Relaxed)
-            + self.files_with_errors.load(Ordering::Relaxed)
-    }
-
-    /// Returns true if any files were processed successfully (modified or unmodified)
-    pub fn has_successful_files(&self) -> bool {
-        self.files_modified.load(Ordering::Relaxed) > 0
-            || self.files_unmodified.load(Ordering::Relaxed) > 0
-    }
-
-    /// Returns true if any files had errors during processing
-    pub fn has_errors(&self) -> bool {
-        self.files_with_errors.load(Ordering::Relaxed) > 0
-    }
-
-    /// Returns the success rate as a percentage (0.0 to 1.0)
-    pub fn success_rate(&self) -> f64 {
-        let total = self.total_files();
-        if total == 0 {
-            0.0
-        } else {
-            (self.files_modified.load(Ordering::Relaxed)
-                + self.files_unmodified.load(Ordering::Relaxed)) as f64
-                / total as f64
-        }
-    }
-}
-
-impl fmt::Display for ExecutionStats {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Execution Summary: {} files processed ({} modified, {} unmodified, {} errors)",
-            self.total_files(),
-            self.files_modified.load(Ordering::Relaxed),
-            self.files_unmodified.load(Ordering::Relaxed),
-            self.files_with_errors.load(Ordering::Relaxed)
-        )
-    }
-}
 
 /// Result of executing a codemod on a single file
 #[derive(Debug, Clone)]
 pub enum ExecutionResult {
-    Modified,
+    Modified(String),
     Unmodified,
-    Error(String),
-}
-
-/// Output of executing a codemod on content (in-memory)
-#[derive(Debug, Clone)]
-pub struct ExecutionOutput {
-    /// The transformed content, if any
-    pub content: Option<String>,
-    /// Whether the content was modified from the original
-    pub modified: bool,
-    /// Error message if execution failed
-    pub error: Option<String>,
-}
-
-impl ExecutionOutput {
-    /// Create a successful output with transformed content
-    pub fn success(content: Option<String>, original_content: &str) -> Self {
-        let modified = match &content {
-            Some(new_content) => new_content != original_content,
-            None => false,
-        };
-
-        Self {
-            content,
-            modified,
-            error: None,
-        }
-    }
-
-    /// Create an error output
-    pub fn error(message: String) -> Self {
-        Self {
-            content: None,
-            modified: false,
-            error: Some(message),
-        }
-    }
-
-    /// Check if the execution was successful
-    pub fn is_success(&self) -> bool {
-        self.error.is_none()
-    }
-
-    /// Check if the execution failed
-    pub fn is_error(&self) -> bool {
-        self.error.is_some()
-    }
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -133,13 +28,11 @@ pub async fn execute_codemod_with_quickjs<F, R>(
     language: SupportLang,
     file_path: &Path,
     content: &str,
-) -> Result<ExecutionOutput, ExecutionError>
+) -> Result<ExecutionResult, ExecutionError>
 where
     F: FileSystem,
     R: ModuleResolver + 'static,
 {
-    use crate::utils::quickjs_utils::maybe_promise;
-
     let script_name = script_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -185,7 +78,7 @@ where
         })?;
 
     // Execute JavaScript code
-    let result: Result<Option<String>, ExecutionError> = async_with!(context => |ctx| {
+    async_with!(context => |ctx| {
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
@@ -271,9 +164,14 @@ where
                 })?;
 
             if result_obj.is_string() {
-                Ok(Some(result_obj.get::<String>().unwrap()))
+                let new_content = result_obj.get::<String>().unwrap();
+                if new_content == content {
+                    Ok(ExecutionResult::Unmodified)
+                } else {
+                    Ok(ExecutionResult::Modified(new_content))
+                }
             } else if result_obj.is_null() || result_obj.is_undefined() {
-                Ok(None)
+                Ok(ExecutionResult::Unmodified)
             } else {
                 Err(ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
@@ -284,29 +182,5 @@ where
         };
         execution.await
     })
-    .await;
-
-    // Convert the result to ExecutionOutput
-    match result {
-        Ok(new_content) => Ok(ExecutionOutput::success(new_content, content)),
-        Err(e) => {
-            // Format the error message for better readability
-            let error_msg = match &e {
-                ExecutionError::Runtime { source } => {
-                    match source {
-                        crate::sandbox::errors::RuntimeError::InitializationFailed { message } => {
-                            // Unescape newlines in JavaScript error messages
-                            message.replace("\\n", "\n")
-                        }
-                        crate::sandbox::errors::RuntimeError::ExecutionFailed { message } => {
-                            message.replace("\\n", "\n")
-                        }
-                        _ => e.to_string(),
-                    }
-                }
-                _ => e.to_string(),
-            };
-            Ok(ExecutionOutput::error(error_msg))
-        }
-    }
+    .await
 }

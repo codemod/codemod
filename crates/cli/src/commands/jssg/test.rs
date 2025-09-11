@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Args;
+use codemod_sandbox::sandbox::engine::ExecutionResult;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -140,11 +141,10 @@ pub async fn handler(args: &Command) -> Result<()> {
             )
             .await?;
 
-            if let Some(error) = execution_output.error {
-                Ok(TransformationResult::Error(error))
-            } else {
-                let content = execution_output.content.unwrap_or(input_code);
-                Ok(TransformationResult::Success(content))
+            match execution_output {
+                ExecutionResult::Modified(content) => Ok(TransformationResult::Success(content)),
+                // use input code as the output if the codemod was unmodified
+                ExecutionResult::Unmodified => Ok(TransformationResult::Success(input_code)),
             }
         })
             as Pin<
