@@ -127,6 +127,10 @@ const JS_APPLY_SCRIPT_FOR_RUBY: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.rb.ts");
 const JS_APPLY_SCRIPT_FOR_ELIXIR: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.ex.ts");
+const JS_APPLY_SCRIPT_FOR_JSON: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
+const JS_APPLY_SCRIPT_FOR_YAML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -168,6 +172,12 @@ const RUBY_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fix
 const ELIXIR_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.ex");
 const ELIXIR_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.ex");
+const JSON_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.json");
+const JSON_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.json");
+const YAML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.yaml");
+const YAML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.yaml");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -198,6 +208,10 @@ const ASTGREP_PATTERNS_FOR_RUBY: &str =
     include_str!("../templates/astgrep-yaml/rules/config.rb.yml");
 const ASTGREP_PATTERNS_FOR_ELIXIR: &str =
     include_str!("../templates/astgrep-yaml/rules/config.ex.yml");
+const ASTGREP_PATTERNS_FOR_JSON: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.json.yml");
+const ASTGREP_PATTERNS_FOR_YAML: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.yaml.yml");
 
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
@@ -448,6 +462,8 @@ fn select_language() -> Result<String> {
         "PHP",
         "Ruby",
         "Elixir",
+        "Json",
+        "Yaml",
         "Other",
     ];
 
@@ -469,6 +485,8 @@ fn select_language() -> Result<String> {
         "PHP" => "php",
         "Ruby" => "ruby",
         "Elixir" => "elixir",
+        "Json" => "json",
+        "Yaml" => "yaml",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -590,6 +608,8 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "php" => JS_APPLY_SCRIPT_FOR_PHP.to_string(),
         "ruby" => JS_APPLY_SCRIPT_FOR_RUBY.to_string(),
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
+        "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
+        "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -624,6 +644,8 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "php" => ASTGREP_PATTERNS_FOR_PHP,
         "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
         "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+        "json" => ASTGREP_PATTERNS_FOR_JSON,
+        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
         _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
     };
     fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -653,6 +675,18 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "rust" => JS_APPLY_SCRIPT_FOR_RUST,
         "go" => JS_APPLY_SCRIPT_FOR_GO,
         "java" => JS_APPLY_SCRIPT_FOR_JAVA,
+        "html" => JS_APPLY_SCRIPT_FOR_HTML,
+        "css" => JS_APPLY_SCRIPT_FOR_CSS,
+        "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN,
+        "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR,
+        "csharp" => JS_APPLY_SCRIPT_FOR_CSHARP,
+        "cpp" => JS_APPLY_SCRIPT_FOR_CPP,
+        "c" => JS_APPLY_SCRIPT_FOR_C,
+        "php" => JS_APPLY_SCRIPT_FOR_PHP,
+        "ruby" => JS_APPLY_SCRIPT_FOR_RUBY,
+        "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
+        "json" => JS_APPLY_SCRIPT_FOR_JSON,
+        "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
@@ -667,6 +701,18 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "rust" => ASTGREP_PATTERNS_FOR_RUST,
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
+        "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "css" => ASTGREP_PATTERNS_FOR_CSS,
+        "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
+        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
+        "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
+        "cpp" => ASTGREP_PATTERNS_FOR_CPP,
+        "c" => ASTGREP_PATTERNS_FOR_C,
+        "php" => ASTGREP_PATTERNS_FOR_PHP,
+        "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
+        "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+        "json" => ASTGREP_PATTERNS_FOR_JSON,
+        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
         _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
     };
     fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -844,6 +890,24 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected-angular.ts"),
             ANGULAR_TEST_EXPECTED,
+        )?;
+    } else if config.language == "json" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.json"),
+            JSON_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.json"),
+            JSON_TEST_EXPECTED,
+        )?;
+    } else if config.language == "yaml" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.yaml"),
+            YAML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.yaml"),
+            YAML_TEST_EXPECTED,
         )?;
     }
 
