@@ -33,6 +33,7 @@ llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features =
   "util",
   "zlib",
 ], optional = true }
+serde.workspace = true
 
 [features]
 native = [

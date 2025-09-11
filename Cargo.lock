@@ -1057,6 +1057,7 @@ name = "codemod-llrt-capabilities"
 version = "1.0.17"
 dependencies = [
  "llrt_modules",
+ "serde",
 ]
 
 [[package]]
@@ -1066,6 +1067,7 @@ dependencies = [
  "anyhow",
  "ast-grep-core",
  "ast-grep-language",
+ "codemod-llrt-capabilities",
  "codemod-sandbox",
  "rmcp",
  "serde",
@@ -7974,6 +7976,7 @@ name = "testing-utils"
 version = "1.0.18"
 dependencies = [
  "anyhow",
+ "codemod-llrt-capabilities",
  "libtest-mimic",
  "serde",
  "similar",

@@ -5,7 +5,7 @@ use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use ast_grep_language::SupportLang;
-use llrt_modules::module_builder::ModuleBuilder;
+use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{FromJs, IntoJs};
@@ -51,8 +51,9 @@ where
     })?;
 
     // Set up built-in modules
-    let module_builder = ModuleBuilder::default();
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) = module_builder.build();
+    let module_builder = LlrtModuleBuilder::build();
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
 
     // Add AstGrepModule
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");

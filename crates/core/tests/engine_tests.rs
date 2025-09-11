@@ -2557,6 +2557,7 @@ cat $STATE_OUTPUTS"#.to_string(),
                 env: HashMap::new(),
             },
         ],
+        capabilities: None
     }
 }
 
