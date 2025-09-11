@@ -1486,8 +1486,18 @@ impl Engine {
                 let capabilities = params
                     .clone()
                     .get("capabilities")
+<<<<<<< HEAD
                     .map(|v| vec![v.to_string()]);
 >>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
+=======
+                    .map(|v| v.to_string())
+                    .map(|s| s.split(",").map(|s| s.to_string()).collect::<Vec<_>>())
+                    .map(|v| {
+                        v.iter()
+                            .map(|v| LlrtSupportedModules::from_str(v).unwrap())
+                            .collect::<Vec<_>>()
+                    });
+>>>>>>> 1b780202 (fix: fix failure tests related to resolve conflicts)
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     js_ast_grep,
