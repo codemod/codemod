@@ -1,6 +1,7 @@
 pub mod config;
 pub mod engine;
 pub mod execution;
+pub(crate) mod execution_stats;
 pub mod file_ops;
 pub mod registry;
 pub mod utils;

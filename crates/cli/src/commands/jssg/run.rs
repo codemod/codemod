@@ -6,6 +6,7 @@ use anyhow::Result;
 use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_core::utils::generate_execution_id;
 use clap::Args;
+use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
@@ -123,36 +124,25 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             {
                 Ok(execution_output) => {
                     // Handle the execution output (write back if modified and not dry run)
-                    if let Some(ref new_content) = execution_output.content {
-                        if new_content != &content {
-                            if !config.dry_run {
-                                if let Err(e) = tokio::fs::write(&file_path, new_content).await {
-                                    error!(
-                                        "Failed to write modified file {}: {}",
-                                        file_path.display(),
-                                        e
-                                    );
-                                } else {
-                                    debug!("Modified file: {}", file_path.display());
-                                }
-                            } else if config.dry_run {
-                                debug!("Would modify file (dry run): {}", file_path.display());
+                    if let ExecutionResult::Modified(ref new_content) = execution_output {
+                        if !config.dry_run {
+                            if let Err(e) = tokio::fs::write(&file_path, new_content).await {
+                                error!(
+                                    "Failed to write modified file {}: {}",
+                                    file_path.display(),
+                                    e
+                                );
+                            } else {
+                                debug!("Modified file: {}", file_path.display());
                             }
+                        } else if config.dry_run {
+                            debug!("Would modify file (dry run): {}", file_path.display());
                         }
-                    }
-
-                    // Handle execution errors
-                    if let Some(ref error_msg) = execution_output.error {
-                        warn!(
-                            "Execution completed with error for {}: {}",
-                            file_path.display(),
-                            error_msg
-                        );
                     }
                 }
                 Err(e) => {
                     error!(
-                        "Failed to execute codemod on {}: {:?}",
+                        "Failed to execute codemod on {}:\n{:?}",
                         file_path.display(),
                         e
                     );

@@ -1,3 +1,4 @@
+use codemod_sandbox::sandbox::engine::ExecutionResult;
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -218,11 +219,11 @@ impl JssgTestHandler {
                 )
                 .await?;
 
-                if let Some(error) = execution_output.error {
-                    Ok(TransformationResult::Error(error))
-                } else {
-                    let content = execution_output.content.unwrap_or(input_code);
-                    Ok(TransformationResult::Success(content))
+                match execution_output {
+                    ExecutionResult::Modified(content) => {
+                        Ok(TransformationResult::Success(content))
+                    }
+                    ExecutionResult::Unmodified => Ok(TransformationResult::Success(input_code)),
                 }
             })
                 as Pin<

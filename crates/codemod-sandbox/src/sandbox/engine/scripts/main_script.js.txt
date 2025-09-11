@@ -4,7 +4,10 @@ import transform from "./{script_name}";
 export function executeCodemod() {{
     try {{
         const sgRoot = astGrep.parseFile(CODEMOD_LANGUAGE, CODEMOD_TARGET_FILE_PATH);
-        return transform(sgRoot);
+        if (typeof transform !== "function") {{
+            throw new Error("jssg codemod modules must export a function. " + typeof transform + " found.");
+        }}
+        return transform(sgRoot, {{ params: CODEMOD_PARAMS }});
     }} catch (e) {{
         console.error(e);
         return null;

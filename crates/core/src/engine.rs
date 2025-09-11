@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use crate::config::WorkflowRunConfig;
 use crate::execution::CodemodExecutionConfig;
+use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
+use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -36,8 +38,7 @@ use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use codemod_sandbox::{
     sandbox::{
-        engine::{execution_engine::execute_codemod_with_quickjs, ExecutionStats},
-        filesystem::RealFileSystem,
+        engine::execution_engine::execute_codemod_with_quickjs, filesystem::RealFileSystem,
         resolvers::OxcResolver,
     },
     utils::project_discovery::find_tsconfig,
@@ -1458,14 +1459,14 @@ impl Engine {
                     Ok(execution_output) => {
                         debug!("Successfully processed file: {}", file_path.display());
 
-                        // Handle the execution output (write back if modified and not dry run)
-                        if let Some(ref new_content) = execution_output.content {
-                            if new_content != &content {
+                        match execution_output {
+                            ExecutionResult::Modified(ref new_content) => {
                                 if config.dry_run {
-                                    debug!("Would modify file (dry run): {}", file_path.display());
                                     self.execution_stats
                                         .files_modified
                                         .fetch_add(1, Ordering::Relaxed);
+
+                                    debug!("Would modify file (dry run): {}", file_path.display());
                                 } else {
                                     // Use async file writing to avoid blocking the thread
                                     let write_result = runtime_handle.block_on(async {
@@ -1493,27 +1494,12 @@ impl Engine {
                                             .fetch_add(1, Ordering::Relaxed);
                                     }
                                 }
-                            } else {
+                            }
+                            ExecutionResult::Unmodified => {
                                 self.execution_stats
                                     .files_unmodified
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                        } else {
-                            self.execution_stats
-                                .files_unmodified
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-
-                        // Handle execution errors
-                        if let Some(ref error_msg) = execution_output.error {
-                            warn!(
-                                "Execution completed with error for {}: {}",
-                                file_path.display(),
-                                error_msg
-                            );
-                            self.execution_stats
-                                .files_with_errors
-                                .fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Err(e) => {
