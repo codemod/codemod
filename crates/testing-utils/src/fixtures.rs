@@ -111,9 +111,16 @@ impl TestSource {
                                 ),
                                 None => {
                                     // Expected file doesn't exist - create placeholder path for snapshot updates
-                                    let input_path = input_file.path.to_string_lossy().to_string();
-                                    let expected_path = input_path.replace("input", "expected");
-                                    ("".to_string(), Some(PathBuf::from(expected_path)))
+                                    let expected_path = match build_expected_path(&input_file.path)
+                                    {
+                                        Ok(path) => Some(path),
+                                        Err(e) => {
+                                            eprintln!("error contructing path: {}", e);
+                                            None
+                                        }
+                                    };
+
+                                    (String::new(), expected_path)
                                 }
                             };
 
@@ -392,4 +399,48 @@ fn collect_files_in_directory(
     }
 
     Ok(files)
+}
+
+fn build_expected_path(input_file_path: &PathBuf) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let file_stem = match input_file_path.file_stem().and_then(|s| s.to_str()) {
+        Some(stem) => stem,
+        None => return Err("Invalid file stem".into()),
+    };
+
+    let parent_dir = match input_file_path.parent() {
+        Some(dir) => dir,
+        None => return Err("No parent directory".into()),
+    };
+
+    let expected_path = match file_stem {
+        "input" => {
+            let extension = match input_file_path.extension().and_then(|ext| ext.to_str()) {
+                Some(ext) => ext,
+                None => return Err("No file extension".into()),
+            };
+
+            parent_dir.join(format!("expected.{}", extension))
+        }
+        _ => {
+            let file_name = match input_file_path.file_name().and_then(|name| name.to_str()) {
+                Some(name) => name,
+                None => return Err("Invalid file name".into()),
+            };
+
+            let expected_dir = if parent_dir.ends_with("input") {
+                parent_dir.with_file_name("expected")
+            } else {
+                PathBuf::from(parent_dir)
+            };
+
+            let expected_str = match expected_dir.to_str() {
+                Some(name) => name,
+                None => return Err("Invalid expected dir".into()),
+            };
+
+            PathBuf::from(expected_str).join(file_name)
+        }
+    };
+
+    Ok(expected_path)
 }
