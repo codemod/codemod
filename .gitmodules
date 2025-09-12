@@ -1,3 +1,6 @@
 [submodule "submodules/llrt"]
 	path = submodules/llrt
 	url = https://github.com/awslabs/llrt
+[submodule "submodules/rolldown"]
+	path = submodules/rolldown
+	url = git@github.com:rolldown/rolldown.git
