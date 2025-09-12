@@ -14,13 +14,14 @@ members = [
 ]
 resolver = "2"
 
-exclude = ["submodules/llrt/llrt_modules"]
+exclude = ["submodules/llrt/llrt_modules", "submodules/rolldown/crates/rolldown"]
 
 [workspace.package]
 authors = ["Codemod.com"]
 description = "A self-hostable workflow engine for code transformations"
 documentation = "https://docs.rs/butterflow"
-repository = "https://github.com/codemod-com/butterflow"
+repository = "https://github.com/codemod/codemod"
+homepage = "https://github.com/codemod/codemod"
 license = "Apache-2.0"
 rust-version = "1.76"
 version = "1.0.8"

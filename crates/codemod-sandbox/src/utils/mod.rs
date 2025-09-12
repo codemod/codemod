@@ -4,6 +4,3 @@ pub mod transpiler;
 
 #[cfg(feature = "wasm")]
 pub mod quickjs_wasm;
-
-#[cfg(feature = "native")]
-pub mod bundler;

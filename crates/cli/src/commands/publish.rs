@@ -1,10 +1,9 @@
+use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
-use codemod_sandbox::utils::bundler::{Bundler, BundlerConfig, RuntimeSystem};
-use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
@@ -131,7 +130,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .path
         .as_ref()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve package path: {}", e))?;
 
     info!("Publishing codemod from: {}", package_path.display());
 
@@ -161,7 +162,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     // Create package bundle with bundled JS files
     let bundle_path =
-        create_package_bundle(&package_path, &manifest, &js_files_to_bundle, args.dry_run)?;
+        create_package_bundle(&package_path, &manifest, &js_files_to_bundle, args.dry_run).await?;
 
     if args.dry_run {
         println!("✓ Package validation successful");
@@ -285,30 +286,28 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
 }
 
 /// Bundle a JavaScript file and return the bundled code
-fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
+async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
     let js_file_path = package_path.join(js_file);
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
-    let tsconfig_path = find_tsconfig(&js_file_path);
-
-    let config = BundlerConfig {
-        base_dir: package_path.to_path_buf(),
-        tsconfig_path,
-        runtime_system: RuntimeSystem::CommonJS,
+    let config = RolldownBundlerConfig {
+        entry_path: js_file_path.clone(),
+        base_dir: Some(package_path.to_path_buf()),
+        output_path: None, // Return code directly, don't write to file
         source_maps: false,
     };
 
-    let mut bundler =
-        Bundler::new(config).map_err(|e| anyhow!("Failed to create bundler: {}", e))?;
+    let bundler = RolldownBundler::new(config);
     let bundle_result = bundler
-        .bundle(&js_file_path.to_string_lossy())
+        .bundle()
+        .await
         .map_err(|e| anyhow!("Failed to bundle {js_file}:\n{e}"))?;
 
     info!(
-        "Successfully bundled {} ({} modules)",
+        "Successfully bundled {} ({} bytes)",
         js_file,
-        bundle_result.modules.len()
+        bundle_result.code.len()
     );
     Ok(bundle_result.code)
 }
@@ -376,7 +375,7 @@ fn validate_package_structure(
     Ok(js_files)
 }
 
-fn create_package_bundle(
+async fn create_package_bundle(
     package_path: &Path,
     manifest: &CodemodManifest,
     js_files_to_bundle: &[String],
@@ -394,7 +393,10 @@ fn create_package_bundle(
     // Bundle JS files first and prepare replacements
     let mut bundled_files = HashMap::new();
     for js_file in js_files_to_bundle {
-        bundled_files.insert(js_file.clone(), bundle_js_file(package_path, js_file)?);
+        bundled_files.insert(
+            js_file.clone(),
+            bundle_js_file(package_path, js_file).await?,
+        );
     }
 
     // Create tar.gz archive

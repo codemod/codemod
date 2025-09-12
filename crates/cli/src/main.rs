@@ -9,6 +9,7 @@ mod commands;
 mod dirty_git_check;
 mod engine;
 mod progress_bar;
+mod utils;
 mod workflow_runner;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
