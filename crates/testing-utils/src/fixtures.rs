@@ -401,7 +401,7 @@ fn collect_files_in_directory(
     Ok(files)
 }
 
-fn build_expected_path(input_file_path: &PathBuf) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn build_expected_path(input_file_path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let file_stem = match input_file_path.file_stem().and_then(|s| s.to_str()) {
         Some(stem) => stem,
         None => return Err("Invalid file stem".into()),
