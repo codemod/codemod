@@ -14,7 +14,9 @@ use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
-use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, ExecutionResult};
+use codemod_sandbox::sandbox::engine::{
+    extract_selector_with_quickjs, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
+};
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -40,10 +42,7 @@ use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use codemod_sandbox::{
-    sandbox::{
-        engine::execution_engine::execute_codemod_with_quickjs, filesystem::RealFileSystem,
-        resolvers::OxcResolver,
-    },
+    sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
 
@@ -1363,7 +1362,7 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
-                self.execute_js_ast_grep_step(node.id.clone(), js_ast_grep)
+                self.execute_js_ast_grep_step(node.id.clone(), js_ast_grep, Some(params.clone()))
                     .await
             }
             StepAction::Codemod(codemod) => {
@@ -1499,6 +1498,7 @@ impl Engine {
         &self,
         id: String,
         js_ast_grep: &UseJSAstGrep,
+        params: Option<HashMap<String, String>>,
     ) -> Result<()> {
         let js_file_path = self
             .workflow_run_config
@@ -1531,7 +1531,6 @@ impl Engine {
 
         let tsconfig_path = find_tsconfig(&script_base_dir);
 
-        let filesystem = Arc::new(RealFileSystem::new());
         let resolver = Arc::new(
             OxcResolver::new(script_base_dir.clone(), tsconfig_path)
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
@@ -1563,15 +1562,17 @@ impl Engine {
             })?
         };
 
-        let selector_config =
-            extract_selector_with_quickjs(&js_file_path, language, Arc::clone(&resolver))
-                .await
-                .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+        let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &js_file_path,
+            language,
+            resolver: Arc::clone(&resolver),
+        })
+        .await
+        .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
 
         // Capture variables for use in parallel threads
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();
-        let _filesystem_clone = filesystem.clone();
         let resolver_clone = resolver.clone();
         let id_clone = Arc::new(id);
         let progress_callback = self.workflow_run_config.progress_callback.clone();
@@ -1599,14 +1600,15 @@ impl Engine {
 
                 // Execute the async codemod using the captured runtime handle
                 let execution_result = runtime_handle.block_on(async {
-                    execute_codemod_with_quickjs(
-                        &js_file_path_clone,
-                        resolver_clone.clone(),
+                    execute_codemod_with_quickjs(JssgExecutionOptions {
+                        script_path: &js_file_path_clone,
+                        resolver: resolver_clone.clone(),
                         language,
                         file_path,
-                        &content,
-                        selector_config.clone(),
-                    )
+                        content: &content,
+                        selector_config: selector_config.clone(),
+                        params: params.clone(),
+                    })
                     .await
                 });
 

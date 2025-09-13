@@ -51,7 +51,7 @@ filter_unconventional = true
 # process each line of a commit as an individual commit
 split_commits = false
 # regex for matching the git tags
-tag_pattern = "codemod-next@[0-9].*"
+tag_pattern = "codemod-cli@[0-9].*"
 # regex for preprocessing the commit messages
 commit_preprocessors = [
   # Replace issue numbers
@@ -88,7 +88,7 @@ sort_commits = "oldest"
 limit_commits = 50
 
 [bump]
-initial_tag = "codemod-next@0.1.0"
+initial_tag = "codemod-cli@1.0.0"
 
 [remote.github]
 owner = "codemod-com"

@@ -80,12 +80,12 @@ The init command will prompt you with several questions to customize your projec
 1. **Project Type Selection:**
    ```
    ? What type of workflow would you like to create?
-   ❯ AST-grep with JavaScript/TypeScript rules
-     AST-grep with YAML rules  
+   ❯ ast-grep with JavaScript/TypeScript rules
+     ast-grep with YAML rules  
      Blank workflow (custom commands)
    ```
 
-2. **Language Selection** (if AST-grep is chosen):
+2. **Language Selection** (if ast-grep is chosen):
    ```
    ? Which language would you like to target?
    ❯ JavaScript/TypeScript
@@ -108,7 +108,7 @@ The init command will prompt you with several questions to customize your projec
 
 Depending on your selections, the init command creates different project templates:
 
-#### AST-grep JavaScript Project
+#### ast-grep JavaScript Project
 ```
 my-codemod/
 ├── workflow.yaml           # Main workflow definition
@@ -123,7 +123,7 @@ my-codemod/
 └── README.md              # Project documentation
 ```
 
-#### AST-grep YAML Project
+#### ast-grep YAML Project
 ```
 my-codemod/
 ├── workflow.yaml          # Main workflow definition
@@ -149,9 +149,9 @@ my-workflow/
 **Example Usage:**
 
 ```bash
-# Create a new AST-grep JavaScript project
+# Create a new ast-grep JavaScript project
 $ codemod init my-js-codemod
-? What type of workflow would you like to create? AST-grep with JavaScript/TypeScript rules
+? What type of workflow would you like to create? ast-grep with JavaScript/TypeScript rules
 ? Which language would you like to target? JavaScript/TypeScript
 ? Project name: my-js-codemod
 ? Description: Migrate from React class components to hooks
@@ -642,9 +642,9 @@ For detailed help on any command, use:
 codemod <command> --help
 ```
 
-## JSSG (JavaScript AST-grep)
+## jssg (JavaScript ast-grep)
 
-JSSG is a JavaScript/TypeScript codemod runner and testing framework inspired by [ast-grep](https://ast-grep.github.io/). It enables you to write codemods in JavaScript and apply them to codebases with powerful CLI and test automation support.
+jssg is a JavaScript/TypeScript codemod runner and testing framework inspired by [ast-grep](https://ast-grep.github.io/). It enables you to write codemods in JavaScript and apply them to codebases with powerful CLI and test automation support.
 
 ### Running a Codemod
 
@@ -672,11 +672,11 @@ codemod jssg run my-codemod.js ./src --language javascript --dry-run
 
 ---
 
-# JSSG Testing Framework Usage Guide
+# jssg Testing Framework Usage Guide
 
 ## Overview
 
-The JSSG Testing Framework provides comprehensive testing capabilities for JavaScript codemods with before/after fixture files. It integrates with the existing ExecutionEngine and provides a familiar test runner interface.
+The jssg Testing Framework provides comprehensive testing capabilities for JavaScript codemods with before/after fixture files. It integrates with the existing ExecutionEngine and provides a familiar test runner interface.
 
 ## Quick Start
 
@@ -704,7 +704,7 @@ tests/
 ### 2. Running Tests
 
 ```bash
-# Basic test run
+# Basic test run (language can be specified in config file)
 codemod jssg test my-codemod.js --language javascript
 
 # With custom test directory
@@ -718,13 +718,18 @@ codemod jssg test my-codemod.js --language javascript --verbose
 
 # Watch mode (re-run tests on file changes)
 codemod jssg test my-codemod.js --language javascript --watch
+
+# Using configuration files (no CLI args needed)
+codemod jssg test my-codemod.js
 ```
 
 ## CLI Options
 
 ### Required Arguments
 - `codemod_file`: Path to the codemod JavaScript file
-- `--language`: Target language (javascript, typescript, etc.)
+
+### Optional Arguments
+- `--language`: Target language (javascript, typescript, etc.) - can be specified in config file
 
 ### Test Discovery
 - `--test-directory`: Test directory (default: "tests")
@@ -944,3 +949,222 @@ codemod jssg test my-codemod.js --language javascript --verbose --sequential
 ```
 
 This framework provides a robust foundation for testing JavaScript codemods with familiar tooling and comprehensive features.
+
+## Configuration System
+
+jssg supports a hierarchical configuration system using configuration files, allowing you to specify test settings globally and override them per test case. Multiple file formats and aliases are supported.
+
+### Configuration Files
+
+#### Supported Formats and Names
+
+Configuration files are searched in the following order of precedence (first found wins):
+
+1. `test.config.json` - JSON format
+2. `test.config.yaml` - YAML format  
+3. `codemod-test.config.json` - JSON format with codemod prefix
+4. `codemod-test.config.yaml` - YAML format with codemod prefix
+
+#### Global Configuration
+
+Create a configuration file in your project root to set default configurations:
+
+**JSON format (`test.config.json`):**
+```json
+{
+  "language": "typescript",
+  "timeout": 30,
+  "ignore_whitespace": false
+}
+```
+
+**YAML format (`test.config.yaml`):**
+```yaml
+language: typescript
+timeout: 30
+ignore_whitespace: false
+```
+
+#### Test Case Configuration
+
+Create configuration files in individual test case directories to override global settings:
+
+```
+tests/
+├── test.config.yaml          # Global config (YAML)
+├── simple-transform/
+│   ├── input.js
+│   ├── expected.js
+│   └── test.config.json      # Test-specific config (JSON)
+└── complex-case/
+    ├── input.ts
+    ├── expected.ts
+    └── codemod-test.config.yaml  # Different test-specific config (YAML with prefix)
+```
+
+**Example test-specific configs:**
+
+JSON format (`test.config.json`):
+```json
+{
+  "language": "javascript",
+  "expect_errors": ["syntax-error"],
+  "timeout": 60
+}
+```
+
+YAML format (`test.config.yaml`):
+```yaml
+language: javascript
+expect_errors:
+  - syntax-error
+timeout: 60
+```
+
+### Configuration Schema
+
+Configuration options that can be specified in configuration files:
+
+**Per-Test Configurable Options:**
+| Option | Type | Description |
+|--------|------|-------------|
+| `language` | string | Target language (javascript, typescript, etc.) |
+| `timeout` | number | Test timeout in seconds |
+| `ignore_whitespace` | boolean | Ignore whitespace differences in comparisons |
+| `expect_errors` | string[] | Test patterns expected to produce errors |
+
+**Global-Only Options (CLI arguments only):**
+These options control test execution behavior and cannot be configured per-test:
+- `test_directory` - Directory containing test fixtures
+- `filter` - Run only tests matching this pattern  
+- `update_snapshots` - Update expected outputs with actual results
+- `verbose` - Show detailed output for each test
+- `sequential` - Run tests sequentially instead of in parallel
+- `max_threads` - Maximum number of concurrent test threads
+- `fail_fast` - Stop on first test failure
+- `watch` - Watch for file changes and re-run tests
+- `reporter` - Output format (console, json, terse)
+- `context_lines` - Number of context lines in diff output
+
+### Configuration Precedence
+
+Configuration is resolved differently for per-test and global options:
+
+**For Per-Test Options** (language, timeout, ignore_whitespace, expect_errors):
+1. Default values
+2. Root `test.config.json` (walking up directory tree)
+3. Parent directory configs (inheriting from root to test case)
+4. Test case `test.config.json` (highest priority for per-test options)
+5. CLI arguments (override everything)
+
+**For Global Options** (all execution behavior settings):
+- Only CLI arguments are considered - config files are ignored for these options
+
+### Usage Examples
+
+#### Basic Global Configuration
+
+**Using JSON:**
+```bash
+# Create global config (only per-test options)
+cat > test.config.json << EOF
+{
+  "language": "typescript",
+  "timeout": 60
+}
+EOF
+```
+
+**Using YAML:**
+```bash
+# Create global config (only per-test options)
+cat > test.config.yaml << EOF
+language: typescript
+timeout: 60
+EOF
+```
+
+**Running tests:**
+```bash
+# Run tests (use CLI for global execution options)
+codemod jssg test my-codemod.js --reporter json --max-threads 2
+```
+
+#### Per-Test-Case Language Support
+
+```bash
+# Global config (YAML)
+cat > test.config.yaml << EOF
+language: javascript
+EOF
+
+# TypeScript-specific test (JSON)
+mkdir tests/typescript-test
+cat > tests/typescript-test/test.config.json << EOF
+{
+  "language": "typescript"
+}
+EOF
+
+# Another test with codemod prefix (YAML)
+mkdir tests/special-test  
+cat > tests/special-test/codemod-test.config.yaml << EOF
+language: typescript
+timeout: 120
+expect_errors:
+  - compile-error
+EOF
+
+# Mixed language and format testing works automatically
+codemod jssg test my-codemod.js
+```
+
+#### Development Workflow
+
+```bash
+# Set up development-friendly defaults (per-test options only)
+cat > test.config.json << EOF
+{
+  "language": "typescript",
+  "timeout": 120
+}
+EOF
+
+# Use CLI args for execution behavior
+# Development
+codemod jssg test my-codemod.js --verbose --fail-fast --context-lines 5
+
+# CI
+codemod jssg test my-codemod.js --reporter json --max-threads 1 --sequential
+```
+
+### Configuration Discovery
+
+The system automatically discovers per-test configuration files by:
+
+1. Starting from the current working directory
+2. Looking for configuration files in the supported formats and names
+3. Walking up the directory tree to find parent configs
+4. For each test case, checking for test-specific configuration files
+5. Merging configurations with proper inheritance (child overrides parent)
+6. Applying CLI argument overrides (for both global and per-test options)
+
+**Configuration File Discovery Order:**
+At each directory level, the system checks for files in this order:
+1. `test.config.json`
+2. `test.config.yaml`
+3. `codemod-test.config.json`
+4. `codemod-test.config.yaml`
+
+The first file found is used for that directory level.
+
+This allows for flexible project organization where you can have:
+- Repository-wide defaults in the root configuration file
+- Module-specific configs in subdirectories (any supported format)
+- Test-case specific overrides in individual test folders (any supported format)
+
+**Important:** Only per-test options (language, timeout, ignore_whitespace, expect_errors) are inherited from config files. Global execution options must be specified via CLI arguments.
+
+**Current Limitations:**
+- Per-test timeout and ignore_whitespace settings are applied during codemod execution but not yet integrated with the test runner's timeout mechanism
+- Per-test expect_errors patterns work correctly for individual test cases

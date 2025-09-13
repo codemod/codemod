@@ -15,17 +15,22 @@ use std::sync::Arc;
 
 use crate::ast_grep::serde::JsValue;
 
+pub struct SelectorEngineOptions<'a, R> {
+    pub script_path: &'a Path,
+    pub language: SupportLang,
+    pub resolver: Arc<R>,
+}
+
 /// Extract a selector from a codemod module using QuickJS
 /// This executes the getSelector function and converts the result to RuleConfig
-pub async fn extract_selector_with_quickjs<R>(
-    script_path: &Path,
-    language: SupportLang,
-    resolver: Arc<R>,
+pub async fn extract_selector_with_quickjs<'a, R>(
+    options: SelectorEngineOptions<'a, R>,
 ) -> Result<Option<Box<RuleConfig<SupportLang>>>, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
-    let script_name = script_path
+    let script_name = options
+        .script_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("main.js");
@@ -53,7 +58,7 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
-    let fs_resolver = QuickJSResolver::new(Arc::clone(&resolver));
+    let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
     // Combine resolvers and loaders
@@ -100,7 +105,7 @@ where
                 })?;
 
             ctx.globals()
-                .set("CODEMOD_LANGUAGE", language.to_string())
+                .set("CODEMOD_LANGUAGE", options.language.to_string())
                 .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: format!("Failed to set language global variable: {e}"),

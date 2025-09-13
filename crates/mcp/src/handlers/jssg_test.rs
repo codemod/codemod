@@ -1,4 +1,4 @@
-use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -206,15 +206,16 @@ impl JssgTestHandler {
             let input_path = input_path.to_path_buf();
 
             Box::pin(async move {
-                let execution_output = execute_codemod_with_quickjs(
-                    &codemod_path,
+                let options = JssgExecutionOptions {
+                    script_path: &codemod_path,
                     resolver,
                     language,
-                    &input_path,
-                    &input_code,
-                    None,
-                )
-                .await?;
+                    file_path: &input_path,
+                    content: &input_code,
+                    selector_config: None,
+                    params: None,
+                };
+                let execution_output = execute_codemod_with_quickjs(options).await?;
 
                 match execution_output {
                     ExecutionResult::Modified(content) => {
