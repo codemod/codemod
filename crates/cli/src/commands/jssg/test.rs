@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use ast_grep_language::SupportLang;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -75,6 +76,18 @@ pub struct Command {
     /// Test patterns that are expected to produce errors (comma-separated)
     #[arg(long)]
     pub expect_errors: Option<String>,
+
+    /// Allow fs access
+    #[arg(long)]
+    pub allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    pub allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    pub allow_child_process: bool,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
@@ -119,47 +132,77 @@ pub async fn handler(args: &Command) -> Result<()> {
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
+    // Create and run test runner
+    let mut capabilities = Vec::new();
+    if args.allow_fs {
+        capabilities.push(LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        capabilities.push(LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        capabilities.push(LlrtSupportedModules::ChildProcess);
+    }
+    let capabilities = if capabilities.is_empty() {
+        None
+    } else {
+        Some(capabilities.into_iter().collect())
+    };
+
     let tsconfig_path = find_tsconfig(&script_base_dir);
     let resolver = Arc::new(OxcResolver::new(script_base_dir, tsconfig_path)?);
 
     let codemod_path_clone = codemod_path.to_path_buf();
-    let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
-        let codemod_path = codemod_path_clone.clone();
-        let _filesystem = filesystem.clone();
-        let resolver = resolver.clone();
-        let input_code = input_code.to_string();
-        let input_path = input_path.to_path_buf();
+    let execution_fn = Box::new(
+        move |input_code: &str,
+              input_path: &Path,
+              capabilities: Option<Vec<LlrtSupportedModules>>| {
+            let codemod_path = codemod_path_clone.clone();
+            let _filesystem = filesystem.clone();
+            let resolver = resolver.clone();
+            let input_code = input_code.to_string();
+            let input_path = input_path.to_path_buf();
 
-        Box::pin(async move {
-            let execution_output = execute_codemod_with_quickjs(
-                &codemod_path,
-                resolver,
-                language_enum,
-                &input_path,
-                &input_code,
-                None,
-            )
-            .await?;
+            Box::pin(async move {
+                let execution_output = execute_codemod_with_quickjs(
+                    &codemod_path,
+                    resolver,
+                    language_enum,
+                    &input_path,
+                    &input_code,
+                    None,
+                    capabilities.clone(),
+                )
+                .await?;
 
-            match execution_output {
-                ExecutionResult::Modified(content) => Ok(TransformationResult::Success(content)),
-                // use input code as the output if the codemod was unmodified
-                ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                    Ok(TransformationResult::Success(input_code))
+                match execution_output {
+                    ExecutionResult::Modified(content) => {
+                        Ok(TransformationResult::Success(content))
+                    }
+                    // use input code as the output if the codemod was unmodified
+                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                        Ok(TransformationResult::Success(input_code))
+                    }
                 }
-            }
-        })
-            as Pin<
-                Box<dyn std::future::Future<Output = Result<TransformationResult, anyhow::Error>>>,
-            >
-    });
+            })
+                as Pin<
+                    Box<
+                        dyn std::future::Future<
+                            Output = Result<TransformationResult, anyhow::Error>,
+                        >,
+                    >,
+                >
+        },
+    );
 
     let test_source = TestSource::Directory(test_directory);
 
     let extensions = get_extensions_for_language(language_enum);
 
     let mut runner = TestRunner::new(options, test_source);
-    let summary = runner.run_tests(&extensions, execution_fn).await?;
+    let summary = runner
+        .run_tests(&extensions, execution_fn, capabilities.clone())
+        .await?;
 
     if !summary.is_success() {
         std::process::exit(1);
