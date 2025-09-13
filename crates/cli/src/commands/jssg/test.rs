@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,14 +9,15 @@ use ast_grep_language::SupportLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
-        filesystem::RealFileSystem,
         resolvers::OxcResolver,
     },
     utils::project_discovery::find_tsconfig,
 };
-use testing_utils::{ReporterType, TestOptions, TestRunner, TestSource, TransformationResult};
+use testing_utils::{TestOptions, TestRunner, TestSource, TransformationResult};
 
-#[derive(Args, Debug)]
+use super::config::{ResolvedTestConfig, TestConfig};
+
+#[derive(Args, Debug, Clone)]
 pub struct Command {
     /// Path to the codemod file to test
     pub codemod_file: String,
@@ -24,9 +25,9 @@ pub struct Command {
     /// Test directory containing test fixtures (default: tests)
     pub test_directory: Option<String>,
 
-    /// Language to process (required)
+    /// Language to process (can be specified in config file)
     #[arg(long, short)]
-    pub language: String,
+    pub language: Option<String>,
 
     /// Run only tests matching the pattern
     #[arg(long)]
@@ -79,41 +80,41 @@ pub struct Command {
 
 pub async fn handler(args: &Command) -> Result<()> {
     let codemod_path = Path::new(&args.codemod_file);
-    let test_directory = PathBuf::from(args.test_directory.as_deref().unwrap_or("tests"));
 
     if !codemod_path.exists() {
         anyhow::bail!("Codemod file '{}' does not exist", codemod_path.display());
     }
 
-    let language_enum: SupportLang = args.language.parse()?;
+    let current_dir = std::env::current_dir()?;
+    let base_config = TestConfig::load_hierarchical(&current_dir, None)?;
 
-    let reporter_type: ReporterType = args
-        .reporter
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid reporter type: {}", e))?;
+    let test_directory = PathBuf::from(args.test_directory.as_deref().unwrap_or("tests"));
 
-    let expect_errors = if let Some(patterns) = &args.expect_errors {
-        patterns.split(',').map(|s| s.trim().to_string()).collect()
-    } else {
-        Vec::new()
-    };
+    let global_config = ResolvedTestConfig::resolve(args, &base_config, None)?;
+
+    let default_language_str = global_config.language.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Language must be specified either via --language argument or in a config file"
+        )
+    })?;
+
+    let default_language_enum: SupportLang = default_language_str.parse()?;
 
     let options = TestOptions {
-        filter: args.filter.clone(),
-        update_snapshots: args.update_snapshots,
-        verbose: args.verbose,
-        parallel: !args.sequential,
-        max_threads: args.max_threads,
-        fail_fast: args.fail_fast,
-        watch: args.watch,
-        reporter: reporter_type,
-        timeout: std::time::Duration::from_secs(args.timeout),
-        ignore_whitespace: args.ignore_whitespace,
-        context_lines: args.context_lines,
-        expect_errors,
+        filter: global_config.filter,
+        update_snapshots: global_config.update_snapshots,
+        verbose: global_config.verbose,
+        parallel: !global_config.sequential,
+        max_threads: global_config.max_threads,
+        fail_fast: global_config.fail_fast,
+        watch: global_config.watch,
+        reporter: global_config.reporter,
+        timeout: std::time::Duration::from_secs(global_config.timeout),
+        ignore_whitespace: global_config.ignore_whitespace,
+        context_lines: global_config.context_lines,
+        expect_errors: global_config.expect_errors,
     };
 
-    let filesystem = Arc::new(RealFileSystem::new());
     let script_base_dir = codemod_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -123,27 +124,46 @@ pub async fn handler(args: &Command) -> Result<()> {
     let resolver = Arc::new(OxcResolver::new(script_base_dir, tsconfig_path)?);
 
     let codemod_path_clone = codemod_path.to_path_buf();
+    let base_config_clone = base_config.clone();
+    let args_clone = args.clone();
+    let current_dir_clone = current_dir.clone();
+
     let execution_fn = Box::new(move |input_code: &str, input_path: &Path| {
         let codemod_path = codemod_path_clone.clone();
-        let _filesystem = filesystem.clone();
         let resolver = resolver.clone();
         let input_code = input_code.to_string();
         let input_path = input_path.to_path_buf();
+        let base_config = base_config_clone.clone();
+        let args = args_clone.clone();
+        let current_dir = current_dir_clone.clone();
 
         Box::pin(async move {
-            let execution_output = execute_codemod_with_quickjs(
-                &codemod_path,
+            let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
+            let per_test_config =
+                TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
+
+            let test_config =
+                ResolvedTestConfig::resolve(&args, &base_config, Some(&per_test_config))?;
+
+            let language_str = test_config
+                .language
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
+            let language_enum: SupportLang = language_str.parse()?;
+
+            let options = JssgExecutionOptions {
+                script_path: &codemod_path,
                 resolver,
-                language_enum,
-                &input_path,
-                &input_code,
-                None,
-            )
-            .await?;
+                language: language_enum,
+                file_path: &input_path,
+                content: &input_code,
+                selector_config: None,
+                params: None,
+            };
+            let execution_output = execute_codemod_with_quickjs(options).await?;
 
             match execution_output {
                 ExecutionResult::Modified(content) => Ok(TransformationResult::Success(content)),
-                // use input code as the output if the codemod was unmodified
                 ExecutionResult::Unmodified | ExecutionResult::Skipped => {
                     Ok(TransformationResult::Success(input_code))
                 }
@@ -156,7 +176,7 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let test_source = TestSource::Directory(test_directory);
 
-    let extensions = get_extensions_for_language(language_enum);
+    let extensions = get_extensions_for_language(default_language_enum);
 
     let mut runner = TestRunner::new(options, test_source);
     let summary = runner.run_tests(&extensions, execution_fn).await?;

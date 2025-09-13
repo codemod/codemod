@@ -24,20 +24,27 @@ pub enum ExecutionResult {
     Skipped,
 }
 
+/// Options for executing a codemod on a single file
+pub struct JssgExecutionOptions<'a, R> {
+    pub script_path: &'a Path,
+    pub resolver: Arc<R>,
+    pub language: SupportLang,
+    pub file_path: &'a Path,
+    pub content: &'a str,
+    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub params: Option<HashMap<String, String>>,
+}
+
 /// Execute a codemod on string content using QuickJS
 /// This is the core execution logic that doesn't touch the filesystem
-pub async fn execute_codemod_with_quickjs<R>(
-    script_path: &Path,
-    resolver: Arc<R>,
-    language: SupportLang,
-    file_path: &Path,
-    content: &str,
-    selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+pub async fn execute_codemod_with_quickjs<'a, R>(
+    options: JssgExecutionOptions<'a, R>,
 ) -> Result<ExecutionResult, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
-    let script_name = script_path
+    let script_name = options
+        .script_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("main.js");
@@ -48,7 +55,7 @@ where
     );
 
     // TODO: Add params to the codemod
-    let params: HashMap<String, String> = HashMap::new();
+    let params: HashMap<String, String> = options.params.unwrap_or_default();
 
     // Initialize QuickJS runtime and context
     let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
@@ -57,9 +64,9 @@ where
         },
     })?;
 
-    let ast_grep = AstGrep::new(content, language);
+    let ast_grep = AstGrep::new(options.content, options.language);
 
-    if let Some(selector_config) = &selector_config {
+    if let Some(selector_config) = &options.selector_config {
         let matches: Vec<_> = ast_grep
             .root()
             .dfs()
@@ -79,7 +86,7 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
-    let fs_resolver = QuickJSResolver::new(Arc::clone(&resolver));
+    let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
     // Combine resolvers and loaders
@@ -127,7 +134,7 @@ where
                 })?;
 
             // Set the language for the codemod
-            let language_str = language.to_string();
+            let language_str = options.language.to_string();
             ctx.globals()
                     .set("CODEMOD_LANGUAGE", language_str)
                     .map_err(|e| ExecutionError::Runtime {
@@ -159,7 +166,7 @@ where
                 })?;
 
             let parsed_content =
-                SgRootRjs::try_new_from_ast_grep(ast_grep, Some(file_path.to_string_lossy().to_string())).map_err(|e| ExecutionError::Runtime {
+                SgRootRjs::try_new_from_ast_grep(ast_grep, Some(options.file_path.to_string_lossy().to_string())).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
                     },
@@ -193,7 +200,7 @@ where
 
             if result_obj.is_string() {
                 let new_content = result_obj.get::<String>().unwrap();
-                if new_content == content {
+                if new_content == options.content {
                     Ok(ExecutionResult::Unmodified)
                 } else {
                     Ok(ExecutionResult::Modified(new_content))
@@ -275,15 +282,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            &codemod_path,
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Ok(ExecutionResult::Modified(new_content)) => {
@@ -312,15 +321,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            &codemod_path,
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -350,15 +361,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            &codemod_path,
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -388,15 +401,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            &codemod_path,
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -429,15 +444,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            &codemod_path,
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Err(ExecutionError::Runtime { source }) => {
@@ -464,15 +481,17 @@ function example() {
         "#
         .trim();
 
-        let result = execute_codemod_with_quickjs(
-            nonexistent_path,
+        let options = JssgExecutionOptions {
+            script_path: nonexistent_path,
             resolver,
-            SupportLang::JavaScript,
+            language: SupportLang::JavaScript,
             file_path,
             content,
-            None,
-        )
-        .await;
+            selector_config: None,
+            params: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
 
         // Should fail due to file not found
         assert!(result.is_err());

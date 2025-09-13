@@ -1900,6 +1900,7 @@ function helper() {
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -1978,6 +1979,7 @@ interface ApiResponse {
                 dry_run: Some(false),
                 language: Some("typescript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -2034,6 +2036,7 @@ var count = 0;
                 dry_run: Some(true), // Enable dry run
                 language: Some("javascript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -2070,6 +2073,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 dry_run: Some(false),
                 language: None,
             },
+            None,
         )
         .await;
 
@@ -2134,6 +2138,7 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -2156,6 +2161,7 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -2208,6 +2214,7 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
         )
         .await;
 
@@ -2255,6 +2262,7 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("invalid-language".to_string()), // Invalid language
             },
+            None,
         )
         .await;
 

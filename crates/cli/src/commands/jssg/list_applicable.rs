@@ -3,7 +3,7 @@ use ast_grep_config::CombinedScan;
 use ast_grep_language::SupportLang;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::extract_selector_with_quickjs;
+use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
@@ -68,11 +68,11 @@ pub async fn handler(args: &Command) -> Result<()> {
         languages: Some(vec![args.language.clone()]),
     };
 
-    let selector_config = extract_selector_with_quickjs(
-        js_file_path,
-        args.language.parse().unwrap(),
-        resolver.clone(),
-    )
+    let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+        script_path: js_file_path,
+        language: args.language.parse().unwrap(),
+        resolver: resolver.clone(),
+    })
     .await?;
     let combined_scan: Option<Arc<CombinedScan<SupportLang>>> = selector_config
         .as_ref()

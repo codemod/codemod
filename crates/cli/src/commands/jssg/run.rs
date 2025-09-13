@@ -5,8 +5,10 @@ use crate::CLI_VERSION;
 use anyhow::Result;
 use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_core::utils::generate_execution_id;
+use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
@@ -44,6 +46,10 @@ pub struct Command {
     /// Allow dirty git status
     #[arg(long)]
     pub allow_dirty: bool,
+
+    /// Parameters to pass to the codemod
+    #[arg(long)]
+    pub params: Option<Vec<String>>,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -88,7 +94,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let started = Instant::now();
 
-    let _ = config.execute(|file_path, _config| {
+    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
+        .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+
+    let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
             return;
@@ -108,20 +117,22 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
             };
 
-            // Execute the codemod on this file
-            match execute_codemod_with_quickjs(
-                js_file_path,
-                resolver.clone(),
-                args.language
+            let options = JssgExecutionOptions {
+                script_path: js_file_path,
+                resolver: resolver.clone(),
+                language: args
+                    .language
                     .clone()
                     .parse()
                     .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
                 file_path,
-                &content,
-                None,
-            )
-            .await
-            {
+                content: &content,
+                selector_config: None,
+                params: Some(params.clone()),
+            };
+
+            // Execute the codemod on this file
+            match execute_codemod_with_quickjs(options).await {
                 Ok(execution_output) => {
                     // Handle the execution output (write back if modified and not dry run)
                     if let ExecutionResult::Modified(ref new_content) = execution_output {
