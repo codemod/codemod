@@ -47,7 +47,7 @@ console = "0.15"
 rolldown = { path = "../../submodules/rolldown/crates/rolldown" }
 
 # OIDC and HTTP dependencies
-reqwest = { version = "0.11", features = ["json", "rustls-tls", "multipart"] }
+reqwest = { workspace = true, features = ["stream", "multipart"] }
 oauth2 = "4.4"
 url = "2.4"
 base64 = "0.22"

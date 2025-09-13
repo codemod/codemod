@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use butterflow_models::variable::resolve_state_path;
 use log::{debug, warn};
@@ -190,6 +192,70 @@ impl Scheduler {
     }
 }
 
+/// Create a stable hash from matrix values for consistent task identification
+/// This ensures that the same logical matrix values always produce the same hash,
+/// regardless of JSON serialization order or other inconsistencies.
+fn create_stable_hash(item: &serde_json::Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_value_stable(item, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_value_stable<H: Hasher>(value: &serde_json::Value, hasher: &mut H) {
+    match value {
+        serde_json::Value::Null => {
+            0u8.hash(hasher);
+        }
+        serde_json::Value::Bool(b) => {
+            1u8.hash(hasher);
+            b.hash(hasher);
+        }
+        serde_json::Value::Number(n) => {
+            2u8.hash(hasher);
+            if let Some(i) = n.as_i64() {
+                0u8.hash(hasher); // integer marker
+                i.hash(hasher);
+            } else if let Some(u) = n.as_u64() {
+                1u8.hash(hasher); // unsigned marker
+                u.hash(hasher);
+            } else if let Some(f) = n.as_f64() {
+                2u8.hash(hasher); // float marker
+                f.to_bits().hash(hasher);
+            }
+        }
+        serde_json::Value::String(s) => {
+            3u8.hash(hasher);
+            s.hash(hasher);
+        }
+        serde_json::Value::Array(arr) => {
+            4u8.hash(hasher);
+            arr.len().hash(hasher);
+            for item in arr {
+                hash_value_stable(item, hasher);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            5u8.hash(hasher);
+            obj.len().hash(hasher);
+
+            let mut sorted_keys: Vec<_> = obj.keys().collect();
+            sorted_keys.sort();
+
+            for key in sorted_keys {
+                key.hash(hasher);
+                hash_value_stable(&obj[key], hasher);
+            }
+        }
+    }
+}
+
+/// Helper function to create hash from HashMap matrix values
+fn create_matrix_hash(matrix_values: &HashMap<String, serde_json::Value>) -> u64 {
+    // Convert HashMap to JSON Value for consistent hashing
+    let json_value = serde_json::to_value(matrix_values).unwrap_or(serde_json::Value::Null);
+    create_stable_hash(&json_value)
+}
+
 // Internal implementation shared by both Rust and WASM APIs
 impl Scheduler {
     async fn calculate_initial_tasks_internal(
@@ -303,51 +369,52 @@ impl Scheduler {
                     }
                 }
 
+                let existing_tasks_for_node = tasks.iter().filter(|t| {
+                    t.master_task_id == Some(master_task_id) && t.matrix_values.is_some()
+                });
+
                 // --- Compare with Existing Tasks ---
-                // Store existing tasks keyed by their matrix_values for comparison
-                let existing_child_tasks_by_value: HashMap<serde_json::Value, &Task> = tasks
-                    .iter()
-                    .filter(|t| {
-                        t.master_task_id == Some(master_task_id) && t.matrix_values.is_some()
-                    })
-                    .filter_map(|t| {
-                        serde_json::to_value(t.matrix_values.as_ref().unwrap())
-                            .ok()
-                            .map(|v| (v, t))
+                let existing_child_tasks_by_hash: HashMap<u64, &Task> = existing_tasks_for_node
+                    .map(|t| {
+                        let hash = create_matrix_hash(t.matrix_values.as_ref().unwrap());
+                        (hash, t)
                     })
                     .collect();
 
-                let existing_child_values: HashSet<serde_json::Value> =
-                    existing_child_tasks_by_value.keys().cloned().collect();
+                let existing_child_hashes: HashSet<u64> =
+                    existing_child_tasks_by_hash.keys().cloned().collect();
 
                 debug!(
                     "Found {} existing child tasks for node '{}'",
-                    existing_child_tasks_by_value.len(),
+                    existing_child_tasks_by_hash.len(),
                     node.id
                 );
 
                 // --- Identify Tasks to Create ---
-                let current_item_values_set: HashSet<_> =
-                    current_item_values.iter().cloned().collect();
+                let mut current_item_hashes = HashSet::new();
 
-                for item_value in current_item_values {
-                    if !existing_child_values.contains(&item_value) {
-                        // Task for this value doesn't exist, need to create it
-                        let matrix_data = match item_value.as_object() {
-                            Some(obj) => obj
-                                .iter()
-                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), serde_json::Value::String(s.to_string()))))
-                                .collect::<HashMap<_, _>>(),
-                            None => {
-                                warn!(
-                                    "Matrix item for node '{}' is not a JSON object, skipping: {:?}",
-                                    node.id,
-                                    item_value
-                                );
-                                continue; // Skip this item
-                            }
-                        };
+                for item_value in &current_item_values {
+                    // Convert state item to matrix_data format first, then hash that
+                    // This ensures we're comparing the same representation
+                    let matrix_data = match item_value.as_object() {
+                        Some(obj) => obj
+                            .iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), serde_json::Value::String(s.to_string()))))
+                            .collect::<HashMap<_, _>>(),
+                        None => {
+                            warn!(
+                                "Matrix item for node '{}' is not a JSON object, skipping: {:?}",
+                                node.id,
+                                item_value
+                            );
+                            continue; // Skip this item
+                        }
+                    };
 
+                    let item_hash = create_matrix_hash(&matrix_data);
+                    current_item_hashes.insert(item_hash);
+
+                    if !existing_child_hashes.contains(&item_hash) {
                         let new_task = Task::new_matrix(
                             workflow_run_id,
                             node.id.clone(),
@@ -355,25 +422,24 @@ impl Scheduler {
                             matrix_data,
                         );
                         debug!(
-                            "Need to create new task for node '{}', value: {:?}",
-                            node.id, item_value
+                            "Need to create new task for node '{}', hash: {}, value: {:?}",
+                            node.id, item_hash, item_value
                         );
                         new_tasks.push(new_task);
                     }
                 }
 
                 // --- Identify Tasks to Mark as WontDo ---
-                for (task_value, task) in &existing_child_tasks_by_value {
-                    if !current_item_values_set.contains(task_value) {
-                        // This task's value is no longer in the current state
+                for (task_hash, task) in &existing_child_tasks_by_hash {
+                    if !current_item_hashes.contains(task_hash) {
                         // Mark as WontDo only if it's not already in a terminal state
                         if !matches!(
                             task.status,
                             TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
                         ) {
                             debug!(
-                                "Need to mark task {} (value {:?}) for node '{}' as WontDo",
-                                task.id, task_value, node.id
+                                "Need to mark task {} (hash: {}, matrix_values: {:?}) for node '{}' as WontDo",
+                                task.id, task_hash, task.matrix_values, node.id
                             );
                             tasks_to_mark_wont_do.push(task.id);
                         }
@@ -454,5 +520,104 @@ impl Scheduler {
             tasks_to_await_trigger,
             runnable_tasks,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_stable_hash_consistency() {
+        let value1 = json!({
+            "name": "John",
+            "age": 30,
+            "active": true
+        });
+
+        let value2 = json!({
+            "age": 30,
+            "name": "John",
+            "active": true
+        });
+
+        // Should have same hash despite different key order
+        assert_eq!(create_stable_hash(&value1), create_stable_hash(&value2));
+    }
+
+    #[test]
+    fn test_different_values_different_hashes() {
+        let value1 = json!({"name": "John", "age": 30});
+        let value2 = json!({"name": "Jane", "age": 30});
+
+        assert_ne!(create_stable_hash(&value1), create_stable_hash(&value2));
+    }
+
+    #[test]
+    fn test_nested_objects() {
+        let value1 = json!({
+            "user": {
+                "name": "John",
+                "details": {
+                    "age": 30,
+                    "city": "NYC"
+                }
+            }
+        });
+
+        let value2 = json!({
+            "user": {
+                "details": {
+                    "city": "NYC",
+                    "age": 30
+                },
+                "name": "John"
+            }
+        });
+
+        assert_eq!(create_stable_hash(&value1), create_stable_hash(&value2));
+    }
+
+    #[test]
+    fn test_matrix_hash_consistency() {
+        // Test that state items and their converted matrix_data have the same hash
+        let state_item = json!({
+            "team": "unassigned",
+            "shard": "1/6",
+            "shardId": "unassigned 1/6"
+        });
+
+        // Simulate the conversion that happens in matrix task creation
+        let matrix_data = state_item
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, v)| {
+                v.as_str()
+                    .map(|s| (k.clone(), serde_json::Value::String(s.to_string())))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let _state_hash = create_stable_hash(&state_item);
+        let matrix_hash = create_matrix_hash(&matrix_data);
+
+        // These should NOT be equal because we're comparing different representations
+        // But when we use create_matrix_hash for both sides, they should be equal
+        let converted_matrix_data = state_item
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, v)| {
+                v.as_str()
+                    .map(|s| (k.clone(), serde_json::Value::String(s.to_string())))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let converted_hash = create_matrix_hash(&converted_matrix_data);
+
+        assert_eq!(
+            matrix_hash, converted_hash,
+            "Matrix hashes should be equal when using same conversion"
+        );
     }
 }

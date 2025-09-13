@@ -1,20 +1,23 @@
 [workspace]
 members = [
-    "crates/models",
-    "crates/core",
-    "crates/cli",
-    "crates/runners",
-    "crates/state",
-    "crates/codemod-sandbox",
-    "crates/codemod-sandbox/build",
-    "crates/telemetry",
-    "crates/mcp",
-    "crates/testing-utils",
-    "xtask",
+  "crates/models",
+  "crates/core",
+  "crates/cli",
+  "crates/runners",
+  "crates/state",
+  "crates/codemod-sandbox",
+  "crates/codemod-sandbox/build",
+  "crates/telemetry",
+  "crates/mcp",
+  "crates/testing-utils",
+  "xtask",
 ]
 resolver = "2"
 
-exclude = ["submodules/llrt/llrt_modules", "submodules/rolldown/crates/rolldown"]
+exclude = [
+  "submodules/llrt/llrt_modules",
+  "submodules/rolldown/crates/rolldown",
+]
 
 [workspace.package]
 authors = ["Codemod.com"]
@@ -53,7 +56,12 @@ futures = "0.3"
 ignore = { version = "0.4.23" }
 log = "0.4"
 regex = "1.10"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls-native-roots",
+  "http2",
+  "json",
+  "gzip",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
