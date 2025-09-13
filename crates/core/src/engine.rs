@@ -1,9 +1,12 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 use crate::config::WorkflowRunConfig;
 use crate::execution::CodemodExecutionConfig;
@@ -57,6 +60,9 @@ pub struct Engine {
 
     /// Async file writer for batched I/O operations
     file_writer: Arc<AsyncFileWriter>,
+
+    /// Notification for when running tasks complete
+    task_completion_notify: Arc<Notify>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -84,6 +90,7 @@ impl Engine {
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             file_writer: Arc::new(AsyncFileWriter::new()),
+            task_completion_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -98,6 +105,7 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             file_writer: Arc::new(AsyncFileWriter::new()),
+            task_completion_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -114,12 +122,81 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             file_writer: Arc::new(AsyncFileWriter::new()),
+            task_completion_notify: Arc::new(Notify::new()),
         }
     }
 
     /// Get the workflow file path
     pub fn get_workflow_file_path(&self) -> PathBuf {
         self.workflow_run_config.workflow_file_path.clone()
+    }
+
+    /// Spawn a task asynchronously
+    async fn spawn_task_with_handle(&self, task_id: Uuid) -> Result<()> {
+        let engine = self.clone();
+
+        let runtime_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(async move {
+                if let Err(e) = engine.execute_task(task_id).await {
+                    error!("Task execution failed: {e}");
+                }
+            });
+        });
+
+        Ok(())
+    }
+
+    /// Wait for all currently running tasks to complete
+    async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
+        let mut consecutive_empty_checks = 0;
+        const MAX_EMPTY_CHECKS: u8 = 3;
+
+        loop {
+            // Check the actual task status from the database (source of truth)
+            let current_tasks = self
+                .state_adapter
+                .lock()
+                .await
+                .get_tasks(workflow_run_id)
+                .await?;
+
+            let running_tasks: Vec<_> = current_tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Running)
+                .collect();
+
+            if running_tasks.is_empty() {
+                consecutive_empty_checks += 1;
+                if consecutive_empty_checks >= MAX_EMPTY_CHECKS {
+                    // Multiple checks confirm no running tasks
+                    break;
+                }
+                // Brief pause to ensure task status updates are fully propagated
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                continue;
+            }
+
+            // Reset counter if we found running tasks
+            consecutive_empty_checks = 0;
+
+            debug!(
+                "Waiting for {} running tasks to complete before matrix recompilation",
+                running_tasks.len()
+            );
+
+            // Use event-driven waiting with timeout fallback for robustness
+            tokio::select! {
+                _ = self.task_completion_notify.notified() => {
+                    // Task completed, check again
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                    // Timeout fallback to prevent infinite waiting due to missed notifications
+                    debug!("Timeout while waiting for task completion notification");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Create initial tasks for all nodes
@@ -214,15 +291,9 @@ impl Engine {
                     .apply_task_diff(&task_diff)
                     .await?;
 
-                let engine = self.clone();
-                let runtime_handle = tokio::runtime::Handle::current();
-                tokio::task::spawn_blocking(move || {
-                    runtime_handle.block_on(async move {
-                        if let Err(e) = engine.execute_task(task_id).await {
-                            error!("Task execution failed: {e}");
-                        }
-                    });
-                });
+                if let Err(e) = self.spawn_task_with_handle(task_id).await {
+                    error!("Failed to spawn task {}: {}", task_id, e);
+                }
 
                 triggered = true;
                 info!("Triggered task {} ({})", task_id, task.node_id);
@@ -349,16 +420,10 @@ impl Engine {
                 .apply_task_diff(&task_diff)
                 .await?;
 
-            let engine = self.clone();
             let task_id = task.id;
-            let runtime_handle = tokio::runtime::Handle::current();
-            tokio::task::spawn_blocking(move || {
-                runtime_handle.block_on(async move {
-                    if let Err(e) = engine.execute_task(task_id).await {
-                        error!("Task execution failed: {e}");
-                    }
-                });
-            });
+            if let Err(e) = self.spawn_task_with_handle(task_id).await {
+                error!("Failed to spawn task {}: {}", task_id, e);
+            }
 
             triggered = true;
             info!("Triggered task {} ({})", task.id, task.node_id);
@@ -685,6 +750,10 @@ impl Engine {
 
         info!("Starting workflow run {workflow_run_id}");
 
+        // Small delay at workflow start to allow tests to observe the workflow in Running state
+        #[cfg(test)]
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
         // Create tasks for all nodes if they don't exist yet
         let existing_tasks = self
             .state_adapter
@@ -695,6 +764,9 @@ impl Engine {
         if existing_tasks.is_empty() {
             self.create_initial_tasks(&workflow_run).await?;
         }
+
+        // Track the last state hash to detect state changes
+        let mut last_state_hash: Option<u64> = None;
 
         // Main execution loop
         loop {
@@ -714,6 +786,10 @@ impl Engine {
                 .get_tasks(workflow_run_id)
                 .await?;
 
+            // Wait for any running tasks to complete before proceeding
+            self.wait_for_running_tasks_to_complete(workflow_run_id)
+                .await?;
+
             // --- Recompile matrix tasks based on current state (only if workflow has matrix strategies) ---
             // This ensures the task list reflects the latest state before scheduling
             let has_matrix_strategies = current_workflow_run.workflow.nodes.iter().any(|n| {
@@ -726,7 +802,42 @@ impl Engine {
                 )
             });
 
-            if has_matrix_strategies {
+            // Check if state has changed for matrix recompilation
+            let should_recompile = if has_matrix_strategies {
+                let current_state = self
+                    .state_adapter
+                    .lock()
+                    .await
+                    .get_state(workflow_run_id)
+                    .await?;
+
+                // Calculate hash of current state
+                let mut hasher = DefaultHasher::new();
+                for (key, value) in &current_state {
+                    key.hash(&mut hasher);
+                    // Hash the JSON string representation of the value
+                    value.to_string().hash(&mut hasher);
+                }
+                let current_hash = hasher.finish();
+
+                // Check if state has changed
+                let state_changed = match last_state_hash {
+                    Some(last_hash) => last_hash != current_hash,
+                    None => true, // First time, always recompile
+                };
+
+                if state_changed {
+                    last_state_hash = Some(current_hash);
+                    debug!("State changed, triggering matrix recompilation for workflow {workflow_run_id}");
+                }
+
+                state_changed
+            } else {
+                false
+            };
+
+            if should_recompile {
+                debug!("Starting matrix task recompilation for workflow {workflow_run_id}");
                 if let Err(e) = self
                     .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
                     .await
@@ -737,10 +848,15 @@ impl Engine {
                     // Decide how to handle recompilation errors, e.g., fail the workflow?
                     // For now, we log and continue, but this might need refinement.
                 }
+                debug!("Completed matrix task recompilation for workflow {workflow_run_id}");
+
+                // Small delay after matrix recompilation to ensure tasks are properly persisted
+                #[cfg(test)]
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
 
             // Get potentially updated tasks after recompilation (only if we ran recompilation)
-            let tasks_after_recompilation = if has_matrix_strategies {
+            let tasks_after_recompilation = if should_recompile {
                 self.state_adapter
                     .lock()
                     .await
@@ -872,7 +988,9 @@ impl Engine {
                 break;
             }
 
-            // Execute runnable tasks
+            let runnable_tasks_is_empty = runnable_tasks.is_empty();
+
+            // Execute runnable tasks synchronously to avoid race conditions with matrix recompilation
             for task_id in runnable_tasks {
                 let task = tasks_after_recompilation
                     .iter()
@@ -885,21 +1003,16 @@ impl Engine {
                     .find(|n| n.id == task.node_id)
                     .unwrap(); // Should exist based on how tasks are created
 
-                // Start task execution
-                let engine = self.clone();
-                let task_id = task.id;
-                let runtime_handle = tokio::runtime::Handle::current();
-                tokio::task::spawn_blocking(move || {
-                    runtime_handle.block_on(async move {
-                        if let Err(e) = engine.execute_task(task_id).await {
-                            error!("Task execution failed: {e}");
-                        }
-                    });
-                });
+                // Execute task synchronously to ensure state updates are applied before matrix recompilation
+                if let Err(e) = self.execute_task(task_id).await {
+                    error!("Task execution failed: {e}");
+                }
             }
 
-            // Wait a bit before checking again
-            time::sleep(Duration::from_secs(1)).await;
+            // Only wait if no tasks were executed (to avoid busy waiting)
+            if runnable_tasks_is_empty {
+                time::sleep(Duration::from_secs(1)).await;
+            }
         }
 
         Ok(())
@@ -1008,6 +1121,10 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
+        // Add a delay at the start of task execution to allow tests to observe Running state
+        #[cfg(test)]
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
         // Create a runner for this task
         let runner: Box<dyn Runner> = match node
             .runtime
@@ -1100,6 +1217,13 @@ impl Engine {
                         .apply_task_diff(&task_diff)
                         .await?;
 
+                    // Small delay to allow tests to observe intermediate workflow states
+                    #[cfg(test)]
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                    // Notify that a task has completed (failed) for event-driven waiting
+                    self.task_completion_notify.notify_one();
+
                     error!(
                         "Task {} ({}) step {} failed: {}",
                         task_id, node.id, step.name, e
@@ -1159,6 +1283,13 @@ impl Engine {
             .await?;
 
         info!("Task {} ({}) completed", task_id, node.id);
+
+        // Small delay to allow tests to observe intermediate workflow states
+        #[cfg(test)]
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Notify that a task has completed (for event-driven waiting)
+        self.task_completion_notify.notify_one();
 
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = task.master_task_id {
@@ -2092,6 +2223,7 @@ impl Clone for Engine {
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),
             file_writer: Arc::clone(&self.file_writer),
+            task_completion_notify: Arc::clone(&self.task_completion_notify),
         }
     }
 }

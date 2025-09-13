@@ -72,12 +72,12 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
                     info!("- {} ({})", task.id, task.node_id);
                 }
                 info!("");
-                info!("Use 'butterflow status -i {workflow_run_id}' to check status");
+                info!("Use 'codemod workflow status -i {workflow_run_id}' to check status");
                 info!(
-                    "Run 'butterflow resume -i {workflow_run_id} -t <TASK_ID>' to trigger a specific task"
+                    "Run 'codemod workflow resume -i {workflow_run_id} -t <TASK_ID>' to trigger a specific task"
                 );
                 info!(
-                    "Run 'butterflow resume -i {workflow_run_id} --trigger-all' to trigger all awaiting tasks"
+                    "Run 'codemod workflow resume -i {workflow_run_id} --trigger-all' to trigger all awaiting tasks"
                 );
                 break;
             }

@@ -1,5 +1,4 @@
 use bytes::BytesMut;
-use futures_util::StreamExt;
 use log::{debug, info};
 use reqwest;
 use reqwest::header::CONTENT_LENGTH;
@@ -496,22 +495,21 @@ impl RegistryClient {
         }
 
         let mut package_data = BytesMut::new();
-        let mut stream = response.bytes_stream();
-        let mut downloaded = 0u64;
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| RegistryError::DownloadFailed {
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| RegistryError::DownloadFailed {
                 status: e
                     .status()
                     .unwrap_or(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
                     .into(),
                 message: e.to_string(),
             })?;
-            package_data.extend_from_slice(&chunk);
-            downloaded += chunk.len() as u64;
-            if let Some(callback) = &progress_bar {
-                callback(downloaded, total_size);
-            }
+        package_data.extend_from_slice(&bytes);
+        let downloaded = bytes.len() as u64;
+
+        if let Some(callback) = &progress_bar {
+            callback(downloaded, total_size);
         }
 
         Ok(package_data)
