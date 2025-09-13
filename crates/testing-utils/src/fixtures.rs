@@ -115,7 +115,7 @@ impl TestSource {
                                     {
                                         Ok(path) => Some(path),
                                         Err(e) => {
-                                            eprintln!("error contructing path: {}", e);
+                                            eprintln!("error constructing path: {}", e);
                                             None
                                         }
                                     };
@@ -430,15 +430,10 @@ fn build_expected_path(input_file_path: &Path) -> Result<PathBuf, Box<dyn std::e
             let expected_dir = if parent_dir.ends_with("input") {
                 parent_dir.with_file_name("expected")
             } else {
-                PathBuf::from(parent_dir)
+                parent_dir.to_path_buf()
             };
 
-            let expected_str = match expected_dir.to_str() {
-                Some(name) => name,
-                None => return Err("Invalid expected dir".into()),
-            };
-
-            PathBuf::from(expected_str).join(file_name)
+            expected_dir.join(file_name)
         }
     };
 
