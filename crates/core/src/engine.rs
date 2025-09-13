@@ -1,17 +1,21 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::WorkflowRunConfig;
-use crate::execution::CodemodExecutionConfig;
+use crate::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, ExecutionResult};
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -44,6 +48,12 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct Rule {
+    language: String,
+}
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -1271,30 +1281,49 @@ impl Engine {
         }
 
         let config_path_clone = config_path.clone();
+        let config_content = tokio::fs::read_to_string(&config_path_clone).await?;
+        let mut languages = Vec::new();
+        for content in config_content.split("---") {
+            let parsed = serde_yaml::Deserializer::from_str(content);
+            let rule = Rule::deserialize(parsed)
+                .map_err(|e| Error::StepExecution(format!("Failed to parse rule: {e:?}")))?;
+            languages.push(SupportedLanguage::from_str(&rule.language).map_err(|e| {
+                Error::StepExecution(format!(
+                    "Unsupported language '{}': {:?}",
+                    &rule.language, e
+                ))
+            })?);
+        }
+
+        let execution_config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            Some(self.workflow_run_config.target_path.clone()),
+            ast_grep.base_path.as_deref().map(PathBuf::from),
+            GlobsCodemodExecutionConfig {
+                include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            self.workflow_run_config.dry_run,
+            Some(languages),
+        )
+        .await;
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
-            |combined_scan_with_rule| {
-                let rule_refs = combined_scan_with_rule.rule_refs.clone();
-                let languages = rule_refs.iter().map(|r| r.language).collect::<Vec<_>>();
-
-                let execution_config = CodemodExecutionConfig {
-                    pre_run_callback: None,
-                    progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    target_path: Some(self.workflow_run_config.target_path.clone()),
-                    base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
-                    include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
-                    exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-                    dry_run: self.workflow_run_config.dry_run,
-                    languages: Some(languages.iter().map(|l| l.to_string()).collect()),
-                };
-
+            move |combined_scan_with_rule| {
                 // Clone variables needed in the closure
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                let _ = execution_config.execute(|path, config| {
+                execution_config.execute(move |path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
@@ -1354,7 +1383,7 @@ impl Engine {
                         let callback = callback.callback.clone();
                         callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
                     }
-                });
+                })?;
 
                 Ok(())
             },
@@ -1406,19 +1435,35 @@ impl Engine {
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
         );
 
-        let config = CodemodExecutionConfig {
-            pre_run_callback: None,
-            progress_callback: self.workflow_run_config.progress_callback.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
-            base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
-            include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
-            exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-            dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
-            languages: Some(vec![js_ast_grep
+        let config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            Some(self.workflow_run_config.target_path.clone()),
+            js_ast_grep.base_path.as_deref().map(PathBuf::from),
+            GlobsCodemodExecutionConfig {
+                include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
+            Some(vec![js_ast_grep
                 .language
                 .clone()
-                .unwrap_or("typescript".to_string())]),
-        };
+                .unwrap_or("typescript".to_string())
+                .parse()
+                .map_err(|_| {
+                    Error::StepExecution(format!(
+                        "Unsupported language: {}",
+                        js_ast_grep.language.as_ref().unwrap_or(&"".to_string())
+                    ))
+                })?]),
+        )
+        .await;
 
         // Set language first to get default extensions
         let language = if let Some(lang_str) = &js_ast_grep.language {
@@ -1471,7 +1516,7 @@ impl Engine {
                     execute_codemod_with_quickjs(
                         &js_file_path_clone,
                         resolver_clone.clone(),
-                        language,
+                        SupportedLanguage::from_str(language.name()).unwrap(),
                         file_path,
                         &content,
                         selector_config.clone(),

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codemod_sandbox::tree_sitter::load_tree_sitter;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::future::Future;
@@ -65,7 +66,21 @@ pub struct TestRunner {
 }
 
 impl TestRunner {
-    pub fn new(options: TestOptions, test_source: TestSource) -> Self {
+    pub async fn new(options: TestOptions, test_source: TestSource) -> Self {
+        let _ = load_tree_sitter(
+            &[options.language.unwrap()],
+            options
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| {
+            Box::new(std::io::Error::other(format!(
+                "Failed to load tree-sitter language: {e:?}"
+            )))
+        });
+
         Self {
             options,
             test_source,

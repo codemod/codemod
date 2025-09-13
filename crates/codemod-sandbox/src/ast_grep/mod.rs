@@ -12,9 +12,8 @@ pub mod wasm_utils;
 pub mod native;
 
 #[cfg(not(feature = "wasm"))]
-use ast_grep_language::{LanguageExt, SupportLang};
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 
-#[cfg(feature = "wasm")]
 use ast_grep_core::language::Language;
 
 use rquickjs::module::{Declarations, Exports, ModuleDef};
@@ -108,12 +107,10 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
-    let lang = SupportLang::from_str(&lang)
+    let lang = DynamicLang::from_str(&lang)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Language error: {e}")))?;
 
-    let kind = lang
-        .get_ts_language()
-        .id_for_node_kind(&kind_name, /* named */ true);
+    let kind = lang.kind_to_id(&kind_name);
 
     Ok(kind)
 }

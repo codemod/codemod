@@ -1,10 +1,10 @@
 use crate::ast_grep::types::AstGrepError;
 #[cfg(feature = "wasm")]
-use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
+use crate::ast_grep::wasm_lang::WasmLang as DynamicLang;
 use ast_grep_config::{DeserializeEnv, RuleCore, SerializableRuleCore};
 use ast_grep_core::{matcher::KindMatcher, Pattern};
 #[cfg(not(feature = "wasm"))]
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 
 use super::serde::JsValue;
@@ -19,7 +19,7 @@ pub enum JsMatcherRjs {
 // Convert a JavaScript value to an appropriate ast-grep matcher
 pub fn convert_matcher<'js>(
     value: Value<'js>,
-    lang: SupportLang,
+    lang: DynamicLang,
     ctx: &Ctx<'js>,
 ) -> QResult<JsMatcherRjs> {
     if value.is_string() {

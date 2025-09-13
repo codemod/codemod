@@ -14,3 +14,6 @@ libtest-mimic = "0.8.0"
 similar = "2.6.0"
 thiserror = "2.0.0"
 serde = { workspace = true, features = ["derive"] }
+codemod-ast-grep-dynamic-lang = {workspace = true}
+codemod-sandbox = {workspace = true}
+butterflow-core = {workspace = true}

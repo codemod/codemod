@@ -17,6 +17,7 @@ use butterflow_models::trigger::TriggerType;
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use serial_test::serial;
 use uuid::Uuid;
 
 // Helper function to create a simple test workflow
@@ -413,17 +414,20 @@ fn create_matrix_from_state_workflow() -> Workflow {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_engine_new() {
     let _ = Engine::new();
 }
 
 #[tokio::test]
+#[serial]
 async fn test_engine_with_state_adapter() {
     let state_adapter = Box::new(LocalStateAdapter::new());
     let _ = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -447,6 +451,7 @@ async fn test_run_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_workflow_status() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -466,6 +471,7 @@ async fn test_get_workflow_status() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_tasks() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -493,6 +499,7 @@ async fn test_get_tasks() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_list_workflow_runs() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -525,6 +532,7 @@ async fn test_list_workflow_runs() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_cancel_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -546,6 +554,7 @@ async fn test_cancel_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_manual_trigger_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -592,6 +601,7 @@ async fn test_manual_trigger_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_manual_node_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -639,6 +649,7 @@ async fn test_manual_node_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_matrix_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -666,6 +677,7 @@ async fn test_matrix_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_template_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -702,6 +714,7 @@ async fn test_template_workflow() {
 
 // Test for trigger_all method
 #[tokio::test]
+#[serial]
 async fn test_trigger_all() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -849,6 +862,7 @@ echo "workflow_run_id_valid=$(if [ "$CODEMOD_WORKFLOW_RUN_ID" != "" ] && [ ${#CO
 }
 
 #[tokio::test]
+#[serial]
 async fn test_matrix_recompilation_with_direct_adapter() {
     // Create a mock state adapter
     let mut state_adapter = MockStateAdapter::new();
@@ -1063,6 +1077,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_env_var_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1102,6 +1117,7 @@ async fn test_env_var_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_variable_resolution_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1160,6 +1176,7 @@ async fn test_variable_resolution_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_invalid_workflow_run_id() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1175,6 +1192,7 @@ async fn test_invalid_workflow_run_id() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_workflow_with_params() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1198,6 +1216,7 @@ async fn test_workflow_with_params() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_codemod_environment_variables() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1273,6 +1292,7 @@ async fn test_codemod_environment_variables() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_codemod_environment_variables_in_matrix() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1406,6 +1426,7 @@ echo "env_vars_in_matrix=true""#
 }
 
 #[tokio::test]
+#[serial]
 async fn test_cyclic_dependency_workflow() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1475,6 +1496,7 @@ async fn test_cyclic_dependency_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_invalid_template_reference() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -1532,6 +1554,7 @@ fn create_test_file(dir: &std::path::Path, name: &str, content: &str) -> std::pa
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_ast_grep_step() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1650,6 +1673,7 @@ message: "Found var declaration"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_ast_grep_step_with_typescript() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1719,6 +1743,7 @@ message: "Found interface declaration"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_ast_grep_step_nonexistent_config() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1754,6 +1779,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_ast_grep_step_no_matches() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1810,6 +1836,7 @@ message: "Found console.log statement"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1879,6 +1906,7 @@ function helper() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step_with_typescript() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -1957,6 +1985,7 @@ interface ApiResponse {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step_dry_run() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -2013,6 +2042,7 @@ var count = 0;
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -2047,6 +2077,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step_with_gitignore() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -2135,6 +2166,7 @@ build/
 }
 
 #[tokio::test]
+#[serial]
 async fn test_execute_js_ast_grep_step_with_hidden_files() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -2187,6 +2219,8 @@ export default function transform(ast) {
 }
 
 #[tokio::test]
+#[serial]
+
 async fn test_execute_js_ast_grep_step_invalid_language() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -2226,11 +2260,9 @@ export default function transform(ast) {
         )
         .await;
 
-    // Currently the implementation doesn't validate language strings, so just test that it doesn't panic
-    // Note: This test was updated because the current implementation doesn't validate language strings
-    // If validation is needed, it should be added to the execute_js_ast_grep_step method
-    // assert!(result.is_err(), "Should fail with invalid language");
-    println!("Result with invalid language: {result:?}");
+    // Test that invalid language is properly rejected
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("invalid-language"));
 }
 
 // Helper function to create a workflow with JSAstGrep step
@@ -2274,6 +2306,7 @@ fn create_js_ast_grep_workflow() -> Workflow {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_js_ast_grep_workflow_execution() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();

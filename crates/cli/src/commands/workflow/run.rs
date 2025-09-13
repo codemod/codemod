@@ -8,7 +8,7 @@ use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 
-use crate::engine::create_engine;
+use crate::engine::{create_download_progress_callback, create_engine};
 use crate::workflow_runner::{resolve_workflow_source, run_workflow};
 
 #[derive(Args, Debug)]
@@ -47,6 +47,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    let download_progress_callback = create_download_progress_callback();
     let (engine, config) = create_engine(
         workflow_file_path,
         target_path,
@@ -54,6 +55,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.allow_dirty,
         params,
         None,
+        Some(download_progress_callback),
     )?;
 
     // Run workflow using the extracted workflow runner
