@@ -210,8 +210,6 @@ impl RegistryClient {
         // Get or create cache directory
         let package_cache_dir = self.get_package_cache_dir(&package_spec, &version)?;
 
-        println!("package_cache_dir: {}", package_cache_dir.display());
-
         // Check if package is cached and valid
         let package_dir = if force_download || !is_package_cached(&package_cache_dir)? {
             info!("Downloading package: {source}@{version}");
@@ -404,21 +402,29 @@ impl RegistryClient {
                                 )
                                 .await?;
 
-                            // Verify this is actually a gzip file
+                            // Check if this is a gzip file or uncompressed tar
                             if actual_package_data.len() >= 2 {
                                 let actual_magic = &actual_package_data[0..2];
-                                if actual_magic != [0x1f, 0x8b] {
-                                    return Err(RegistryError::InvalidCdnGzipFile {
-                                        magic: format!(
-                                            "{:02x} {:02x}",
-                                            actual_magic[0], actual_magic[1]
-                                        ),
-                                    });
+                                if actual_magic == [0x1f, 0x8b] {
+                                    // It's a gzip file, extract as usual
+                                    self.extract_package(&actual_package_data, cache_dir)
+                                        .await
+                                        .map_err(|e| RegistryError::InvalidCdnGzipFile {
+                                            magic: e.to_string(),
+                                        })?;
+                                } else {
+                                    // It might be an uncompressed tar file, try to extract it directly
+                                    self.extract_uncompressed_tar(&actual_package_data, cache_dir)
+                                        .await
+                                        .map_err(|e| RegistryError::InvalidCdnGzipFile {
+                                            magic: e.to_string(),
+                                        })?;
                                 }
+                            } else {
+                                return Err(RegistryError::InvalidCdnGzipFile {
+                                    magic: "empty file".to_string(),
+                                });
                             }
-
-                            self.extract_package(&actual_package_data, cache_dir)
-                                .await?;
                             info!("Package cached to: {}", cache_dir.display());
                             return Ok(cache_dir.to_path_buf());
                         }
@@ -516,23 +522,36 @@ impl RegistryClient {
     }
 
     async fn extract_package(&self, package_data: &[u8], cache_dir: &Path) -> Result<()> {
-        // Extract to temporary directory first
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path();
 
-        // Extract tar.gz
         let tar_gz = flate2::read::GzDecoder::new(package_data);
         let mut archive = tar::Archive::new(tar_gz);
         info!("Extracting to: {}", temp_path.display());
         archive.unpack(temp_path)?;
 
-        // Move to cache directory
         if cache_dir.exists() {
             fs::remove_dir_all(cache_dir)?;
         }
         fs::create_dir_all(cache_dir.parent().unwrap())?;
 
-        // Copy to cache directory
+        copy_dir_recursively(temp_path, cache_dir)?;
+        Ok(())
+    }
+
+    async fn extract_uncompressed_tar(&self, package_data: &[u8], cache_dir: &Path) -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let temp_path = temp_dir.path();
+
+        let mut archive = tar::Archive::new(package_data);
+        info!("Extracting uncompressed tar to: {}", temp_path.display());
+        archive.unpack(temp_path)?;
+
+        if cache_dir.exists() {
+            fs::remove_dir_all(cache_dir)?;
+        }
+        fs::create_dir_all(cache_dir.parent().unwrap())?;
+
         copy_dir_recursively(temp_path, cache_dir)?;
         Ok(())
     }
