@@ -214,6 +214,7 @@ impl JssgTestHandler {
                     content: &input_code,
                     selector_config: None,
                     params: None,
+                    matrix_values: None,
                 };
                 let execution_output = execute_codemod_with_quickjs(options).await?;
 

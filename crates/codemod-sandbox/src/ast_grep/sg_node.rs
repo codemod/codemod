@@ -131,7 +131,7 @@ pub struct SgNodeRjs<'js> {
     #[qjs(skip_trace)] // NodeMatch is not Trace
     pub(crate) inner_node: NodeMatch<'static, TSDoc>,
     #[qjs(skip_trace)]
-    _phantom: PhantomData<&'js ()>,
+    pub(crate) _phantom: PhantomData<&'js ()>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for SgNodeRjs<'js> {

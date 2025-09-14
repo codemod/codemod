@@ -1618,6 +1618,7 @@ message: "Found var declaration"
         base_path: None,
         config_file: "ast-grep-rules.yaml".to_string(),
         allow_dirty: Some(false),
+        max_threads: None,
     };
 
     let step = Step {
@@ -1670,6 +1671,7 @@ message: "Found var declaration"
                 base_path: None,
                 config_file: "ast-grep-rules.yaml".to_string(),
                 allow_dirty: Some(false),
+                max_threads: None,
             },
         )
         .await;
@@ -1739,6 +1741,7 @@ message: "Found interface declaration"
                 base_path: None,
                 config_file: "ts-rules.yaml".to_string(),
                 allow_dirty: Some(false),
+                max_threads: None,
             },
         )
         .await;
@@ -1773,6 +1776,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 base_path: None,
                 config_file: "nonexistent.yaml".to_string(),
                 allow_dirty: Some(false),
+                max_threads: None,
             },
         )
         .await;
@@ -1830,6 +1834,7 @@ message: "Found console.log statement"
                 base_path: None,
                 config_file: "rules.yaml".to_string(),
                 allow_dirty: Some(false),
+                max_threads: None,
             },
         )
         .await;
@@ -1900,6 +1905,7 @@ function helper() {
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
             None,
         )
         .await;
@@ -1980,6 +1986,7 @@ interface ApiResponse {
                 language: Some("typescript".to_string()),
             },
             None,
+            None,
         )
         .await;
 
@@ -2037,6 +2044,7 @@ var count = 0;
                 language: Some("javascript".to_string()),
             },
             None,
+            None,
         )
         .await;
 
@@ -2073,6 +2081,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 dry_run: Some(false),
                 language: None,
             },
+            None,
             None,
         )
         .await;
@@ -2139,6 +2148,7 @@ build/
                 language: Some("javascript".to_string()),
             },
             None,
+            None,
         )
         .await;
 
@@ -2161,6 +2171,7 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
             None,
         )
         .await;
@@ -2215,6 +2226,7 @@ export default function transform(ast) {
                 language: Some("javascript".to_string()),
             },
             None,
+            None,
         )
         .await;
 
@@ -2262,6 +2274,7 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("invalid-language".to_string()), // Invalid language
             },
+            None,
             None,
         )
         .await;

@@ -7,7 +7,6 @@ use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEn
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use log::info;
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
@@ -66,6 +65,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         exclude_globs: None,
         dry_run: false,
         languages: Some(vec![args.language.clone()]),
+        threads: args.max_threads,
     };
 
     let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
@@ -87,7 +87,6 @@ pub async fn handler(args: &Command) -> Result<()> {
             return;
         }
 
-        info!("Processing file with JS AST grep: {}", file_path.display());
         if let Some(cs) = &combined_scan_cloned {
             let result = scan_file_with_combined_scan(file_path, cs.as_ref(), false);
             if let Ok((matches, _, _)) = result {

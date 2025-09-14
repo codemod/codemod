@@ -57,6 +57,8 @@ pub struct CodemodExecutionConfig {
     pub dry_run: bool,
     /// Language
     pub languages: Option<Vec<String>>,
+    /// Number of threads to use
+    pub threads: Option<usize>,
 }
 
 impl CodemodExecutionConfig {
@@ -87,9 +89,11 @@ impl CodemodExecutionConfig {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
         }
 
-        let num_threads = std::thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .min(12);
+        let num_threads = self.threads.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(12)
+        });
 
         let walker = self
             .create_walk_builder(&search_base, globs)

@@ -73,6 +73,11 @@ pub struct UseAstGrep {
     #[ts(optional, as = "Option<String>")]
     pub base_path: Option<String>,
 
+    /// Set maximum number of concurrent threads (optional, defaults to CPU cores)
+    #[serde(default)]
+    #[ts(optional, as = "Option<usize>")]
+    pub max_threads: Option<usize>,
+
     /// Path to the ast-grep config file (.yaml)
     pub config_file: String,
 

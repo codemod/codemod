@@ -1,5 +1,6 @@
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::sg_node::SgRootRjs;
+use crate::ast_grep::serde::JsValue;
+use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
@@ -9,10 +10,11 @@ use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use llrt_modules::module_builder::ModuleBuilder;
-use rquickjs::IntoJs;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
+use rquickjs::{IntoJs, Object};
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,6 +35,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub content: &'a str,
     pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
     pub params: Option<HashMap<String, String>>,
+    pub matrix_values: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -64,19 +67,8 @@ where
         },
     })?;
 
+    // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
-
-    if let Some(selector_config) = &options.selector_config {
-        let matches: Vec<_> = ast_grep
-            .root()
-            .dfs()
-            .filter_map(move |node| selector_config.matcher.match_node(node))
-            .collect();
-
-        if matches.is_empty() {
-            return Ok(ExecutionResult::Skipped);
-        }
-    }
 
     // Set up built-in modules
     let module_builder = ModuleBuilder::default();
@@ -122,27 +114,6 @@ where
                     },
                 })?;
 
-
-            let params_qjs = params.into_js(&ctx);
-
-            ctx.globals()
-                .set("CODEMOD_PARAMS", params_qjs)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: format!("Failed to set params global variable: {e}"),
-                    },
-                })?;
-
-            // Set the language for the codemod
-            let language_str = options.language.to_string();
-            ctx.globals()
-                    .set("CODEMOD_LANGUAGE", language_str)
-                    .map_err(|e| ExecutionError::Runtime {
-                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                            message: format!("Failed to set language global variable: {e}"),
-                        },
-                    })?;
-
             // Evaluate module.
             let (evaluated, _) = module
                 .eval()
@@ -172,6 +143,66 @@ where
                     },
                 })?;
 
+            // Calculate matches inside the JS context
+            let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
+                let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+                let ast_matches: Vec<_> = root_node.inner_node.dfs()
+                    .filter_map(|node| selector_config.matcher.match_node(node))
+                    .collect();
+
+                if ast_matches.is_empty() {
+                    return Ok(ExecutionResult::Skipped);
+                }
+
+                Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
+                    root: Arc::downgrade(&parsed_content.inner),
+                    inner_node: node_match,
+                    _phantom: PhantomData,
+                }).collect())
+            } else {
+                None
+            };
+
+            let language_str = options.language.to_string();
+
+            let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            })?;
+            run_options.set("params", params).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            })?;
+            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            })?;
+            run_options.set("matches", matches).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            })?;
+
+            let matrix_values_js = options.matrix_values
+                .map(|input| input.into_iter()
+                .map(|(k, v)| (k, JsValue(v)))
+                .collect::<HashMap<String, JsValue>>());
+
+            run_options.set("matrixValues", matrix_values_js).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: e.to_string(),
+                },
+            })?;
+
+            let run_options_qjs = run_options.into_js(&ctx);
+
             let func = namespace
                 .get::<_, Function>("executeCodemod")
                 .catch(&ctx)
@@ -182,7 +213,7 @@ where
                 })?;
 
             // Call it and return value.
-            let result_obj_promise = func.call((parsed_content,)).catch(&ctx).map_err(|e| {
+            let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
@@ -290,6 +321,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -329,6 +361,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -369,6 +402,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -409,6 +443,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -452,6 +487,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -489,6 +525,7 @@ function example() {
             content,
             selector_config: None,
             params: None,
+            matrix_values: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
