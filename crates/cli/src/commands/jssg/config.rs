@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 use testing_utils::ReporterType;
 
 const DEFAULT_TIMEOUT: u64 = 30;
@@ -20,6 +20,9 @@ pub struct TestConfig {
 
     /// Test patterns that are expected to produce errors
     pub expect_errors: Option<Vec<String>>,
+
+    /// Parameters to pass to the codemod
+    pub params: Option<HashMap<String, String>>,
 }
 
 /// Merged configuration from CLI args and config files
@@ -31,6 +34,7 @@ pub struct ResolvedTestConfig {
     pub timeout: u64,
     pub ignore_whitespace: bool,
     pub expect_errors: Vec<String>,
+    pub params: Option<HashMap<String, String>>,
 
     // Global-only options (CLI args only)
     pub filter: Option<String>,
@@ -143,6 +147,9 @@ impl TestConfig {
         if other.expect_errors.is_some() {
             self.expect_errors = other.expect_errors;
         }
+        if other.params.is_some() {
+            self.params = other.params;
+        }
     }
 }
 
@@ -194,6 +201,7 @@ impl ResolvedTestConfig {
         } else {
             merged_config.expect_errors.clone().unwrap_or_default()
         };
+        let params = merged_config.params.clone();
 
         Ok(Self {
             language,
@@ -209,6 +217,7 @@ impl ResolvedTestConfig {
             watch,
             reporter,
             context_lines,
+            params,
         })
     }
 }
