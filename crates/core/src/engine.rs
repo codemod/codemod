@@ -1250,7 +1250,7 @@ impl Engine {
         if let Some(matrix_values) = &task.matrix_values {
             for (key, value) in matrix_values {
                 env.insert(
-                    key.clone(),
+                    format!("MATRIX_{}", key.to_uppercase()),
                     serde_json::to_string(value).unwrap_or(value.to_string()),
                 );
             }
@@ -1362,8 +1362,13 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
-                self.execute_js_ast_grep_step(node.id.clone(), js_ast_grep, Some(params.clone()))
-                    .await
+                self.execute_js_ast_grep_step(
+                    node.id.clone(),
+                    js_ast_grep,
+                    Some(params.clone()),
+                    task.matrix_values.clone(),
+                )
+                .await
             }
             StepAction::Codemod(codemod) => {
                 Box::pin(self.execute_codemod_step(
@@ -1417,6 +1422,7 @@ impl Engine {
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
                     dry_run: self.workflow_run_config.dry_run,
                     languages: Some(languages.iter().map(|l| l.to_string()).collect()),
+                    threads: ast_grep.max_threads,
                 };
 
                 // Clone variables needed in the closure
@@ -1499,6 +1505,7 @@ impl Engine {
         id: String,
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, String>>,
+        matrix_input: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<()> {
         let js_file_path = self
             .workflow_run_config
@@ -1548,6 +1555,7 @@ impl Engine {
                 .language
                 .clone()
                 .unwrap_or("typescript".to_string())]),
+            threads: js_ast_grep.max_threads,
         };
 
         // Set language first to get default extensions
@@ -1587,8 +1595,6 @@ impl Engine {
                     return;
                 }
 
-                info!("Processing file with JS AST grep: {}", file_path.display());
-
                 // Read file content synchronously
                 let content = match std::fs::read_to_string(file_path) {
                     Ok(content) => content,
@@ -1608,14 +1614,13 @@ impl Engine {
                         content: &content,
                         selector_config: selector_config.clone(),
                         params: params.clone(),
+                        matrix_values: matrix_input.clone(),
                     })
                     .await
                 });
 
                 match execution_result {
                     Ok(execution_output) => {
-                        debug!("Successfully processed file: {}", file_path.display());
-
                         match execution_output {
                             ExecutionResult::Modified(ref new_content) => {
                                 if config.dry_run {
@@ -1960,8 +1965,8 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        info!("Step output:");
-        info!("{output}");
+        println!("Step output:");
+        println!("{output}");
 
         let outputs = read_to_string(&state_outputs_path).await?;
 

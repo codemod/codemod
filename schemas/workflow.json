@@ -586,6 +586,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "max_threads": {
+          "description": "Set maximum number of concurrent threads (optional, defaults to CPU cores)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
         }
       },
       "required": [

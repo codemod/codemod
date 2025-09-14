@@ -14,7 +14,7 @@ use codemod_sandbox::sandbox::{
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -90,6 +90,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         exclude_globs: None,
         dry_run: args.dry_run,
         languages: Some(vec![args.language.clone()]),
+        threads: args.max_threads,
     };
 
     let started = Instant::now();
@@ -102,8 +103,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         if !file_path.is_file() {
             return;
         }
-
-        info!("Processing file with JS AST grep: {}", file_path.display());
 
         // Use a tokio runtime to handle the async execution within the sync callback
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -129,6 +128,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 content: &content,
                 selector_config: None,
                 params: Some(params.clone()),
+                matrix_values: None,
             };
 
             // Execute the codemod on this file

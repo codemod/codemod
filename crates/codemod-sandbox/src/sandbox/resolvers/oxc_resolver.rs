@@ -30,7 +30,12 @@ impl OxcResolver {
                 ".mjs".into(),
                 ".mts".into(),
             ],
-            condition_names: vec!["module".into(), "import".into(), "node".into()],
+            condition_names: vec![
+                "module".into(),
+                "import".into(),
+                "node".into(),
+                "default".into(),
+            ],
             main_fields: vec!["module".into(), "main".into()],
             tsconfig: tsconfig_path.map(|path| TsconfigOptions {
                 config_file: path,
