@@ -55,7 +55,7 @@ pub fn resolve_variables(
 
     for captures in re.captures_iter(input) {
         let full_match = captures.get(0).unwrap().as_str();
-        let inner = captures.get(1).unwrap().as_str();
+        let inner = captures.get(1).unwrap().as_str().trim();
 
         let replacement =
             // First check if it's a direct matrix value
