@@ -24,6 +24,7 @@ fn create_long_running_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "long-running-node".to_string(),
@@ -55,6 +56,7 @@ fn create_test_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -112,6 +114,7 @@ fn create_manual_trigger_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -171,6 +174,7 @@ fn create_manual_node_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -228,6 +232,7 @@ fn create_matrix_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -341,6 +346,7 @@ fn create_template_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![template],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -384,6 +390,7 @@ fn create_matrix_from_state_workflow() -> Workflow {
 
     Workflow {
         version: "1".to_string(),
+        params: None,
         state: Some(butterflow_models::WorkflowState {
             schema: root_schema,
         }),
@@ -770,6 +777,7 @@ fn create_env_var_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -808,6 +816,7 @@ fn create_variable_resolution_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -846,6 +855,7 @@ fn create_env_vars_test_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "env-test-node".to_string(),
@@ -1313,6 +1323,7 @@ async fn test_codemod_environment_variables_in_matrix() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -1446,6 +1457,7 @@ async fn test_cyclic_dependency_workflow() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -1515,6 +1527,7 @@ async fn test_invalid_template_reference() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -2291,6 +2304,7 @@ fn create_js_ast_grep_workflow() -> Workflow {
     Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "js-ast-grep-node".to_string(),
@@ -2404,6 +2418,7 @@ fn create_realistic_state_write_workflow() -> Workflow {
 
     Workflow {
         version: "1".to_string(),
+        params: None,
         state: Some(butterflow_models::WorkflowState {
             schema: root_schema,
         }),

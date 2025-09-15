@@ -120,6 +120,7 @@ fn test_validate_workflow_valid() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -162,6 +163,7 @@ fn test_validate_workflow_duplicate_node_id() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -210,6 +212,7 @@ fn test_validate_workflow_nonexistent_dependency() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -244,6 +247,7 @@ fn test_validate_workflow_cyclic_dependency() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -351,6 +355,7 @@ fn test_validate_workflow_duplicate_template_id() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![
             Template {
                 id: "template1".to_string(),
@@ -395,6 +400,7 @@ fn test_validate_workflow_nonexistent_template_reference() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![Template {
             id: "template1".to_string(),
             name: "Template 1".to_string(),
@@ -445,6 +451,7 @@ fn test_validate_workflow_invalid_matrix_strategy() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -484,6 +491,7 @@ fn test_validate_workflow_complex_cyclic_dependency() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![
             Node {
@@ -627,6 +635,7 @@ fn test_validate_workflow_self_dependency() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -676,6 +685,7 @@ fn test_validate_workflow_valid_matrix_strategy_with_values() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -708,6 +718,7 @@ fn test_validate_workflow_valid_matrix_strategy_with_from_state() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -740,6 +751,7 @@ fn test_validate_workflow_with_template_outputs() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![Template {
             id: "template1".to_string(),
             name: "Template 1".to_string(),
@@ -773,6 +785,7 @@ fn test_validate_workflow_with_step_env_vars() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -827,6 +840,7 @@ fix:
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -881,6 +895,7 @@ fn test_validate_workflow_with_invalid_config_path() {
     let workflow = Workflow {
         version: "1".to_string(),
         state: None,
+        params: None,
         templates: vec![],
         nodes: vec![Node {
             id: "node1".to_string(),
@@ -924,15 +939,13 @@ fn test_parse_workflow_file_complex() {
 version: "1"
 state:
   schema:
-    type: object
-    properties:
-      testState:
-        type: array
-        items:
-          type: object
-          properties:
-            key:
-              type: string
+    testState:
+      type: array
+      items:
+        type: object
+        properties:
+          key:
+            type: string
 templates:
   - id: template1
     name: Template 1
