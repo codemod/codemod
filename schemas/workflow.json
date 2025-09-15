@@ -11,6 +11,18 @@
         "$ref": "#/$defs/Node"
       }
     },
+    "params": {
+      "description": "Params schema definition",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowParams"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "state": {
       "description": "State schema definition",
       "anyOf": [
@@ -223,10 +235,124 @@
         }
       ]
     },
-    "Schema": {
-      "type": [
-        "object",
-        "boolean"
+    "SimpleSchema": {
+      "description": "Simple schema system for workflow state and params validation\nRoot is always an object with properties",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/SimpleSchemaProperty"
+      }
+    },
+    "SimpleSchemaProperty": {
+      "description": "Represents a property in the schema with type-specific fields",
+      "oneOf": [
+        {
+          "description": "String type with optional oneOf and default",
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "Default value for the property",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "oneOf": {
+              "description": "Allows multiple schema alternatives for strings",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/SimpleSchemaVariant"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "string"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Array type with required items schema",
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "Default value for the property",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "items": {
+              "description": "Defines the schema of array items",
+              "$ref": "#/$defs/SimpleSchemaProperty"
+            },
+            "type": {
+              "type": "string",
+              "const": "array"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ]
+        },
+        {
+          "description": "Object type with properties",
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "Default value for the property",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "properties": {
+              "description": "Properties of the object",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/$defs/SimpleSchemaProperty"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "object"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "SimpleSchemaVariant": {
+      "description": "Represents a variant in a oneOf schema for strings",
+      "type": "object",
+      "properties": {
+        "enum": {
+          "description": "For string types with enumeration, the allowed values",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "description": "Type of this variant (always \"string\" for oneOf variants)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
       ]
     },
     "Step": {
@@ -712,13 +838,24 @@
         "js_file"
       ]
     },
+    "WorkflowParams": {
+      "description": "Represents the params schema for a workflow",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "description": "Object schema definition (root is always an object)",
+          "$ref": "#/$defs/SimpleSchema",
+          "default": {}
+        }
+      }
+    },
     "WorkflowState": {
       "description": "Represents the state schema for a workflow",
       "type": "object",
       "properties": {
         "schema": {
-          "description": "Object schema definition (enforced to be object type)",
-          "$ref": "#/$defs/Schema",
+          "description": "Object schema definition (root is always an object)",
+          "$ref": "#/$defs/SimpleSchema",
           "default": {}
         }
       }

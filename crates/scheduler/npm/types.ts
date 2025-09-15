@@ -1,3 +1,21 @@
+export type UseCodemod = {
+  /**
+   * Codemod source identifier (registry package or local path)
+   */
+  source: string;
+  /**
+   * Command line arguments to pass to the codemod (optional)
+   */
+  args?: Array<string>;
+  /**
+   * Environment variables to set for the codemod execution (optional)
+   */
+  env?: { [key in string]?: string };
+  /**
+   * Working directory for codemod execution (optional, defaults to current directory)
+   */
+  working_dir?: string;
+};
 export type FieldDiff = {
   /**
    * The operation to perform
@@ -8,74 +26,6 @@ export type FieldDiff = {
    */
   value: JsonValue | null;
 };
-export type StateDiff = {
-  /**
-   * The ID of the workflow run
-   */
-  workflow_run_id: string;
-  /**
-   * The fields to update
-   */
-  fields: { [key in string]?: FieldDiff };
-};
-export type UseAstGrep = {
-  /**
-   * Include globs for files to search (optional, defaults to language-specific extensions)
-   */
-  include?: Array<string>;
-  /**
-   * Exclude globs for files to skip (optional)
-   */
-  exclude?: Array<string>;
-  /**
-   * Base path for resolving relative globs (optional, defaults to current working directory)
-   */
-  base_path?: string;
-  /**
-   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
-   */
-  max_threads?: number;
-  /**
-   * Path to the ast-grep config file (.yaml)
-   */
-  config_file: string;
-  /**
-   * Allow dirty files (optional, defaults to false)
-   */
-  allow_dirty?: boolean;
-};
-export type TaskDiff = {
-  /**
-   * The ID of the task
-   */
-  task_id: string;
-  /**
-   * The fields to update
-   */
-  fields: { [key in string]?: FieldDiff };
-};
-export type TriggerType = "automatic" | "manual";
-export type WorkflowState = {
-  /**
-   * Object schema definition (enforced to be object type)
-   */
-  schema: Record<string, any>;
-};
-export type TemplateOutput = {
-  /**
-   * Name of the output
-   */
-  name: string;
-  /**
-   * Value of the output
-   */
-  value: string;
-  /**
-   * Description of the output
-   */
-  description: string | null;
-};
-export type StrategyType = "matrix";
 export type WorkflowRun = {
   /**
    * Unique identifier for the workflow run
@@ -132,7 +82,54 @@ export type TemplateInput = {
    */
   default: string | null;
 };
-export type NodeType = "automatic" | "manual";
+export type Strategy = {
+  /**
+   * Type of strategy
+   */
+  type: StrategyType;
+  /**
+   * Matrix values (for matrix strategy)
+   */
+  values?: Array<{ [key in string]?: JsonValue }>;
+  /**
+   * State key to get matrix values from (for matrix strategy)
+   */
+  from_state?: string | null;
+};
+export type Template = {
+  /**
+   * Unique identifier for the template
+   */
+  id: string;
+  /**
+   * Human-readable name
+   */
+  name: string;
+  /**
+   * Detailed description of what the template does
+   */
+  description?: string | null;
+  /**
+   * Container runtime configuration
+   */
+  runtime?: Runtime | null;
+  /**
+   * Inputs for the template
+   */
+  inputs: Array<TemplateInput>;
+  /**
+   * Steps to execute within the template
+   */
+  steps: Array<Step>;
+  /**
+   * Outputs from the template
+   */
+  outputs?: Array<TemplateOutput>;
+  /**
+   * Environment variables to inject into the container
+   */
+  env?: { [key in string]?: string };
+};
 export type Workflow = {
   /**
    * Version of the workflow format
@@ -143,6 +140,10 @@ export type Workflow = {
    */
   state?: WorkflowState | null;
   /**
+   * Params schema definition
+   */
+  params?: WorkflowParams | null;
+  /**
    * Templates for reusable components
    */
   templates?: Array<Template>;
@@ -151,42 +152,155 @@ export type Workflow = {
    */
   nodes: Array<Node>;
 };
+export type UseAstGrep = {
+  /**
+   * Include globs for files to search (optional, defaults to language-specific extensions)
+   */
+  include?: Array<string>;
+  /**
+   * Exclude globs for files to skip (optional)
+   */
+  exclude?: Array<string>;
+  /**
+   * Base path for resolving relative globs (optional, defaults to current working directory)
+   */
+  base_path?: string;
+  /**
+   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
+   */
+  max_threads?: number;
+  /**
+   * Path to the ast-grep config file (.yaml)
+   */
+  config_file: string;
+  /**
+   * Allow dirty files (optional, defaults to false)
+   */
+  allow_dirty?: boolean;
+};
 export type Trigger = {
   /**
    * Type of trigger
    */
   type: TriggerType;
 };
-export type Step = {
+export type NodeType = "automatic" | "manual";
+export type RuntimeType = "direct" | "docker" | "podman";
+export type StrategyType = "matrix";
+export type StateDiff = {
   /**
-   * Human-readable name
+   * The ID of the workflow run
+   */
+  workflow_run_id: string;
+  /**
+   * The fields to update
+   */
+  fields: { [key in string]?: FieldDiff };
+};
+export type Task = {
+  /**
+   * Unique identifier for the task
+   */
+  id: string;
+  /**
+   * ID of the workflow run this task belongs to
+   */
+  workflow_run_id: string;
+  /**
+   * ID of the node this task is an instance of
+   */
+  node_id: string;
+  /**
+   * Current status of the task
+   */
+  status: TaskStatus;
+  /**
+   * Whether or not this task is a master task for other matrix tasks.
+   */
+  is_master: boolean;
+  /**
+   * For matrix tasks, the master task ID
+   */
+  master_task_id?: string | null;
+  /**
+   * For matrix tasks, the matrix values
+   */
+  matrix_values?: { [key in string]?: JsonValue } | null;
+  /**
+   * Start time of the task
+   */
+  started_at?: string | null;
+  /**
+   * End time of the task (if completed or failed)
+   */
+  ended_at?: string | null;
+  /**
+   * Error message (if failed)
+   */
+  error?: string | null;
+  /**
+   * Logs from the task
+   */
+  logs: Array<string>;
+};
+export type SimpleSchema = {
+  [key in string]?:
+    | {
+        type: "string";
+        /**
+         * Allows multiple schema alternatives for strings
+         */
+        oneOf: Array<SimpleSchemaVariant> | null;
+        /**
+         * Default value for the property
+         */
+        default: string | null;
+      }
+    | {
+        type: "array";
+        /**
+         * Defines the schema of array items
+         */
+        items: SimpleSchemaProperty;
+        /**
+         * Default value for the property
+         */
+        default: string | null;
+      }
+    | {
+        type: "object";
+        /**
+         * Properties of the object
+         */
+        properties: { [key in string]?: SimpleSchemaProperty } | null;
+        /**
+         * Default value for the property
+         */
+        default: string | null;
+      };
+};
+export type TemplateOutput = {
+  /**
+   * Name of the output
    */
   name: string;
   /**
-   * Environment variables specific to this step
+   * Value of the output
    */
-  env?: { [key in string]?: string };
-} & (
-  | { use: TemplateUse }
-  | { run: string }
-  | { "ast-grep": UseAstGrep }
-  | { "js-ast-grep": UseJSAstGrep }
-  | { codemod: UseCodemod }
-);
-export type JsonValue =
-  | number
-  | string
-  | boolean
-  | Array<JsonValue>
-  | { [key in string]?: JsonValue }
-  | null;
-export type WorkflowStatus =
+  value: string;
+  /**
+   * Description of the output
+   */
+  description: string | null;
+};
+export type TaskStatus =
   | "Pending"
   | "Running"
   | "Completed"
   | "Failed"
   | "AwaitingTrigger"
-  | "Canceled";
+  | "Blocked"
+  | "WontDo";
 export type Node = {
   /**
    * Unique identifier for the node
@@ -239,23 +353,120 @@ export type TemplateUse = {
    */
   inputs?: { [key in string]?: string };
 };
-export type UseCodemod = {
+export type Step = {
   /**
-   * Codemod source identifier (registry package or local path)
+   * Human-readable name
    */
-  source: string;
+  name: string;
   /**
-   * Command line arguments to pass to the codemod (optional)
-   */
-  args?: Array<string>;
-  /**
-   * Environment variables to set for the codemod execution (optional)
+   * Environment variables specific to this step
    */
   env?: { [key in string]?: string };
+} & (
+  | { use: TemplateUse }
+  | { run: string }
+  | { "ast-grep": UseAstGrep }
+  | { "js-ast-grep": UseJSAstGrep }
+  | { codemod: UseCodemod }
+);
+export type JsonValue =
+  | number
+  | string
+  | boolean
+  | Array<JsonValue>
+  | { [key in string]?: JsonValue }
+  | null;
+export type SimpleSchemaVariant = {
   /**
-   * Working directory for codemod execution (optional, defaults to current directory)
+   * Type of this variant (always "string" for oneOf variants)
    */
-  working_dir?: string;
+  type: string;
+  /**
+   * For string types with enumeration, the allowed values
+   */
+  enum: Array<string> | null;
+};
+export type SimpleSchemaProperty =
+  | {
+      type: "string";
+      /**
+       * Allows multiple schema alternatives for strings
+       */
+      oneOf: Array<SimpleSchemaVariant> | null;
+      /**
+       * Default value for the property
+       */
+      default: string | null;
+    }
+  | {
+      type: "array";
+      /**
+       * Defines the schema of array items
+       */
+      items: SimpleSchemaProperty;
+      /**
+       * Default value for the property
+       */
+      default: string | null;
+    }
+  | {
+      type: "object";
+      /**
+       * Properties of the object
+       */
+      properties: { [key in string]?: SimpleSchemaProperty } | null;
+      /**
+       * Default value for the property
+       */
+      default: string | null;
+    };
+export type WorkflowStatus =
+  | "Pending"
+  | "Running"
+  | "Completed"
+  | "Failed"
+  | "AwaitingTrigger"
+  | "Canceled";
+export type UseJSAstGrep = {
+  /**
+   * Path to the JavaScript file to execute
+   */
+  js_file: string;
+  /**
+   * Include globs for files to search (optional, defaults to language-specific extensions)
+   */
+  include?: Array<string>;
+  /**
+   * Exclude globs for files to skip (optional)
+   */
+  exclude?: Array<string>;
+  /**
+   * Base path for resolving relative globs (optional, defaults to current working directory)
+   */
+  base_path?: string;
+  /**
+   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
+   */
+  max_threads?: number;
+  /**
+   * Perform a dry run without making changes (optional, defaults to false)
+   */
+  dry_run?: boolean;
+  /**
+   * Language to process (optional)
+   */
+  language?: string;
+};
+export type TriggerType = "automatic" | "manual";
+export type TaskDiff = {
+  /**
+   * The ID of the task
+   */
+  task_id: string;
+  /**
+   * The fields to update
+   */
+  fields: { [key in string]?: FieldDiff };
 };
 export type Runtime = {
   /**
@@ -293,137 +504,16 @@ export type WorkflowRunDiff = {
    */
   fields: { [key in string]?: FieldDiff };
 };
+export type WorkflowParams = {
+  /**
+   * Object schema definition (root is always an object)
+   */
+  schema: SimpleSchema;
+};
+export type WorkflowState = {
+  /**
+   * Object schema definition (root is always an object)
+   */
+  schema: SimpleSchema;
+};
 export type DiffOperation = "Add" | "Update" | "Remove" | "Append";
-export type Task = {
-  /**
-   * Unique identifier for the task
-   */
-  id: string;
-  /**
-   * ID of the workflow run this task belongs to
-   */
-  workflow_run_id: string;
-  /**
-   * ID of the node this task is an instance of
-   */
-  node_id: string;
-  /**
-   * Current status of the task
-   */
-  status: TaskStatus;
-  /**
-   * Whether or not this task is a master task for other matrix tasks.
-   */
-  is_master: boolean;
-  /**
-   * For matrix tasks, the master task ID
-   */
-  master_task_id?: string | null;
-  /**
-   * For matrix tasks, the matrix values
-   */
-  matrix_values?: { [key in string]?: JsonValue } | null;
-  /**
-   * Start time of the task
-   */
-  started_at?: string | null;
-  /**
-   * End time of the task (if completed or failed)
-   */
-  ended_at?: string | null;
-  /**
-   * Error message (if failed)
-   */
-  error?: string | null;
-  /**
-   * Logs from the task
-   */
-  logs: Array<string>;
-};
-export type Template = {
-  /**
-   * Unique identifier for the template
-   */
-  id: string;
-  /**
-   * Human-readable name
-   */
-  name: string;
-  /**
-   * Detailed description of what the template does
-   */
-  description?: string | null;
-  /**
-   * Container runtime configuration
-   */
-  runtime?: Runtime | null;
-  /**
-   * Inputs for the template
-   */
-  inputs: Array<TemplateInput>;
-  /**
-   * Steps to execute within the template
-   */
-  steps: Array<Step>;
-  /**
-   * Outputs from the template
-   */
-  outputs?: Array<TemplateOutput>;
-  /**
-   * Environment variables to inject into the container
-   */
-  env?: { [key in string]?: string };
-};
-export type Strategy = {
-  /**
-   * Type of strategy
-   */
-  type: StrategyType;
-  /**
-   * Matrix values (for matrix strategy)
-   */
-  values?: Array<{ [key in string]?: JsonValue }>;
-  /**
-   * State key to get matrix values from (for matrix strategy)
-   */
-  from_state?: string | null;
-};
-export type RuntimeType = "direct" | "docker" | "podman";
-export type TaskStatus =
-  | "Pending"
-  | "Running"
-  | "Completed"
-  | "Failed"
-  | "AwaitingTrigger"
-  | "Blocked"
-  | "WontDo";
-export type UseJSAstGrep = {
-  /**
-   * Path to the JavaScript file to execute
-   */
-  js_file: string;
-  /**
-   * Include globs for files to search (optional, defaults to language-specific extensions)
-   */
-  include?: Array<string>;
-  /**
-   * Exclude globs for files to skip (optional)
-   */
-  exclude?: Array<string>;
-  /**
-   * Base path for resolving relative globs (optional, defaults to current working directory)
-   */
-  base_path?: string;
-  /**
-   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
-   */
-  max_threads?: number;
-  /**
-   * Perform a dry run without making changes (optional, defaults to false)
-   */
-  dry_run?: boolean;
-  /**
-   * Language to process (optional)
-   */
-  language?: string;
-};

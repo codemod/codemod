@@ -416,3 +416,24 @@ export type RootKind<M extends TypesMap> = NoNever<
 
 export declare function parse<M extends TypesMap = TypesMap>(lang: string, src: string): SgRoot<M>;
 export declare function parseAsync<M extends TypesMap = TypesMap>(lang: string, src: string): Promise<SgRoot<M>>;
+
+
+export type TransformOptions<T extends TypesMap> = {
+  params: Record<string, string>;
+  matches?: SgNode<T>[];
+  language: string;
+  matrixValues?: Record<string, any>;
+};
+
+export type Transform<T extends TypesMap> = (
+  root: SgRoot<T>,
+  options: TransformOptions<T>
+) => Promise<string | null>;
+
+export type GetSelectorOptions<_T extends TypesMap> = {
+  params: Record<string, string>;
+};
+
+export type GetSelector<T extends TypesMap> = ({
+  params,
+}: GetSelectorOptions<T>) => RuleConfig<T>;

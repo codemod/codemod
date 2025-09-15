@@ -1,6 +1,6 @@
 {
   "name": "@codemod.com/butterflow-scheduler",
-  "version": "0.1.5",
+  "version": "0.1.8",
   "description": "Butterflow Scheduler",
   "main": "pkg/butterflow_scheduler.js",
   "types": "pkg/butterflow_scheduler.d.ts",

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use schemars::{JsonSchema, Schema as JsonSchemaSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,6 +8,60 @@ use uuid::Uuid;
 use crate::node::Node;
 use crate::template::Template;
 use ts_rs::TS;
+
+/// Simple schema system for workflow state and params validation
+/// Root is always an object with properties
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema, TS)]
+pub struct SimpleSchema {
+    /// Properties of the root object
+    #[serde(flatten)]
+    pub properties: HashMap<String, SimpleSchemaProperty>,
+}
+
+/// Represents a property in the schema with type-specific fields
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SimpleSchemaProperty {
+    /// String type with optional oneOf and default
+    String {
+        /// Allows multiple schema alternatives for strings
+        #[serde(rename = "oneOf")]
+        one_of: Option<Vec<SimpleSchemaVariant>>,
+
+        /// Default value for the property
+        default: Option<String>,
+    },
+
+    /// Array type with required items schema
+    Array {
+        /// Defines the schema of array items
+        items: Box<SimpleSchemaProperty>,
+
+        /// Default value for the property
+        default: Option<String>,
+    },
+
+    /// Object type with properties
+    Object {
+        /// Properties of the object
+        properties: Option<HashMap<String, SimpleSchemaProperty>>,
+
+        /// Default value for the property
+        default: Option<String>,
+    },
+}
+
+/// Represents a variant in a oneOf schema for strings
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SimpleSchemaVariant {
+    /// Type of this variant (always "string" for oneOf variants)
+    #[serde(rename = "type")]
+    pub schema_type: String,
+
+    /// For string types with enumeration, the allowed values
+    #[serde(rename = "enum")]
+    pub enum_values: Option<Vec<String>>,
+}
 
 /// Represents a workflow definition
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
@@ -19,6 +73,11 @@ pub struct Workflow {
     #[serde(default)]
     #[ts(optional=nullable)]
     pub state: Option<WorkflowState>,
+
+    /// Params schema definition
+    #[serde(default)]
+    #[ts(optional=nullable)]
+    pub params: Option<WorkflowParams>,
 
     // Why using as="Option<Vec<Template>>" -> https://github.com/Aleph-Alpha/ts-rs/issues/175
     /// Templates for reusable components
@@ -33,10 +92,17 @@ pub struct Workflow {
 /// Represents the state schema for a workflow
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema, TS)]
 pub struct WorkflowState {
-    /// Object schema definition (enforced to be object type)
+    /// Object schema definition (root is always an object)
     #[serde(default)]
-    #[ts(type = "Record<string, any>")]
-    pub schema: JsonSchemaSchema,
+    pub schema: SimpleSchema,
+}
+
+/// Represents the params schema for a workflow
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema, TS)]
+pub struct WorkflowParams {
+    /// Object schema definition (root is always an object)
+    #[serde(default)]
+    pub schema: SimpleSchema,
 }
 
 /// Represents a workflow run
