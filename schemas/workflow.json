@@ -443,6 +443,18 @@
           "required": [
             "codemod"
           ]
+        },
+        {
+          "description": "Execute AI agent with prompt",
+          "type": "object",
+          "properties": {
+            "ai": {
+              "$ref": "#/$defs/UseAI"
+            }
+          },
+          "required": [
+            "ai"
+          ]
         }
       ],
       "required": [
@@ -674,6 +686,116 @@
           "type": "string",
           "const": "manual"
         }
+      ]
+    },
+    "UseAI": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "description": "LLM API key (optional, defaults to configured key or env var)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "dry_run": {
+          "description": "Perform a dry run without making changes (optional, defaults to false)",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "enable_lakeview": {
+          "description": "Enable lakeview mode (optional, defaults to true)",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "endpoint": {
+          "description": "LLM API endpoint (optional, defaults to configured endpoint)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "env": {
+          "description": "Environment variables to set for the AI agent execution (optional)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "max_steps": {
+          "description": "Maximum number of steps the AI agent can take (optional, defaults to 100)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "model": {
+          "description": "AI model to use (optional, defaults to configured model)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "prompt": {
+          "description": "Prompt to send to the AI agent",
+          "type": "string"
+        },
+        "system_prompt": {
+          "description": "System prompt for the AI agent (optional)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timeout_ms": {
+          "description": "Timeout in milliseconds for AI agent execution (optional)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "tools": {
+          "description": "Tools available to the AI agent (optional, defaults to common tools)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "working_dir": {
+          "description": "Working directory for AI agent execution (optional, defaults to current directory)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "prompt"
       ]
     },
     "UseAstGrep": {
