@@ -370,6 +370,14 @@
           },
           "default": null
         },
+        "if": {
+          "description": "Conditional expression to determine if this step should be executed",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "name": {
           "description": "Human-readable name",
           "type": "string"

@@ -28,6 +28,12 @@ pub enum Error {
     #[error("Variable resolution error: {0}")]
     VariableResolution(String),
 
+    #[error("Expression evaluation error: {0}")]
+    ExpressionEvaluation(#[from] evalexpr::EvalexprError),
+
+    #[error("Invalid command. Expected string, got unknown type")]
+    InvalidCommand,
+
     #[error("Runtime error: {0}")]
     Runtime(String),
 

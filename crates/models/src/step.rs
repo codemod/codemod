@@ -16,6 +16,12 @@ pub struct Step {
     #[serde(default)]
     #[ts(optional, as = "Option<HashMap<String, String>>")]
     pub env: Option<HashMap<String, String>>,
+
+    /// Conditional expression to determine if this step should be executed
+    #[serde(rename = "if")]
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub condition: Option<String>,
 }
 
 /// Represents the action a step can take - either using templates or running a script

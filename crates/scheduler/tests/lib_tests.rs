@@ -37,6 +37,7 @@ fn create_basic_node(id: &str, depends_on: Vec<&str>) -> Node {
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running {id}'")),
             env: None,
+            condition: None,
         }],
         env: HashMap::new(),
     }
@@ -71,6 +72,7 @@ fn create_matrix_node_values(
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running matrix {id}'")),
             env: None,
+            condition: None,
         }],
         env: HashMap::new(),
     }
@@ -101,6 +103,7 @@ fn create_matrix_node_from_state(id: &str, depends_on: Vec<&str>, state_key: &st
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running matrix from state {id}'")),
             env: None,
+            condition: None,
         }],
         env: HashMap::new(),
     }
@@ -132,6 +135,7 @@ fn create_manual_node(
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running manual {id}'")),
             env: None,
+            condition: None,
         }],
         env: HashMap::new(),
     }

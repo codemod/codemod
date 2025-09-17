@@ -18,6 +18,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+evalexpr = "11.3"
 schemars = "1.0.0-alpha.17"
 ts-rs = { version = "11.0", features = [
     "chrono-impl",

@@ -632,6 +632,7 @@ name = "butterflow-models"
 version = "1.0.12"
 dependencies = [
  "chrono",
+ "evalexpr",
  "regex",
  "reqwest 0.12.23",
  "schemars 1.0.4",
@@ -1707,6 +1708,12 @@ name = "escape8259"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5692dd7b5a1978a5aeb0ce83b7655c58ca8efdcb79d21036ea249da95afec2c6"
+
+[[package]]
+name = "evalexpr"
+version = "11.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aff27af350e7b53e82aac3e5ab6389abd8f280640ac034508dff0608c4c7e5"
 
 [[package]]
 name = "event-listener"
