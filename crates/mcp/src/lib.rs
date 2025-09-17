@@ -39,6 +39,8 @@ impl CodemodMcpServer {
             description: description.map(|s| s.to_string()),
             mime_type: None,
             size: None,
+            icons: None,
+            title: None,
         }
         .no_annotation()
     }

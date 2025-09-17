@@ -1,0 +1,31 @@
+[package]
+name = "codemod-ai"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+coro-core = { git = "https://github.com/mohebifar/coro-code.git", branch = "chore/upgrade-tree-sitter"}
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.25"
+tokio = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+walkdir = "2.0"
+ignore = { workspace = true }
+jsonpath-rust = "0.7"
+tracing = "0.1"
+log = { workspace = true }

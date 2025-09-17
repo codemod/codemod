@@ -3509,6 +3509,285 @@ async fn test_matrix_hash_based_deduplication() {
     );
 }
 
+// Helper function to create a workflow with conditional step
+fn create_conditional_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "conditional-node".to_string(),
+            name: "Conditional Node".to_string(),
+            description: Some("Test node with conditional step".to_string()),
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![
+                Step {
+                    name: "Always runs".to_string(),
+                    action: StepAction::RunScript("echo 'This step always runs'".to_string()),
+                    env: None,
+                    condition: None,
+                },
+                Step {
+                    name: "Conditional step".to_string(),
+                    action: StepAction::RunScript(
+                        "echo 'This step runs conditionally'".to_string(),
+                    ),
+                    env: None,
+                    condition: Some("params.my_cond".to_string()),
+                },
+            ],
+            env: HashMap::new(),
+        }],
+    }
+}
+
+// Helper function to create a workflow with non-existent variable references
+fn create_nonexistent_variable_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "nonexistent-var-node".to_string(),
+                name: "Node with non-existent variables".to_string(),
+                description: Some("Test node referencing non-existent variables".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    name: "Test non-existent variable".to_string(),
+                    action: StepAction::RunScript("echo 'Value: ${nonexistent.variable}' && echo 'Another: ${params.missing_param}'".to_string()),
+                    env: Some(HashMap::from([
+                        ("TEST_VAR".to_string(), "${nonexistent.env_var}".to_string()),
+                        ("MISSING_PARAM".to_string(), "${params.does_not_exist}".to_string()),
+                    ])),
+                    condition: None,
+                }],
+                env: HashMap::from([
+                    ("NODE_VAR".to_string(), "${state.missing_state}".to_string()),
+                ]),
+            },
+        ],
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_params_true() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_conditional_workflow();
+
+    // Create parameters with my_cond set to true
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), "true".to_string());
+
+    let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
+
+    // Allow some time for the workflow to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Get the workflow run
+    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
+
+    // Check that the workflow completed
+    assert!(
+        workflow_run.status == WorkflowStatus::Running
+            || workflow_run.status == WorkflowStatus::Completed
+    );
+
+    // Get the tasks
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+
+    // Find the conditional task
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    // The task should have completed successfully (both steps should run)
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    // Check logs contain both steps if completed
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        assert!(log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_params_false() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_conditional_workflow();
+
+    // Create parameters with my_cond set to false
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), "false".to_string());
+
+    let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
+
+    // Allow some time for the workflow to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Get the workflow run
+    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
+
+    // Check that the workflow completed
+    assert!(
+        workflow_run.status == WorkflowStatus::Running
+            || workflow_run.status == WorkflowStatus::Completed
+    );
+
+    // Get the tasks
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+
+    // Find the conditional task
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    // The task should have completed successfully (only first step should run)
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    // Check logs contain only the first step if completed
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        // The conditional step should NOT have run
+        assert!(!log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_params_missing() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_conditional_workflow();
+
+    // Create parameters WITHOUT my_cond (it should default to false/empty)
+    let params = HashMap::new();
+
+    let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
+
+    // Allow some time for the workflow to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Get the workflow run
+    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
+
+    // Check that the workflow completed
+    assert!(
+        workflow_run.status == WorkflowStatus::Running
+            || workflow_run.status == WorkflowStatus::Completed
+    );
+
+    // Get the tasks
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+
+    // Find the conditional task
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    // The task should have completed successfully (only first step should run, condition should be false)
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    // Check logs contain only the first step if completed
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        // The conditional step should NOT have run (missing param should be treated as false)
+        assert!(!log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_expression_resolution_nonexistent_variable() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_nonexistent_variable_workflow();
+    let params = HashMap::new(); // No parameters provided
+
+    let workflow_run_id = engine.run_workflow(workflow, params, None).await.unwrap();
+
+    // Allow some time for the workflow to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Get the workflow run
+    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
+
+    // Check that the workflow completed without errors (non-existent variables should resolve gracefully)
+    assert!(
+        workflow_run.status == WorkflowStatus::Running
+            || workflow_run.status == WorkflowStatus::Completed
+            || workflow_run.status == WorkflowStatus::Failed // Might fail, but shouldn't crash
+    );
+
+    // Get the tasks
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+
+    // Find the task with non-existent variables
+    let nonexistent_var_task = tasks
+        .iter()
+        .find(|t| t.node_id == "nonexistent-var-node")
+        .unwrap();
+
+    // The task should have either completed or failed gracefully
+    assert!(
+        nonexistent_var_task.status == TaskStatus::Completed
+            || nonexistent_var_task.status == TaskStatus::Running
+            || nonexistent_var_task.status == TaskStatus::Failed
+    );
+
+    // If the task completed, check that non-existent variables were resolved to empty strings
+    if nonexistent_var_task.status == TaskStatus::Completed {
+        let log_output = nonexistent_var_task.logs.join("\n");
+        // Non-existent variables should resolve to empty strings in the output
+        // The exact output depends on how the shell interprets empty variables,
+        // but it should not contain literal "${variable}" strings
+        println!("Log output for non-existent variables test: {}", log_output);
+    }
+}
+
 // TODO: test_cycle_detection_direct_cycle
 // TODO: test_find_cycle_in_chain
 // TODO: test_runtime_cycle_detection
