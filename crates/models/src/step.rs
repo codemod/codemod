@@ -47,6 +47,10 @@ pub enum StepAction {
     /// Execute another codemod
     #[serde(rename = "codemod")]
     Codemod(UseCodemod),
+
+    /// Execute AI agent with prompt
+    #[serde(rename = "ai")]
+    AI(UseAI),
 }
 
 /// Represents a template use in a step
@@ -150,4 +154,66 @@ pub struct UseCodemod {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub working_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseAI {
+    /// Prompt to send to the AI agent
+    pub prompt: String,
+
+    /// Working directory for AI agent execution (optional, defaults to current directory)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub working_dir: Option<String>,
+
+    /// Timeout in milliseconds for AI agent execution (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<u64>")]
+    pub timeout_ms: Option<u64>,
+
+    /// Environment variables to set for the AI agent execution (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<HashMap<String, String>>")]
+    pub env: Option<HashMap<String, String>>,
+
+    /// Perform a dry run without making changes (optional, defaults to false)
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: Option<bool>,
+
+    /// AI model to use (optional, defaults to configured model)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub model: Option<String>,
+
+    /// System prompt for the AI agent (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub system_prompt: Option<String>,
+
+    /// Maximum number of steps the AI agent can take (optional, defaults to 100)
+    #[serde(default)]
+    #[ts(optional, as = "Option<usize>")]
+    pub max_steps: Option<usize>,
+
+    /// Tools available to the AI agent (optional, defaults to common tools)
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub tools: Option<Vec<String>>,
+
+    /// LLM API endpoint (optional, defaults to configured endpoint)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub endpoint: Option<String>,
+
+    /// LLM API key (optional, defaults to configured key or env var)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub api_key: Option<String>,
+
+    /// Enable lakeview mode (optional, defaults to true)
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub enable_lakeview: Option<bool>,
 }

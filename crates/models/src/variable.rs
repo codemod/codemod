@@ -923,4 +923,15 @@ mod tests {
             "Null: ''"
         );
     }
+
+    #[test]
+    fn test_resolve_string_with_expression_with_missing_params() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+
+        assert!(
+            resolve_string_with_expression("Hello ${{ params.name }}", &params, &state, None)
+                .is_err()
+        );
+    }
 }

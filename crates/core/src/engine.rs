@@ -1,3 +1,4 @@
+use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs::File;
@@ -27,7 +28,7 @@ use uuid::Uuid;
 
 use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
-use butterflow_models::step::{StepAction, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
     Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
@@ -1418,6 +1419,10 @@ impl Engine {
                 ))
                 .await
             }
+            StepAction::AI(ai_config) => {
+                self.execute_ai_step(ai_config, step_env, node, task, params, state)
+                    .await
+            }
         }
     }
 
@@ -1724,6 +1729,70 @@ impl Engine {
             })
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
+        Ok(())
+    }
+
+    /// Execute an AI agent step
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_ai_step(
+        &self,
+        ai_config: &UseAI,
+        _step_env: &Option<HashMap<String, String>>,
+        _node: &Node,
+        task: &Task,
+        params: &HashMap<String, String>,
+        state: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        info!("Executing AI agent step with prompt: {}", ai_config.prompt);
+
+        // Resolve the prompt with parameters, state, and matrix values
+        let resolved_prompt = resolve_string_with_expression(
+            &ai_config.prompt,
+            params,
+            state,
+            task.matrix_values.as_ref(),
+        )?;
+
+        // Configure LLM settings
+        let api_key = ai_config
+            .api_key
+            .clone()
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+            .or_else(|| std::env::var("LLM_API_KEY").ok())
+            .ok_or_else(|| {
+                Error::StepExecution(
+                    "AI API key not provided and not found in environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, or LLM_API_KEY)".to_string(),
+                )
+            })?;
+
+        let endpoint = ai_config
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+        let model = ai_config
+            .model
+            .clone()
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
+        let config = ExecuteAiStepConfig {
+            api_key,
+            endpoint,
+            model,
+            system_prompt: ai_config.system_prompt.clone(),
+            max_steps: ai_config.max_steps,
+            enable_lakeview: ai_config.enable_lakeview,
+            prompt: resolved_prompt,
+            working_dir: self.workflow_run_config.target_path.clone(),
+        };
+
+        let output = execute_ai_step(config)
+            .await
+            .map_err(|e| Error::StepExecution(e.to_string()))?;
+
+        println!("AI agent output:\n{}", output.data.unwrap_or_default());
+        info!("AI agent step completed successfully");
         Ok(())
     }
 
