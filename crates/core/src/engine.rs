@@ -29,8 +29,9 @@ use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 use butterflow_models::step::{StepAction, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
-    resolve_variables, DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task,
-    TaskDiff, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
+    evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
+    Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
+    WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -1163,6 +1164,23 @@ impl Engine {
                 .get_state(workflow_run.id)
                 .await?;
 
+            if let Some(condition) = &step.condition {
+                let should_execute = evaluate_condition(
+                    condition,
+                    &workflow_run.params,
+                    &state,
+                    task.matrix_values.as_ref(),
+                )?;
+
+                if !should_execute {
+                    info!(
+                        "Skipping step '{}' - condition not met: {}",
+                        step.name, condition
+                    );
+                    continue;
+                }
+            }
+
             let result = self
                 .execute_step_action(
                     runner.as_ref(),
@@ -1342,6 +1360,23 @@ impl Engine {
                 combined_params.extend(template_use.inputs.clone());
 
                 for template_step in &template.steps {
+                    if let Some(condition) = &template_step.condition {
+                        let should_execute = evaluate_condition(
+                            condition,
+                            &combined_params,
+                            state,
+                            task.matrix_values.as_ref(),
+                        )?;
+
+                        if !should_execute {
+                            info!(
+                                "Skipping template step '{}' - condition not met: {}",
+                                template_step.name, condition
+                            );
+                            continue;
+                        }
+                    }
+
                     Box::pin(self.execute_step_action(
                         runner,
                         &template_step.action,
@@ -1859,6 +1894,23 @@ impl Engine {
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
             for step in &node.steps {
+                if let Some(condition) = &step.condition {
+                    let should_execute = evaluate_condition(
+                        condition,
+                        &codemod_params,
+                        state,
+                        task.matrix_values.as_ref(),
+                    )?;
+
+                    if !should_execute {
+                        info!(
+                            "Skipping codemod step '{}' - condition not met: {}",
+                            step.name, condition
+                        );
+                        continue;
+                    }
+                }
+
                 Box::pin(self.execute_step_action(
                     runner.as_ref(),
                     &step.action,
@@ -1947,7 +1999,8 @@ impl Engine {
         );
 
         // Resolve variables
-        let resolved_command = resolve_variables(run, params, state, task.matrix_values.as_ref())?;
+        let resolved_command =
+            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref())?;
 
         // Execute the command
         let output = runner.run_command(&resolved_command, &env).await?;
