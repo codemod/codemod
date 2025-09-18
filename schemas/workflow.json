@@ -243,7 +243,24 @@
       }
     },
     "SimpleSchemaProperty": {
-      "description": "Represents a property in the schema with type-specific fields",
+      "description": "Represents a property in the schema with common metadata and type-specific fields",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Description of what this property represents",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Human-readable name for this property",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "oneOf": [
         {
           "description": "String type with optional oneOf and default",

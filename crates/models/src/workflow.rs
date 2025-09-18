@@ -18,10 +18,26 @@ pub struct SimpleSchema {
     pub properties: HashMap<String, SimpleSchemaProperty>,
 }
 
-/// Represents a property in the schema with type-specific fields
+/// Represents a property in the schema with common metadata and type-specific fields
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SimpleSchemaProperty {
+    /// Human-readable name for this property
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Description of what this property represents
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// The actual schema definition
+    #[serde(flatten)]
+    pub schema: SimpleSchemaType,
+}
+
+/// Represents the type-specific schema definition
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum SimpleSchemaProperty {
+pub enum SimpleSchemaType {
     /// String type with optional oneOf and default
     String {
         /// Allows multiple schema alternatives for strings

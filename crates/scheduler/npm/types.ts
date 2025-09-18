@@ -16,7 +16,16 @@ export type WorkflowStatus =
   | "AwaitingTrigger"
   | "Canceled";
 export type SimpleSchema = {
-  [key in string]?:
+  [key in string]?: {
+    /**
+     * Human-readable name for this property
+     */
+    name: string | null;
+    /**
+     * Description of what this property represents
+     */
+    description: string | null;
+  } & (
     | {
         type: "string";
         /**
@@ -56,7 +65,8 @@ export type SimpleSchema = {
          * Default value for the property
          */
         default: boolean | null;
-      };
+      }
+  );
 };
 export type Node = {
   /**
@@ -140,7 +150,22 @@ export type JsonValue =
   | Array<JsonValue>
   | { [key in string]?: JsonValue }
   | null;
-export type SimpleSchemaProperty =
+export type WorkflowParams = {
+  /**
+   * Object schema definition (root is always an object)
+   */
+  schema: SimpleSchema;
+};
+export type SimpleSchemaProperty = {
+  /**
+   * Human-readable name for this property
+   */
+  name: string | null;
+  /**
+   * Description of what this property represents
+   */
+  description: string | null;
+} & (
   | {
       type: "string";
       /**
@@ -180,13 +205,8 @@ export type SimpleSchemaProperty =
        * Default value for the property
        */
       default: boolean | null;
-    };
-export type WorkflowParams = {
-  /**
-   * Object schema definition (root is always an object)
-   */
-  schema: SimpleSchema;
-};
+    }
+);
 export type UseJSAstGrep = {
   /**
    * Path to the JavaScript file to execute
