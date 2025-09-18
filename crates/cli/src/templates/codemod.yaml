@@ -7,6 +7,7 @@ author: "{author}"
 license: "{license}"
 workflow: "workflow.yaml"
 category: "migration"
+repository: "{repository}"
 
 targets:
   languages: ["{language}"]
