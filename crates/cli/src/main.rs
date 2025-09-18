@@ -39,7 +39,7 @@ struct Cli {
     trailing_args: Vec<String>,
 
     /// Disable telemetry
-    #[arg(long, global = true)]
+    #[arg(long, global = true, action = clap::ArgAction::SetTrue)]
     disable_analytics: bool,
 }
 
@@ -225,7 +225,11 @@ async fn main() -> Result<()> {
 
     let implicit_run_params = Cli::try_parse_from(cli.trailing_args.clone());
 
-    if cli.disable_analytics || implicit_run_params.unwrap().disable_analytics {
+    if cli.disable_analytics
+        || implicit_run_params
+            .map(|params| params.disable_analytics)
+            .unwrap_or(false)
+    {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
