@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-coro-core = { git = "https://github.com/Blushyes/coro-code", branch = "main" }
+coro-core = "0.0.7"
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"
@@ -29,3 +29,5 @@ ignore = { workspace = true }
 jsonpath-rust = "0.7"
 tracing = "0.1"
 log = { workspace = true }
+# We need this vendored openssl for cross-compilation
+# openssl = { version = "0.10", features = ["vendored"] }

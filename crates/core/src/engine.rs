@@ -29,6 +29,26 @@ use uuid::Uuid;
 use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 
+use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::{
+    evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
+    Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
+    WorkflowRunDiff, WorkflowStatus,
+};
+use butterflow_runners::direct_runner::DirectRunner;
+#[cfg(feature = "docker")]
+use butterflow_runners::docker_runner::DockerRunner;
+#[cfg(feature = "podman")]
+use butterflow_runners::podman_runner::PodmanRunner;
+use butterflow_runners::Runner;
+use butterflow_scheduler::Scheduler;
+use butterflow_state::local_adapter::LocalStateAdapter;
+use butterflow_state::StateAdapter;
+use codemod_sandbox::{
+    sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
+    utils::project_discovery::find_tsconfig,
+};
+
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
     notify: Arc<Notify>,
@@ -56,25 +76,6 @@ impl Drop for TaskCleanupGuard {
         }
     }
 }
-use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
-use butterflow_models::{
-    evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
-    Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
-    WorkflowRunDiff, WorkflowStatus,
-};
-use butterflow_runners::direct_runner::DirectRunner;
-#[cfg(feature = "docker")]
-use butterflow_runners::docker_runner::DockerRunner;
-#[cfg(feature = "podman")]
-use butterflow_runners::podman_runner::PodmanRunner;
-use butterflow_runners::Runner;
-use butterflow_scheduler::Scheduler;
-use butterflow_state::local_adapter::LocalStateAdapter;
-use butterflow_state::StateAdapter;
-use codemod_sandbox::{
-    sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
-    utils::project_discovery::find_tsconfig,
-};
 
 /// Workflow engine
 pub struct Engine {
@@ -182,8 +183,6 @@ impl Engine {
                     }
                     Ok(Err(e)) => {
                         error!("Task {} execution failed: {}", task_id, e);
-                        // Mark guard as sent since execute_task already sent notification on error
-                        cleanup_guard.mark_sent();
                     }
                     Err(_) => {
                         error!(
@@ -1254,7 +1253,8 @@ impl Engine {
                     &workflow_run.params,
                     &state,
                     task.matrix_values.as_ref(),
-                )?;
+                )
+                .unwrap_or_default();
 
                 if !should_execute {
                     info!(
@@ -1389,13 +1389,13 @@ impl Engine {
         #[cfg(test)]
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        // Notify that a task has completed (for event-driven waiting)
-        self.task_completion_notify.notify_one();
-
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = task.master_task_id {
             self.update_matrix_master_status(master_task_id).await?;
         }
+
+        // Notify that a task has completed (for event-driven waiting)
+        self.task_completion_notify.notify_one();
 
         Ok(())
     }
