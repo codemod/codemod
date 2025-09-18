@@ -3,7 +3,7 @@ use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -35,8 +35,8 @@ pub struct Command {
     dry_run: bool,
 
     /// Additional arguments to pass to the codemod
-    #[arg(last = true)]
-    params: Vec<String>,
+    #[arg(long = "param", value_name = "KEY=VALUE")]
+    params: Option<Vec<String>>,
 
     /// Allow dirty git status
     #[arg(long)]
@@ -47,7 +47,11 @@ pub struct Command {
     target_path: Option<PathBuf>,
 }
 
-pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+pub async fn handler(
+    args: &Command,
+    telemetry: TelemetrySenderMutex,
+    disable_analytics: bool,
+) -> Result<()> {
     // Resolve the package (local path or registry package)
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
@@ -78,7 +82,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 style("[2/2]").bold().dim(),
                 args.package,
             );
-            return run_legacy_codemod(args).await;
+            return run_legacy_codemod(args, disable_analytics).await;
         }
         Err(e) => return Err(anyhow::anyhow!("Registry error: {}", e)),
     };
@@ -102,7 +106,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
-    let params = parse_params(&args.params).context("Failed to parse parameters")?;
+    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
+        .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(
@@ -202,10 +207,13 @@ pub async fn run_legacy_codemod_with_raw_args(raw_args: &[String]) -> Result<()>
     Ok(())
 }
 
-async fn run_legacy_codemod(args: &Command) -> Result<()> {
+async fn run_legacy_codemod(args: &Command, disable_analytics: bool) -> Result<()> {
     let mut legacy_args = vec![args.package.clone()];
     if let Some(target_path) = args.target_path.as_ref() {
         legacy_args.push(format!("--target {}", target_path.to_string_lossy()));
+    }
+    if disable_analytics {
+        legacy_args.push("--no-telemetry".to_string());
     }
     run_legacy_codemod_with_raw_args(&legacy_args).await
 }

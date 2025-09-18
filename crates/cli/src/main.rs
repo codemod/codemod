@@ -32,14 +32,14 @@ struct Cli {
     command: Option<Commands>,
 
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     verbose: bool,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     trailing_args: Vec<String>,
 
     /// Disable telemetry
-    #[arg(long, short)]
+    #[arg(long, global = true, action = clap::ArgAction::SetTrue)]
     disable_analytics: bool,
 }
 
@@ -173,15 +173,51 @@ async fn handle_implicit_run_command(
         return Ok(false);
     }
 
-    // Construct arguments for clap parsing as if "run" was specified
+    let mut filtered_args = Vec::new();
+    let mut disable_analytics = false;
+    let mut verbose = false;
+
+    for arg in &trailing_args {
+        match arg.as_str() {
+            "--disable-analytics" => {
+                disable_analytics = true;
+            }
+            "--verbose" | "-v" => {
+                verbose = true;
+            }
+            _ => {
+                filtered_args.push(arg.clone());
+            }
+        }
+    }
+
+    if disable_analytics {
+        std::env::set_var("DISABLE_ANALYTICS", "true");
+    }
+    if verbose {
+        std::env::set_var("RUST_LOG", "debug");
+    }
+
     let mut full_args = vec!["codemod".to_string(), "run".to_string()];
-    full_args.extend(trailing_args.clone());
+    full_args.extend(filtered_args.clone());
+
+    if disable_analytics {
+        full_args.push("--disable-analytics".to_string());
+    }
+    if verbose {
+        full_args.push("--verbose".to_string());
+    }
 
     // Re-parse the entire CLI with the run command included
     match Cli::try_parse_from(&full_args) {
         Ok(new_cli) => {
             if let Some(Commands::Run(run_args)) = new_cli.command {
-                commands::run::handler(&run_args, telemetry_sender.clone()).await?;
+                commands::run::handler(
+                    &run_args,
+                    telemetry_sender.clone(),
+                    new_cli.disable_analytics,
+                )
+                .await?;
                 Ok(true)
             } else {
                 Ok(false)
@@ -190,6 +226,10 @@ async fn handle_implicit_run_command(
         Err(e) => {
             if e.kind() == clap::error::ErrorKind::UnknownArgument {
                 info!("Unknown argument, falling back to legacy codemod runner.");
+                let mut trailing_args = trailing_args.clone();
+                if disable_analytics {
+                    trailing_args.push("--no-telemetry".to_string());
+                }
                 commands::run::run_legacy_codemod_with_raw_args(&trailing_args).await?;
                 return Ok(true);
             }
@@ -213,7 +253,8 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    if cli.disable_analytics {
+    // Set analytics flag from CLI or check if already set by handle_implicit_run_command
+    if cli.disable_analytics || std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string()) {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
@@ -297,7 +338,7 @@ async fn main() -> Result<()> {
             commands::search::handler(args).await?;
         }
         Some(Commands::Run(args)) => {
-            commands::run::handler(args, telemetry_sender.clone()).await?;
+            commands::run::handler(args, telemetry_sender.clone(), cli.disable_analytics).await?;
         }
         Some(Commands::Unpublish(args)) => {
             commands::unpublish::handler(args).await?;
