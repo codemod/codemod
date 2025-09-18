@@ -329,6 +329,26 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "Boolean type with optional default",
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "Default value for the property",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "boolean"
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       ]
     },
