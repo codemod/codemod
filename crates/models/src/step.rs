@@ -216,4 +216,9 @@ pub struct UseAI {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     pub enable_lakeview: Option<bool>,
+
+    /// LLM protocol to use (optional, defaults to openai)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub llm_protocol: Option<String>,
 }

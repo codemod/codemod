@@ -28,6 +28,34 @@ use uuid::Uuid;
 
 use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
+
+/// Guard that ensures task completion notification is sent even on panic/timeout
+struct TaskCleanupGuard {
+    notify: Arc<Notify>,
+    sent: bool,
+}
+
+impl TaskCleanupGuard {
+    fn new(notify: Arc<Notify>) -> Self {
+        Self {
+            notify,
+            sent: false,
+        }
+    }
+
+    fn mark_sent(&mut self) {
+        self.sent = true;
+    }
+}
+
+impl Drop for TaskCleanupGuard {
+    fn drop(&mut self) {
+        if !self.sent {
+            debug!("TaskCleanupGuard: Sending task completion notification on cleanup");
+            self.notify.notify_one();
+        }
+    }
+}
 use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
@@ -135,12 +163,41 @@ impl Engine {
     /// Spawn a task asynchronously
     async fn spawn_task_with_handle(&self, task_id: Uuid) -> Result<()> {
         let engine = self.clone();
+        let task_completion_notify = Arc::clone(&self.task_completion_notify);
 
         let runtime_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             runtime_handle.block_on(async move {
-                if let Err(e) = engine.execute_task(task_id).await {
-                    error!("Task execution failed: {e}");
+                // Always ensure task completion notification is sent, even on panic or hang
+                let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
+
+                // Add timeout to prevent infinite hanging
+                let task_timeout = tokio::time::Duration::from_secs(45 * 60); // 5 minutes timeout for AI tasks
+
+                match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
+                    Ok(Ok(())) => {
+                        debug!("Task {} completed successfully", task_id);
+                        // Mark guard as sent since execute_task already sent notification
+                        cleanup_guard.mark_sent();
+                    }
+                    Ok(Err(e)) => {
+                        error!("Task {} execution failed: {}", task_id, e);
+                        // Mark guard as sent since execute_task already sent notification on error
+                        cleanup_guard.mark_sent();
+                    }
+                    Err(_) => {
+                        error!(
+                            "Task {} timed out after {} seconds",
+                            task_id,
+                            task_timeout.as_secs()
+                        );
+                        // Mark task as failed due to timeout
+                        if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
+                        {
+                            error!("Failed to mark task {} as failed: {}", task_id, e);
+                        }
+                        // Let cleanup guard send notification for timeout case
+                    }
                 }
             });
         });
@@ -148,7 +205,42 @@ impl Engine {
         Ok(())
     }
 
-    /// Wait for all currently running tasks to complete
+    /// Mark a task as failed due to timeout or other issues
+    async fn mark_task_as_failed(&self, task_id: Uuid, error_message: &str) -> Result<()> {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(TaskStatus::Failed)?),
+            },
+        );
+        fields.insert(
+            "ended_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(Utc::now())?),
+            },
+        );
+        fields.insert(
+            "error".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Add,
+                value: Some(serde_json::to_value(error_message.to_string())?),
+            },
+        );
+        let task_diff = TaskDiff { task_id, fields };
+
+        self.state_adapter
+            .lock()
+            .await
+            .apply_task_diff(&task_diff)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Wait for all currently running tasks to complete using pure notification-based approach
     async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
         let mut consecutive_empty_checks = 0;
         const MAX_EMPTY_CHECKS: u8 = 3;
@@ -186,16 +278,7 @@ impl Engine {
                 running_tasks.len()
             );
 
-            // Use event-driven waiting with timeout fallback for robustness
-            tokio::select! {
-                _ = self.task_completion_notify.notified() => {
-                    // Task completed, check again
-                }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                    // Timeout fallback to prevent infinite waiting due to missed notifications
-                    debug!("Timeout while waiting for task completion notification");
-                }
-            }
+            self.task_completion_notify.notified().await;
         }
         Ok(())
     }
@@ -1757,24 +1840,37 @@ impl Engine {
         let api_key = ai_config
             .api_key
             .clone()
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
             .or_else(|| std::env::var("LLM_API_KEY").ok())
             .ok_or_else(|| {
                 Error::StepExecution(
-                    "AI API key not provided and not found in environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, or LLM_API_KEY)".to_string(),
+                    "AI API key not provided and not found in environment variables (LLM_API_KEY)"
+                        .to_string(),
                 )
             })?;
-
-        let endpoint = ai_config
-            .endpoint
-            .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         let model = ai_config
             .model
             .clone()
+            .or_else(|| std::env::var("LLM_MODEL").ok())
             .unwrap_or_else(|| "gpt-4o".to_string());
+
+        let llm_provider = ai_config
+            .llm_protocol
+            .clone()
+            .or_else(|| std::env::var("LLM_PROVIDER").ok())
+            .unwrap_or_else(|| "openai".to_string());
+
+        let endpoint = ai_config
+            .endpoint
+            .clone()
+            .or_else(|| std::env::var("LLM_BASE_URL").ok())
+            .unwrap_or_else(|| match llm_provider.as_str() {
+                "openai" => "https://api.openai.com/v1".to_string(),
+                "anthropic" => "https://api.anthropic.com".to_string(),
+                "google_ai" => "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                "azure_openai" => "https://api.openai.com".to_string(),
+                _ => "https://api.openai.com/v1".to_string(),
+            });
 
         let config = ExecuteAiStepConfig {
             api_key,
@@ -1785,6 +1881,7 @@ impl Engine {
             enable_lakeview: ai_config.enable_lakeview,
             prompt: resolved_prompt,
             working_dir: self.workflow_run_config.target_path.clone(),
+            llm_protocol: llm_provider,
         };
 
         let output = execute_ai_step(config)
@@ -2020,6 +2117,19 @@ impl Engine {
         for (key, value) in &node.env {
             env.insert(key.clone(), value.clone());
         }
+
+        // Add state variables
+        for (key, value) in state {
+            env.insert(
+                format!("CODEMOD_STATE_{}", key.to_uppercase()),
+                serde_json::to_string(value).unwrap_or("".to_string()),
+            );
+        }
+
+        env.insert(
+            String::from("CODEMOD_STATE"),
+            serde_json::to_string(state).unwrap_or("".to_string()),
+        );
 
         // Add step environment variables
         if let Some(step_env) = step_env {

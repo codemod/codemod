@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-coro-core = { git = "https://github.com/mohebifar/coro-code.git", branch = "chore/upgrade-tree-sitter"}
+coro-core = { git = "https://github.com/Blushyes/coro-code", branch = "main" }
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"
