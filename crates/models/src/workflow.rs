@@ -49,6 +49,12 @@ pub enum SimpleSchemaProperty {
         /// Default value for the property
         default: Option<String>,
     },
+
+    /// Boolean type with optional default
+    Boolean {
+        /// Default value for the property
+        default: Option<bool>,
+    },
 }
 
 /// Represents a variant in a oneOf schema for strings
