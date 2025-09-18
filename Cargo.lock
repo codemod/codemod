@@ -1321,8 +1321,8 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "coro-core"
-version = "0.0.6"
-source = "git+https://github.com/mohebifar/coro-code.git?branch=chore/upgrade-tree-sitter#e343d390be14b0fff9d38bf06254181d3199e063"
+version = "0.0.7"
+source = "git+https://github.com/Blushyes/coro-code?branch=main#d613db0abd35da8c4d84dce51de055b90136286f"
 dependencies = [
  "anyhow",
  "async-openai",
