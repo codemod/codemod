@@ -48,7 +48,7 @@ pub struct Command {
     pub allow_dirty: bool,
 
     /// Parameters to pass to the codemod
-    #[arg(long)]
+    #[arg(long = "param", value_name = "KEY=VALUE")]
     pub params: Option<Vec<String>>,
 }
 

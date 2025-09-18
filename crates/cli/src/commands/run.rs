@@ -3,7 +3,7 @@ use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -35,8 +35,8 @@ pub struct Command {
     dry_run: bool,
 
     /// Additional arguments to pass to the codemod
-    #[arg(last = true)]
-    params: Vec<String>,
+    #[arg(long = "param", value_name = "KEY=VALUE")]
+    params: Option<Vec<String>>,
 
     /// Allow dirty git status
     #[arg(long)]
@@ -102,7 +102,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
-    let params = parse_params(&args.params).context("Failed to parse parameters")?;
+    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
+        .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(

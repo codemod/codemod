@@ -32,14 +32,14 @@ struct Cli {
     command: Option<Commands>,
 
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     verbose: bool,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     trailing_args: Vec<String>,
 
     /// Disable telemetry
-    #[arg(long, short)]
+    #[arg(long, global = true)]
     disable_analytics: bool,
 }
 
