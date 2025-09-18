@@ -135,6 +135,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
+    let capabilities_for_closure = config.capabilities.clone();
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
@@ -166,7 +167,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 selector_config: None,
                 params: Some(params.clone()),
                 matrix_values: None,
-                capabilities: config.capabilities.as_deref().map(|v| v.to_vec()),
+                capabilities: capabilities_for_closure.as_deref().map(|v| v.to_vec()),
             };
 
             // Execute the codemod on this file
