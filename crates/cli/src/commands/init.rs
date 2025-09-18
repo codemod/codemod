@@ -17,6 +17,10 @@ pub struct Command {
     #[arg(long)]
     name: Option<String>,
 
+    /// Git repository URL
+    #[arg(long)]
+    git_repository_url: Option<String>,
+
     /// Project type
     #[arg(long)]
     project_type: Option<ProjectType>,
@@ -75,6 +79,7 @@ struct ProjectConfig {
     language: String,
     private: bool,
     package_manager: Option<String>,
+    git_repository_url: Option<String>,
 }
 
 // Template constants using include_str!
@@ -132,7 +137,7 @@ static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
 
 pub fn handler(args: &Command) -> Result<()> {
-    let (project_path, project_name) = if args.no_interactive {
+    let (project_path, project_name, git_repository_url) = if args.no_interactive {
         let project_path = match args.path.clone() {
             Some(path) => path,
             None => return Err(anyhow!("Path argument is required")),
@@ -154,7 +159,9 @@ pub fn handler(args: &Command) -> Result<()> {
             }
         };
 
-        (project_path, project_name)
+        let git_repository_url = args.git_repository_url.clone();
+
+        (project_path, project_name, git_repository_url)
     } else {
         // Interactive mode - ask for path if not provided
         let project_path = if let Some(path) = &args.path {
@@ -174,7 +181,9 @@ pub fn handler(args: &Command) -> Result<()> {
                 .to_string()
         });
 
-        (project_path, project_name)
+        let git_repository_url = args.git_repository_url.clone();
+
+        (project_path, project_name, git_repository_url)
     };
 
     if project_path.exists() && !args.force {
@@ -229,6 +238,7 @@ pub fn handler(args: &Command) -> Result<()> {
                 .ok_or_else(|| anyhow!("Language is required --language"))?,
             private: args.private,
             package_manager,
+            git_repository_url,
         }
     } else {
         interactive_setup(&project_name, args)?
@@ -277,6 +287,12 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
             .prompt()?
     };
 
+    let git_repository_url = if let Some(url) = &args.git_repository_url {
+        url.clone()
+    } else {
+        Text::new("Git repository URL:").prompt()?
+    };
+
     let description = if let Some(desc) = &args.description {
         desc.clone()
     } else {
@@ -316,6 +332,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         language,
         private,
         package_manager: args.package_manager.clone(),
+        git_repository_url: Some(git_repository_url),
     })
 }
 
@@ -403,6 +420,10 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         .replace(
             "{visibility}",
             if config.private { "private" } else { "public" },
+        )
+        .replace(
+            "{repository}",
+            config.git_repository_url.as_deref().unwrap_or(""),
         );
 
     fs::write(project_path.join("codemod.yaml"), manifest_content)?;
