@@ -734,6 +734,14 @@
           },
           "default": null
         },
+        "llm_protocol": {
+          "description": "LLM protocol to use (optional, defaults to openai)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "max_steps": {
           "description": "Maximum number of steps the AI agent can take (optional, defaults to 100)",
           "type": [

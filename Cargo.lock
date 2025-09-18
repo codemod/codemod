@@ -1322,7 +1322,8 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "coro-core"
 version = "0.0.7"
-source = "git+https://github.com/Blushyes/coro-code?branch=main#d613db0abd35da8c4d84dce51de055b90136286f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d97dbb905a55992d3bf2b39504f4fd705d7ca19503eebc580eaa49adaf45908"
 dependencies = [
  "anyhow",
  "async-openai",
