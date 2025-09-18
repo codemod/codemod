@@ -50,6 +50,7 @@ fn create_long_running_workflow() -> Workflow {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -109,6 +110,7 @@ fn create_test_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -171,6 +173,7 @@ fn create_manual_trigger_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -231,6 +234,7 @@ fn create_manual_node_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -308,6 +312,7 @@ fn create_matrix_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -391,6 +396,7 @@ fn create_template_workflow() -> Workflow {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -460,6 +466,7 @@ fn create_matrix_from_state_workflow() -> Workflow {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     }
 }
 
@@ -822,6 +829,7 @@ fn create_env_var_workflow() -> Workflow {
                 ("NODE_SPECIFIC_VAR".to_string(), "node-value".to_string()),
             ]),
         }],
+        capabilities: None,
     }
 }
 
@@ -862,6 +870,7 @@ fn create_variable_resolution_workflow() -> Workflow {
                 ("DEBUG".to_string(), "${env.CI}".to_string()),
             ]),
         }],
+        capabilities: None,
     }
 }
 
@@ -903,6 +912,7 @@ echo "workflow_run_id_valid=$(if [ "$CODEMOD_WORKFLOW_RUN_ID" != "" ] && [ ${#CO
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -1410,6 +1420,7 @@ echo "env_vars_in_matrix=true""#
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -1527,6 +1538,7 @@ async fn test_cyclic_dependency_workflow() {
                 env: HashMap::new(),
             },
         ],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -1576,6 +1588,7 @@ async fn test_invalid_template_reference() {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     };
 
     let params = HashMap::new();
@@ -1942,6 +1955,8 @@ function helper() {
             },
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2022,6 +2037,8 @@ interface ApiResponse {
             },
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2080,6 +2097,8 @@ var count = 0;
             },
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2116,6 +2135,8 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 dry_run: Some(false),
                 language: None,
             },
+            None,
+            None,
             None,
             None,
         )
@@ -2184,6 +2205,8 @@ build/
             },
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2206,6 +2229,8 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
             },
+            None,
+            None,
             None,
             None,
         )
@@ -2262,6 +2287,8 @@ export default function transform(ast) {
             },
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2309,6 +2336,8 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("invalid-language".to_string()), // Invalid language
             },
+            None,
+            None,
             None,
             None,
         )
@@ -2360,6 +2389,7 @@ fn create_js_ast_grep_workflow() -> Workflow {
             }],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -2544,6 +2574,7 @@ cat $STATE_OUTPUTS"#.to_string(),
                 env: HashMap::new(),
             },
         ],
+        capabilities: None
     }
 }
 

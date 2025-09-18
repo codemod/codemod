@@ -1,3 +1,4 @@
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use ignore::{
     overrides::{Override, OverrideBuilder},
@@ -12,7 +13,7 @@ use std::{
     },
 };
 
-type PreRunCallbackFn = Box<dyn Fn(&Path, bool) + Send + Sync>;
+type PreRunCallbackFn = Box<dyn Fn(&Path, bool, &CodemodExecutionConfig) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PreRunCallback {
@@ -59,6 +60,8 @@ pub struct CodemodExecutionConfig {
     pub languages: Option<Vec<String>>,
     /// Number of threads to use
     pub threads: Option<usize>,
+    /// Capabilities
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
 
 impl CodemodExecutionConfig {
@@ -78,7 +81,7 @@ impl CodemodExecutionConfig {
         let search_base = self.get_search_base()?;
 
         if let Some(ref pre_run_cb) = self.pre_run_callback {
-            (pre_run_cb.callback)(&search_base, !self.dry_run);
+            (pre_run_cb.callback)(&search_base, !self.dry_run, self);
         }
 
         let globs = self.build_globs(&search_base)?;

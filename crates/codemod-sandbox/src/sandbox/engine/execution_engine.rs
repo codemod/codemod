@@ -9,7 +9,9 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
-use llrt_modules::module_builder::ModuleBuilder;
+#[cfg(feature = "native")]
+use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
@@ -36,6 +38,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
     pub params: Option<HashMap<String, String>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -71,9 +74,25 @@ where
     let ast_grep = AstGrep::new(options.content, options.language);
 
     // Set up built-in modules
-    let module_builder = ModuleBuilder::default();
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) = module_builder.build();
-
+    let mut module_builder = LlrtModuleBuilder::build();
+    if let Some(capabilities) = options.capabilities {
+        for capability in capabilities {
+            match capability {
+                LlrtSupportedModules::Fetch => {
+                    module_builder.enable_fetch();
+                }
+                LlrtSupportedModules::Fs => {
+                    module_builder.enable_fs();
+                }
+                LlrtSupportedModules::ChildProcess => {
+                    module_builder.enable_child_process();
+                }
+                _ => {}
+            }
+        }
+    }
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
     // Add AstGrepModule
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
@@ -322,6 +341,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -362,6 +382,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -403,6 +424,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -444,6 +466,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -488,6 +511,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -526,6 +550,7 @@ function example() {
             selector_config: None,
             params: None,
             matrix_values: None,
+            capabilities: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;

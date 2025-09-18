@@ -16,3 +16,5 @@ keywords: ["transformation", "migration"]
 registry:
   access: "{access}"
   visibility: "{visibility}"
+
+capabilities: []
