@@ -833,10 +833,6 @@ impl Engine {
 
         info!("Starting workflow run {workflow_run_id}");
 
-        // Small delay at workflow start to allow tests to observe the workflow in Running state
-        #[cfg(test)]
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
         // Create tasks for all nodes if they don't exist yet
         let existing_tasks = self
             .state_adapter
@@ -932,10 +928,6 @@ impl Engine {
                     // For now, we log and continue, but this might need refinement.
                 }
                 debug!("Completed matrix task recompilation for workflow {workflow_run_id}");
-
-                // Small delay after matrix recompilation to ensure tasks are properly persisted
-                #[cfg(test)]
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
 
             // Get potentially updated tasks after recompilation (only if we ran recompilation)
@@ -1204,10 +1196,6 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
-        // Add a delay at the start of task execution to allow tests to observe Running state
-        #[cfg(test)]
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
         // Create a runner for this task
         let runner: Box<dyn Runner> = match node
             .runtime
@@ -1318,10 +1306,6 @@ impl Engine {
                         .apply_task_diff(&task_diff)
                         .await?;
 
-                    // Small delay to allow tests to observe intermediate workflow states
-                    #[cfg(test)]
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
                     // Notify that a task has completed (failed) for event-driven waiting
                     self.task_completion_notify.notify_one();
 
@@ -1384,10 +1368,6 @@ impl Engine {
             .await?;
 
         info!("Task {} ({}) completed", task_id, node.id);
-
-        // Small delay to allow tests to observe intermediate workflow states
-        #[cfg(test)]
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = task.master_task_id {
@@ -1826,8 +1806,6 @@ impl Engine {
         params: &HashMap<String, String>,
         state: &HashMap<String, serde_json::Value>,
     ) -> Result<()> {
-        info!("Executing AI agent step with prompt: {}", ai_config.prompt);
-
         // Resolve the prompt with parameters, state, and matrix values
         let resolved_prompt = resolve_string_with_expression(
             &ai_config.prompt,
@@ -1835,6 +1813,8 @@ impl Engine {
             state,
             task.matrix_values.as_ref(),
         )?;
+
+        info!("Executing AI agent step with prompt: {}", resolved_prompt);
 
         // Configure LLM settings
         let api_key = ai_config

@@ -250,9 +250,17 @@ fn hash_value_stable<H: Hasher>(value: &serde_json::Value, hasher: &mut H) {
 }
 
 /// Helper function to create hash from HashMap matrix values
+/// Excludes keys starting with "_meta_" from hash calculation as these are considered
+/// metadata fields that don't affect task execution logic
 fn create_matrix_hash(matrix_values: &HashMap<String, serde_json::Value>) -> u64 {
-    // Convert HashMap to JSON Value for consistent hashing
-    let json_value = serde_json::to_value(matrix_values).unwrap_or(serde_json::Value::Null);
+    // Filter out metadata keys that shouldn't affect task identity
+    let filtered_values: HashMap<String, serde_json::Value> = matrix_values
+        .iter()
+        .filter(|(key, _)| !key.starts_with("_meta_"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let json_value = serde_json::to_value(&filtered_values).unwrap_or(serde_json::Value::Null);
     create_stable_hash(&json_value)
 }
 
@@ -399,7 +407,7 @@ impl Scheduler {
                     let matrix_data = match item_value.as_object() {
                         Some(obj) => obj
                             .iter()
-                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), serde_json::Value::String(s.to_string()))))
+                            .map(|(k, v)| (k.clone(), v.clone()))
                             .collect::<HashMap<_, _>>(),
                         None => {
                             warn!(
@@ -585,7 +593,9 @@ mod tests {
         let state_item = json!({
             "team": "unassigned",
             "shard": "1/6",
-            "shardId": "unassigned 1/6"
+            "shardId": "unassigned 1/6",
+            "files": ["file1.ts", "file2.ts"],
+            "count": 42
         });
 
         // Simulate the conversion that happens in matrix task creation
@@ -593,31 +603,112 @@ mod tests {
             .as_object()
             .unwrap()
             .iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), serde_json::Value::String(s.to_string())))
-            })
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<std::collections::HashMap<_, _>>();
 
-        let _state_hash = create_stable_hash(&state_item);
+        let state_hash = create_matrix_hash(&matrix_data);
         let matrix_hash = create_matrix_hash(&matrix_data);
 
-        // These should NOT be equal because we're comparing different representations
-        // But when we use create_matrix_hash for both sides, they should be equal
+        // Should be equal since we're using the same data
         let converted_matrix_data = state_item
             .as_object()
             .unwrap()
             .iter()
-            .filter_map(|(k, v)| {
-                v.as_str()
-                    .map(|s| (k.clone(), serde_json::Value::String(s.to_string())))
-            })
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<std::collections::HashMap<_, _>>();
         let converted_hash = create_matrix_hash(&converted_matrix_data);
 
         assert_eq!(
             matrix_hash, converted_hash,
             "Matrix hashes should be equal when using same conversion"
+        );
+
+        assert_eq!(
+            state_hash, converted_hash,
+            "State and converted matrix hashes should be equal"
+        );
+    }
+
+    #[test]
+    fn test_meta_key_exclusion() {
+        // Test that keys starting with "_meta_" are excluded from hash calculation
+        let matrix_data_1 = [
+            (
+                "team".to_string(),
+                serde_json::Value::String("frontend".to_string()),
+            ),
+            (
+                "shard".to_string(),
+                serde_json::Value::String("1/3".to_string()),
+            ),
+            (
+                "_meta_timestamp".to_string(),
+                serde_json::Value::String("2024-01-01T00:00:00Z".to_string()),
+            ),
+            (
+                "_meta_build_id".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(12345)),
+            ),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
+        let matrix_data_2 = [
+            (
+                "team".to_string(),
+                serde_json::Value::String("frontend".to_string()),
+            ),
+            (
+                "shard".to_string(),
+                serde_json::Value::String("1/3".to_string()),
+            ),
+            (
+                "_meta_timestamp".to_string(),
+                serde_json::Value::String("2024-01-01T12:00:00Z".to_string()),
+            ), // Different timestamp
+            (
+                "_meta_build_id".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(67890)),
+            ), // Different build ID
+            (
+                "_meta_extra_field".to_string(),
+                serde_json::Value::String("extra".to_string()),
+            ), // Additional meta field
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
+        let hash_1 = create_matrix_hash(&matrix_data_1);
+        let hash_2 = create_matrix_hash(&matrix_data_2);
+
+        assert_eq!(
+            hash_1, hash_2,
+            "Matrix hashes should be equal even when _meta_ fields differ"
+        );
+
+        // Test that non-meta fields still affect the hash
+        let matrix_data_3 = [
+            (
+                "team".to_string(),
+                serde_json::Value::String("backend".to_string()),
+            ), // Different team
+            (
+                "shard".to_string(),
+                serde_json::Value::String("1/3".to_string()),
+            ),
+            (
+                "_meta_timestamp".to_string(),
+                serde_json::Value::String("2024-01-01T00:00:00Z".to_string()),
+            ),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
+        let hash_3 = create_matrix_hash(&matrix_data_3);
+
+        assert_ne!(
+            hash_1, hash_3,
+            "Matrix hashes should differ when non-meta fields differ"
         );
     }
 }
