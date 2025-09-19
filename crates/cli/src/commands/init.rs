@@ -290,7 +290,18 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     let git_repository_url = if let Some(url) = &args.git_repository_url {
         url.clone()
     } else {
-        Text::new("Git repository URL:").prompt()?
+        Text::new("Git repository URL:")
+            .with_validator(|input: &str| {
+                if input.is_empty() || input.starts_with("https://") || input.starts_with("git@") {
+                    Ok(inquire::validator::Validation::Valid)
+                } else {
+                    Ok(inquire::validator::Validation::Invalid(
+                        "Please enter a valid Git URL (must start with 'https://' or 'git@') or leave empty to skip."
+                            .into(),
+                    ))
+                }
+            })
+            .prompt()?
     };
 
     let description = if let Some(desc) = &args.description {
@@ -332,7 +343,11 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         language,
         private,
         package_manager: args.package_manager.clone(),
-        git_repository_url: Some(git_repository_url),
+        git_repository_url: if git_repository_url.is_empty() {
+            None
+        } else {
+            Some(git_repository_url)
+        },
     })
 }
 
