@@ -12,7 +12,7 @@ my-workflow/
 └─ rules/
 ```
 
-The folder—called a **workflow package**—is the root when you run `npx codemod workflow run ./my-workflow/`.
+The folder—called a **workflow package**—is the root when you run `npx codemod workflow run -w ./my-workflow/`.
 
 <Info>
 You can combine types in a single package by placing assets under the required directories (e.g., <code>scripts/</code>, <code>rules/</code>) and referencing them from <code>workflow.yaml</code>.
@@ -24,7 +24,7 @@ You can combine types in a single package by placing assets under the required d
   - When you run
 
     ```bash
-    npx codemod workflow run ./my-workflow/
+    npx codemod workflow run -w ./my-workflow/
     ```
 
     the directory is used as the root for all relative paths.
