@@ -1306,9 +1306,6 @@ impl Engine {
                         .apply_task_diff(&task_diff)
                         .await?;
 
-                    // Notify that a task has completed (failed) for event-driven waiting
-                    self.task_completion_notify.notify_one();
-
                     error!(
                         "Task {} ({}) step {} failed: {}",
                         task_id, node.id, step.name, e
