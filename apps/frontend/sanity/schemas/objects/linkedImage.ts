@@ -29,5 +29,3 @@ export const linkedImage = defineType({
     },
   },
 });
-
-
