@@ -32,6 +32,7 @@ import { codeSnippet } from "./objects/codeSnippet";
 import { collapsible } from "./objects/collapsible";
 import { cta } from "./objects/cta";
 import { imageBlock } from "./objects/image";
+import { linkedImage } from "./objects/linkedImage";
 import { link } from "./objects/link";
 import { muxVideo } from "./objects/muxVideo";
 import { muxVideoWithCaption } from "./objects/muxVideoWithCaption";
@@ -82,6 +83,7 @@ const schemas = [
   collapsible,
   sectionsBody,
   imageBlock,
+  linkedImage,
   codeSnippet,
   twitterEmbed,
   ptBody,

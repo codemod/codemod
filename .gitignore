@@ -63,3 +63,5 @@ coverage/
 # CLI package
 apps/cli/package/
 .cursor/rules/mintlify.mdc
+.vercel
+.env*.local

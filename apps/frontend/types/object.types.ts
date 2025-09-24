@@ -121,6 +121,12 @@ export type ImageBlock = {
   caption?: string;
 };
 
+export type LinkedImageBlock = {
+  image: ImageWithAltFieldObject;
+  link?: { href?: string; label?: string };
+  caption?: string;
+};
+
 export type TwitterEmbedBlock = {
   _type: "twitterEmbed";
   url?: string;
