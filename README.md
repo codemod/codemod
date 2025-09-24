@@ -27,8 +27,9 @@ This repo houses the **Codemod CLI** and its underlying **workflow engine** – 
 
 ## Key Features
 
-- **Workflows** – Scaffold, test, and orchestrate complex, multi-step migrations with ast-grep YAML or JavaScipt ast-grep (jssg).
-- **Codemod Registry** – Share or discover community codemods via `npx codemod publish` or `npx codemod search`.
+- [**Workflows**](https://go.codemod.com/workflows-docs) – Scaffold, test, and orchestrate complex, multi-step migrations with ast-grep YAML or JavaScipt ast-grep (jssg).
+- [**Codemod Registry**](https://go.codemod.com/registry) – Share or discover community codemods via `npx codemod publish` or `npx codemod search`.
+- [**Codemod MCP**](https://go.codemod.com/mcp-docs) – AI-powered code transformation tools for IDEs like Cursor and Claude Desktop.
 
 ## Getting Started
 
