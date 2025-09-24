@@ -3,6 +3,7 @@ import { getCustomBody } from "../helpers/getCustomBody";
 import { codeSnippet } from "./codeSnippet";
 import { collapsible } from "./collapsible";
 import { imageBlock } from "./image";
+import { linkedImage } from "./linkedImage";
 import { muxVideoWithCaption } from "./muxVideoWithCaption";
 import { quoteBlock } from "./quoteBlock";
 import { ptTable } from "./table";
@@ -13,6 +14,7 @@ const ptBlocks = [
   muxVideoWithCaption,
   youtubeVideo,
   imageBlock,
+  linkedImage,
   twitterEmbed,
   codeSnippet,
   quoteBlock,
