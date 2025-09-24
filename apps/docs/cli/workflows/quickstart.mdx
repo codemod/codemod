@@ -32,144 +32,66 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
   </Step>
 
   <Step title="Explore the generated project">
-    The generated project structure will differ depending on the codemod type you select:
+    A typical combined workflow package (matching the example below) looks like:
 
-    <CodeGroup>
-
-    ```plaintext Shell Command Workflow
+    ```plaintext
     example-codemod/
     ├── .gitignore
     ├── README.md
-    ├── codemod.yaml       # Codemod package manifest and metadata
-    ├── workflow.yaml      # Workflow definition for running the codemod
-    ├── scripts/
-    │   ├── setup.sh       # Script to set up environment
-    │   ├── transform.sh   # Script to apply code transformations
-    │   └── cleanup.sh     # Script to clean up after transformation
+    ├── codemod.yaml        # Codemod package manifest and metadata
+    ├── workflow.yaml       # Workflow definition for running the codemod
+    ├── scripts/            # JS/TS codemods and shell scripts
+    │   └── codemod.ts      # JS ast-grep codemod entry point
+    └── rules/              # YAML ast-grep rule definitions
+        └── config.yml
     ```
-
-    ```plaintext JavaScript ast-grep Workflow
-    example-codemod/
-    ├── .gitignore
-    ├── README.md
-    ├── codemod.yaml       # Codemod package manifest and metadata
-    ├── workflow.yaml      # Workflow definition for running the codemod
-    ├── package.json
-    ├── tsconfig.json
-    ├── scripts/
-    │   └── codemod.ts     # Example JS/TS codemod entry point
-    └── tests/
-        └── fixtures/
-            ├── input.js   # Input fixture for codemod test
-            └── expected.js # Expected output after codemod
-    ```
-
-    ```plaintext YAML ast-grep Workflow
-    example-codemod/
-    ├── .gitignore
-    ├── README.md
-    ├── codemod.yaml       # Codemod package manifest and metadata
-    ├── workflow.yaml      # Workflow definition for running the codemod
-    ├── rules/
-    │   └── config.yml     # Example ast-grep rule
-    └── tests/
-        ├── input/
-        └── expected/
-    ```
-
-    </CodeGroup>
 
     <Info>
-      You can combine different codemod types in a single package by placing each type under its required directory (e.g., <code>scripts/</code> for shell scripts, <code>rules/</code> for ast-grep rules) and referencing them from <code>workflow.yaml</code>.
+      You can combine different codemod types in a single package by placing each type under its required directory (e.g., <code>scripts/</code> for shell scripts & JavaScript ast-grep (jssg) transforms, <code>rules/</code> for ast-grep rules) and referencing them from <code>workflow.yaml</code>.
     </Info>
   </Step>
 
   <Step title="Understand an example workflow">
     The generated <code>workflow.yaml</code> will differ depending on the codemod type you select:
 
-    <CodeGroup>
-
-    ```yaml Shell Command Workflow
+    ```yaml Combined (jssg + yaml + shell + ai)
     version: "1"
     nodes:
-      - id: setup
-        name: Setup Environment
+      - id: run-all
+        name: Combined Example
         type: automatic
         steps:
-          - id: init
-            name: Initialize
-            run: ./scripts/setup.sh
-
-      - id: transform
-        name: Apply Transformations
-        type: automatic
-        depends_on: [setup]
-        steps:
-          - id: apply
-            name: Apply Changes
-            run: ./scripts/transform.sh
-
-      - id: cleanup
-        name: Cleanup
-        type: automatic
-        depends_on: [transform]
-        steps:
-          - id: clean
-            name: Clean temporary files
-            run: ./scripts/cleanup.sh
-    ```
-
-    ```yaml JavaScript ast-grep Workflow
-    version: "1"
-    nodes:
-      - id: install-deps
-        name: Install Dependencies
-        type: automatic
-        runtime:
-          type: direct
-        steps:
-          - id: npm-install
-            name: Install npm packages
-            run: npm install
-
-      - id: apply-transforms
-        name: Apply AST Transformations
-        type: automatic
-        depends_on: [install-deps]
-        runtime:
-          type: direct
-        steps:
-          - name: "Remove console.log statements"
+          # 1) JS ast-grep (jssg)
+          - name: "JS ast-grep codemod"
             js-ast-grep:
               js_file: "scripts/codemod.ts"
               base_path: "."
-              include:
-                - "**/*.ts"
-                - "**/*.tsx"
-              exclude:
-                - "**/node_modules/**"
               language: "typescript"
-    ```
-
-    ```yaml YAML ast-grep Workflow
-    version: "1"
-    nodes:
-      - id: apply-rules
-        name: Apply AST-grep Rules
-        steps:
-          - name: "Scan TypeScript files only"
-            ast-grep:
               include:
                 - "**/*.ts"
                 - "**/*.tsx"
+
+          # 2) YAML ast-grep
+          - name: "Apply YAML ast-grep rules"
+            ast-grep:
+              config_file: "rules/config.yml"
+              base_path: "./src"
+              include:
+                - "**/*.ts"
               exclude:
                 - "**/*.test.ts"
-                - "**/*.spec.ts"
-              base_path: "src"
-              config_file: "rules/config.yml"
-    ```
 
-    </CodeGroup>
+          # 3) Shell command
+          - name: "Format code"
+            run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
+
+          # 4) AI step
+          - name: "AI review"
+            ai:
+              prompt: |
+                Summarize risky changes and suggest tests.
+              timeout_ms: 60000
+    ```
   </Step>
 
   <Step title="Validate & run your workflow">
