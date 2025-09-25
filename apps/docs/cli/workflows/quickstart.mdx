@@ -47,7 +47,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
     ```
 
     <Info>
-      You can combine different codemod types in a single package by placing each type under its required directory (e.g., <code>scripts/</code> for shell scripts & JavaScript ast-grep (jssg) transforms, <code>rules/</code> for ast-grep rules) and referencing them from <code>workflow.yaml</code>.
+      You can combine different codemod types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths you prefer as long as you reference them correctly from <code>workflow.yaml</code>.
     </Info>
   </Step>
 
@@ -90,7 +90,6 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
             ai:
               prompt: |
                 Summarize risky changes and suggest tests.
-              timeout_ms: 60000
     ```
   </Step>
 
