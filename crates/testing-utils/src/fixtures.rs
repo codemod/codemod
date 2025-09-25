@@ -197,24 +197,33 @@ impl FileSystemTestCase {
 
         // Check for single file format (input.js + expected.js)
         if let Ok(input_files) = find_input_files(test_dir, extensions) {
-            let expected_files = find_expected_files(test_dir, &input_files)?;
+            let expected_files = find_expected_files(&input_files)?;
+
+            let mut input_files_map = HashMap::new();
+            let mut expected_files_map = HashMap::new();
+
+            for input_file_path in input_files {
+                if let Ok(input_file) = TestFile::from_path(&input_file_path) {
+                    if let Some(ext) = input_file_path.extension().and_then(|e| e.to_str()) {
+                        let key = PathBuf::from(format!("input.{}", ext));
+                        input_files_map.insert(key, input_file);
+                    }
+                }
+            }
+
+            for expected_file_path in expected_files {
+                if let Ok(expected_file) = TestFile::from_path(&expected_file_path) {
+                    if let Some(ext) = expected_file_path.extension().and_then(|e| e.to_str()) {
+                        let key = PathBuf::from(format!("input.{}", ext));
+                        expected_files_map.insert(key, expected_file);
+                    }
+                }
+            }
 
             return Ok(FileSystemTestCase {
                 name,
-                input_files: input_files
-                    .into_iter()
-                    .map(|path| TestFile::from_path(&path))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|file| (file.relative_path.clone(), file))
-                    .collect::<HashMap<_, _>>(),
-                expected_files: expected_files
-                    .into_iter()
-                    .map(|path| TestFile::from_path(&path))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|file| (file.relative_path.clone(), file))
-                    .collect::<HashMap<_, _>>(),
+                input_files: input_files_map,
+                expected_files: expected_files_map,
                 path: test_dir.to_path_buf(),
                 should_error,
             });
@@ -347,27 +356,17 @@ fn find_input_files(test_dir: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>
 }
 
 /// Find expected files corresponding to input files
-fn find_expected_files(
-    test_dir: &Path,
-    input_files: &[PathBuf],
-) -> Result<Vec<PathBuf>, TestError> {
+fn find_expected_files(input_files: &[PathBuf]) -> Result<Vec<PathBuf>, TestError> {
     let mut expected_files = Vec::new();
 
     for input_file in input_files {
-        let input_name = input_file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| TestError::InvalidFilePath(input_file.clone()))?;
-
-        // Replace "input" with "expected" in the filename
-        let expected_name = input_name.replace("input", "expected");
-        let expected_file = test_dir.join(expected_name);
-
-        if expected_file.exists() {
-            expected_files.push(expected_file);
-        } else {
-            // Don't error here - let the caller handle missing expected files
-            // This allows --update-snapshots to work
+        if let Ok(expected_file) = build_expected_path(input_file) {
+            if expected_file.exists() {
+                expected_files.push(expected_file);
+            } else {
+                // Don't error here - let the caller handle missing expected files
+                // This allows --update-snapshots to work
+            }
         }
     }
 
