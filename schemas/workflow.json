@@ -273,6 +273,13 @@
                 "null"
               ]
             },
+            "multi_line": {
+              "description": "Whether the string is multi-line",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "oneOf": {
               "description": "Allows multiple schema alternatives for strings",
               "type": [
@@ -283,9 +290,36 @@
                 "$ref": "#/$defs/SimpleSchemaVariant"
               }
             },
+            "secret": {
+              "description": "Whether the string is a secret",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "type": {
               "type": "string",
               "const": "string"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "Default value for the property",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "type": {
+              "type": "string",
+              "const": "number"
             }
           },
           "required": [

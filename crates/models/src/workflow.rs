@@ -46,6 +46,17 @@ pub enum SimpleSchemaType {
 
         /// Default value for the property
         default: Option<String>,
+
+        /// Whether the string is multi-line
+        multi_line: Option<bool>,
+
+        /// Whether the string is a secret
+        secret: Option<bool>,
+    },
+
+    Number {
+        /// Default value for the property
+        default: Option<f64>,
     },
 
     /// Array type with required items schema
