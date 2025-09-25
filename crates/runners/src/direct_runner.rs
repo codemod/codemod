@@ -1,7 +1,9 @@
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 use async_trait::async_trait;
+use tokio::task;
 
 use butterflow_models::Error;
 use butterflow_models::Result;
@@ -15,6 +17,100 @@ impl DirectRunner {
     /// Create a new direct runner
     pub fn new() -> Self {
         Self
+    }
+
+    /// Execute a command with streaming output
+    async fn execute_with_streaming(&self, mut cmd: Command) -> Result<String> {
+        // Configure the command to pipe stdout and stderr
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        // Spawn the command
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
+
+        // Get handles to stdout and stderr
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Runtime("Failed to capture stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Runtime("Failed to capture stderr".to_string()))?;
+
+        // Create readers
+        let stdout_reader = BufReader::new(stdout);
+        let stderr_reader = BufReader::new(stderr);
+
+        // Handle stdout in a separate task
+        let stdout_handle = task::spawn_blocking(move || {
+            let mut collected_output = String::new();
+            for line in stdout_reader.lines() {
+                match line {
+                    Ok(line) => {
+                        // Print to stdout in real-time
+                        println!("{}", line);
+                        collected_output.push_str(&line);
+                        collected_output.push('\n');
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading stdout: {}", e);
+                        break;
+                    }
+                }
+            }
+            collected_output
+        });
+
+        // Handle stderr in a separate task
+        let stderr_handle = task::spawn_blocking(move || {
+            let mut collected_output = String::new();
+            for line in stderr_reader.lines() {
+                match line {
+                    Ok(line) => {
+                        // Print to stderr in real-time
+                        eprintln!("{}", line);
+                        collected_output.push_str(&line);
+                        collected_output.push('\n');
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading stderr: {}", e);
+                        break;
+                    }
+                }
+            }
+            collected_output
+        });
+
+        // Wait for the process to complete and collect outputs
+        let (exit_status, stdout_output, stderr_output) = tokio::try_join!(
+            async {
+                child
+                    .wait()
+                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
+            },
+            async {
+                stdout_handle
+                    .await
+                    .map_err(|e| Error::Runtime(format!("Failed to read stdout: {e}")))
+            },
+            async {
+                stderr_handle
+                    .await
+                    .map_err(|e| Error::Runtime(format!("Failed to read stderr: {e}")))
+            }
+        )?;
+
+        if !exit_status.success() {
+            return Err(Error::Runtime(format!(
+                "Command failed with exit code {}: {}",
+                exit_status.code().unwrap_or(-1),
+                stderr_output
+            )));
+        }
+
+        Ok(stdout_output)
     }
 }
 
@@ -59,27 +155,14 @@ impl Runner for DirectRunner {
                 cmd.env(key, value);
             }
 
-            // Execute the command
-            let output = cmd
-                .output()
-                .map_err(|e| Error::Runtime(format!("Failed to execute command: {e}")))?;
+            // Execute the command with streaming
+            let result = self.execute_with_streaming(cmd).await;
 
             // Clean up the temporary file
             std::fs::remove_file(&script_path).ok();
 
-            // Check if the command succeeded
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Runtime(format!(
-                    "Command failed with exit code {}: {}",
-                    output.status.code().unwrap_or(-1),
-                    stderr
-                )));
-            }
-
-            // Return the output
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            Ok(stdout)
+            // Return the result
+            result
         } else {
             // Determine the shell to use
             let shell = if cfg!(target_os = "windows") {
@@ -103,24 +186,8 @@ impl Runner for DirectRunner {
                 cmd.env(key, value);
             }
 
-            // Execute the command
-            let output = cmd
-                .output()
-                .map_err(|e| Error::Runtime(format!("Failed to execute command: {e}")))?;
-
-            // Check if the command succeeded
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Runtime(format!(
-                    "Command failed with exit code {}: {}",
-                    output.status.code().unwrap_or(-1),
-                    stderr
-                )));
-            }
-
-            // Return the output
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            Ok(stdout)
+            // Execute the command with streaming
+            self.execute_with_streaming(cmd).await
         }
     }
 }
