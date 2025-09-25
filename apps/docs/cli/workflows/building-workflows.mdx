@@ -57,31 +57,6 @@ You can also declare state schema using an object map:
 
 ---
 
-## Templates
-
-Templates can define required or optional inputs, which are referenced in their steps.
-
-```yaml
-version: "1"
-templates:
-  - id: checkout-repo
-    name: Checkout Repository
-    inputs:
-      - name: repo_url
-        type: string
-        required: true
-    steps:
-      - name: Clone
-        run: git clone ${{inputs.repo_url}} repo
-```
-
-
-<Info>
-  Template steps are supported. Use the <code>use</code> key inside a step to call a template with inputs.
-</Info>
-
----
-
 ## Nodes & Steps
 
 ### Nodes
@@ -139,7 +114,6 @@ nodes:
 
 Steps are the atomic actions inside a node; they run sequentially and each step performs one action 
 - [`run`](#shell-command-step)
-- [`use`](#template-step)
 - [`ast-grep`](#yaml-ast-grep-step)
 - [`js-ast-grep`](#js-ast-grep-step)
 - [`codemod`](#codemod-registry-step)
@@ -150,7 +124,11 @@ All step types support the following field:
 <ParamField path="if" type="string">
     Conditional expression to gate the step. `if` is evaluated before executing any step type.
     
-    Example: <code>params.autoAIReview</code>.
+    Expression evaluation supports referencing `params.x` and `state.x`, and any matrix value keys (injected as-is). Supported operators include `==`, `!=`, `>`, `<`, `&&`, and `||`.
+
+    Example: `params.autoAIReview`.
+    
+    See [Variable resolution](#variable-resolution) for the full expression and interpolation grammar.
   </ParamField>
 
 
@@ -173,35 +151,14 @@ All step types support the following field:
 
     <ParamField path="run" type="string">
       Inline shell command to execute.
-
-      Provide either <code>run</code> or <code>use</code>, not both.
     </ParamField>
 
     <ParamField path="env" type="object">
-      Step-level environment variables applied to the process environment for this <code>run</code> step.
+      Step-level environment variables applied to the process environment for this `run` step.
     </ParamField>
   </Accordion>
 
-  <Accordion title="Template step">
-    Invokes a reusable template by ID with inputs. Use to standardize common sequences across nodes/workflows.
 
-    ```yaml
-    steps:
-      - name: Checkout Repository
-        use:
-          template: checkout-repo
-          inputs:
-            repo_url: "https://github.com/org/repo.git"
-    ```
-
-    <ParamField path="use.template" type="string" required>
-      Template ID to invoke.
-    </ParamField>
-
-    <ParamField path="use.inputs" type="object">
-      Key-value inputs passed to the template.
-    </ParamField>
-  </Accordion>
 
   <Accordion title="YAML ast-grep step">
     Executes ast-grep using a YAML config. Use for fast, declarative pattern matching and structured find/replace.
@@ -257,7 +214,7 @@ All step types support the following field:
     </ParamField>
 
     <ParamField path="js-ast-grep.language" type="string">
-      Target language (e.g., <code>typescript</code>, <code>javascript</code>, etc.).
+      Target language (e.g., `typescript`, `javascript`, etc.).
     </ParamField>
 
     <ParamField path="js-ast-grep.include" type="string[]">
@@ -311,7 +268,7 @@ All step types support the following field:
     </ParamField>
 
     <ParamField path="env" type="object">
-      Step-level environment variables. For <code>codemod</code> steps, these are forwarded to the invoked workflow as parameters with an <code>env_</code> prefix (e.g., <code>FOO</code> → <code>env_FOO</code>). They are not applied to the OS environment of the nested workflow.
+      Step-level environment variables. For `codemod` steps, these are forwarded to the invoked workflow as parameters with an `env_` prefix (e.g., `FOO` → `env_FOO`). They are not applied to the OS environment of the nested workflow.
     </ParamField>
   </Accordion>
 
@@ -331,7 +288,7 @@ All step types support the following field:
     </ParamField>
 
     <ParamField path="ai.model" type="string" default="gpt-4o">
-      Model identifier. Overrides <code>LLM_MODEL</code> if set.
+      Model identifier. Overrides `LLM_MODEL` if set.
     </ParamField>
 
     <ParamField path="ai.system_prompt" type="string">
@@ -342,24 +299,18 @@ All step types support the following field:
       Maximum number of agent steps before stopping.
     </ParamField>
 
-    <ParamField path="ai.enable_lakeview" type="boolean" default="false">
-      Enables lakeview mode for agent outputs.
-    </ParamField>
-
     <ParamField path="ai.llm_protocol" type="string" default="openai">
-      LLM provider/protocol. Supported: <code>openai</code>, <code>anthropic</code>, <code>google_ai</code>, <code>azure_openai</code>.
+      LLM provider/protocol. Supported: `openai`, `anthropic`, `azure_openai`.
     </ParamField>
 
     <ParamField path="ai.endpoint" type="string">
-      LLM base URL. If omitted, defaults to the provider’s standard endpoint.
+      LLM base URL. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
     </ParamField>
 
     <ParamField path="ai.api_key" type="string">
       API key to access the LLM.
       
-      **The AI step requires valid LLM credentials. Provide them via environment variables or inline on the step:**
-
-      **Option A — Environment variables (recommended)**
+      **The AI step requires valid LLM credentials. Provide them via environment variables:**
 
       ```bash
       LLM_API_KEY=YOUR_KEY
@@ -368,23 +319,10 @@ All step types support the following field:
       LLM_BASE_URL=https://api.openai.com/v1
       ```
 
-      **Option B — Inline on the AI step**
+      <Tip>
+        LLM_BASE_URL is optional. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
+      </Tip>
 
-      ```yaml
-      steps:
-        - name: Review diffs with AI
-          ai:
-            prompt: |
-              Summarize risky changes and suggest tests.
-            llm_protocol: "openai"                    # provider
-            endpoint: "https://api.openai.com/v1"     # base URL
-            model: "gpt-4o"                           # model
-            api_key: "YOUR_API_KEY_HERE"               # paste key inline
-      ```
-
-      <Warning>
-        The <code>ai.api_key</code> field does not support expression interpolation. It must be a literal string. To use environment variables, set <code>LLM_API_KEY</code> in your shell and omit <code>ai.api_key</code>.
-      </Warning>
     </ParamField>
   </Accordion>
 
@@ -555,9 +493,11 @@ nodes:
 - **Environment:** `${{env.CI}}` — Host env var
 - **Shared State:** `${{state.counter}}` — Live JSON value
 
-<Info>
-  In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …). Inside steps, variables are unprefixed.
-</Info>
+<Tip>
+  - In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …). Inside steps, variables are unprefixed.
+
+  - Operators (`==`, `!=`, `>`, `<`, `&&`, `||`) are supported inside string interpolations like `${{ ... }}` for resolving parameters, state, and matrix values.
+</Tip>
 
 ---
 

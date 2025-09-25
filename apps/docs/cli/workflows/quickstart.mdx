@@ -81,15 +81,16 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
               exclude:
                 - "**/*.test.ts"
 
-          # 3) Shell command
-          - name: "Format code"
-            run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
-
-          # 4) AI step
+          # 3) AI step
           - name: "AI review"
             ai:
               prompt: |
                 Summarize risky changes and suggest tests.
+          
+          # 4) Shell command
+          - name: "Format code"
+            run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
+
     ```
   </Step>
 
