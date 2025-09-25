@@ -84,11 +84,9 @@ templates:
 
 ## Nodes & Steps
 
-Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps.
-
-Steps are the atomic actions inside a node; they run sequentially and each step performs one action (`run`, `use`, `ast-grep`, `js-ast-grep`, `codemod`, or `ai`).
-
 ### Nodes
+
+Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps.
 
 ```yaml
 version: "1"
@@ -139,18 +137,27 @@ nodes:
 
 ### Step
 
-<Tabs>
-  <ParamField path="if" type="string">
-    Conditional expression to gate the step.
+Steps are the atomic actions inside a node; they run sequentially and each step performs one action 
+- [`run`](#shell-command-step)
+- [`use`](#template-step)
+- [`ast-grep`](#yaml-ast-grep-step)
+- [`js-ast-grep`](#js-ast-grep-step)
+- [`codemod`](#codemod-registry-step)
+- [`ai`](#ai-step)
+
+All step types support the following field:
+
+<ParamField path="if" type="string">
+    Conditional expression to gate the step. `if` is evaluated before executing any step type.
     
     Example: <code>params.autoAIReview</code>.
   </ParamField>
 
-  <ParamField path="env" type="object">
-    Step-level environment variables.
-  </ParamField>
 
-  <Tab title="Shell command step">
+
+<AccordionGroup>
+
+  <Accordion title="Shell command step">
     Runs shell commands on the host. Use for setup/cleanup, invoking external tools, or glue logic between transformations.
     ```yaml
     steps:
@@ -161,17 +168,21 @@ nodes:
     ```
 
     <ParamField path="name" type="string" required>
-    Step label.
+      Step label.
     </ParamField>
 
     <ParamField path="run" type="string">
-    Inline shell command to execute.
+      Inline shell command to execute.
 
-    Provide either <code>run</code> or <code>use</code>, not both.
+      Provide either <code>run</code> or <code>use</code>, not both.
     </ParamField>
-  </Tab>
 
-  <Tab title="Template step">
+    <ParamField path="env" type="object">
+      Step-level environment variables applied to the process environment for this <code>run</code> step.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Template step">
     Invokes a reusable template by ID with inputs. Use to standardize common sequences across nodes/workflows.
 
     ```yaml
@@ -184,15 +195,15 @@ nodes:
     ```
 
     <ParamField path="use.template" type="string" required>
-    Template ID to invoke.
+      Template ID to invoke.
     </ParamField>
 
     <ParamField path="use.inputs" type="object">
-    Key-value inputs passed to the template.
+      Key-value inputs passed to the template.
     </ParamField>
-  </Tab>
+  </Accordion>
 
-  <Tab title="YAML ast-grep step">
+  <Accordion title="YAML ast-grep step">
     Executes ast-grep using a YAML config. Use for fast, declarative pattern matching and structured find/replace.
     ```yaml
     steps:
@@ -225,10 +236,9 @@ nodes:
     <ParamField path="ast-grep.max_threads" type="number">
       Maximum concurrent threads.
     </ParamField>
+  </Accordion>
 
-  </Tab>
-
-  <Tab title="JS ast-grep (jssg) step">
+  <Accordion title="JS ast-grep (jssg) step">
     Runs a TypeScript/JavaScript codemod powered by ast-grep. Use when you need programmatic logic beyond YAML rules.
     ```yaml
     steps:
@@ -269,9 +279,9 @@ nodes:
     <ParamField path="js-ast-grep.dry_run" type="boolean" default="false">
       Perform a dry run without applying changes.
     </ParamField>
-  </Tab>
+  </Accordion>
 
-  <Tab title="Codemod Registry step">
+  <Accordion title="Codemod Registry step">
     Runs another codemod by package name (or local path). Use to compose larger migrations by chaining codemods.
     ```yaml
     steps:
@@ -299,9 +309,13 @@ nodes:
     <ParamField path="codemod.working_dir" type="string">
       Working directory for execution.
     </ParamField>
-  </Tab>
 
-  <Tab title="AI step">
+    <ParamField path="env" type="object">
+      Step-level environment variables. For <code>codemod</code> steps, these are forwarded to the invoked workflow as parameters with an <code>env_</code> prefix (e.g., <code>FOO</code> → <code>env_FOO</code>). They are not applied to the OS environment of the nested workflow.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="AI step">
     Calls an AI agent with a prompt. Use for generating change plans or reviews; validate outputs and prefer dry runs in critical paths.
     ```yaml
     steps:
@@ -318,14 +332,14 @@ nodes:
 
     <ParamField path="ai.model" type="string" default="gpt-4o">
       Model identifier. Overrides <code>LLM_MODEL</code> if set.
-   </ParamField>
+    </ParamField>
 
     <ParamField path="ai.system_prompt" type="string">
       System prompt to scope the AI agent’s behavior.
     </ParamField>
 
-   <ParamField path="ai.max_steps" type="number" default="30">
-    Maximum number of agent steps before stopping.
+    <ParamField path="ai.max_steps" type="number" default="30">
+      Maximum number of agent steps before stopping.
     </ParamField>
 
     <ParamField path="ai.enable_lakeview" type="boolean" default="false">
@@ -341,48 +355,40 @@ nodes:
     </ParamField>
 
     <ParamField path="ai.api_key" type="string">
-      API key to access the LLM. Prefer <code>LLM_API_KEY</code> env var instead of hardcoding here.
+      API key to access the LLM.
       
-      <Note>
-        The AI step requires valid LLM credentials. Provide them via environment variables or inline on the step.
+      **The AI step requires valid LLM credentials. Provide them via environment variables or inline on the step:**
 
-        Step-level <code>env</code> and <code>ai.env</code> are currently ignored by the engine.
-      </Note>
+      **Option A — Environment variables (recommended)**
+
+      ```bash
+      LLM_API_KEY=YOUR_KEY
+      LLM_PROVIDER=openai
+      LLM_MODEL=gpt-4o
+      LLM_BASE_URL=https://api.openai.com/v1
+      ```
+
+      **Option B — Inline on the AI step**
+
+      ```yaml
+      steps:
+        - name: Review diffs with AI
+          ai:
+            prompt: |
+              Summarize risky changes and suggest tests.
+            llm_protocol: "openai"                    # provider
+            endpoint: "https://api.openai.com/v1"     # base URL
+            model: "gpt-4o"                           # model
+            api_key: "YOUR_API_KEY_HERE"               # paste key inline
+      ```
+
+      <Warning>
+        The <code>ai.api_key</code> field does not support expression interpolation. It must be a literal string. To use environment variables, set <code>LLM_API_KEY</code> in your shell and omit <code>ai.api_key</code>.
+      </Warning>
     </ParamField>
+  </Accordion>
 
-
-    **Option A — Environment variables (recommended)**
-
-    ```bash
-    LLM_API_KEY=YOUR_KEY
-    LLM_PROVIDER=openai
-    LLM_MODEL=gpt-4o
-    LLM_BASE_URL=https://api.openai.com/v1
-    ```
-
-    **Option B — Inline on the AI step**
-
-    ```yaml
-    steps:
-      - name: Review diffs with AI
-        ai:
-          prompt: |
-            Summarize risky changes and suggest tests.
-          llm_protocol: "openai"                    # provider
-          endpoint: "https://api.openai.com/v1"     # base URL
-          model: "gpt-4o"                           # model
-          api_key: "YOUR_API_KEY_HERE"               # paste key inline
-    ```
-
-    <Warning>
-      Avoid hardcoding secrets in YAML. Prefer environment variables and CI secret stores.
-    </Warning>
-
-    <Note>
-      The <code>ai.api_key</code> field does not support expression interpolation. It must be a literal string. To use environment variables, set <code>LLM_API_KEY</code> in your shell and omit <code>ai.api_key</code>.
-    </Note>
-  </Tab>
-</Tabs>
+</AccordionGroup>
 
 ## Matrix Strategy
 
