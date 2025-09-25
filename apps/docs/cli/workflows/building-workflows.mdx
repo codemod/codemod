@@ -39,39 +39,29 @@ state:
 nodes: []
 ```
 
----
+You can also declare state schema using an object map:
 
-## Templates
-
-```yaml
-version: "1"
-templates:
-  - id: checkout-repo
-    name: Checkout Repository
-    inputs:
-      - name: repo_url
-        type: string
-        required: true
-    steps:
-      - name: Clone
-        run: git clone ${{inputs.repo_url}} repo
-```
-
-**Template Inputs & Usage**:
-
-Templates can define required or optional inputs, which are referenced in their steps.
-
-<Info>
-  Template steps are supported. Use the <code>use</code> key inside a step to call a template with inputs.
-</Info>
+  ```yaml
+  version: "1"
+  state:
+    schema:
+      shards:
+        type: array
+        items:
+          type: object
+          properties:
+            team:    { type: string }
+            shardId: { type: string }
+  nodes: []
+  ```
 
 ---
 
 ## Nodes & Steps
 
-Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps. Steps are the atomic actions inside a node; they run sequentially and each step performs one action (`run`, `use`, `ast-grep`, `js-ast-grep`, `codemod`, or `ai`).
-
 ### Nodes
+
+Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps.
 
 ```yaml
 version: "1"
@@ -92,7 +82,7 @@ nodes:
   Display name.
 </ParamField>
 
-<ParamField path="type" type="string" required>
+<ParamField path="type" type="string">
   `automatic` (default) or `manual`.
 </ParamField>
 
@@ -122,8 +112,30 @@ nodes:
 
 ### Step
 
-<Tabs>
-  <Tab title="Shell command step">
+Steps are the atomic actions inside a node; they run sequentially and each step performs one action 
+- [`run`](#shell-command-step)
+- [`ast-grep`](#yaml-ast-grep-step)
+- [`js-ast-grep`](#js-ast-grep-step)
+- [`codemod`](#codemod-registry-step)
+- [`ai`](#ai-step)
+
+All step types support the following field:
+
+<ParamField path="if" type="string">
+    Conditional expression to gate the step. `if` is evaluated before executing any step type.
+    
+    Expression evaluation supports referencing `params.x` and `state.x`, and any matrix value keys (injected as-is). Supported operators include `==`, `!=`, `>`, `<`, `&&`, and `||`.
+
+    Example: `params.autoAIReview`.
+    
+    See [Variable resolution](#variable-resolution) for the full expression and interpolation grammar.
+  </ParamField>
+
+
+
+<AccordionGroup>
+
+  <Accordion title="Shell command step">
     Runs shell commands on the host. Use for setup/cleanup, invoking external tools, or glue logic between transformations.
     ```yaml
     steps:
@@ -134,44 +146,21 @@ nodes:
     ```
 
     <ParamField path="name" type="string" required>
-    Step label.
+      Step label.
     </ParamField>
 
     <ParamField path="run" type="string">
-    Inline shell command to execute.
-
-    Provide either <code>run</code> or <code>use</code>, not both.
+      Inline shell command to execute.
     </ParamField>
 
-    <ParamField path="use" type="object">
-    Call a template within a step.
-
-    Provide either <code>run</code> or <code>use</code>, not both.
+    <ParamField path="env" type="object">
+      Step-level environment variables applied to the process environment for this `run` step.
     </ParamField>
-  </Tab>
+  </Accordion>
 
-  <Tab title="Template step">
-    Invokes a reusable template by ID with inputs. Use to standardize common sequences across nodes/workflows.
 
-    ```yaml
-    steps:
-    - name: Checkout Repository
-        use:
-        template: checkout-repo
-        inputs:
-            repo_url: "https://github.com/org/repo.git"
-    ```
 
-    <ParamField path="use.template" type="string" required>
-    Template ID to invoke.
-    </ParamField>
-
-    <ParamField path="use.inputs" type="object">
-    Key-value inputs passed to the template.
-    </ParamField>
-  </Tab>
-
-  <Tab title="YAML ast-grep step">
+  <Accordion title="YAML ast-grep step">
     Executes ast-grep using a YAML config. Use for fast, declarative pattern matching and structured find/replace.
     ```yaml
     steps:
@@ -204,13 +193,9 @@ nodes:
     <ParamField path="ast-grep.max_threads" type="number">
       Maximum concurrent threads.
     </ParamField>
+  </Accordion>
 
-    <ParamField path="ast-grep.allow_dirty" type="boolean" default="false">
-      Allow dirty files.
-    </ParamField>
-  </Tab>
-
-  <Tab title="JS ast-grep (jssg) step">
+  <Accordion title="JS ast-grep (jssg) step">
     Runs a TypeScript/JavaScript codemod powered by ast-grep. Use when you need programmatic logic beyond YAML rules.
     ```yaml
     steps:
@@ -229,7 +214,7 @@ nodes:
     </ParamField>
 
     <ParamField path="js-ast-grep.language" type="string">
-      Target language (e.g., <code>typescript</code>, <code>javascript</code>, etc.).
+      Target language (e.g., `typescript`, `javascript`, etc.).
     </ParamField>
 
     <ParamField path="js-ast-grep.include" type="string[]">
@@ -251,9 +236,9 @@ nodes:
     <ParamField path="js-ast-grep.dry_run" type="boolean" default="false">
       Perform a dry run without applying changes.
     </ParamField>
-  </Tab>
+  </Accordion>
 
-  <Tab title="Codemod Registry step">
+  <Accordion title="Codemod Registry step">
     Runs another codemod by package name (or local path). Use to compose larger migrations by chaining codemods.
     ```yaml
     steps:
@@ -281,9 +266,13 @@ nodes:
     <ParamField path="codemod.working_dir" type="string">
       Working directory for execution.
     </ParamField>
-  </Tab>
 
-  <Tab title="AI step">
+    <ParamField path="env" type="object">
+      Step-level environment variables. For `codemod` steps, these are forwarded to the invoked workflow as parameters with an `env_` prefix (e.g., `FOO` → `env_FOO`). They are not applied to the OS environment of the nested workflow.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="AI step">
     Calls an AI agent with a prompt. Use for generating change plans or reviews; validate outputs and prefer dry runs in critical paths.
     ```yaml
     steps:
@@ -292,30 +281,52 @@ nodes:
           prompt: |
             Summarize risky changes and suggest tests.
           model: "gpt-4o"
-          timeout_ms: 60000
     ```
 
     <ParamField path="ai.prompt" type="string" required>
       Prompt to send to the AI agent.
     </ParamField>
 
-    <ParamField path="ai.model" type="string">
-      Model identifier.
+    <ParamField path="ai.model" type="string" default="gpt-4o">
+      Model identifier. Overrides `LLM_MODEL` if set.
     </ParamField>
 
-    <ParamField path="ai.timeout_ms" type="number">
-      Timeout in milliseconds.
+    <ParamField path="ai.system_prompt" type="string">
+      System prompt to scope the AI agent’s behavior.
     </ParamField>
 
-    <ParamField path="ai.env" type="object">
-      Environment variables used during execution.
+    <ParamField path="ai.max_steps" type="number" default="30">
+      Maximum number of agent steps before stopping.
     </ParamField>
 
-    <ParamField path="ai.dry_run" type="boolean" default="false">
-      Perform a dry run.
+    <ParamField path="ai.llm_protocol" type="string" default="openai">
+      LLM provider/protocol. Supported: `openai`, `anthropic`, `azure_openai`.
     </ParamField>
-  </Tab>
-</Tabs>
+
+    <ParamField path="ai.endpoint" type="string">
+      LLM base URL. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
+    </ParamField>
+
+    <ParamField path="ai.api_key" type="string">
+      API key to access the LLM.
+      
+      **The AI step requires valid LLM credentials. Provide them via environment variables:**
+
+      ```bash
+      LLM_API_KEY=YOUR_KEY
+      LLM_PROVIDER=openai
+      LLM_MODEL=gpt-4o
+      LLM_BASE_URL=https://api.openai.com/v1
+      ```
+
+      <Tip>
+        LLM_BASE_URL is optional. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
+      </Tip>
+
+    </ParamField>
+  </Accordion>
+
+</AccordionGroup>
 
 ## Matrix Strategy
 
@@ -482,9 +493,11 @@ nodes:
 - **Environment:** `${{env.CI}}` — Host env var
 - **Shared State:** `${{state.counter}}` — Live JSON value
 
-<Info>
-  In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …).
-</Info>
+<Tip>
+  - In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …). Inside steps, variables are unprefixed.
+
+  - Operators (`==`, `!=`, `>`, `<`, `&&`, `||`) are supported inside string interpolations like `${{ ... }}` for resolving parameters, state, and matrix values.
+</Tip>
 
 ---
 
@@ -505,7 +518,7 @@ nodes:
   <Card title="Codemod CLI Reference" icon="terminal" href="/cli/cli-reference">
     Explore the full command and option reference for Codemod CLI.
   </Card>
-  <Card title="Build Workflows with Codemod MCP" icon="robot" href="/mcp/building-workflows">
+  <Card title="Build Workflows with Codemod MCP" icon="robot" href="/mcp">
     Learn how to build codemod workflows in your IDE using Codemod MCP.
   </Card>
 </CardGroup>

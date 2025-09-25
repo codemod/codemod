@@ -44,7 +44,7 @@
                   "cli/workflows/building-workflows"
                 ]
               },
-              "more-resources/codemod-mcp"
+              "mcp"
             ]
           },
           {
