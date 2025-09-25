@@ -39,9 +39,27 @@ state:
 nodes: []
 ```
 
+You can also declare state schema using an object map:
+
+  ```yaml
+  version: "1"
+  state:
+    schema:
+      shards:
+        type: array
+        items:
+          type: object
+          properties:
+            team:    { type: string }
+            shardId: { type: string }
+  nodes: []
+  ```
+
 ---
 
 ## Templates
+
+Templates can define required or optional inputs, which are referenced in their steps.
 
 ```yaml
 version: "1"
@@ -57,9 +75,6 @@ templates:
         run: git clone ${{inputs.repo_url}} repo
 ```
 
-**Template Inputs & Usage**:
-
-Templates can define required or optional inputs, which are referenced in their steps.
 
 <Info>
   Template steps are supported. Use the <code>use</code> key inside a step to call a template with inputs.
@@ -69,7 +84,9 @@ Templates can define required or optional inputs, which are referenced in their 
 
 ## Nodes & Steps
 
-Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps. Steps are the atomic actions inside a node; they run sequentially and each step performs one action (`run`, `use`, `ast-grep`, `js-ast-grep`, `codemod`, or `ai`).
+Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (e.g., matrix), trigger, runtime, env, and an ordered list of steps.
+
+Steps are the atomic actions inside a node; they run sequentially and each step performs one action (`run`, `use`, `ast-grep`, `js-ast-grep`, `codemod`, or `ai`).
 
 ### Nodes
 
@@ -92,7 +109,7 @@ nodes:
   Display name.
 </ParamField>
 
-<ParamField path="type" type="string" required>
+<ParamField path="type" type="string">
   `automatic` (default) or `manual`.
 </ParamField>
 
@@ -123,6 +140,16 @@ nodes:
 ### Step
 
 <Tabs>
+  <ParamField path="if" type="string">
+    Conditional expression to gate the step.
+    
+    Example: <code>params.autoAIReview</code>.
+  </ParamField>
+
+  <ParamField path="env" type="object">
+    Step-level environment variables.
+  </ParamField>
+
   <Tab title="Shell command step">
     Runs shell commands on the host. Use for setup/cleanup, invoking external tools, or glue logic between transformations.
     ```yaml
@@ -293,14 +320,6 @@ nodes:
       Model identifier. Overrides <code>LLM_MODEL</code> if set.
    </ParamField>
 
-    <ParamField path="ai.env" type="object">
-      Environment variables used during execution.
-    </ParamField>
-
-    <ParamField path="ai.dry_run" type="boolean" default="false">
-      Perform a dry run.
-    </ParamField>
-
     <ParamField path="ai.system_prompt" type="string">
       System prompt to scope the AI agent’s behavior.
     </ParamField>
@@ -323,11 +342,14 @@ nodes:
 
     <ParamField path="ai.api_key" type="string">
       API key to access the LLM. Prefer <code>LLM_API_KEY</code> env var instead of hardcoding here.
+      
+      <Note>
+        The AI step requires valid LLM credentials. Provide them via environment variables or inline on the step.
+
+        Step-level <code>env</code> and <code>ai.env</code> are currently ignored by the engine.
+      </Note>
     </ParamField>
 
-    <Info>
-      The AI step requires valid LLM credentials. Provide them via environment variables or inline on the step.
-    </Info>
 
     **Option A — Environment variables (recommended)**
 
@@ -528,7 +550,7 @@ nodes:
 - **Shared State:** `${{state.counter}}` — Live JSON value
 
 <Info>
-  In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …).
+  In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`, …). Inside steps, variables are unprefixed.
 </Info>
 
 ---
