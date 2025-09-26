@@ -97,9 +97,82 @@ Languages targeted by this codemod (selected language during `codemod init`; edi
 </ParamField>
 
 <ParamField path="keywords" type="string[]">
-Search keywords for discovery.
+Keyword tags are an optional feature helping developers quickly identify the purpose, scope, and relevance of a codemod. They also enable better search, filtering, and reporting when managing many codemods across frameworks and projects.
 
-Example: `keywords: ["transformation", "migration"]`
+Example: `keywords: ["react", "v18-to-v19", "migration"]`
+
+<Accordion title="Best practices and conventions">
+
+  - Keep tags concise (1–2 words).
+  - Use lowercase for consistency.
+  - Don’t overload with tags — 2–4 per codemod is ideal.
+  - Prioritize **transformation type + framework/library + version (if relevant)**.
+
+  ---
+
+  **1. Transformation Type Tags**
+
+  Use one of these to describe **why** the codemod exists:
+
+  - **`breaking-change`** – adapts code to framework/library breaking API changes.
+  - **`feature-adoption`** – helps adoption of new optional or incremental features.
+  - **`security`** – addresses known vulnerabilities or unsafe patterns.
+  - **`migration`** – helps migrate code from one version to another.
+  - **`cross-migration`** – replaces one library/framework with another.
+  - **`best-practice-modernization`** – aligns code with community standards and modern idioms.
+  - **`standardization`** – unifies patterns, conventions, or APIs across a codebase.
+  - **`code-mining`** – identifies, flags, or extracts patterns without transforming. Use if codemod is for *detection-only*.
+
+  **Rule of thumb**: Pick one primary type tag per codemod.
+
+  ---
+
+  **2. Target Version Tags**
+
+  Use these to indicate the **framework/library version** the codemod prepares for.
+
+  - Format: `vX` or `vX-to-vY` (for upgrades).
+  - Examples:
+      - `v17-to-v18` (React 17 → 18)
+      - `v5-to-v6` (React Router 5 → 6)
+      - `v16` (Angular 16 breaking changes)
+
+  **Rule of thumb**: If the codemod is version-specific, always tag it. 
+
+  ---
+
+  **3. Framework / Library / SDK Tags**
+
+  Always add the **ecosystem name** to improve discoverability.
+
+  - Examples:
+      - `react`
+      - `nextjs`
+      - `nodejs`
+      - `angular`
+      - `msw`
+      - `i18next`
+
+  **Rule of thumb**: Use the official, common name of the framework/library.
+
+  ---
+
+  **4. Example Tag Sets**
+
+  Here are some examples to illustrate how tags combine:
+
+  - **React Root API Upgrade (17 → 18)**
+      - Tags: `breaking-change`, `v17-to-v18`, `react`
+  - **Adopt React Hooks**
+      - Tags: `feature-adoption`, `react`
+  - **Migrate from Moment.js to Day.js**
+      - Tags: `cross-migration`, `momentjs`, `dayjs`
+  - **Remove Hardcoded Strings for i18n**
+      - Tags: `best-practice-modernization`, `standardization`, `i18next`
+  - **Detect Insecure crypto API usage**
+      - Tags: `security`, `nodejs`, `crypto`
+
+</Accordion>
 </ParamField>
 
 <ParamField path="registry.access" type="string" default="public">
