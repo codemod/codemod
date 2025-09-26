@@ -63,14 +63,6 @@
         "description": "Learn more with hands-on guides.",
         "groups": [
           {
-            "group": "Workflows",
-            "pages": [
-              "cli/workflows/quickstart",
-              "cli/workflows/package-structure",
-              "cli/workflows/building-workflows"
-            ]
-          },
-          {
             "group": "Guides & Examples",
             "pages": ["guides/introduction"]
           },
