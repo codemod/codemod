@@ -87,19 +87,19 @@ nodes:
 </ParamField>
 
 <ParamField path="depends_on" type="string[]">
-  Upstream node IDs.
+  Upstream node IDs. Learn more about cyclic dependencies [here](#cyclic-dependency-example).
 </ParamField>
 
 <ParamField path="trigger" type="object">
-  `{ type: manual }` → approval gate.
+  `{ type: manual }` → approval gate. Learn more about manual triggers [here](#manual-trigger).
 </ParamField>
 
 <ParamField path="strategy" type="object">
-  Matrix configuration.
+  Matrix configuration. Learn more about matrix strategies [here](#matrix-strategy).
 </ParamField>
 
 <ParamField path="steps" type="array" required>
-  Ordered list of steps.
+  Ordered list of [steps](#step).
 </ParamField>
 
 <ParamField path="env" type="object">
@@ -240,7 +240,7 @@ All step types support the following field:
     steps:
       - name: Run registry codemod
         codemod:
-          source: "@scope/package@1.2.3"
+          source: "@scope/package"
           args: ["--flag", "value"]
           env:
             NODE_ENV: production
@@ -249,6 +249,10 @@ All step types support the following field:
 
     <ParamField path="codemod.source" type="string" required>
       Codemod source (registry package or local path).
+
+      <Tip>
+        <b>Version pinning</b>: specify an exact version in <code>source</code> (e.g., <code>@scope/pkg@1.2.3</code>) for reproducible runs. If you omit the version, the latest published version is used.
+      </Tip>
     </ParamField>
 
     <ParamField path="codemod.args" type="string[]">
@@ -266,6 +270,28 @@ All step types support the following field:
     <ParamField path="env" type="object">
       Step-level environment variables. For `codemod` steps, these are forwarded to the invoked workflow as parameters with an `env_` prefix (e.g., `FOO` → `env_FOO`). They are not applied to the OS environment of the nested workflow.
     </ParamField>
+
+    **Aggregate multiple codemods:**
+
+    <Info>
+      You can <b>aggregate multiple codemods</b> by adding more than one <code>codemod</code> step in the same node. A codemod package may itself orchestrate other codemods, enabling nested compositions for larger upgrades.
+    </Info>
+
+    ```yaml
+    steps:
+      - name: Convert `createRequireFromPath` to `createRequire`
+        codemod:
+          source: "@nodejs/create-require-from-path"
+      - name: Handle DEP0147 (`fs.rmdir` to `fs.rm`)
+        codemod:
+          source: "@nodejs/rmdir"
+    ```
+
+    <Info>
+      - Steps in a node **run sequentially** from top to bottom.
+      - Use [`depends_on`](#param-depends-on) or a matrix [`strategy`](#matrix-strategy) across multiple nodes for gating/parallelism.
+      - If a step fails, the node fails and subsequent steps in that node are skipped.
+    </Info>
   </Accordion>
 
   <Accordion title="AI step">
