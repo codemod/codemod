@@ -6,10 +6,6 @@ description: "{description}"
 author: "{author}"
 license: "{license}"
 workflow: "workflow.yaml"
-category: "migration"
-
-targets:
-  languages: ["{language}"]
 
 keywords: ["transformation", "migration"]
 

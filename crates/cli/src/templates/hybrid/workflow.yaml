@@ -1,10 +1,6 @@
-version: "1"
+# yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
 
-params:
-  language: "{language}"
-  run_shell: true
-  run_yaml: true
-  run_jssg: true
+version: "1"
 
 nodes:
   - id: shell-setup
