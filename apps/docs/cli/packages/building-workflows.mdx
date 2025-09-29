@@ -2,7 +2,15 @@
 title: "Building workflows"
 ---
 
+This page explains the concepts and structure of the Codemod package's workflow file.
+
+<Tip>
+  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/cli/mcp) to create your codemod package with the help of AI.
+</Tip>
+
 ## Workflow File
+
+A workflow has four top-level keys:
 
 ```yaml workflow.yaml
 version: "1"
@@ -11,8 +19,6 @@ state:
 templates: []
 nodes: []
 ```
-
-A workflow has four top-level keys:
 
 | Key                       | Required | Purpose                                           |
 | ------------------------- | -------- | ------------------------------------------------- |

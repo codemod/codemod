@@ -1,5 +1,6 @@
 ---
 title: "Codemod MCP"
+sidebarTitle: 'MCP'
 ---
 
 Codemod MCP (Model Context Protocol) provides AI assistants with tools for code analysis, AST manipulation, and codemod creation. The MCP server enables AI tools like Claude, Cursor, and others to understand code structure, create codemods, and perform automated code transformations.
@@ -42,6 +43,58 @@ The Codemod MCP server provides these tools for AI assistants:
 - **`get_jssg_instructions`** - Get jssg instructions for creating TypeScript transformation scripts
 - **`get_ast_grep_instructions`** - Get ast-grep instructions for creating ast-grep rules
 - **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
+
+## Building Codemod packages with MCP
+
+<Steps>
+  <Step title="Ask the AI for a specific codemod">
+    Describe your transformation [clearly](#best-practices):
+    
+    ```
+    "Create a jssg codemod that converts all console.log statements to console.info in TypeScript files. 
+    The codemod should:
+    - Target .ts and .tsx files
+    - Only transform console.log calls (not console.error, console.warn, etc.)
+    - Preserve all arguments and formatting
+    - Include test cases for the transformation"
+    ```
+  </Step>
+  
+  <Step title="Let MCP build the codemod package">
+    The AI will use MCP tools to:
+    - Analyze your codebase structure with `dump_ast`
+    - Get TypeScript node types with `get_node_types`
+    - Create the jssg codemod script
+    - Generate test cases with `run_jssg_tests`
+    - Set up the [`workflow.yaml` and `codemod.yaml`](/cli/packages/package-structure) files
+  </Step>
+  
+  <Step title="Validate the workflow">
+    ```bash
+    npx codemod@latest workflow validate -w workflow.yaml
+    ```
+    
+    This ensures your workflow file is syntactically correct and follows the schema.
+  </Step>
+  
+  <Step title="Understand and run the output package">
+    The MCP will create a complete codemod package structure:
+    
+    ```
+    my-codemod/
+    ├── codemod.yaml        # Package metadata
+    ├── workflow.yaml       # Workflow definition
+    ├── scripts/
+    │   └── codemod.ts      # Your jssg transformation
+    └── tests/              # Test cases
+    ```
+    
+    Run your codemod:
+    ```bash
+    npx codemod@latest workflow run -w ./my-codemod/
+    ```
+  </Step>
+</Steps>
 
 ## Why use Codemod MCP?
 

@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Create your first codemod workflow project and run it locally."
+description: "Create your first codemod package and run it locally."
 ---
 
 import { CLIDemo } from "/snippets/cli-demo.mdx";
@@ -10,7 +10,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
 </Frame>
 
 <Steps>
-  <Step title="Create a new codemod project">
+  <Step title="Create a new codemod package">
     ```bash
     npx codemod init
     ```
@@ -19,9 +19,9 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
 
     - **Project directory**
     - **Codemod type:**
-      - Shell command workflow codemod
-      - JavaScript ast-grep codemod
-      - YAML ast-grep codemod
+      - <Tooltip tip="Best for simple code transformations. Uses the JavaScript ast-grep engine.">JavaScript ast-grep (jssg) codemod</Tooltip>
+      - <Tooltip tip="Best for orchestrating large-scale migration campaigns. Combines shell commands, YAML ast-grep rules, and JS codemods into a single workflow.">Multi-step workflow (shell command, YAML & jssg)</Tooltip>
+    - **Target language**
     - **Project name**
     - **Description**
     - **Author**
@@ -32,7 +32,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
   </Step>
 
   <Step title="Explore the generated project">
-    An example combined workflow package:
+    An example codemod package:
 
     ```plaintext
     example-codemod/
@@ -49,6 +49,8 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
     <Info>
       You can combine different codemod types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths you prefer as long as you reference them correctly from <code>workflow.yaml</code>.
     </Info>
+
+    Check out the [codemod package structure](/cli/packages/package-structure) for more details.
   </Step>
 
   <Step title="Understand an example workflow">
@@ -92,9 +94,11 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
             run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
 
     ```
+
+    Learn more about building workflows [here](/cli/packages/building-workflows).
   </Step>
 
-  <Step title="Validate & run your workflow">
+  <Step title="Validate & run your codemod package">
     ```bash
     npx codemod workflow validate -w workflow.yaml
     npx codemod workflow run -w workflow.yaml
