@@ -192,6 +192,9 @@ struct PackageRow {
     #[tabled(rename = "📦 Name")]
     name: String,
 
+    #[tabled(rename = "🔖 Version")]
+    version: String,
+
     #[tabled(rename = "📊 Downloads")]
     downloads: String,
 
@@ -221,12 +224,19 @@ fn print_table(result: &SearchResponse, args: &Command) -> Result<()> {
                 None => package.name.clone(),
             };
 
+            let version = package
+                .latest_version
+                .as_ref()
+                .map(|v| v.clone())
+                .unwrap_or_else(|| "N/A".to_string());
+
             let downloads = format_number(package.download_count);
             let stars = format_number(package.star_count);
             let author = package.author.clone();
 
             PackageRow {
                 name,
+                version,
                 downloads,
                 stars,
                 author,

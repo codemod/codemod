@@ -76,7 +76,8 @@ impl RolldownBundler {
             ..Default::default()
         };
 
-        let mut bundler = Bundler::new(bundler_options);
+        let mut bundler = Bundler::new(bundler_options)
+            .map_err(|e| anyhow::anyhow!("Rolldown bundler creation failed: {:?}", e))?;
 
         let _result = bundler
             .write()
