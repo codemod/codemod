@@ -4,7 +4,6 @@ import Icon from "@/components/shared/Icon";
 import RelatedLinks from "@/components/shared/RelatedLinks";
 import { RichText } from "@/components/shared/RichText";
 import type { Job } from "@/types";
-import ApplyToJobForm from "./ApplyToJobForm";
 
 export default function JobListingPageContent(props: Job) {
   return (
@@ -81,29 +80,6 @@ export default function JobListingPageContent(props: Job) {
         </aside>
       </div>
 
-      {/* Apply form */}
-      <div
-        className="flex w-full flex-col py-2xl lg:flex-row lg:py-[80px]"
-        id="apply-to-job"
-      >
-        {/* Left */}
-        <div className="block w-full max-w-none lg:hidden">
-          <h2 className="l-heading">Apply to position</h2>
-        </div>
-
-        <div className="relative hidden w-full max-w-none pr-2xl lg:block">
-          <h2 className="l-heading">Apply to position</h2>
-          <div className="absolute right-0 top-0 hidden h-full w-[1px] bg-gradient-to-b from-transparent via-[#0b151e39] via-10% to-transparent to-95% lg:block dark:via-emphasis-dark" />
-        </div>
-
-        {/* Right */}
-        <div className="w-full max-w-none lg:px-2xl lg:py-xs">
-          <ApplyToJobForm
-            jobTitle={props?.title}
-            privacyPolicy={props.privacyPolicy}
-          />
-        </div>
-      </div>
 
       {props?.relatedPositions ? (
         <RelatedLinks
