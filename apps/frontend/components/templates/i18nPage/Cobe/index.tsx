@@ -9,22 +9,11 @@ const CobeSection = () => {
         <div className="space-y-5 text-black dark:text-white">
           <TextTransitions />
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-1">
-              <p className="mb-2 body-l uppercase opacity-50">Time to market</p>
-              <p className="whitespace-pre-wrap s-heading tracking-tighter text-black md:text-4xl dark:text-white">
-                <NumberTicker value={10} suffix="x" />
-              </p>
-              <p className="body-s-medium">Faster time to market</p>
-            </div>
-            <div className="col-span-1">
-              <p className="mb-2 body-l uppercase opacity-50">Revenue Growth</p>
-              <p className="whitespace-pre-wrap s-heading tracking-tighter text-black md:text-4xl dark:text-white">
-                <NumberTicker value={5} suffix="x" />
-              </p>
-              <p className="body-s-medium">More revenue potential</p>
-            </div>
-          </div>
+          <p className="mb-2 body-l uppercase opacity-50">Revenue Growth</p>
+          <p className="whitespace-pre-wrap s-heading tracking-tighter text-black md:text-4xl dark:text-white">
+            <NumberTicker value={5} suffix="x" />
+          </p>
+          <p className="body-s-medium">More revenue potential</p>
           <p className="body-l max-w-2xl">
             Enter the global market faster and drive unprecedented business
             growth, all while freeing your engineering team from thousands of

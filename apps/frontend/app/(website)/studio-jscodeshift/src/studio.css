@@ -117,8 +117,8 @@
 
 .studio .resizeHandleOuter {
   position: relative;
-  @apply bg-gray-300;
-  @apply dark:bg-gray-600;
+  @apply bg-border-light;
+  @apply dark:bg-border-dark;
 }
 
 .studio .resizeHandleOuter:hover {

@@ -7,6 +7,9 @@ import CobeSection from "./Cobe";
 import type { I18NPageProps } from "./Page";
 import DemoSection from "./Preview/DemoSection";
 import ShiningLines from "./Preview/ShinningLines";
+import FeaturesSection from "./Sections/features";
+import CaseStudySection from "./Sections/caseStudy";
+import BentoGridSection from "./Sections/bentoGrid";
 
 export default function I18NPageSections({ data }: I18NPageProps) {
   return (
@@ -20,7 +23,7 @@ export default function I18NPageSections({ data }: I18NPageProps) {
         />
       </noscript>
       {/* Hero */}
-      <div className="relative overflow-x-clip lg:w-auto w-full px-xl py-[80px] pt-[calc(var(--header-height)+5rem)] lg:overflow-x-visible lg:px-[80px]">
+      <div className="relative w-full overflow-x-clip px-xl py-[80px] pt-[calc(var(--header-height)+5rem)] lg:w-auto lg:overflow-x-visible lg:px-[80px]">
         <div className="pointer-events-none absolute left-0 top-0 z-[1] h-full w-full">
           <div className="pointer-events-none relative h-full w-full">
             <GradientBlob style="planet" />
@@ -92,6 +95,9 @@ export default function I18NPageSections({ data }: I18NPageProps) {
           </GradientBorderBox>
         </div>
       )}
+      <BentoGridSection />
+      <FeaturesSection />
+      <CaseStudySection />
       <CobeSection />
     </>
   );

@@ -5,6 +5,7 @@
     "dev:ai": "cd ../modgpt && npm run start & cd ../../../ee && uvicorn app:app & npm run dev",
     "build": "next build",
     "dev": "next",
+    "dev:turbo": "next dev --turbo",
     "lint": "next lint -- --ignore-path .gitignore",
     "lint:fix": "npm run format && npm run lint -- --fix",
     "start": "next start",

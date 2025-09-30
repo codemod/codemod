@@ -53,7 +53,7 @@ export const Timeline = ({
   const isAI = step < 3;
 
   return (
-    <div className="sticky top-0 z-50 py-1 flex flex-wrap items-center gap-3 rounded bg-gradient-to-r from-zinc-50 to-zinc-50/0 dark:from-white/10 dark:to-white/0 px-3 text-sm">
+    <div className="sticky top-0 z-50 flex flex-wrap items-center gap-3 rounded-[6px] bg-gradient-to-r from-zinc-50 to-zinc-50/0 px-3 py-1 text-sm dark:from-white/10 dark:to-white/0">
       {currentStep < stateMapping.length && (
         <div className="flex items-center gap-3">
           <CircularProgress
@@ -75,7 +75,7 @@ export const Timeline = ({
             </motion.span>
             <motion.span
               variants={childVariants}
-              className="text-zinc-600 dark:text-zinc-400 text-xs"
+              className="text-xs text-zinc-600 dark:text-zinc-400"
             >
               {stateMapping[currentStep]?.description}
             </motion.span>
@@ -83,7 +83,7 @@ export const Timeline = ({
             {isAI && (
               <motion.span
                 variants={childVariants}
-                className="dark:bg-accent/10 dark:text-accent bg-accent/50 text-black rounded p-0.5 text-xs"
+                className="rounded bg-accent/50 p-0.5 text-xs text-black dark:bg-accent/10 dark:text-accent"
               >
                 Automated by Codemod AI
               </motion.span>
