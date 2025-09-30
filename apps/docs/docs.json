@@ -25,8 +25,8 @@
         "description": "Get started with Codemod",
         "groups": [
           {
-            "group": "Quickstart",
-            "pages": ["introduction"]
+            "group": "Getting Started",
+            "pages": ["introduction", "quickstart"]
           },
           {
             "group": "Codemod Platform",
@@ -44,7 +44,7 @@
                   "cli/packages/building-workflows"
                 ]
               },
-              "mcp"
+              "/model-context-protocol"
             ]
           },
           {
@@ -62,14 +62,6 @@
         "icon": "chalkboard",
         "description": "Learn more with hands-on guides.",
         "groups": [
-          {
-            "group": "Packages",
-            "pages": [
-              "cli/packages/quickstart",
-              "cli/packages/package-structure",
-              "cli/packages/building-workflows"
-            ]
-          },
           {
             "group": "Guides & Examples",
             "pages": ["guides/introduction"]
@@ -145,6 +137,26 @@
     {
       "source": "/platform/track",
       "destination": "/insights"
+    },
+    {
+      "source": "/cli/workflows/quickstart",
+      "destination": "/cli/packages/quickstart"
+    },
+    {
+      "source": "/cli/workflows/package-structure",
+      "destination": "/cli/packages/package-structure"
+    },
+    {
+      "source": "/cli/workflows/building-workflows",
+      "destination": "/cli/packages/building-workflows"
+    },
+    {
+      "source": "/cli/workflows",
+      "destination": "/cli/packages/quickstart"
+    },
+    {
+      "source": "/cli/mcp",
+      "destination": "/model-context-protocol"
     }
   ],
   "contextual": {

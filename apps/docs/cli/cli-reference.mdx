@@ -1,6 +1,7 @@
 ---
 title: "Codemod CLI"
-description: "Scaffold, publish, and run codemod projects, recipes, or workflows from your terminal using Codemod's open-source CLI."
+sidebarTitle: 'CLI'
+description: "Scaffold, publish, and run codemod projects, recipes, or packages from your terminal using Codemod's open-source CLI."
 ---
 
 import { CLIDemo } from "/snippets/cli-demo.mdx";
@@ -27,7 +28,7 @@ import { APIKeyDemo } from "/snippets/api-key-demo.mdx";
     npx codemod workflow run -w /path/to/my-codemod/workflow.yaml
     ```
 
-    This runs your local codemod workflow on your codebase to test it before publishing.
+    This runs your local codemod package on your codebase to test it before publishing.
   </Step>
   <Step title="Publish your codemod">
     ```bash
@@ -45,13 +46,13 @@ import { APIKeyDemo } from "/snippets/api-key-demo.mdx";
   </Step>
 </Steps>
 
-For more details on building and running workflows, see the [Workflows documentation](#cli-command-reference).
+For more details on building and running codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
 
 ---
 
 ## Advanced Concepts
 
-- <a href="#codemod-workflow">**Workflows:**</a> Orchestrate complex, multi-step codemod processes.
+- <a href="#codemod-workflow">**Codemod Packages:**</a> Orchestrate complex, multi-step codemod processes.
 - <a href="#codemod-jssg">**JS ast-grep (jssg):**</a> Run codemods written in JavaScript/TypeScript to transform code in any language using the high-performance ast-grep engine.
 
 ---
@@ -81,8 +82,8 @@ npx codemod <package-name>
 </CodeGroup>
 
 <Info>
-**Local workflows vs. Registry packages:** 
-- Use `npx codemod workflow run -w <path>` for local workflow files and directories
+**Local codemod packages vs. Registry packages:** 
+- Use `npx codemod workflow run -w <path>` for local codemod packages and directories
 - Use `npx codemod <package-name>` to run packages directly from the [Codemod Registry](https://app.codemod.com/registry)
 </Info>
 
@@ -92,13 +93,13 @@ npx codemod <package-name>
 
 <Accordion title="Examples">
 
-**Running a local workflow**:
+**Running a local codemod package**:
 
 ```bash
-# Run a local workflow file
+# Run a local codemod package file
 npx codemod workflow run -w ./my-workflow.yaml
 
-# Run a workflow from a local directory
+# Run a codemod package from a local directory
 npx codemod workflow run -w ./my-codemod
 
 
@@ -106,10 +107,10 @@ npx codemod workflow run -w ./my-codemod
 npx codemod workflow run -w ./my-codemod -t /abs/path/to/repo
 ```
 
-**Running a workflow from the registry**:
+**Running a codemod package from the registry**:
 
 ```bash
-# Run a workflow package from the registry
+# Run a codemod package from the registry
 npx codemod @codemod-com/my-test-pkg
 
 # Specify a target directory
@@ -389,7 +390,7 @@ npx codemod jssg test <codemod_file> [options]
 
 ### `codemod init`
 
-Initialize a new workflow project.
+Initialize a new codemod package project.
 
 ```bash
 npx codemod init [PATH] [options]
@@ -498,7 +499,7 @@ npx codemod whoami [--registry <REGISTRY>] [--detailed]
 
 ### `codemod publish`
 
-Publish a workflow to a registry.
+Publish a codemod package to a registry.
 
 ```bash
 npx codemod publish [PATH] [options]

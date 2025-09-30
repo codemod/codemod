@@ -1,0 +1,57 @@
+---
+title: "Quickstart"
+---
+
+{/* TODO: move section to correct place. */}
+
+{/* TODO: create codemod bot for migrations template and add instructions. Consider removing/shortening first time instructions from the migrations template readme and linking to the onboarding guide. */}
+
+This guide streamlines your first end‑to‑end setup: create a codemods repo, connect GitHub, build a codemod package with MCP or Studio, test locally, and publish via CI.
+
+<Steps>
+  <Step title="Create your codemods repository">
+    Use our [migrations template repository](https://github.com/codemod/migrations-template) to bootstrap a repo in your GitHub organization.
+  </Step>
+
+  <Step title="Sign in to Codemod">
+    [Sign in](https://app.codemod.com) to Codemod with GitHub, GitLab, or SSO.
+  </Step>
+
+  <Step title="Create an organization and install the GitHub App">
+    1. [Create an organization](https://app.codemod.com/global/organizations/create)
+        ![Create Org](/images/guides/create-org.png)
+    2. Install: <a href="https://github.com/apps/codemod">GitHub → Codemod App</a>
+        <Warning>
+            If the user requesting installation isn’t an org admin, they may see an error. Ask an admin to approve the installation.
+        </Warning>
+    3. Switch context from your personal account to your organization account.
+  </Step>
+
+  <Step title="Create an API key">
+    From your organization settings, [create an API key](https://app.codemod.com/api-keys?create=false).
+
+    In your GitHub repo: Settings → Secrets & variables → Actions → New repository secret `CODEMOD_API_KEY`
+
+    ![Create API Key](/images/guides/create-api-key.png)
+  </Step>
+
+  {/* <Step title="Set up MCP (IDE workflows)">
+    [Setup Codemod MCP](/cli/mcp#quick-setup) in your IDE to build and iterate on codemods locally.
+  </Step> */}
+
+  <Step title="Build a codemod package">
+    You can build a [codemod package](/cli/packages/quickstart) that automates a code change your team needs—such as updating an API, renaming components, or refactoring patterns.
+    
+    <Tip>
+      If you're new to codemods, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/cli/mcp) to create your first codemod package with the help of AI.
+    </Tip>
+    
+    Once you build your codemod package, you can place it in your codemods repository.
+  </Step>
+
+  <Step title="Validate & Publish">
+    Use the [included GitHub Action workflow](https://github.com/codemod/migrations-template/blob/main/.github/workflows/codemod-publish.yaml) to validate and publish your codemod package. 
+    
+    Alternatively, you can run `npx codemod workflow validate` and `npx codemod publish` with [Codemod CLI](/cli/cli-reference).
+  </Step>
+</Steps>
