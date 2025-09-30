@@ -37,11 +37,11 @@
             "pages": [
               "cli/cli-reference",
               {
-                "group": "Workflows",
+                "group": "Packages",
                 "pages": [
-                  "cli/workflows/quickstart",
-                  "cli/workflows/package-structure",
-                  "cli/workflows/building-workflows"
+                  "cli/packages/quickstart",
+                  "cli/packages/package-structure",
+                  "cli/packages/building-workflows"
                 ]
               },
               "mcp"
@@ -63,11 +63,11 @@
         "description": "Learn more with hands-on guides.",
         "groups": [
           {
-            "group": "Workflows",
+            "group": "Packages",
             "pages": [
-              "cli/workflows/quickstart",
-              "cli/workflows/package-structure",
-              "cli/workflows/building-workflows"
+              "cli/packages/quickstart",
+              "cli/packages/package-structure",
+              "cli/packages/building-workflows"
             ]
           },
           {

@@ -1,31 +1,31 @@
 ---
-title: "Workflow package structure"
+title: "Codemod package structure"
 sidebarTitle: "Package structure"
 ---
 
 ## Directory Layout
 
 ```
-my-workflow/
+my-codemod-package/
 ├─ codemod.yaml
 ├─ workflow.yaml
 ├─ scripts/
 └─ rules/
 ```
 
-The folder—called a **workflow package**—is the root when you run `npx codemod workflow run -w ./my-workflow/`.
+The folder—called a **codemod package**—is the root when you run `npx codemod workflow run -w ./my-codemod-package/`.
 
 <Info>
 You can combine types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths and reference them from <code>workflow.yaml</code>.
 </Info>
 
-<Accordion title="Workflow Package & Loading Workflows">
-  A workflow package is a directory containing your `workflow.yaml` and any scripts, rules, or assets referenced by your workflow.
+<Accordion title="Codemod Package & Loading Workflows">
+  A codemod package is a directory containing your `workflow.yaml` and any scripts, rules, or assets referenced by your workflow.
 
   - When you run
 
     ```bash
-    npx codemod workflow run -w ./my-workflow/
+    npx codemod workflow run -w ./my-codemod-package/
     ```
 
     the directory is used as the root for all relative paths.
@@ -49,7 +49,7 @@ nodes: []
 ```
 
 <Tip>
-See <a href="/cli/workflows/building-workflows">Building workflows</a> for a deep dive into nodes, steps, params, strategy, and examples.
+See <a href="/cli/packages/building-workflows">Building codemod packages</a> for a deep dive into nodes, steps, params, strategy, and examples.
 </Tip>
 
 ## codemod.yaml fields
@@ -105,7 +105,7 @@ Example: `keywords: ["react", "v18-to-v19", "migration"]`
 
   - Keep tags concise (1–2 words).
   - Use lowercase for consistency.
-  - Don’t overload with tags — 2–4 per codemod is ideal.
+  - Don't overload with tags — 2–4 per codemod is ideal.
   - Prioritize **transformation type + framework/library + version (if relevant)**.
 
   ---
@@ -216,7 +216,7 @@ category: "migration"
 targets:
   languages: ["typescript"]
 
-keywords: ["transformation", "migration"]
+keywords: ["breaking-change", "react", "v17-to-v18"]
 
 registry:
   access: "public"
