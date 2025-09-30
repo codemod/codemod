@@ -90,13 +90,13 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
       className={cn(
         "group relative overflow-hidden rounded-2xl border border-border-light bg-white p-6 shadow-sm dark:border-border-dark dark:bg-[#050D15] dark:shadow-xl",
         card.size === "large" && "md:col-span-1 md:row-span-2",
-        card.size === "medium" && "md:col-span-1 md:row-span-1"
+        card.size === "medium" && "md:col-span-1 md:row-span-1",
       )}
     >
       <div
         className={cn(
           "flex h-full flex-col",
-          card.id === "orchestrate" ? "flex-col-reverse" : ""
+          card.id === "orchestrate" ? "flex-col-reverse" : "",
         )}
       >
         {/* Text Content */}
@@ -105,7 +105,7 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
             "relative z-10 flex flex-1 flex-col gap-2",
             card.id === "customize" &&
               "mb-8 flex-auto items-center text-center md:pt-12",
-            card.id === "transform" && "mb-4"
+            card.id === "transform" && "mb-4",
           )}
         >
           <h3 className="font-bold text-2xl text-primary-light dark:text-primary-dark">
@@ -114,7 +114,7 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
           <p
             className={cn(
               "text-sm text-secondary-light dark:text-secondary-dark",
-              card.id === "customize" && "mx-auto max-w-[330px]"
+              card.id === "customize" && "mx-auto max-w-[330px]",
             )}
           >
             {card.description}
@@ -129,7 +129,7 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
               "aspect-[861/1004] flex-1 [mask-image:linear-gradient(to_bottom,black_80%,transparent_100%)]",
 
             card.id === "orchestrate" && "aspect-[1085/330]",
-            card.id === "transform" && "-mb-4 aspect-[1085/660]"
+            card.id === "transform" && "-mb-4 aspect-[1085/660]",
           )}
         >
           {/* Light/Dark Image Support */}
@@ -141,7 +141,7 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
                 "absolute inset-x-0 bottom-0 top-0 rounded-xl border border-border-light dark:border-border-dark",
                 "block h-full w-full object-cover dark:hidden",
                 card.id === "orchestrate" && "object-top",
-                card.id === "transform" && "object-bottom"
+                card.id === "transform" && "object-bottom",
               )}
             />
           )}
@@ -153,7 +153,7 @@ const BentoCard = ({ card }: { card: BentoCard }) => {
                 "absolute inset-x-0 bottom-0 top-0 rounded-xl border border-border-light dark:border-border-dark",
                 "hidden h-full w-full object-cover dark:block",
                 card.id === "orchestrate" && "object-top",
-                card.id === "transform" && "object-bottom"
+                card.id === "transform" && "object-bottom",
               )}
             />
           )}

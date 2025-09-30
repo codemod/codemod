@@ -60,7 +60,7 @@ export function SeparatorY({
       className={clsx(
         "pointer-events-none relative mx-auto h-px w-full",
         map.padding,
-        className
+        className,
       )}
       aria-hidden="true"
     >
@@ -70,19 +70,19 @@ export function SeparatorY({
           <div
             className={clsx(
               "absolute left-0 h-px w-[calc(33.33%-8px)] bg-border-light dark:bg-border-dark",
-              map.horizontal
+              map.horizontal,
             )}
           />
           <div
             className={clsx(
               "absolute left-[calc(33.33%+18px)] h-px w-[calc(33.33%-36px)] bg-border-light dark:bg-border-dark",
-              map.horizontal
+              map.horizontal,
             )}
           />
           <div
             className={clsx(
               "absolute right-0 h-px w-[calc(33.33%-8px)] bg-border-light dark:bg-border-dark",
-              map.horizontal
+              map.horizontal,
             )}
           />
         </>
@@ -91,13 +91,13 @@ export function SeparatorY({
           <div
             className={clsx(
               "absolute right-0 h-px w-[calc(50%-12px)] bg-border-light dark:bg-border-dark",
-              map.horizontal
+              map.horizontal,
             )}
           />
           <div
             className={clsx(
               "absolute left-0 h-px w-[calc(50%-12px)] bg-border-light dark:bg-border-dark",
-              map.horizontal
+              map.horizontal,
             )}
           />
         </>
@@ -110,13 +110,13 @@ export function SeparatorY({
           <div
             className={clsx(
               "absolute -left-24 h-px w-24 bg-gradient-to-l from-border-light to-transparent dark:from-border-dark dark:to-transparent",
-              map.side
+              map.side,
             )}
           />
           <div
             className={clsx(
               "absolute -right-24 h-px w-24 bg-gradient-to-r from-border-light to-transparent dark:from-border-dark dark:to-transparent",
-              map.side
+              map.side,
             )}
           />
         </>
@@ -128,13 +128,13 @@ export function SeparatorY({
           <div
             className={clsx(
               "absolute left-[calc(33.33%+1px)] size-2 rounded-full bg-white shadow ring-1 ring-border-light dark:bg-background-dark dark:ring-border-dark",
-              map.dot
+              map.dot,
             )}
           />
           <div
             className={clsx(
               "absolute left-[calc(66%-1px)] size-2 rounded-full bg-white shadow ring-1 ring-border-light dark:bg-background-dark dark:ring-border-dark",
-              map.dot
+              map.dot,
             )}
           />
         </>
@@ -143,7 +143,7 @@ export function SeparatorY({
           <div
             className={clsx(
               "absolute left-1/2 size-2 -translate-x-1/2 rounded-full bg-white shadow ring-1 ring-border-light dark:bg-background-dark dark:ring-border-dark",
-              map.dot
+              map.dot,
             )}
           />
         )
@@ -157,7 +157,7 @@ export function SeparatorX({ className }: { className?: string }) {
     <div
       className={clsx(
         "absolute h-[calc(100%-24px)] w-px border-l border-dashed border-border-light dark:border-border-dark",
-        className
+        className,
       )}
     />
   );
