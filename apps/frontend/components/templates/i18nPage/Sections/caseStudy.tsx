@@ -9,13 +9,13 @@ import { useRef } from "react";
 const caseStudy = {
   quote:
     "“Codemod gave us the visibility we needed when piloting our i18n effort. We could focus on the business while their team handled the heavy lifting. Their platform automated large-scale code updates across multiple teams. We’re especially excited about the new AI orchestration workflow!”",
-  authorName: "Jonathan Alford",
-  authorPosition: "Software-engineer padoa",
+  authorName: "Charles-Antoine de Salaberry",
+  authorPosition: "Tech lead at Padoa",
   authorImage: {
-    src: "https://cdn.sanity.io/images/aho0e32c/production/7521092fe778ea52184b279ab89de4ebfd53d4cb-800x800.jpg?w=100&fit=max&auto=format",
+    src: "/static/i18n/casestudy-author.jpg",
   },
   image: {
-    src: "https://cdn.sanity.io/images/aho0e32c/production/d38d414181f69afdc296137c9e1b54a9c3c54663-3840x3840.png?w=64&fit=max&auto=format",
+    src: "/static/i18n/casestudy-logo.jpg",
   },
 };
 
@@ -27,7 +27,7 @@ const kpi = {
 
 const cta = {
   label: "Read case study",
-  href: "https://codemod.com/blog/automate-i18n-internationalization-with-codemod",
+  href: "https://codemod.com/blog/padoa",
 };
 
 export default function CaseStudySection() {
