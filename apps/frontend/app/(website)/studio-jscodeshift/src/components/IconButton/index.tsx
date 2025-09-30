@@ -13,7 +13,7 @@ const IconButton = ({ children, tooltip, isActive, ...restProps }: Props) => (
       className={cn(
         "mr-1 inline-flex items-center rounded-lg px-1.5 text-center text-sm text-white focus:outline-none",
         "hover:bg-blue-900 dark:hover:bg-blue-800",
-        !isActive && "bg-gray-300 dark:bg-gray-500",
+        !isActive && "bg-border-light dark:bg-border-dark",
         isActive && "bg-blue-900 dark:bg-blue-800",
       )}
       data-tooltip-content={tooltip ?? ""}

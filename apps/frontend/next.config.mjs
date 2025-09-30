@@ -2,6 +2,9 @@ import MonacoEditorPlugin from "monaco-editor-webpack-plugin";
 
 /** @type {import('next').NextConfig} */
 const config = {
+  compiler: {
+    styledComponents: true,
+  },
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
       config.plugins.push(
@@ -62,7 +65,19 @@ const config = {
   },
   experimental: {
     taint: true,
+    optimizePackageImports: [
+      "@phosphor-icons/react",
+      "lucide-react",
+      "@radix-ui/react-select",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-tooltip",
+    ],
   },
+  transpilePackages: [
+    "@codemod-com/api-types",
+    "@codemod-com/utilities",
+    "@codemod.com/codemod-utils",
+  ],
   async headers() {
     return [
       {

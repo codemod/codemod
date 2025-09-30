@@ -61,12 +61,12 @@ export default function DemoSection() {
     <div className="relative z-[60] w-full max-w-full" ref={ref}>
       <main
         key={`Timeline-${resetKey}`} // Force re-mount of the main component
-        className="relative flex flex-col gap-1 max-w-[1152px] shadow-2xl overflow-hidden rounded-[6px] border border-border-light bg-zinc-200 p-1 mx-auto dark:bg-gray-950 dark:border-border-dark"
+        className="relative mx-auto flex max-w-[1152px] flex-col gap-1 overflow-hidden rounded-xl border border-border-light bg-zinc-200 p-1 shadow-2xl dark:border-border-dark dark:bg-gray-950"
       >
         <AnimatePresence>
           {!isAnimating && (
             <Play
-              className="absolute inset-0 z-50 flex items-center justify-center bg-white/30 transition-colors hover:bg-white/10 dark:hover:bg-gray-950/10 dark:bg-gray-950/20"
+              className="absolute inset-0 z-50 flex items-center justify-center bg-white/30 transition-colors hover:bg-white/10 dark:bg-gray-950/20 dark:hover:bg-gray-950/10"
               onClick={handleAnimationReset}
             />
           )}
@@ -77,7 +77,7 @@ export default function DemoSection() {
           step={step}
           isAnimating={isAnimating}
         />
-        <motion.div className="flex gap-1 flex-col md:h-[500px] md:flex-row">
+        <motion.div className="flex flex-col gap-1 md:h-[500px] md:flex-row">
           <div className="relative order-2 flex flex-col overflow-hidden rounded-l md:order-1 md:w-[40%]">
             <Code
               key={`Code-${resetKey}`}
