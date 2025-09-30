@@ -1,0 +1,142 @@
+---
+title: "Quickstart"
+---
+
+Build a working JavaScript ast-grep (jssg) codemod in minutes.
+
+## What is jssg?
+
+JavaScript ast-grep (jssg) is a codemod framework that lets you write code transformations using JavaScript/TypeScript. Instead of complex AST manipulation, you use patterns to find and replace code structures.
+
+**How it works:**
+- Your transform runs in a **QuickJS** runtime with **AWS LLRT** module infrastructure
+- The `codemod:ast-grep` module exposes `SgRoot` and `SgNode` APIs for AST navigation
+- You write pattern-based rules to find code, then create edits to transform it
+- Return a string with changes applied, or `null`/`undefined` to skip the file
+
+**Key concepts:**
+- **Patterns**: Use `console.log($ARG)` to match function calls with captured arguments
+- **Rules**: Combine patterns with `any`, `all`, `kind`, and relational constraints
+- **Edits**: Create replacements with `node.replace()` and apply with `commitEdits()`
+- **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return
+
+## Build your first codemod
+
+<Steps>
+  <Step title="Scaffold a jssg package">
+
+```bash
+npx codemod init
+```
+
+Pick `JavaScript ast-grep (jssg) codemod` when prompted.
+
+This will scaffold a new folder with the required files and structure.
+
+```plaintext
+<your-codemod>/
+├── codemod.yaml
+├── workflow.yaml       # references scripts/codemod.ts in a js-ast-grep step
+└── scripts/
+    └── codemod.ts      # write your jssg transform here
+```
+
+  </Step>
+
+  <Step title="Write a minimal transform (scripts/codemod.ts)">
+
+    **Key concepts:**
+
+    - <b>Transform signature</b>: `export default function transform(root, options)`<br/>
+    - <b>Edit flow</b>: find nodes → build edits → `commitEdits(edits)` → return resulting string<br/>
+    - <b>Return contract</b>: string → modified (unless equal to input), null/undefined → unmodified; anything else → error<br/>
+    - <b>Type safety</b>: Always check node types before accessing fields
+    
+    ```ts codemod.ts
+    import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+    import type TSX from "codemod:ast-grep/langs/tsx";
+
+    export default function transform(root: SgRoot<TSX>): string | null {
+      const rootNode = root.root();
+
+      // Find all console.* calls with type safety
+      const consoleCalls = rootNode.findAll({
+        rule: {
+          any: [
+            { pattern: "console.log($$$ARGS)" },
+            { pattern: "console.debug($$$ARGS)" },
+            { pattern: "console.warn($$$ARGS)" },
+          ],
+        },
+      });
+
+      if (consoleCalls.length === 0) {
+        return null; // No changes needed
+      }
+
+      // Create edits with proper validation
+      const edits = consoleCalls.map((node: SgNode<TSX>) => {
+        const callee = node.field("function");
+        const method = callee?.field("property")?.text() || "log";
+        const args = node.getMultipleMatches("ARGS")
+          .map(arg => arg.text())
+          .join(", ");
+        
+        return node.replace(`logger.${method}(${args})`);
+      });
+
+      return rootNode.commitEdits(edits);
+    }
+    ```
+
+    The transform follows this pattern:
+    1. If no matches are found, the step is skipped or files are unchanged
+    2. When matches exist, files with changes are updated in-memory and reported in the diff
+    3. Returning the same string results in "unmodified"; returning null/undefined is also treated as "unmodified"
+
+  </Step>
+
+  <Step title="Validate & run">
+
+    ```bash
+    npx codemod workflow validate -w workflow.yaml
+    npx codemod workflow run -w workflow.yaml --dry-run
+    ```
+
+    The transform will make the following changes:
+
+    ```js Before
+    function example() {
+      console.log("Hello");
+      console.debug("Debug");
+    }
+    ```
+
+    ```js After
+    function example() {
+      logger.log("Hello");How it
+      logger.log("Debug");
+    }
+    ```
+
+  </Step>
+</Steps>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card
+    title="Test your codemod"
+    href="/guides/jssg/testing"
+  >
+    Learn how to validate your codemod with before/after fixtures and the <code>jssg test</code> runner.
+  </Card>
+  <Card
+    title="jssg reference"
+    href="/guides/jssg/reference"
+  >
+    Explore the full API reference for the jssg runtime, including node navigation, editing, and pattern matching.
+  </Card>
+</Columns>
+
+

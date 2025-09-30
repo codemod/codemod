@@ -44,6 +44,14 @@
                   "cli/packages/building-workflows"
                 ]
               },
+              {
+                "group": "jssg",
+                "pages": [
+                  "guides/jssg/quickstart",
+                  "guides/jssg/testing",
+                  "guides/jssg/reference"
+                ]
+              },
               "/model-context-protocol"
             ]
           },
