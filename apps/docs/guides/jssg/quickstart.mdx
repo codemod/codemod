@@ -6,19 +6,26 @@ Build a working JavaScript ast-grep (jssg) codemod in minutes.
 
 ## What is jssg?
 
-JavaScript ast-grep (jssg) is a codemod framework that lets you write code transformations using JavaScript/TypeScript. Instead of complex AST manipulation, you use patterns to find and replace code structures.
+JavaScript ast-grep (jssg) is a secure JavaScript runtime for codemods, similar to Node.js. It includes most Node.js globals and modules (for example, `fs`, `process`) so you can write real-world transformations in JavaScript/TypeScript.
 
 **How it works:**
-- Your transform runs in a **QuickJS** runtime with **AWS LLRT** module infrastructure
-- The `codemod:ast-grep` module exposes `SgRoot` and `SgNode` APIs for AST navigation
-- You write pattern-based rules to find code, then create edits to transform it
-- Return a string with changes applied, or `null`/`undefined` to skip the file
+- A jssg codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
+- The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
+- You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
+
+<Info>
+For engine details and built-ins, see <a href="/guides/jssg/reference#runtime-and-built-ins">Runtime and built-ins</a> in the API reference.
+</Info>
 
 **Key concepts:**
-- **Patterns**: Use `console.log($ARG)` to match function calls with captured arguments
-- **Rules**: Combine patterns with `any`, `all`, `kind`, and relational constraints
-- **Edits**: Create replacements with `node.replace()` and apply with `commitEdits()`
-- **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return
+- **Patterns**: Describe code shapes using ast-grep’s pattern syntax with captures (for example, `$NAME`, `$$$ARGS`).
+- **Rules**: Compose patterns with `any`, `all`, `kind`, relational constraints (`inside`, `has`, `precedes`, `follows`), and utilities like `matches` and `constraints`.
+- **Edits**: Build replacements with `node.replace(text)` and apply them with `commitEdits(edits)`.
+- **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
+
+<Tip>
+You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [jssg API reference](/guides/jssg/reference#rule-configuration).
+</Tip>
 
 ## Build your first codemod
 
@@ -114,7 +121,7 @@ This will scaffold a new folder with the required files and structure.
 
     ```js After
     function example() {
-      logger.log("Hello");How it
+      logger.log("Hello");
       logger.log("Debug");
     }
     ```

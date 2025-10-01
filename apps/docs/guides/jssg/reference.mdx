@@ -2,8 +2,6 @@
 title: "API Reference"
 ---
 
-Complete API reference for JavaScript ast-grep (jssg) codemods. Use this guide to understand all available methods, types, and patterns for building robust code transformations.
-
 ## Quick Reference
 
 ### Core Types
@@ -19,6 +17,12 @@ Complete API reference for JavaScript ast-grep (jssg) codemods. Use this guide t
 - `node.findAll(rule)` - Find all matches
 - `node.replace(text)` - Create edit
 - `node.commitEdits(edits)` - Apply edits
+
+## Runtime and built-ins
+
+<Info>
+jssg is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
+</Info>
 
 ## Transform Function
 
@@ -41,6 +45,9 @@ export default function transform(
 }
 ```
 
+<Info>
+Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript types (not runtime values). At runtime, the <code>codemod:ast-grep</code> module provides functions such as <code>parse</code> and <code>parseAsync</code> (see [Parse Helpers](#parse-helpers)).
+</Info>
 **Return values:**
 - `string` - Modified code (if identical to input, treated as unmodified)
 - `null` - No changes needed
@@ -146,6 +153,10 @@ jssg uses ast-grep patterns to find code structures. Patterns are more powerful 
 - `$NAME:kind` - Capture only specific node types
 
 ### Rule Configuration
+
+<Info>
+Rules are authored as plain JavaScript objects with the same semantics as ast-grep’s YAML rule config. See: [ast‑grep YAML Rule Config](https://ast-grep.github.io/reference/yaml.html) and [Rule Config Guide](https://ast-grep.github.io/guide/rule-config.html).
+</Info>
 
 ```ts
 // Simple pattern
