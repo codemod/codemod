@@ -97,9 +97,8 @@
       }
     ],
     "primary": {
-      "label": "Dashboard",
-      "type": "button",
-      "href": "https://app.codemod.com"
+      "type": "github",
+      "href": "https://github.com/codemod/codemod"
     }
   },
   "footer": {
