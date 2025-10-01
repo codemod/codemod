@@ -1,5 +1,4 @@
 import NavigationLink from "@/components/global/Navigation/NavigationLink";
-import CtaCard from "@/components/shared/CtaCard";
 import Icon from "@/components/shared/Icon";
 import RelatedLinks from "@/components/shared/RelatedLinks";
 import { RichText } from "@/components/shared/RichText";
@@ -30,56 +29,14 @@ export default function JobListingPageContent(props: Job) {
           </span>
         </div>
         <h1 className="xl-heading">{props?.title}</h1>
-        <div className="lg:hidden">
-          <CtaCard
-            title={props.globalLabels?.applyToPosition || "Apply to position"}
-            description={
-              props.globalLabels?.applyToPositionDescription ||
-              "Ready to feel the rush?"
-            }
-            ctaText={props.globalLabels?.applyToPositionCTA || "Apply"}
-            href="#apply-to-job"
-          />
-        </div>
       </div>
 
       {/* Job details */}
       <div className="relative flex w-full">
         <div className="relative flex-1 lg:pr-[68px]">
           <RichText value={props?.post} usage="textPage" />
-          <div className="absolute right-0 top-0 hidden h-full w-[1px] bg-gradient-to-b from-transparent via-[#0b151e39] via-10% to-transparent to-95%  lg:flex dark:via-[#ffffff33]" />
         </div>
-
-        <aside className="sticky top-8 hidden h-fit w-1/3 px-s pl-[52px] lg:flex">
-          <div className="flex w-full flex-col">
-            <div className="mb-l">
-              <CtaCard
-                title={
-                  props.globalLabels?.applyToPosition || "Apply to position"
-                }
-                description={
-                  props.globalLabels?.applyToPositionDescription ||
-                  "Ready to feel the rush?"
-                }
-                ctaText={props.globalLabels?.applyToPositionCTA || "Apply"}
-                href="#apply-to-job"
-              />
-            </div>
-            <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-[#0b151e39] to-transparent dark:via-emphasis-dark" />
-            {props?.relatedPositions ? (
-              <RelatedLinks
-                className="mt-l"
-                title={props.globalLabels?.relatedJobs || "Related positions"}
-                links={props?.relatedPositions.map((position) => ({
-                  title: position?.title,
-                  href: position?.pathname?.current.split("/")[1],
-                }))}
-              />
-            ) : null}
-          </div>
-        </aside>
       </div>
-
 
       {props?.relatedPositions ? (
         <RelatedLinks
