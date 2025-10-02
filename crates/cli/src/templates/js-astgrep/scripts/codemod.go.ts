@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
 import type Go from "codemod:ast-grep/langs/go";
 
-async function transform(root: SgRoot<Go>): Promise<string> {
+const transform: Transform<Go> = async (root) => {
 	const rootNode = root.root();
 
 	// Find all fmt.Println calls
