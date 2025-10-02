@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
 import type Rust from "codemod:ast-grep/langs/rust";
 
-async function transform(root: SgRoot<Rust>): Promise<string> {
+const transform: Transform<Rust> = async (root) => {
 	const rootNode = root.root();
 
 	// Find all println! macro calls

@@ -1,7 +1,9 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
+import type JS from "codemod:ast-grep/langs/javascript";
 import type TS from "codemod:ast-grep/langs/typescript";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-async function transform(root: SgRoot<TS>): Promise<string> {
+const transform: Transform<TS | TSX | JS> = async (root) => {
 	const rootNode = root.root();
 
 	const nodes = rootNode.findAll({
