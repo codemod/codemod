@@ -31,7 +31,7 @@ Codemod supports a mostly automated MSW v2 upgrade experience. This page provide
 <Card
     title="MSW v2 Upgrade Recipe"
     icon="cauldron"
-    href="https://codemod.com/registry/msw-2-upgrade-recipe"
+    href="https://go.codemod.com/msw-codemods"
 >
     
 </Card>
@@ -45,10 +45,10 @@ Codemod supports a mostly automated MSW v2 upgrade experience. This page provide
     ```
     </Step>
     <Step title="Run codemods">
-        Inside your project's root directory, run the [MSW v2 upgrade recipe](https://codemod.com/registry/msw-2-upgrade-recipe):
+        Inside your project's root directory, run the [MSW v2 upgrade recipe](https://go.codemod.com/msw-codemods):
 
         ```bash
-        npx codemod msw/2/upgrade-recipe
+        npx codemod@latest @mswjs/v2
         ```
     </Step>
     <Step title="Fix false negatives">
