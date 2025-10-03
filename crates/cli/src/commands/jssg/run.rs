@@ -1,12 +1,13 @@
-use crate::dirty_git_check;
 use crate::engine::create_progress_callback;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
+use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
+use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
@@ -50,6 +51,18 @@ pub struct Command {
     /// Parameters to pass to the codemod
     #[arg(long = "param", value_name = "KEY=VALUE")]
     pub params: Option<Vec<String>>,
+
+    /// Allow fs access
+    #[arg(long)]
+    pub allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    pub allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    pub allow_child_process: bool,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -81,8 +94,31 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
+    let mut capabilities = Vec::new();
+    if args.allow_fs {
+        capabilities.push(LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        capabilities.push(LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        capabilities.push(LlrtSupportedModules::ChildProcess);
+    }
+    let capabilities = if capabilities.is_empty() {
+        None
+    } else {
+        Some(capabilities.into_iter().collect())
+    };
+
+    let capabilities_security_callback = capabilities_security_callback();
+    let pre_run_callback = PreRunCallback {
+        callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
+            capabilities_security_callback(config);
+        })),
+    };
+
     let config = CodemodExecutionConfig {
-        pre_run_callback: None,
+        pre_run_callback: Some(pre_run_callback),
         progress_callback: Arc::new(Some(create_progress_callback())),
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
@@ -91,6 +127,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         dry_run: args.dry_run,
         languages: Some(vec![args.language.clone()]),
         threads: args.max_threads,
+        capabilities: capabilities.clone(),
     };
 
     let started = Instant::now();
@@ -98,6 +135,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
+    let capabilities_for_closure = config.capabilities.clone();
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
@@ -129,6 +167,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 selector_config: None,
                 params: Some(params.clone()),
                 matrix_values: None,
+                capabilities: capabilities_for_closure.as_deref().map(|v| v.to_vec()),
             };
 
             // Execute the codemod on this file

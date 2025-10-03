@@ -1,16 +1,17 @@
 [workspace]
 members = [
-  "crates/models",
-  "crates/core",
-  "crates/cli",
-  "crates/runners",
-  "crates/state",
-  "crates/codemod-sandbox",
-  "crates/codemod-sandbox/build",
-  "crates/telemetry",
-  "crates/mcp",
-  "crates/testing-utils",
-  "xtask",
+    "crates/models",
+    "crates/core",
+    "crates/cli",
+    "crates/runners",
+    "crates/state",
+    "crates/codemod-sandbox",
+    "crates/codemod-sandbox/build",
+    "crates/telemetry",
+    "crates/mcp",
+    "crates/testing-utils",
+    "xtask",
+    "crates/llrt-capabilities",
 ]
 resolver = "2"
 
@@ -41,6 +42,7 @@ codemod-telemetry = { path = "crates/telemetry" }
 codemod-mcp = { path = "crates/mcp" }
 testing-utils = { path = "crates/testing-utils" }
 rmcp = { version = "0.6", features = ["server"] }
+codemod-llrt-capabilities = { path = "crates/llrt-capabilities" }
 
 anyhow = "1.0"
 ast-grep-core = "0.38.6"

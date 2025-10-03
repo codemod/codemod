@@ -120,6 +120,11 @@ pub struct Workflow {
 
     /// Nodes in the workflow
     pub nodes: Vec<Node>,
+
+    /// Capabilities
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub capabilities: Option<Vec<String>>,
 }
 
 /// Represents the state schema for a workflow

@@ -3,6 +3,7 @@ use ast_grep_config::CombinedScan;
 use ast_grep_language::SupportLang;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
@@ -29,6 +30,18 @@ pub struct Command {
     /// Language to process
     #[arg(long)]
     pub language: String,
+
+    /// Allow fs access
+    #[arg(long)]
+    pub allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    pub allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    pub allow_child_process: bool,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
@@ -56,6 +69,22 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
+    let mut capabilities = Vec::new();
+    if args.allow_fs {
+        capabilities.push(LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        capabilities.push(LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        capabilities.push(LlrtSupportedModules::ChildProcess);
+    }
+    let capabilities = if capabilities.is_empty() {
+        None
+    } else {
+        Some(capabilities.into_iter().collect())
+    };
+
     let config = CodemodExecutionConfig {
         pre_run_callback: None,
         progress_callback: Arc::new(None),
@@ -66,6 +95,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         dry_run: false,
         languages: Some(vec![args.language.clone()]),
         threads: args.max_threads,
+        capabilities,
     };
 
     let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {

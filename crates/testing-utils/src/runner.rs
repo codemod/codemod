@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::future::Future;
@@ -22,6 +23,7 @@ pub type ExecutionFn<'a> = Box<
     dyn Fn(
             &str,
             &std::path::Path,
+            Option<Vec<LlrtSupportedModules>>,
         ) -> Pin<Box<dyn Future<Output = Result<TransformationResult>> + 'a>>
         + 'a,
 >;
@@ -78,18 +80,23 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         if self.options.watch {
-            return self.run_with_watch(extensions, execution_fn).await;
+            return self
+                .run_with_watch(extensions, execution_fn, capabilities)
+                .await;
         }
 
-        self.run_tests_once(extensions, execution_fn).await
+        self.run_tests_once(extensions, execution_fn, capabilities)
+            .await
     }
 
     async fn run_tests_once<'a>(
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
@@ -121,7 +128,12 @@ impl TestRunner {
         for test_case in filtered_test_cases {
             let result = timeout(
                 self.options.timeout,
-                Self::execute_test_case(test_case, &execution_fn, &self.options),
+                Self::execute_test_case(
+                    test_case,
+                    &execution_fn,
+                    &self.options,
+                    capabilities.clone(),
+                ),
             )
             .await;
 
@@ -164,6 +176,7 @@ impl TestRunner {
         test_case: &UnifiedTestCase,
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<()> {
         let should_expect_error = test_case.should_expect_error(&options.expect_errors);
 
@@ -171,7 +184,8 @@ impl TestRunner {
             .input_path
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new("test_input"));
-        let execution_result = execution_fn(&test_case.input_code, input_path).await?;
+        let execution_result =
+            execution_fn(&test_case.input_code, input_path, capabilities.clone()).await?;
 
         if should_expect_error {
             match execution_result {
@@ -283,10 +297,12 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
-
-        let initial_summary = self.run_tests_once(extensions, execution_fn).await?;
+        let initial_summary = self
+            .run_tests_once(extensions, execution_fn, capabilities)
+            .await?;
 
         println!("Watch mode not fully implemented yet. Use --no-watch for now.");
 
