@@ -14,7 +14,7 @@ JavaScript ast-grep (jssg) is a secure JavaScript runtime for codemods, similar 
 - You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
 
 <Info>
-For engine details and built-ins, see <a href="/guides/jssg/reference#runtime-and-built-ins">Runtime and built-ins</a> in the API reference.
+For engine details and built-ins, see <a href="/jssg/reference#runtime-and-built-ins">Runtime and built-ins</a> in the API reference.
 </Info>
 
 **Key concepts:**
@@ -24,7 +24,7 @@ For engine details and built-ins, see <a href="/guides/jssg/reference#runtime-an
 - **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
 
 <Tip>
-You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [jssg API reference](/guides/jssg/reference#rule-configuration).
+You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [jssg API reference](/jssg/reference#rule-configuration).
 </Tip>
 
 ## Build your first codemod
@@ -134,13 +134,13 @@ This will scaffold a new folder with the required files and structure.
 <Columns cols={2}>
   <Card
     title="Test your codemod"
-    href="/guides/jssg/testing"
+    href="/jssg/testing"
   >
     Learn how to validate your codemod with before/after fixtures and the <code>jssg test</code> runner.
   </Card>
   <Card
     title="jssg reference"
-    href="/guides/jssg/reference"
+    href="/jssg/reference"
   >
     Explore the full API reference for the jssg runtime, including node navigation, editing, and pattern matching.
   </Card>
