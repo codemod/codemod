@@ -47,9 +47,9 @@
               {
                 "group": "jssg",
                 "pages": [
-                  "guides/jssg/quickstart",
-                  "guides/jssg/testing",
-                  "guides/jssg/reference"
+                  "/jssg/quickstart",
+                  "/jssg/testing",
+                  "/jssg/reference"
                 ]
               },
               "/model-context-protocol"
@@ -164,6 +164,22 @@
     {
       "source": "/cli/mcp",
       "destination": "/model-context-protocol"
+    },
+    {
+      "source": "/deploying-codemods/cli",
+      "destination": "/cli/cli-reference"
+    },
+    {
+      "source": "/building-codemods/package-requirements",
+      "destination": "/cli/packages/package-structure"
+    },
+    {
+      "source": "/building-codemods/codemod2",
+      "destination": "/cli/packages/quickstart"
+    },
+    {
+      "source": "/scanner",
+      "destination": "/insights"
     }
   ],
   "contextual": {
