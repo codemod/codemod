@@ -137,6 +137,8 @@ static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
 
 pub fn handler(args: &Command) -> Result<()> {
+    let git_repository_url = args.git_repository_url.clone();
+
     let (project_path, project_name, git_repository_url) = if args.no_interactive {
         let project_path = match args.path.clone() {
             Some(path) => path,
@@ -159,8 +161,6 @@ pub fn handler(args: &Command) -> Result<()> {
             }
         };
 
-        let git_repository_url = args.git_repository_url.clone();
-
         (project_path, project_name, git_repository_url)
     } else {
         // Interactive mode - ask for path if not provided
@@ -180,8 +180,6 @@ pub fn handler(args: &Command) -> Result<()> {
                 .unwrap_or("my-codemod")
                 .to_string()
         });
-
-        let git_repository_url = args.git_repository_url.clone();
 
         (project_path, project_name, git_repository_url)
     };
