@@ -4,7 +4,7 @@ use crate::progress_bar::download_progress_bar;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
