@@ -223,10 +223,10 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let implicit_run_params = Cli::try_parse_from(cli.trailing_args.clone());
+    let implicit_cli_params = Cli::try_parse_from(cli.trailing_args.clone());
 
     if cli.disable_analytics
-        || implicit_run_params
+        || implicit_cli_params
             .map(|params| params.disable_analytics)
             .unwrap_or(false)
     {
