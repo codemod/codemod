@@ -3581,6 +3581,7 @@ fn create_conditional_workflow() -> Workflow {
             ],
             env: HashMap::new(),
         }],
+        capabilities: None,
     }
 }
 
@@ -3622,6 +3623,7 @@ fn create_nonexistent_variable_workflow() -> Workflow {
                 ]),
             },
         ],
+        capabilities: None,
     }
 }
 
