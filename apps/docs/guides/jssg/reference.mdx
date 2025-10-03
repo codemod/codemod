@@ -1,0 +1,806 @@
+---
+title: "API Reference"
+---
+
+## Quick Reference
+
+### Core Types
+- `SgRoot<L>` - Represents a parsed file
+- `SgNode<L>` - Represents any AST node
+- `Edit` - Single text replacement
+- `RuleConfig` - Pattern matching configuration
+
+### Essential Methods
+- `root.root()` - Get root AST node
+- `root.filename()` - Get file path
+- `node.find(rule)` - Find first match
+- `node.findAll(rule)` - Find all matches
+- `node.replace(text)` - Create edit
+- `node.commitEdits(edits)` - Apply edits
+
+## Runtime and built-ins
+
+<Info>
+jssg is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
+</Info>
+
+## Transform Function
+
+Every jssg codemod exports a transform function:
+
+```ts
+import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+export default function transform(
+  root: SgRoot<TSX>, 
+  options: {
+    language: string;
+    params?: Record<string, string>;
+    matches?: SgNode[];
+    matrixValues?: Record<string, unknown>;
+  }
+): string | null {
+  // Your transformation logic
+}
+```
+
+<Info>
+Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript types (not runtime values). At runtime, the <code>codemod:ast-grep</code> module provides functions such as <code>parse</code> and <code>parseAsync</code> (see [Parse Helpers](#parse-helpers)).
+</Info>
+**Return values:**
+- `string` - Modified code (if identical to input, treated as unmodified)
+- `null` - No changes needed
+- `undefined` - Same as null
+- Other types - Runtime error
+
+## SgRoot API
+
+The root object provides access to the parsed file:
+
+<ParamField path="root()" type="SgNode">Get the root AST node of the file.</ParamField>
+<ParamField path="filename()" type="string">Get the file path or "anonymous" for ad-hoc parsing.</ParamField>
+
+```ts
+const rootNode = root.root();
+const filePath = root.filename();
+```
+
+## SgNode API
+
+### Navigation Methods
+
+<ParamField path="find(matcher)" type="SgNode | null">Find the first matching descendant node.</ParamField>
+<ParamField path="findAll(matcher)" type="SgNode[]">Find all matching descendant nodes.</ParamField>
+<ParamField path="parent()" type="SgNode | null">Get the parent node.</ParamField>
+<ParamField path="children()" type="SgNode[]">Get all child nodes.</ParamField>
+<ParamField path="child(index)" type="SgNode | null">Get child at specific index.</ParamField>
+<ParamField path="next()" type="SgNode | null">Get next sibling node.</ParamField>
+<ParamField path="nextAll()" type="SgNode[]">Get all following sibling nodes.</ParamField>
+<ParamField path="prev()" type="SgNode | null">Get previous sibling node.</ParamField>
+<ParamField path="prevAll()" type="SgNode[]">Get all previous sibling nodes.</ParamField>
+<ParamField path="ancestors()" type="SgNode[]">Get all ancestor nodes up to root.</ParamField>
+<ParamField path="getRoot()" type="SgRoot">Get the root SgRoot object.</ParamField>
+
+### Node Properties
+
+<ParamField path="text()" type="string">Get the text content of this node.</ParamField>
+<ParamField path="kind()" type="string">Get the node type (e.g., "function_declaration", "arrow_function").</ParamField>
+<ParamField path="range()" type="Range">Get the source position range.</ParamField>
+<ParamField path="is(kind)" type="boolean">Check if node is of specific type.</ParamField>
+<ParamField path="isLeaf()" type="boolean">Check if node has no children.</ParamField>
+<ParamField path="isNamed()" type="boolean">Check if node is a named AST node.</ParamField>
+<ParamField path="isNamedLeaf()" type="boolean">Check if node is a named leaf node.</ParamField>
+<ParamField path="id()" type="number">Get the unique identifier of this node.</ParamField>
+
+### Field Access
+
+<ParamField path="field(name)" type="SgNode | null">Get first child in named field.</ParamField>
+<ParamField path="fieldChildren(name)" type="SgNode[]">Get all children in named field.</ParamField>
+
+```ts
+// Access function parameters
+const params = node.field("parameters");
+const firstParam = params?.child(0);
+
+// Check node type
+if (node.is("function_declaration")) {
+  const name = node.field("name")?.text();
+}
+```
+
+### Pattern Matching
+
+<ParamField path="matches(matcher)" type="boolean">Test if current node matches a pattern.</ParamField>
+<ParamField path="inside(matcher)" type="boolean">Check if node is inside a matching ancestor.</ParamField>
+<ParamField path="has(matcher)" type="boolean">Check if node has matching descendant.</ParamField>
+<ParamField path="precedes(matcher)" type="boolean">Check if node precedes a matching sibling.</ParamField>
+<ParamField path="follows(matcher)" type="boolean">Check if node follows a matching sibling.</ParamField>
+
+### Capture Methods
+
+<ParamField path="getMatch(name)" type="SgNode | null">Get captured node by name from pattern.</ParamField>
+<ParamField path="getMultipleMatches(name)" type="SgNode[]">Get all captured nodes with same name.</ParamField>
+<ParamField path="getTransformed(name)" type="string | null">Get transformed text of captured node.</ParamField>
+
+### Editing Methods
+
+<ParamField path="replace(text)" type="Edit">Create a replacement edit for this node.</ParamField>
+<ParamField path="commitEdits(edits)" type="string">Apply array of edits and return new code.</ParamField>
+
+## Pattern Matching
+
+jssg uses ast-grep patterns to find code structures. Patterns are more powerful than regex because they understand code syntax.
+
+### Basic Patterns
+
+```ts
+// Find function calls
+{ pattern: "console.log($ARG)" }
+
+// Find variable declarations
+{ pattern: "const $NAME = $VALUE" }
+
+// Find imports
+{ pattern: "import $NAME from $SOURCE" }
+```
+
+### Pattern Syntax
+
+- `$NAME` - Capture a single node (e.g., `$ARG`, `$NAME`)
+- `$$$ARGS` - Capture multiple nodes (e.g., `$$$ARGS`, `$$$PARAMS`)
+- `$...` - Match any number of nodes
+- `$NAME:kind` - Capture only specific node types
+
+### Rule Configuration
+
+<Info>
+Rules are authored as plain JavaScript objects with the same semantics as ast-grep’s YAML rule config. See: [ast‑grep YAML Rule Config](https://ast-grep.github.io/reference/yaml.html) and [Rule Config Guide](https://ast-grep.github.io/guide/rule-config.html).
+</Info>
+
+```ts
+// Simple pattern
+{ rule: { pattern: "console.log($ARG)" } }
+
+// Multiple patterns
+{ rule: { 
+  any: [
+    { pattern: "console.log($ARG)" },
+    { pattern: "console.warn($ARG)" }
+  ]
+}}
+
+// With node type restriction
+{ rule: { 
+  pattern: "$FUNC($$$ARGS)",
+  kind: "call_expression"
+}}
+
+// With regex constraint
+{ rule: {
+  pattern: "$HOOK($$$ARGS)",
+  where: {
+    HOOK: { regex: "^use[A-Z]" }
+  }
+}}
+```
+
+### Relational Patterns
+
+```ts
+// Find nodes inside other nodes
+{ rule: { 
+  pattern: "console.log($ARG)",
+  inside: { pattern: "function $NAME($$$PARAMS)" }
+}}
+
+// Find nodes that have specific children
+{ rule: {
+  pattern: "function $NAME($$$PARAMS)",
+  has: { pattern: "console.log($$$ARGS)" }
+}}
+```
+
+## Advanced Pattern Composition
+
+### Rule References
+
+Use `matches` to reference named rules defined in `utils`:
+
+```ts
+const myRule: RuleConfig<TSX> = {
+  rule: {
+    matches: "jsx-element-hardcoded-human-language",
+    inside: { pattern: "function $NAME()" }
+  },
+  utils: {
+    "jsx-element-hardcoded-human-language": {
+      any: [
+        { kind: "jsx_element" },
+        { kind: "jsx_self_closing_element" }
+      ]
+    }
+  }
+};
+```
+
+### Constraint System
+
+Use `constraints` to define reusable rule patterns and reference them with `matches`:
+
+```ts
+const stringLikeRule: RuleConfig<TSX> = {
+  constraints: {
+    STR: {
+      any: [{ kind: "string" }, { kind: "template_string" }]
+    },
+    NUM: {
+      kind: "number"
+    }
+  },
+  utils: {
+    "string-like": {
+      any: [
+        { matches: "STR" },
+        { pattern: "$STR + $NUM" }
+      ]
+    }
+  },
+  rule: {
+    matches: "string-like"
+  }
+};
+```
+
+### Traversal Control
+
+Use `stopBy` to control how deep the search traverses:
+
+```ts
+// Search only immediate neighbors
+{
+  has: {
+    stopBy: "neighbor",
+    kind: "jsx_attribute"
+  }
+}
+
+// Search until end of parent
+{
+  inside: {
+    stopBy: "end",
+    pattern: "function $NAME()"
+  }
+}
+
+// Stop at specific node types
+{
+  inside: {
+    stopBy: {
+      not: {
+        kind: "variable_declarator"
+      }
+    },
+    pattern: "target"
+  }
+}
+```
+
+## Select (optional)
+
+Use a selector to skip files that don't contain your target shape:
+
+```ts
+export function getSelector() {
+  return { rule: { any: [{ pattern: "console.log($ARG)" }, { pattern: "console.debug($ARG)" }] } };
+}
+```
+
+<Info>
+When a selector is provided, the engine pre‑computes matches; if none are found, the file is skipped (your transform won't be called).
+</Info>
+
+## Basic Example
+
+Here's a complete example that replaces `console.*` calls with `logger.*`:
+
+```ts
+import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+export default function transform(root: SgRoot<TSX>): string | null {
+  const rootNode = root.root();
+  
+  // Find all console.* calls
+  const matches = rootNode.findAll({
+    rule: { 
+      any: [
+        { pattern: "console.log($$$ARGS)" },
+        { pattern: "console.warn($$$ARGS)" },
+        { pattern: "console.error($$$ARGS)" }
+      ]
+    }
+  });
+  
+  if (matches.length === 0) {
+    return null; // No changes needed
+  }
+  
+  // Create edits
+  const edits = matches.map((node: SgNode<TSX>) => {
+    const callee = node.field("function");
+    const method = callee?.field("property")?.text() || "log";
+    const args = node.getMultipleMatches("ARGS")
+      .map(arg => arg.text())
+      .join(", ");
+    
+    return node.replace(`logger.${method}(${args})`);
+  });
+  
+  return rootNode.commitEdits(edits);
+}
+```
+
+**Before:**
+```js
+function example() {
+  console.log("Hello");
+  console.warn("Warning");
+}
+```
+
+**After:**
+```js
+function example() {
+  logger.log("Hello");
+  logger.warn("Warning");
+}
+```
+
+## Types
+
+### Core Types
+
+<ParamField path="Edit" type="{ startPos: number; endPos: number; insertedText: string }">Single text replacement range.</ParamField>
+<ParamField path="Position" type="{ line: number; column: number; index: number }">Source position.</ParamField>
+<ParamField path="Range" type="{ start: Position; end: Position }">Source span.</ParamField>
+
+### Edit Interface
+
+```ts
+interface Edit {
+  /** The start position of the edit */
+  startPos: number;
+  /** The end position of the edit */
+  endPos: number;
+  /** The text to be inserted */
+  insertedText: string;
+}
+```
+
+**Creating edits:**
+```ts
+// Manual creation
+const edit: Edit = {
+  startPos: node.range().start.index,
+  endPos: node.range().end.index,
+  insertedText: "new code"
+};
+
+// Using node.replace() (recommended)
+const edit = node.replace("new code");
+```
+
+## Best Practices
+
+**1. Be Explicit with Transformations**
+
+Always include explicit checks before accessing node properties:
+
+```ts
+// ✅ Good: Explicit validation
+const param = node.field("parameters")?.child(0);
+if (!param || !param.is("required_parameter")) {
+  return null;
+}
+
+// ❌ Avoid: Assumptions without checks
+const param = node.field("parameters").child(0); // May throw
+```
+
+**2. Handle Edge Cases Gracefully**
+
+Your codemod should handle various code styles:
+
+```ts
+// Handle different import styles
+const imports = rootNode.findAll({
+  rule: {
+    any: [
+      { pattern: "import $NAME from $SOURCE" }, // Default import
+      { pattern: "import { $$$NAMES } from $SOURCE" }, // Named imports
+      { pattern: "import * as $NAME from $SOURCE" }, // Namespace import
+      { pattern: "const $NAME = require($SOURCE)" }, // CommonJS
+    ],
+  },
+});
+```
+
+**3. Use Type-Safe Patterns**
+
+Leverage TypeScript's type system:
+
+```ts
+import type { SgNode } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+// Type-safe node type checking
+function isReactComponent(
+  node: SgNode<TSX>
+): node is SgNode<TSX, "function_declaration" | "arrow_function"> {
+  if (!isFunctionLike(node)) return false;
+  
+  // Check if it returns JSX
+  const returnStatements = node.findAll({
+    rule: { pattern: "return $EXPR" },
+  });
+  
+  return returnStatements.some((ret) => {
+    const expr = ret.getMatch("EXPR");
+    return expr?.kind() === "jsx_element" || expr?.kind() === "jsx_fragment";
+  });
+}
+```
+
+**4. Write Idempotent Transforms**
+
+Match only the pre-change shape to avoid re-editing:
+
+```ts
+// ✅ Good: Matches original shape
+{ pattern: "console.log($ARG)" }
+
+// ❌ Avoid: Matches already transformed code
+{ pattern: "logger.log($ARG)" }
+```
+
+**5. Optimize Performance**
+
+For large codebases:
+
+```ts
+export default function transform(root: SgRoot<TSX>): string | null {
+  const rootNode = root.root();
+  
+  // Early return for non-applicable files
+  if (!root.filename().endsWith(".tsx")) {
+    return null;
+  }
+  
+  // Single traversal for multiple patterns
+  const edits: Edit[] = [];
+  
+  rootNode
+    .findAll({
+      rule: {
+        any: [
+          { pattern: "console.log($$$ARGS)" },
+          { pattern: "console.warn($$$ARGS)" },
+          { pattern: "console.error($$$ARGS)" },
+        ],
+      },
+    })
+    .forEach((node) => {
+      // Process all patterns in one pass
+      edits.push(node.replace(`logger.${method}(${args})`));
+    });
+  
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+}
+```
+
+## Parse Helpers
+
+Use parse/parseAsync for ad‑hoc checks, small tools, or tests outside a workflow:
+
+<ParamField path="parse(lang, src)" type="SgRoot">Parse raw source into an SgRoot.</ParamField>
+<ParamField path="parseAsync(lang, src)" type="Promise<SgRoot">Async variant of parse.</ParamField>
+
+```ts
+import { parse } from "codemod:ast-grep";
+
+export default function main() {
+  const root = parse("tsx", "<div>{fn(value)}</div>");
+  const count = root.root().findAll({ rule: { pattern: "fn($X)" } }).length;
+  console.log("matches:", count);
+  return null;
+}
+```
+
+## Async Transformations
+
+jssg supports async operations for complex transformations:
+
+```ts
+export default async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  const filePath = root.filename();
+  
+  // Async file system operations
+  const config = await loadProjectConfig(filePath);
+  
+  // Async API calls or analysis
+  const metadata = await analyzeImports(root.root());
+  
+  // Use gathered data in transformation
+  const edits = await generateEdits(root.root(), config, metadata);
+  
+  return root.root().commitEdits(edits);
+}
+```
+
+**Common async patterns:**
+- Loading configuration files
+- Analyzing project structure
+- Making API calls for metadata
+- Cross-file analysis
+
+## Advanced Patterns
+
+### Multi-File Context
+
+Access information from other files in your project:
+
+```ts
+import { findProjectRoot, analyzeExports } from "./utils/project-analysis";
+
+export default async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  const projectRoot = await findProjectRoot(root.filename());
+  
+  // Analyze exports from related files
+  const componentExports = await analyzeExports(projectRoot, "src/components");
+  
+  // Use cross-file information in transformation
+  const edits = transformImports(root.root(), componentExports);
+  
+  return root.root().commitEdits(edits);
+}
+```
+
+### Custom Node Matchers
+
+Create reusable, complex matchers:
+
+```ts
+// utils/matchers.ts
+export function createReactHookMatcher() {
+  return {
+    rule: {
+      pattern: "$HOOK($$$ARGS)",
+      where: {
+        HOOK: {
+          regex: "^use[A-Z]", // Matches useEffect, useState, etc.
+        },
+      },
+    },
+  };
+}
+
+// Usage in codemod
+const hooks = rootNode.findAll(createReactHookMatcher());
+```
+
+### Real-world Example: Next.js Route Props
+
+Here's a complete example that adds type annotations to Next.js page components:
+
+```ts
+import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+export default function transform(root: SgRoot<TSX>): string | null {
+  const rootNode = root.root();
+
+  // Find the default export
+  const defaultExport = rootNode.find({
+    rule: { pattern: "export default $COMPONENT" }
+  });
+  
+  if (!defaultExport) return null;
+
+  const component = defaultExport.getMatch("COMPONENT");
+  if (!component.is("arrow_function") && !component.is("function_declaration")) {
+    return null; // Not a function component
+  }
+
+  // Check for parameters that need typing
+  const params = component.field("parameters");
+  const secondParam = params?.child(1);
+  
+  if (!secondParam?.is("required_parameter")) {
+    return null; // No second parameter
+  }
+
+  // Check if already has type annotation
+  const typeAnnotation = secondParam.field("type")?.child(1);
+  if (typeAnnotation) {
+    return null; // Already typed
+  }
+
+  // Determine component type based on filename
+  const filePath = root.filename();
+  const isLayout = filePath.endsWith("/layout.tsx");
+  const typeName = isLayout ? "LayoutProps" : "PageProps";
+
+  // Add type annotation
+  const edit = secondParam.replace(`${secondParam.text()}: ${typeName}`);
+  return rootNode.commitEdits([edit]);
+}
+```
+
+This example demonstrates:
+- **Type guards**: Checking node types before operations
+- **Field access**: Safely accessing AST fields with optional chaining
+- **Conditional logic**: Different behavior based on file context
+- **Complex patterns**: Finding and transforming specific code structures
+- **Real-world patterns**: Practical Next.js-specific transformations
+
+### Performance Optimization
+
+For large codebases, optimize your traversal:
+
+```ts
+export default function transform(root: SgRoot<TSX>): string | null {
+  const rootNode = root.root();
+  
+  // Early return for non-applicable files
+  if (!root.filename().endsWith(".tsx")) {
+    return null;
+  }
+  
+  // Single traversal for multiple patterns
+  const edits: Edit[] = [];
+  
+  rootNode
+    .findAll({
+      rule: {
+        any: [
+          { pattern: "console.log($$$ARGS)" },
+          { pattern: "console.warn($$$ARGS)" },
+          { pattern: "console.error($$$ARGS)" },
+        ],
+      },
+    })
+    .forEach((node) => {
+      const callee = node.field("function");
+      const method = callee?.field("property")?.text() || "log";
+      const args = node.getMultipleMatches("ARGS")
+        .map(arg => arg.text())
+        .join(", ");
+      edits.push(node.replace(`logger.${method}(${args})`));
+    });
+  
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+}
+```
+
+**Optimization tips:**
+- Early returns to skip non-applicable files
+- Single traversal for multiple patterns
+- Batch all edits before committing
+- Use specific patterns over generic ones
+
+```ts
+// Range‑aware decision: skip very long calls
+export default function transform(root: any) {
+  const node = root.root().find({ rule: { pattern: "longCall($A, $B, $C, $D)" } });
+  if (!node) return null;
+  const r = node.range();
+  if (r.end.column - r.start.column > 120) return null;
+  return root.root().commitEdits([node.replace("shortCall()")]);
+}
+```
+
+
+## Decision Guides
+
+<AccordionGroup>
+  <Accordion title="Selecting files vs selecting nodes">
+    Use <b>getSelector</b> to skip entire files quickly; use <b>find/findAll</b> inside files to select nodes precisely.
+  </Accordion>
+  <Accordion title="pattern vs kind vs regex vs relations">
+    Prefer <b>pattern</b> for clarity, add <b>kind</b> for stricter scopes, use <b>relations</b> for context, reserve <b>regex</b> as a last resort.
+  </Accordion>
+  <Accordion title="Return null vs same string">
+    Return <b>null</b> to indicate "skipped"; return the <b>same string</b> when edits result in identical output — both are treated as unmodified by the engine.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+
+  <Accordion title="Transformation Not Applied">
+    <b>Issue:</b> Your codemod runs but doesn't make changes.<br/><br/>
+    <b>Debug steps:</b>
+    <CodeBlock language="ts">
+{`export default function transform(root: SgRoot<TSX>): string | null {
+  const rootNode = root.root();
+  
+  // Add debug logging
+  console.log("Processing file:", root.filename());
+  
+  const matches = rootNode.findAll({ rule: { pattern: "your pattern" } });
+  console.log("Found matches:", matches.length);
+  
+  if (matches.length === 0) {
+    console.log("No matches found - check your pattern");
+    return null;
+  }
+  
+  // Log each match for inspection
+  matches.forEach((match, i) => {
+    console.log(\`Match \${i}:\`, match.text());
+  });
+  
+  return rootNode.commitEdits(edits);
+}`}
+    </CodeBlock>
+  </Accordion>
+
+  <Accordion title="Type Errors">
+    <b>Issue:</b> TypeScript compilation errors.<br/><br/>
+    <b>Solution:</b> Ensure proper type imports and annotations:
+    <CodeBlock language="ts">
+{`// Always import these types
+import type { SgRoot, SgNode, Edit } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+// Use proper type annotations
+function helper(node: SgNode<TSX>): Edit | null {
+  // Implementation
+}
+`}
+    </CodeBlock>
+  </Accordion>
+
+  <Accordion title="Test Failures">
+    <b>Issue:</b> Tests fail unexpectedly.<br/><br/>
+    <b>Debug with verbose output:</b>
+    <CodeBlock language="bash">
+{`npx codemod jssg test -l tsx ./scripts/codemod.ts -v`}
+    </CodeBlock>
+    <br/>
+    <b>Update snapshots if changes are intended:</b>
+    <CodeBlock language="bash">
+{`npx codemod jssg test -l tsx ./scripts/codemod.ts -u`}
+    </CodeBlock>
+  </Accordion>
+
+  <Accordion title="Pattern Matching Issues">
+    <b>Issue:</b> Patterns don't match expected code.<br/><br/>
+    <b>Use the ast-grep playground</b> to test patterns:
+    <ol>
+      <li>Visit <a href="https://ast-grep.github.io/playground/" target="_blank">https://ast-grep.github.io/playground/</a></li>
+      <li>Paste your code sample</li>
+      <li>Test different patterns</li>
+      <li>Use the AST viewer to understand structure</li>
+    </ol>
+  </Accordion>
+
+  <Accordion title="Performance Optimization">
+    <b>For large codebases:</b>
+    <ol>
+      <li><b>Early returns</b>: Skip files that don't need transformation</li>
+      <li><b>Efficient patterns</b>: Use specific patterns over generic ones</li>
+      <li><b>Batch operations</b>: Collect all edits before committing</li>
+      <li><b>Limit traversals</b>: Combine related searches</li>
+    </ol>
+  </Accordion>
+
+</AccordionGroup>
+
+<Info>
+Language kinds and editor IntelliSense are available via [codemod:ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/packages/jssg-types/src/langs). E.g., `import { TSX } from "codemod:ast-grep/langs/tsx"`.
+</Info>
+
+
