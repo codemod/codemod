@@ -292,11 +292,11 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     } else {
         Text::new("Git repository URL:")
             .with_validator(|input: &str| {
-                if input.is_empty() || input.starts_with("https://") || input.starts_with("git@") {
+                if input.is_empty() || input.starts_with("https://") {
                     Ok(inquire::validator::Validation::Valid)
                 } else {
                     Ok(inquire::validator::Validation::Invalid(
-                        "Please enter a valid Git URL (must start with 'https://' or 'git@') or leave empty to skip."
+                        "Please enter a valid Git URL (must start with 'https://') or leave empty to skip."
                             .into(),
                     ))
                 }
