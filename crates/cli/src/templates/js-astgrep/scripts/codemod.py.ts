@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
 import type Python from "codemod:ast-grep/langs/python";
 
-async function transform(root: SgRoot<Python>): Promise<string | null> {
+const transform: Transform<Python> = async (root) => {
 	const rootNode = root.root();
 
 	// Find all Python 2-style exception handlers (using comma instead of 'as')

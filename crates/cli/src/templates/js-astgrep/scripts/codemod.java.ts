@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
 import type Java from "codemod:ast-grep/langs/java";
 
-async function transform(root: SgRoot<Java>): Promise<string | null> {
+const transform: Transform<Java> = async (root) => {
 	const rootNode = root.root();
 
 	// Find for-each loops that iterate over a collection and add items to another collection
