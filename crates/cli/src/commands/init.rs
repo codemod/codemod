@@ -420,6 +420,12 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let repository_line = if let Some(url) = &config.git_repository_url {
+        format!("repository: \"{}\"", url)
+    } else {
+        String::new()
+    };
+
     let manifest_content = CODEMOD_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
@@ -434,10 +440,7 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             "{visibility}",
             if config.private { "private" } else { "public" },
         )
-        .replace(
-            "{repository}",
-            config.git_repository_url.as_deref().unwrap_or(""),
-        );
+        .replace("{repository}", &repository_line);
 
     fs::write(project_path.join("codemod.yaml"), manifest_content)?;
     Ok(())
