@@ -163,6 +163,7 @@ type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
 async fn handle_implicit_run_command(
     trailing_args: Vec<String>,
     telemetry_sender: TelemetrySenderMutex,
+    disable_analytics: bool,
 ) -> Result<bool> {
     if trailing_args.is_empty() {
         return Ok(false);
@@ -173,40 +174,9 @@ async fn handle_implicit_run_command(
         return Ok(false);
     }
 
-    let mut filtered_args = Vec::new();
-    let mut disable_analytics = false;
-    let mut verbose = false;
-
-    for arg in &trailing_args {
-        match arg.as_str() {
-            "--disable-analytics" => {
-                disable_analytics = true;
-            }
-            "--verbose" | "-v" => {
-                verbose = true;
-            }
-            _ => {
-                filtered_args.push(arg.clone());
-            }
-        }
-    }
-
-    if disable_analytics {
-        std::env::set_var("DISABLE_ANALYTICS", "true");
-    }
-    if verbose {
-        std::env::set_var("RUST_LOG", "debug");
-    }
-
+    // Construct arguments for clap parsing as if "run" was specified
     let mut full_args = vec!["codemod".to_string(), "run".to_string()];
-    full_args.extend(filtered_args.clone());
-
-    if disable_analytics {
-        full_args.push("--disable-analytics".to_string());
-    }
-    if verbose {
-        full_args.push("--verbose".to_string());
-    }
+    full_args.extend(trailing_args.clone());
 
     // Re-parse the entire CLI with the run command included
     match Cli::try_parse_from(&full_args) {
@@ -253,8 +223,13 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    // Set analytics flag from CLI or check if already set by handle_implicit_run_command
-    if cli.disable_analytics || std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string()) {
+    let implicit_cli_params = Cli::try_parse_from(cli.trailing_args.clone());
+
+    if cli.disable_analytics
+        || implicit_cli_params
+            .map(|params| params.disable_analytics)
+            .unwrap_or(false)
+    {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
@@ -351,7 +326,13 @@ async fn main() -> Result<()> {
         }
         None => {
             // Try to parse as implicit run command
-            if !handle_implicit_run_command(cli.trailing_args, telemetry_sender.clone()).await? {
+            if !handle_implicit_run_command(
+                cli.trailing_args.clone(),
+                telemetry_sender.clone(),
+                cli.disable_analytics,
+            )
+            .await?
+            {
                 // No valid subcommand or package name provided, show help
                 print_ascii_art();
                 eprintln!("No command provided. Use --help for usage information.");
