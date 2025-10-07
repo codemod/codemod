@@ -1,0 +1,90 @@
+---
+title: "Advanced Concepts"
+---
+
+## Selectors
+
+Normally, jssg runner will run your transform for every file in the project. However, you can use a selector to skip files that don't contain your target shape. This also optimizes the jssg and quickjs runtime creation.
+
+```ts
+import type { GetSelector, Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root, { matches }) => {
+  // `matches` is an array of SgNode<TSX> that matched the selector
+  // `matches` will be undefined when `getSelector` is not provided
+  console.log(matches.map((node) => node.text()));
+
+  return null;
+};
+
+export default transform;
+
+export const getSelector: GetSelector<TSX> = () => {
+  return {
+    rule: {
+      any: [
+        { pattern: "console.log($ARG)" },
+        { pattern: "console.debug($ARG)" },
+      ],
+    },
+  };
+};
+```
+
+## Parameters
+
+Parameters are a way to pass variables to your transform. In jssg codemods, they are available in the `options` object. Before using parameters, you need to define the schema of the parameters in `workflow.yaml`.
+
+```yaml
+# workflow.yaml
+params:
+  schema:
+    format:
+      type: string
+      default: "esm"
+      oneOf:
+        - type: string
+          enum:
+            - "esm"
+            - "cjs"
+```
+
+```ts
+// src/codemod.ts
+const transform: Transform<TSX> = (root, { options }) => {
+  console.log(options.params.format); // "esm" or "cjs"
+
+  return null;
+};
+
+export default transform;
+```
+
+When you run the workflow, you can pass the parameters like this:
+
+```bash
+npx codemod workflow run -w workflow.yaml --param format=cjs
+```
+
+## Matrix Values
+
+When using a matrix strategy, the matrix values are available in the `options` object. This is useful when you need to run the same transform with different inputs on the same codebase or to shard the codemod run into smaller chunks.
+
+```ts
+const transform: Transform<TSX> = (root, { options }) => {
+  console.log(options.matrixValues); // { team: "team1", shardId: "shard1" }
+
+  const filename = root.filename();
+
+  if (fitsInShard(filename, options.matrixValues)) {
+    return root.commitEdits([
+      // ... edits
+    ]);
+  }
+
+  return null;
+};
+
+export default transform;
+```
