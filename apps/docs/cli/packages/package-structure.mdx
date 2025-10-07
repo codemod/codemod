@@ -63,9 +63,13 @@ Codemod workflow schema version.
 <ParamField path="name" type="string" required>
 Codemod package name (unique within scope).
 
-Example:
+**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+
+**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+
+Valid examples:
 - <code>remove-console-logs</code>
-- Optionally, you can add organization/project scopes: <code>@scope/remove-console-logs</code>.
+- <code>@scope/remove-console-logs</code> (scope/name format)
 </ParamField>
 
 <ParamField path="version" type="string" required default="0.1.0">
