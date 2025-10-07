@@ -4,12 +4,15 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Result;
+
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,
 };
 
-pub type CapabilitiesSecurityCallback = Arc<Box<dyn Fn(&CodemodExecutionConfig) + Send + Sync>>;
+pub type CapabilitiesSecurityCallback =
+    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
 /// Configuration for running a workflow

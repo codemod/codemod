@@ -113,7 +113,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let capabilities_security_callback = capabilities_security_callback();
     let pre_run_callback = PreRunCallback {
         callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
-            capabilities_security_callback(config);
+            capabilities_security_callback(config).unwrap_or_else(|e| {
+                error!("Failed to check capabilities: {e}");
+                std::process::exit(1);
+            });
         })),
     };
 

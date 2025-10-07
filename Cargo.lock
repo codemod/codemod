@@ -655,6 +655,7 @@ dependencies = [
 name = "butterflow-core"
 version = "1.0.18"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "butterflow-models",

@@ -1,12 +1,12 @@
 use inquire::Confirm;
-use log::error;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use butterflow_core::execution::CodemodExecutionConfig;
 use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 
-type CapabilitiesSecurityCallback = Arc<Box<dyn Fn(&CodemodExecutionConfig) + Send + Sync>>;
+type CapabilitiesSecurityCallback =
+    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
 
 pub fn capabilities_security_callback() -> CapabilitiesSecurityCallback {
     let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
@@ -23,7 +23,7 @@ pub fn capabilities_security_callback() -> CapabilitiesSecurityCallback {
             .collect::<Vec<_>>();
         drop(checked);
         if need_to_check.is_empty() {
-            return;
+            return Ok(());
         }
         let answer = Confirm::new(&format!(
             "🛡️  \x1b[31mSecurity Notice\x1b[0m: This action will grant access to `{}`, which may perform sensitive operations. Are you sure you want to continue?", 
@@ -31,18 +31,15 @@ pub fn capabilities_security_callback() -> CapabilitiesSecurityCallback {
         ))
         .with_default(false)
         .with_help_message("Press 'y' to continue or 'n' to abort")
-        .prompt().unwrap_or_else(|e| {
-            error!("Failed to get user input: {e}");
-            std::process::exit(1);
-        });
+        .prompt().map_err(|e| anyhow::anyhow!("Failed to get user input: {e}"))?;
 
         let mut checked = checked_capabilities.lock().unwrap();
         checked.extend(need_to_check);
         drop(checked);
 
         if !answer {
-            error!("Aborting due to capabilities warning");
-            std::process::exit(1);
+            return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
         }
+        Ok(())
     }))
 }
