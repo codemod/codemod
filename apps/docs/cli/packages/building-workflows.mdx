@@ -2,7 +2,17 @@
 title: "Building workflows"
 ---
 
-This page explains the concepts and structure of the Codemod package's workflow file.
+<Info>
+Codemod CLI and workflow features are free for local use. For large-scale refactoring across many repos, the [Codemod app](https://go.codemod.com/app) provides:
+
+- **Visual parameter configuration** - Edit workflow parameters through the UI instead of YAML
+- **Centralized state management** - Coordinate migrations with persistent state across repos and teams  
+- **Multi-repo orchestration** - Run workflows across your entire codebase with progress tracking
+- **Business insights** - Track migration progress with custom metrics and dashboards
+
+</Info>
+
+---
 
 <Tip>
   This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/cli/mcp) to create your codemod package with the help of AI.
@@ -30,6 +40,16 @@ nodes: []
 ---
 
 ## Shared State
+
+State enables workflows to persist data across runs and coordinate work across repositories and teams:
+
+- **Sharding:** Distribute work across teams or repositories  
+- **Progress tracking:** Resume interrupted migrations without losing work
+- **Coordination:** Maintain consistency across related codebases
+
+<Info>
+The Codemod app provides centralized state management for large-scale refactoring across many repos. See [i18n automation](https://codemod.com/i18n) for examples of coordinated multi-repo migrations.
+</Info>
 
 ```yaml
 version: "1"
@@ -60,6 +80,66 @@ You can also declare state schema using an object map:
             shardId: { type: string }
   nodes: []
   ```
+
+---
+
+## Parameters
+
+Parameters make workflows configurable and reusable across different projects and teams. Define them in your workflow with a schema:
+
+```yaml workflow.yaml
+version: "1"
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Internationalization library to use"
+      type: string
+      default: "next-intl"
+    shardingMethod:
+      name: "Sharding Method"
+      type: string
+      default: "directory"
+    prSize:
+      name: "PR Size"
+      type: string
+      default: "50"
+nodes:
+  - id: transform
+    steps:
+      - name: Run transform
+        js-ast-grep:
+          js_file: ./src/codemod.ts
+          language: tsx
+```
+
+**Access parameters in jssg codemods via `options.params`:**
+
+```ts codemod.ts
+export default function transform(root: SgRoot<TSX>, options) {
+  // Access parameters
+  const library = options.params?.library || "next-intl";
+  const catalogMethod = options.params?.catalogFileSelectionMethod;
+  
+  // Access matrix values (when using matrix strategy)
+  if (options.matrixValues?.shard && options.matrixValues._meta_files) {
+    // This task is part of a matrix - use shard info
+    const fits = fitsInShard(filename, options.matrixValues);
+  }
+}
+```
+
+<Note>
+**Parameters vs Matrix Values:** `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](#matrix-strategy) for details.
+</Note>
+
+**Common parameter use cases:**
+- **Sharding configuration:** Method (`directory`, `codeowner`) and targets
+- **PR settings:** Size limits, auto AI review, pre/post run scripts
+
+<Info>
+**Enterprise Features:** In the Codemod app, you can configure parameters visually through the UI. See [Campaigns](/migrations) for running parameterized workflows at scale.
+</Info>
 
 ---
 
