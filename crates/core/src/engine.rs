@@ -1460,16 +1460,27 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
-                let capabilities = params
-                    .clone()
-                    .get("capabilities")
-                    .map(|v| v.to_string())
-                    .map(|s| s.split(",").map(|s| s.to_string()).collect::<Vec<_>>())
-                    .map(|v| {
-                        v.iter()
-                            .map(|v| LlrtSupportedModules::from_str(v).unwrap())
-                            .collect::<Vec<_>>()
-                    });
+                let capabilities = if let Some(cap_str) = params.clone().get("capabilities") {
+                    let cap_vec = cap_str
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>();
+                    let mut parsed_caps = Vec::new();
+                    for v in cap_vec {
+                        match LlrtSupportedModules::from_str(&v) {
+                            Ok(cap) => parsed_caps.push(cap),
+                            Err(e) => {
+                                return Err(Error::Template(format!(
+                                    "Invalid capability string '{}': {}",
+                                    v, e
+                                )));
+                            }
+                        }
+                    }
+                    Some(parsed_caps)
+                } else {
+                    None
+                };
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     js_ast_grep,
@@ -1667,7 +1678,10 @@ impl Engine {
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
-                    callback(config);
+                    callback(config).unwrap_or_else(|e| {
+                        error!("Failed to check capabilities: {e}");
+                        std::process::exit(1);
+                    });
                 }
             })),
         };
