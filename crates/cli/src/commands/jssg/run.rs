@@ -22,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
+
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
@@ -95,7 +96,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let mut capabilities = Vec::new();
     if args.allow_fs {
-<<<<<<< HEAD
         capabilities.push(LlrtSupportedModules::Fs);
     }
     if args.allow_fetch {
@@ -103,37 +103,20 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
     if args.allow_child_process {
         capabilities.push(LlrtSupportedModules::ChildProcess);
-=======
-        capabilities.push("fs".to_string());
-    }
-    if args.allow_fetch {
-        capabilities.push("fetch".to_string());
-    }
-    if args.allow_child_process {
-        capabilities.push("child_process".to_string());
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
     }
     let capabilities = if capabilities.is_empty() {
         None
     } else {
-<<<<<<< HEAD
         Some(capabilities.into_iter().collect())
-=======
-        Some(capabilities)
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
     };
 
     let capabilities_security_callback = capabilities_security_callback();
     let pre_run_callback = PreRunCallback {
         callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
-<<<<<<< HEAD
             capabilities_security_callback(config).unwrap_or_else(|e| {
                 error!("Failed to check capabilities: {e}");
                 std::process::exit(1);
             });
-=======
-            capabilities_security_callback(config);
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
         })),
     };
 
@@ -187,11 +170,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 selector_config: None,
                 params: Some(params.clone()),
                 matrix_values: None,
-<<<<<<< HEAD
                 capabilities: capabilities_for_closure.as_deref().map(|v| v.to_vec()),
-=======
-                capabilities: config.capabilities.as_deref().map(|v| v.to_vec()),
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
             };
 
             // Execute the codemod on this file
