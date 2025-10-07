@@ -1,23 +1,38 @@
 ---
 title: "Advanced Concepts"
+description: "Learn advanced jssg techniques including dynamic parsing, selectors, parameters, and matrix values for sophisticated code transformations"
 ---
+
+This guide covers advanced jssg features that enable you to build more sophisticated and efficient codemods. You'll learn how to parse code dynamically, optimize performance with selectors, use parameters for flexibility, and leverage matrix values for complex workflows.
 
 ## Dynamic Parsing
 
-jssg supports dynamic parsing, which means you can parse the code dynamically while transforming a file. This is useful for things like parsing CSS in JS or JS in HTML, etc.
+Dynamic parsing allows you to parse and analyze different types of code within a single transform. This is particularly powerful when working with embedded languages like CSS-in-JS, HTML templates, or SQL queries within JavaScript code.
+
+<Tip>
+Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
+</Tip>
+
+Here's how to parse CSS within styled-components:
 
 ```ts
 import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root, { matches }) => {
-  const styled = root.findAll({ rule: { pattern: "styled.$COMPONENT`$ARG`" } });
+const transform: Transform<TSX> = async (root, { matches }) => {
+  // Find all styled-component template literals
+  const styledComponents = root.findAll({ 
+    rule: { pattern: "styled.$COMPONENT`$ARG`" } 
+  });
 
-  for (const styled of styledNodes) {
-    const cssText = styled.getMatch("ARG")?.text();
+  for (const component of styledComponents) {
+    const cssText = component.getMatch("ARG")?.text();
     if (!cssText) continue;
+    
+    // Parse the CSS content dynamically
     const cssRoot = await parseAsync("css", cssText);
 
+    // Find vendor-prefixed properties that have modern equivalents
     const vendorPrefixedDeclarations = cssRoot.findAll({
       rule: {
         kind: "declaration",
@@ -38,7 +53,10 @@ const transform: Transform<TSX> = (root, { matches }) => {
       },
     });
 
-    console.log(vendorPrefixedDeclarations.map((node) => node.text()));
+    // Log findings for analysis
+    console.log("Found vendor prefixes:", 
+      vendorPrefixedDeclarations.map((node) => node.text())
+    );
   }
 
   return null;
@@ -49,16 +67,29 @@ export default transform;
 
 ## Selectors
 
-Normally, jssg runner will run your transform for every file in the project. However, you can use a selector to skip files that don't contain your target shape. This also optimizes the jssg and quickjs runtime creation.
+By default, jssg processes every file in your project, which can be inefficient for large codebases. Selectors allow you to pre-filter files based on specific patterns, dramatically improving performance by only processing files that contain your target code structures.
+
+<Info>
+Selectors optimize both file processing and runtime initialization by creating jssg and QuickJS runtimes only when needed.
+</Info>
+
+When you define a selector, jssg will:
+1. Scan files for matching patterns before running the transform
+2. Skip files that don't match, saving processing time
+3. Pass matched nodes to your transform function
 
 ```ts
 import type { GetSelector, Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 const transform: Transform<TSX> = (root, { matches }) => {
-  // `matches` is an array of SgNode<TSX> that matched the selector
-  // `matches` will be undefined when `getSelector` is not provided
-  console.log(matches.map((node) => node.text()));
+  // `matches` contains pre-filtered nodes that match your selector
+  // This will only run on files containing console.log or console.debug calls
+  if (matches) {
+    console.log("Found console statements:", 
+      matches.map((node) => node.text())
+    );
+  }
 
   return null;
 };
@@ -79,7 +110,11 @@ export const getSelector: GetSelector<TSX> = () => {
 
 ## Parameters
 
-Parameters are a way to pass variables to your transform. In jssg codemods, they are available in the `options` object. Before using parameters, you need to define the schema of the parameters in `workflow.yaml`.
+Parameters make your codemods flexible and reusable by allowing you to pass configuration values at runtime. This enables you to create codemods that adapt their behavior based on user input or different execution contexts.
+
+<Steps>
+<Step title="Define parameter schema">
+First, define your parameter schema in `workflow.yaml`. This ensures type safety and provides default values:
 
 ```yaml
 # workflow.yaml
@@ -94,42 +129,86 @@ params:
             - "esm"
             - "cjs"
 ```
+</Step>
+
+<Step title="Access parameters in your transform">
+Parameters are available through the `options.params` object in your transform function:
 
 ```ts
 // src/codemod.ts
 const transform: Transform<TSX> = (root, { options }) => {
-  console.log(options.params.format); // "esm" or "cjs"
+  // Access the format parameter with type safety
+  const outputFormat = options.params.format; // "esm" or "cjs"
+  
+  if (outputFormat === "cjs") {
+    // Transform to CommonJS format
+    console.log("Converting to CommonJS format");
+  } else {
+    // Transform to ESM format
+    console.log("Converting to ESM format");
+  }
 
   return null;
 };
 
 export default transform;
 ```
+</Step>
 
-When you run the workflow, you can pass the parameters like this:
+<Step title="Run with custom parameters">
+Pass parameters when executing your workflow:
 
 ```bash
 npx codemod workflow run -w workflow.yaml --param format=cjs
 ```
 
+<Tip>
+You can pass multiple parameters by repeating the `--param` flag: `--param format=cjs --param strict=true`
+</Tip>
+</Step>
+</Steps>
+
 ## Matrix Values
 
-When using a matrix strategy, the matrix values are available in the `options` object. This is useful when you need to run the same transform with different inputs on the same codebase or to shard the codemod run into smaller chunks.
+Matrix strategies enable you to run the same codemod with different configurations or to split large codebases into manageable chunks for parallel processing. Matrix values are accessible through `options.matrixValues` and are particularly useful for:
+
+- **Sharding**: Distributing work across multiple processes or machines
+- **Multi-variant transforms**: Running the same logic with different parameters
+- **Team-based processing**: Applying different rules based on team ownership
+
+<Warning>
+Matrix values are only available when your workflow defines a matrix strategy. Without a matrix configuration, `options.matrixValues` will be undefined.
+</Warning>
+
+Here's an example of using matrix values for sharded processing:
 
 ```ts
 const transform: Transform<TSX> = (root, { options }) => {
-  console.log(options.matrixValues); // { team: "team1", shardId: "shard1" }
-
+  // Access matrix values passed from the workflow
+  const { team, shardId } = options.matrixValues; // { team: "team1", shardId: "shard1" }
+  
   const filename = root.filename();
 
+  // Only process files that belong to this shard
   if (fitsInShard(filename, options.matrixValues)) {
+    console.log(`Processing ${filename} for team ${team} in shard ${shardId}`);
+    
     return root.commitEdits([
-      // ... edits
+      // Apply your transformations here
     ]);
   }
 
+  // Skip files that don't belong to this shard
   return null;
 };
+
+// Helper function to determine if a file belongs to a specific shard
+function fitsInShard(filename: string, matrixValues: any): boolean {
+  // Example sharding logic based on file hash
+  const hash = hashString(filename);
+  const shardNumber = parseInt(matrixValues.shardId.replace('shard', ''));
+  return hash % 4 === shardNumber - 1;
+}
 
 export default transform;
 ```
