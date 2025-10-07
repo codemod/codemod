@@ -2,6 +2,51 @@
 title: "Advanced Concepts"
 ---
 
+## Dynamic Parsing
+
+jssg supports dynamic parsing, which means you can parse the code dynamically while transforming a file. This is useful for things like parsing CSS in JS or JS in HTML, etc.
+
+```ts
+import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root, { matches }) => {
+  const styled = root.findAll({ rule: { pattern: "styled.$COMPONENT`$ARG`" } });
+
+  for (const styled of styledNodes) {
+    const cssText = styled.getMatch("ARG")?.text();
+    if (!cssText) continue;
+    const cssRoot = await parseAsync("css", cssText);
+
+    const vendorPrefixedDeclarations = cssRoot.findAll({
+      rule: {
+        kind: "declaration",
+        has: {
+          kind: "property_name",
+          regex: "^(-webkit-|-moz-|-ms-|-o-)"
+        },
+        inside: {
+          kind: "block",
+          has: {
+            kind: "declaration",
+            has: {
+              kind: "property_name",
+              regex: "^(border-radius|box-shadow|transition|transform|background|flex-direction)$"
+            }
+          }
+        }
+      },
+    });
+
+    console.log(vendorPrefixedDeclarations.map((node) => node.text()));
+  }
+
+  return null;
+};
+
+export default transform;
+```
+
 ## Selectors
 
 Normally, jssg runner will run your transform for every file in the project. However, you can use a selector to skip files that don't contain your target shape. This also optimizes the jssg and quickjs runtime creation.
