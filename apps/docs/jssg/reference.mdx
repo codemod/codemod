@@ -29,20 +29,15 @@ jssg is a JavaScript runtime similar to Node.js with most Node globals/modules (
 Every jssg codemod exports a transform function:
 
 ```ts
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type { Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-export default function transform(
-  root: SgRoot<TSX>, 
-  options: {
-    language: string;
-    params?: Record<string, string>;
-    matches?: SgNode[];
-    matrixValues?: Record<string, unknown>;
-  }
-): string | null {
+const transform: Transform<TSX> = (root, options) => {
   // Your transformation logic
-}
+  return null;
+};
+
+export default transform;
 ```
 
 <Info>
@@ -305,10 +300,10 @@ When a selector is provided, the engine pre‑computes matches; if none are foun
 Here's a complete example that replaces `console.*` calls with `logger.*`:
 
 ```ts
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type { Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-export default function transform(root: SgRoot<TSX>): string | null {
+const transform: Transform<TSX> = (root) => {
   const rootNode = root.root();
   
   // Find all console.* calls
@@ -469,7 +464,7 @@ Match only the pre-change shape to avoid re-editing:
 For large codebases:
 
 ```ts
-export default function transform(root: SgRoot<TSX>): string | null {
+const transform: Transform<TSX> = (root) => {
   const rootNode = root.root();
   
   // Early return for non-applicable files
@@ -497,6 +492,8 @@ export default function transform(root: SgRoot<TSX>): string | null {
   
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 }
+
+export default transform;
 ```
 
 ## Parse Helpers
@@ -594,10 +591,10 @@ const hooks = rootNode.findAll(createReactHookMatcher());
 Here's a complete example that adds type annotations to Next.js page components:
 
 ```ts
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type { Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-export default function transform(root: SgRoot<TSX>): string | null {
+const transform: Transform<TSX> = (root) => {
   const rootNode = root.root();
 
   // Find the default export
@@ -635,6 +632,8 @@ export default function transform(root: SgRoot<TSX>): string | null {
   const edit = secondParam.replace(`${secondParam.text()}: ${typeName}`);
   return rootNode.commitEdits([edit]);
 }
+
+export default transform;
 ```
 
 This example demonstrates:
@@ -649,7 +648,7 @@ This example demonstrates:
 For large codebases, optimize your traversal:
 
 ```ts
-export default function transform(root: SgRoot<TSX>): string | null {
+const transform: Transform<TSX> = (root) => {
   const rootNode = root.root();
   
   // Early return for non-applicable files
@@ -681,6 +680,8 @@ export default function transform(root: SgRoot<TSX>): string | null {
   
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 }
+
+export default transform;
 ```
 
 **Optimization tips:**
@@ -691,13 +692,18 @@ export default function transform(root: SgRoot<TSX>): string | null {
 
 ```ts
 // Range‑aware decision: skip very long calls
-export default function transform(root: any) {
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root) => {
   const node = root.root().find({ rule: { pattern: "longCall($A, $B, $C, $D)" } });
   if (!node) return null;
   const r = node.range();
   if (r.end.column - r.start.column > 120) return null;
   return root.root().commitEdits([node.replace("shortCall()")]);
-}
+};
+
+export default transform;
 ```
 
 
@@ -723,27 +729,29 @@ export default function transform(root: any) {
     <b>Issue:</b> Your codemod runs but doesn't make changes.<br/><br/>
     <b>Debug steps:</b>
     <CodeBlock language="ts">
-{`export default function transform(root: SgRoot<TSX>): string | null {
-  const rootNode = root.root();
-  
-  // Add debug logging
-  console.log("Processing file:", root.filename());
-  
-  const matches = rootNode.findAll({ rule: { pattern: "your pattern" } });
-  console.log("Found matches:", matches.length);
-  
-  if (matches.length === 0) {
-    console.log("No matches found - check your pattern");
-    return null;
-  }
-  
-  // Log each match for inspection
-  matches.forEach((match, i) => {
-    console.log(\`Match \${i}:\`, match.text());
-  });
-  
-  return rootNode.commitEdits(edits);
-}`}
+    {`
+    const transform: Transform<TSX> = (root) => {
+    const rootNode = root.root();
+    
+    // Add debug logging
+    console.log("Processing file:", root.filename());
+    
+    const matches = rootNode.findAll({ rule: { pattern: "your pattern" } });
+    console.log("Found matches:", matches.length);
+    
+    if (matches.length === 0) {
+      console.log("No matches found - check your pattern");
+      return null;
+    }
+    
+    // Log each match for inspection
+    matches.forEach((match, i) => {
+      console.log(\`Match \${i}:\`, match.text());
+    });
+    
+    return rootNode.commitEdits(edits);
+    }
+    export default transform;`}
     </CodeBlock>
   </Accordion>
 

@@ -36,8 +36,9 @@
             "group": "OSS & Community",
             "pages": [
               "cli/cli-reference",
+              "/model-context-protocol",
               {
-                "group": "Packages",
+                "group": "Workflows",
                 "pages": [
                   "cli/packages/quickstart",
                   "cli/packages/package-structure",
@@ -49,10 +50,10 @@
                 "pages": [
                   "/jssg/quickstart",
                   "/jssg/testing",
-                  "/jssg/reference"
+                  "/jssg/reference",
+                  "/jssg/advanced"
                 ]
-              },
-              "/model-context-protocol"
+              }
             ]
           },
           {

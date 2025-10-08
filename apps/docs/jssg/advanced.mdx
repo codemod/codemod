@@ -1,0 +1,441 @@
+---
+title: "Advanced Patterns"
+---
+
+This guide covers advanced jssg features that enable you to build more sophisticated and efficient codemods. You'll learn how to parse code dynamically, optimize performance with selectors, use parameters for flexibility, and leverage matrix values for complex workflows.
+
+## Transform Function Contract
+
+Every jssg codemod must export a default function with this exact signature:
+
+```ts
+import type { SgRoot, SgNode, Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  // Your transformation logic
+};
+
+export default transform;
+```
+
+### Transform Options
+
+The `options` object provides execution context:
+
+- `options.language: string` — language of the current file (e.g., `ts`, `tsx`). Use it to branch logic or choose language‑sensitive patterns.
+- `options.params?: Record<string, string>` — user parameters defined in the workflow. Drive behavior switches, defaults, and environment‑specific choices.
+- `options.matches?: SgNode[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
+- `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
+
+```ts
+import type { Transform, SgNode } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  const lang = options.language;
+  const params = options.params;
+  const preFilteredMatches = options.matches; // may be undefined if no selector
+  const matrix = options.matrixValues; // undefined without matrix strategy
+  return null;
+};
+
+export default transform;
+```
+
+<Info>
+`options.matches` contains nodes that matched your selector (when `getSelector` is exported). Use them to short‑circuit or to avoid recomputing broad queries.
+</Info>
+
+## Dynamic Parsing
+
+Dynamic parsing allows you to parse and analyze different types of code within a single transform. This is particularly powerful when working with embedded languages like CSS-in-JS, HTML templates, or SQL queries within JavaScript code.
+
+Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
+
+```ts
+import { parseAsync } from "codemod:ast-grep";
+import type { Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root) => {
+  // Find all styled-component template literals
+  const styledComponents = root.root().findAll({
+    rule: { pattern: "styled.$COMPONENT`$ARG`" }
+  });
+
+  for (const component of styledComponents) {
+    const cssText = component.getMatch("ARG")?.text();
+    if (!cssText) continue;
+
+    // Parse the CSS content dynamically
+    const cssRoot = await parseAsync("css", cssText);
+
+    // Find vendor-prefixed properties that have modern equivalents
+    const vendorPrefixedDeclarations = cssRoot.findAll({
+      rule: {
+        kind: "declaration",
+        has: {
+          kind: "property_name",
+          regex: "^(-webkit-|-moz-|-ms-|-o-)"
+        },
+        inside: {
+          kind: "block",
+          has: {
+            kind: "declaration",
+            has: {
+              kind: "property_name",
+              regex: "^(border-radius|box-shadow|transition|transform|background|flex-direction)$"
+            }
+          }
+        }
+      },
+    });
+
+    // Log findings for analysis
+    console.log(
+      "Found vendor prefixes:",
+      vendorPrefixedDeclarations.map((node) => node.text())
+    );
+  }
+
+  return null;
+};
+
+export default transform;
+```
+
+### Return Semantics
+
+- **`string`**: Modified code (if identical to input, treated as unmodified)
+- **`null`**: No changes needed  
+- **`undefined`**: Same as null
+- **Other types**: Runtime error
+
+## Parameters and Configuration
+
+Parameters make your codemods flexible and reusable by allowing you to pass configuration values at runtime. This enables you to create codemods that adapt their behavior based on user input or different execution contexts.
+
+<Info>
+**Enterprise Features**: In the [Codemod app](https://go.codemod.com/app), parameters are configured through a visual UI. The Codemod app provides centralized state management for large-scale refactoring across many repos.
+</Info>
+
+You can access parameters via `options.params`.
+
+<CodeGroup>
+```ts codemod.ts
+import type { Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  // Access user-configured parameters
+  const library = options.params?.library || "next-intl";
+  const shardingMethod = options.params?.shardingMethod || "directory";
+  const prSize = options.params?.prSize || "50";
+  
+  // Use parameters in your transformation logic
+  if (library === "react-i18next") {
+    // Apply react-i18next specific transformations
+  }
+};
+
+export default transform;
+```
+
+```yaml workflow.yaml
+# --- Basic schema example ---
+version: "1"
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Internationalization library to use"
+      type: string
+      default: "next-intl"
+    shardingMethod:
+      name: "Sharding Method"
+      type: string
+      default: "directory"
+    prSize:
+      name: "PR Size"
+      type: string
+      default: "50"
+
+---
+# --- Enum schema example (multi-document YAML) ---
+version: "1"
+params:
+  schema:
+    format:
+      name: "Module format"
+      type: string
+      default: "esm"
+      oneOf:
+        - type: string
+          enum: ["esm", "cjs"]
+```
+</CodeGroup>
+
+<Tip>
+How to pass params when executing your workflow:
+<a href="/cli/cli-reference#param-param-key-value">Passing parameters (--param)</a>.
+</Tip>
+
+## Matrix Strategy Integration
+
+Matrix strategies enable you to run the same codemod with different configurations or to split large codebases into manageable chunks for parallel processing.
+
+Matrix values are particularly useful for:
+
+- **Sharding**: Distributing work across multiple processes or machines
+- **Multi-variant transforms**: Running the same logic with different parameters
+- **Team-based processing**: Applying different rules based on team ownership
+
+### Accessing Matrix Values
+
+Access matrix values via `options.matrixValues`:
+
+```ts
+import type { Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  // Access matrix values passed from the workflow (if matrix strategy is used)
+  const team = (options.matrixValues as any)?.team;
+  const shardId = (options.matrixValues as any)?.shardId;
+
+  const filename = root.filename();
+
+  // fitsInShard is an example sharding predicate provided by your orchestrator or custom code
+  if (options.matrixValues && fitsInShard(filename, options.matrixValues)) {
+    console.log(`Processing ${filename} for team ${team} in shard ${shardId}`);
+
+    // Apply your transformations here and return committed edits
+    // const edits = [...];
+    // return root.root().commitEdits(edits);
+  }
+
+  // Skip files that don't belong to this shard (or when no matrix values are present)
+  return null;
+};
+
+export default transform;
+```
+
+<Info>
+`options.matrixValues` is only defined when your workflow uses a matrix strategy. Otherwise it is `undefined`.
+</Info>
+
+<Tip>
+Prefer checking sharding against a project-relative path (e.g., `path.relative(process.cwd(), root.filename())`) to avoid mismatches across environments.
+</Tip>
+
+### Matrix Strategy Configuration
+
+Matrix strategy is defined in your workflow:
+
+```yaml workflow.yaml
+version: "1"
+state:
+  schema:
+    shards:
+      type: array
+      items:
+        type: object
+        properties:
+          team: { type: string }
+          shard: { type: string }
+          shardId: { type: string }
+```
+
+<Note>
+**Parameters vs Matrix Values**: `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](/cli/packages/building-workflows#matrix-strategy) for details.
+</Note>
+
+### Selectors (getSelector)
+
+By default, jssg processes every file in your project, which can be inefficient for large codebases.
+
+When a selector is exported, you can pre-filter files based on specific patterns, so that the engine only calls your transform for files that match it.
+
+- jssg scans files using the selector before calling your transform
+- Files without matches are skipped, reducing work
+- Matched nodes are available via `options.matches`
+
+```ts
+import type { GetSelector } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+export const getSelector: GetSelector<TsxTypes> = () => ({
+  rule: { any: [ { pattern: "console.log($$$ARGS)" }, { pattern: "console.warn($$$ARGS)" } ] }
+});
+```
+
+<Info>
+If the selector finds no matches in a file, your transform is not invoked for that file. This reduces both file processing and runtime initialization overhead. Prefer selectors for broad filtering; use `find`/`findAll` inside the transform for precise node selection.
+</Info>
+
+## State Management
+
+State conveys execution context and progress signals across runs (e.g., total files, current progress) to coordinate large migrations.
+
+### Persistent State Across Runs
+
+jssg codemods can leverage persistent state for large-scale migrations:
+
+```ts
+import type { Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  const filePath = root.filename();
+  
+  // Access current state
+  const currentProgress = options.matrixValues?._meta_progress || 0;
+  const totalFiles = options.matrixValues?._meta_total_files || 0;
+  
+  // Update progress
+  const newProgress = currentProgress + 1;
+  console.log(`Progress: ${newProgress}/${totalFiles} files processed`);
+  
+  // Use state for coordination
+  if (newProgress % 100 === 0) {
+    console.log(`Checkpoint: ${newProgress} files completed`);
+  }
+};
+
+export default transform;
+```
+
+### Common State Use Cases
+
+- **Sharding**: Distribute files across multiple workers
+- **Progress tracking**: Monitor migration progress
+- **Coordination**: Coordinate between parallel tasks
+- **Resume capability**: Resume interrupted migrations
+
+## Multi-Repo Orchestration
+
+Use multi-repo orchestration when your codemod must coordinate changes across multiple repositories—such as updating shared libraries, enforcing consistency, or applying repo-specific logic. This approach streamlines large-scale migrations and ensures changes are applied uniformly.
+
+```ts
+import type { Transform } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const transform: Transform<TsxTypes> = async (root, options) => {
+  const filePath = root.filename();
+  const repoName = options.matrixValues?.repo_name;
+  
+  // Apply repo-specific transformations
+  if (repoName === "frontend-app") {
+    // Frontend-specific logic
+  } else if (repoName === "backend-api") {
+    // Backend-specific logic
+  }
+};
+
+export default transform;
+```
+
+## Advanced Pattern Composition
+
+### Rule References with Utils
+
+Reference named sub‑rules in `utils` and attach them via `matches` to keep complex patterns DRY and composable.
+
+```ts
+import type { RuleConfig } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const myRule: RuleConfig<TsxTypes> = {
+  rule: {
+    matches: "jsx-element-hardcoded-human-language",
+    inside: { pattern: "function $NAME()" }
+  },
+  utils: {
+    "jsx-element-hardcoded-human-language": {
+      any: [
+        { kind: "jsx_element" },
+        { kind: "jsx_self_closing_element" }
+      ]
+    }
+  }
+};
+```
+
+### Constraint System
+
+Define reusable named fragments in `constraints` and reuse them across rules to centralize pattern logic.
+
+```ts
+import type { RuleConfig } from "@codemod.com/jssg-types/main";
+import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+
+const stringLikeRule: RuleConfig<TsxTypes> = {
+  constraints: {
+    STR: {
+      any: [{ kind: "string" }, { kind: "template_string" }]
+    },
+    NUM: {
+      kind: "number"
+    }
+  },
+  utils: {
+    "string-like": {
+      any: [
+        { matches: "STR" },
+        { pattern: "$STR + $NUM" }
+      ]
+    }
+  },
+  rule: {
+    matches: "string-like"
+  }
+};
+```
+
+### Traversal Control
+
+Use `stopBy` to bound relational searches (e.g., to immediate neighbors or the end of a parent) for correctness and performance.
+
+```ts
+// Search only immediate neighbors
+{
+  has: {
+    stopBy: "neighbor",
+    kind: "jsx_attribute"
+  }
+}
+
+// Search until end of parent
+{
+  inside: {
+    stopBy: "end",
+    pattern: "function $NAME()"
+  }
+}
+```
+
+## Best Practices
+
+### Consistent Patterns
+
+1. **Use `const transform: Transform<TsxTypes> = async (root, options) => {}` with `export default transform`** - this is the standard pattern used in production codemods
+2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `@codemod.com/jssg-types`
+3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
+4. **Use early returns** - skip processing when possible, especially for sharding
+5. **Batch operations** - collect edits before committing
+6. **Export getSelector** - provide a selector function for performance optimization
+7. **Optimization strategies** - prefer early returns, single traversals, and batching edits; use specific patterns to reduce backtracking and false positives
+
+### Enterprise Considerations
+
+- **Idempotent transforms**: Ensure transforms can be run multiple times safely
+- **Progress reporting**: Log progress for long-running migrations
+- **Error handling**: Gracefully handle unexpected input
+- **Performance**: Optimize for large codebases
+- **Coordination**: Use state for multi-repo coordination
+
+<Tip>
+If you're working on a large-scale enterprise migration, feel free to [reach out to us](https://go.codemod.com/contact) to learn more about pro and enterprise plans and features.
+</Tip>
