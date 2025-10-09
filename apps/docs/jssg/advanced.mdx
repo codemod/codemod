@@ -264,7 +264,7 @@ When a selector is exported, you can pre-filter files based on specific patterns
 
 ```ts
 import type { GetSelector } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type TsxTypes from "codemod:ast-grep";
 
 export const getSelector: GetSelector<TsxTypes> = () => ({
   rule: { any: [ { pattern: "console.log($$$ARGS)" }, { pattern: "console.warn($$$ARGS)" } ] }
