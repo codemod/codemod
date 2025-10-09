@@ -9,7 +9,7 @@ This guide covers advanced jssg features that enable you to build more sophistic
 Every jssg codemod must export a default function with this exact signature:
 
 ```ts
-import type { SgRoot, SgNode, Transform } from "@codemod.com/jssg-types/main";
+import type { Transform } from "@codemod.com/jssg-types/main";
 import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
 
 const transform: Transform<TsxTypes> = async (root, options) => {
