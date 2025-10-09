@@ -55,7 +55,7 @@ Use dynamic parsing when your codemod needs to analyze multiple languages or whe
 
 ```ts
 import { parseAsync } from "codemod:ast-grep";
-import type { Transform } from "@codemod.com/jssg-types/main";
+import type { Transform } from "codemod:ast-grep";
 import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
 
 const transform: Transform<TsxTypes> = async (root) => {
