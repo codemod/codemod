@@ -9,10 +9,10 @@ This guide covers advanced jssg features that enable you to build more sophistic
 Every jssg codemod must export a default function with this exact signature:
 
 ```ts
-import type { Transform } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   // Your transformation logic
 };
 
@@ -25,14 +25,14 @@ The `options` object provides execution context:
 
 - `options.language: string` — language of the current file (e.g., `ts`, `tsx`). Use it to branch logic or choose language‑sensitive patterns.
 - `options.params?: Record<string, string>` — user parameters defined in the workflow. Drive behavior switches, defaults, and environment‑specific choices.
-- `options.matches?: SgNode[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
+- `options.matches?: any[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
 - `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
 
 ```ts
-import type { Transform, SgNode } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   const lang = options.language;
   const params = options.params;
   const preFilteredMatches = options.matches; // may be undefined if no selector
@@ -54,11 +54,10 @@ Dynamic parsing allows you to parse and analyze different types of code within a
 Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
 
 ```ts
-import { parseAsync } from "codemod:ast-grep";
-import type { Transform } from "codemod:ast-grep";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root) => {
+const transform: Transform<TSX> = async (root) => {
   // Find all styled-component template literals
   const styledComponents = root.root().findAll({
     rule: { pattern: "styled.$COMPONENT`$ARG`" }
@@ -124,10 +123,10 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { Transform } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   // Access user-configured parameters
   const library = options.params?.library || "next-intl";
   const shardingMethod = options.params?.shardingMethod || "directory";
@@ -196,10 +195,10 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { Transform } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";    
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   // Access matrix values passed from the workflow (if matrix strategy is used)
   const team = (options.matrixValues as any)?.team;
   const shardId = (options.matrixValues as any)?.shardId;
@@ -263,10 +262,10 @@ When a selector is exported, you can pre-filter files based on specific patterns
 - Matched nodes are available via `options.matches`
 
 ```ts
-import type { GetSelector } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "codemod:ast-grep";
+import type { GetSelector } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-export const getSelector: GetSelector<TsxTypes> = () => ({
+export const getSelector: GetSelector<TSX> = () => ({
   rule: { any: [ { pattern: "console.log($$$ARGS)" }, { pattern: "console.warn($$$ARGS)" } ] }
 });
 ```
@@ -284,10 +283,10 @@ State conveys execution context and progress signals across runs (e.g., total fi
 jssg codemods can leverage persistent state for large-scale migrations:
 
 ```ts
-import type { Transform } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   const filePath = root.filename();
   
   // Access current state
@@ -319,10 +318,10 @@ export default transform;
 Use multi-repo orchestration when your codemod must coordinate changes across multiple repositories—such as updating shared libraries, enforcing consistency, or applying repo-specific logic. This approach streamlines large-scale migrations and ensures changes are applied uniformly.
 
 ```ts
-import type { Transform } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TsxTypes> = async (root, options) => {
+const transform: Transform<TSX> = async (root, options) => {
   const filePath = root.filename();
   const repoName = options.matrixValues?.repo_name;
   
@@ -344,10 +343,10 @@ export default transform;
 Reference named sub‑rules in `utils` and attach them via `matches` to keep complex patterns DRY and composable.
 
 ```ts
-import type { RuleConfig } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { RuleConfig } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const myRule: RuleConfig<TsxTypes> = {
+const myRule: RuleConfig<TSX> = {
   rule: {
     matches: "jsx-element-hardcoded-human-language",
     inside: { pattern: "function $NAME()" }
@@ -368,10 +367,10 @@ const myRule: RuleConfig<TsxTypes> = {
 Define reusable named fragments in `constraints` and reuse them across rules to centralize pattern logic.
 
 ```ts
-import type { RuleConfig } from "@codemod.com/jssg-types/main";
-import type TsxTypes from "@codemod.com/jssg-types/langs/tsx";
+import type { RuleConfig } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-const stringLikeRule: RuleConfig<TsxTypes> = {
+const stringLikeRule: RuleConfig<TSX> = {
   constraints: {
     STR: {
       any: [{ kind: "string" }, { kind: "template_string" }]
@@ -420,8 +419,8 @@ Use `stopBy` to bound relational searches (e.g., to immediate neighbors or the e
 
 ### Consistent Patterns
 
-1. **Use `const transform: Transform<TsxTypes> = async (root, options) => {}` with `export default transform`** - this is the standard pattern used in production codemods
-2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `@codemod.com/jssg-types`
+1. **Use `const transform: Transform<TSX> = async (root, options) => {}` with `export default transform`**
+2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `codemod:ast-grep`
 3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
 4. **Use early returns** - skip processing when possible, especially for sharding
 5. **Batch operations** - collect edits before committing

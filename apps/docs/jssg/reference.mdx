@@ -498,7 +498,7 @@ export default transform;
 
 ## Parse Helpers
 
-Use parse/parseAsync for ad‑hoc checks, small tools, or tests outside a workflow:
+Use parse/parseAsync to sub‑parse embedded languages or strings extracted from your AST (for example, CSS‑in‑JS, HTML templates, or SQL in template literals). Parse the content, run queries on the resulting tree, and use the findings to inform edits in the host file.
 
 <ParamField path="parse(lang, src)" type="SgRoot">Parse raw source into an SgRoot.</ParamField>
 <ParamField path="parseAsync(lang, src)" type="Promise<SgRoot">Async variant of parse.</ParamField>
