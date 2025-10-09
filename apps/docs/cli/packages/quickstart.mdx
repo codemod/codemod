@@ -3,6 +3,10 @@ title: "Quickstart"
 description: "Create your first codemod package and run it locally."
 ---
 
+A **codemod package** is a set of files that define an automated code transformation. Codemod Packages let you create, test, and distribute reusable transformations that update source code across entire codebases.
+
+Packages range from quick, single-file refactors to advanced, multi-step migrations. They're fully portable—run them locally, in CI, or share with your team.
+
 import { CLIDemo } from "/snippets/cli-demo.mdx";
 
 <Frame>
@@ -11,9 +15,14 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
 
 <Steps>
   <Step title="Create a new codemod package">
+
+    Scaffold a new codemod package:
+
     ```bash
     npx codemod init
     ```
+
+    Each package includes your transformation logic (written in JavaScript, TypeScript, or YAML), a project manifest, and [workflow](/cli/packages/building-workflows) specification.
 
     When creating a new codemod project, you'll be prompted for:
 
@@ -111,5 +120,3 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
     </Info>
   </Step>
 </Steps>
-
-

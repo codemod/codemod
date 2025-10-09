@@ -6,7 +6,11 @@ Build a working JavaScript ast-grep (jssg) codemod in minutes.
 
 ## What is jssg?
 
-JavaScript ast-grep (jssg) is a secure JavaScript runtime for codemods, similar to Node.js. It includes most Node.js globals and modules (for example, `fs`, `process`) so you can write real-world transformations in JavaScript/TypeScript.
+JavaScript ast-grep (jssg) is a secure JavaScript runtime for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
+
+<Info>
+jssg is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility.
+</Info>
 
 **How it works:**
 - A jssg codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
@@ -60,10 +64,10 @@ This will scaffold a new folder with the required files and structure.
     - <b>Type safety</b>: Always check node types before accessing fields
     
     ```ts codemod.ts
-    import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+    import type { Transform } from "codemod:ast-grep";
     import type TSX from "codemod:ast-grep/langs/tsx";
 
-    export default function transform(root: SgRoot<TSX>): string | null {
+    const transform: Transform<TSX> = (root) => {
       const rootNode = root.root();
 
       // Find all console.* calls with type safety
@@ -82,7 +86,7 @@ This will scaffold a new folder with the required files and structure.
       }
 
       // Create edits with proper validation
-      const edits = consoleCalls.map((node: SgNode<TSX>) => {
+      const edits = consoleCalls.map((node) => {
         const callee = node.field("function");
         const method = callee?.field("property")?.text() || "log";
         const args = node.getMultipleMatches("ARGS")
@@ -94,6 +98,8 @@ This will scaffold a new folder with the required files and structure.
 
       return rootNode.commitEdits(edits);
     }
+
+    export default transform;
     ```
 
     The transform follows this pattern:
@@ -145,5 +151,3 @@ This will scaffold a new folder with the required files and structure.
     Explore the full API reference for the jssg runtime, including node navigation, editing, and pattern matching.
   </Card>
 </Columns>
-
-
