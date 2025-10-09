@@ -290,6 +290,10 @@ const transform: Transform<TSX> = async (root, options) => {
   const filePath = root.filename();
   
   // Access current state
+  // The following meta properties are example placeholders.
+  // In a real migration, _meta_progress and _meta_total_files should be set and updated
+  // by your orchestration logic or jssg's state management system.
+  // They are used here to illustrate how you might track progress across files.
   const currentProgress = options.matrixValues?._meta_progress || 0;
   const totalFiles = options.matrixValues?._meta_total_files || 0;
   
