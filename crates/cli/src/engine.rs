@@ -11,6 +11,7 @@ use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
 
 use crate::auth_provider::CliAuthProvider;
+use crate::capabilities_security_callback::capabilities_security_callback;
 use crate::{dirty_git_check, progress_bar};
 
 pub fn create_progress_callback() -> ProgressCallback {
@@ -99,6 +100,7 @@ pub fn create_engine(
 
     let registry_client = create_registry_client(registry)?;
 
+    let capabilities_security_callback = capabilities_security_callback();
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(Some(progress_callback)),
@@ -108,6 +110,7 @@ pub fn create_engine(
         bundle_path,
         params,
         registry_client,
+        capabilities_security_callback: Some(capabilities_security_callback),
         ..WorkflowRunConfig::default()
     };
 
