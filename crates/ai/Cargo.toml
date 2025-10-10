@@ -31,3 +31,6 @@ tracing = "0.1"
 log = { workspace = true }
 # We need this vendored openssl for cross-compilation
 # openssl = { version = "0.10", features = ["vendored"] }
+
+[dev-dependencies]
+tempfile = "3.22"

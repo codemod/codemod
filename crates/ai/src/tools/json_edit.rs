@@ -338,19 +338,103 @@ impl JsonEditTool {
         ))
     }
 
+    /// Parse JSONPath into a list of keys
+    fn parse_json_path(&self, json_path: &str) -> Result<Vec<String>> {
+        if json_path == "$" {
+            return Ok(vec![]);
+        }
+
+        if !json_path.starts_with('$') {
+            return Err("JSONPath must start with '$'".into());
+        }
+
+        let path = &json_path[1..];
+        let mut keys = Vec::new();
+        let mut chars = path.chars().peekable();
+
+        while chars.peek().is_some() {
+            match chars.next() {
+                Some('.') => {
+                    // Dot notation: .key
+                    let mut key = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '.' || ch == '[' {
+                            break;
+                        }
+                        key.push(ch);
+                        chars.next();
+                    }
+                    if !key.is_empty() {
+                        keys.push(key);
+                    }
+                }
+                Some('[') => {
+                    // bracket notation: ["key"] or ['key'] or [0]
+                    let quote_char = chars.peek().copied();
+
+                    if quote_char == Some('"') || quote_char == Some('\'') {
+                        // string key: ["key"] or ['key']
+                        chars.next(); // consume the quote
+                        let quote = quote_char.unwrap();
+                        let mut key = String::new();
+                        let mut escaped = false;
+
+                        for ch in chars.by_ref() {
+                            if escaped {
+                                key.push(ch);
+                                escaped = false;
+                            } else if ch == '\\' {
+                                escaped = true;
+                            } else if ch == quote {
+                                break;
+                            } else {
+                                key.push(ch);
+                            }
+                        }
+
+                        // consume the closing bracket
+                        if chars.peek() == Some(&']') {
+                            chars.next();
+                        }
+
+                        keys.push(key);
+                    } else {
+                        // numeric index: [0]
+                        let mut index_str = String::new();
+                        while let Some(&ch) = chars.peek() {
+                            if ch == ']' {
+                                chars.next();
+                                break;
+                            }
+                            index_str.push(ch);
+                            chars.next();
+                        }
+                        keys.push(index_str);
+                    }
+                }
+                _ => {
+                    return Err("Invalid JSONPath syntax".into());
+                }
+            }
+        }
+
+        Ok(keys)
+    }
+
     /// Set value at JSONPath (simplified implementation)
     fn set_value_at_path(&self, data: &mut Value, json_path: &str, value: Value) -> Result<()> {
-        // Simple implementation for basic paths like $.key or $.key.subkey
+        // Handle root replacement
         if json_path == "$" {
             *data = value;
             return Ok(());
         }
 
-        if !json_path.starts_with("$.") {
-            return Err("JSONPath must start with '$.'".into());
+        let path_parts = self.parse_json_path(json_path)?;
+        if path_parts.is_empty() {
+            *data = value;
+            return Ok(());
         }
 
-        let path_parts: Vec<&str> = json_path[2..].split('.').collect();
         let mut current = data;
 
         for (i, part) in path_parts.iter().enumerate() {
@@ -365,10 +449,10 @@ impl JsonEditTool {
             } else {
                 // Navigate to the next level
                 if let Value::Object(ref mut map) = current {
-                    if !map.contains_key(*part) {
+                    if !map.contains_key(part) {
                         map.insert(part.to_string(), Value::Object(serde_json::Map::new()));
                     }
-                    current = map.get_mut(*part).unwrap();
+                    current = map.get_mut(part).unwrap();
                 } else {
                     return Err(format!("Cannot navigate to '{}' on non-object", part).into());
                 }
@@ -386,11 +470,8 @@ impl JsonEditTool {
 
     /// Remove value at JSONPath
     fn remove_value_at_path(&self, data: &mut Value, json_path: &str) -> Result<()> {
-        if !json_path.starts_with("$.") {
-            return Err("JSONPath must start with '$.'".into());
-        }
+        let path_parts = self.parse_json_path(json_path)?;
 
-        let path_parts: Vec<&str> = json_path[2..].split('.').collect();
         if path_parts.is_empty() {
             return Err("Cannot remove root element".into());
         }
@@ -401,7 +482,7 @@ impl JsonEditTool {
         for part in &path_parts[..path_parts.len() - 1] {
             if let Value::Object(ref mut map) = current {
                 current = map
-                    .get_mut(*part)
+                    .get_mut(part)
                     .ok_or_else(|| format!("Path '{}' not found", part))?;
             } else {
                 return Err(format!("Cannot navigate to '{}' on non-object", part).into());
@@ -411,7 +492,7 @@ impl JsonEditTool {
         // Remove the final key
         let final_key = path_parts.last().unwrap();
         if let Value::Object(ref mut map) = current {
-            if map.remove(*final_key).is_none() {
+            if map.remove(final_key).is_none() {
                 return Err(format!("Key '{}' not found", final_key).into());
             }
         } else {
@@ -428,3 +509,456 @@ impl_tool_factory!(
     "json_edit_tool",
     "Tool for editing JSON files with JSONPath expressions"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use tokio::fs;
+
+    fn create_tool_call(
+        id: &str,
+        operation: &str,
+        file_path: &str,
+        json_path: Option<&str>,
+        value: Option<serde_json::Value>,
+    ) -> ToolCall {
+        let mut params = json!({
+            "operation": operation,
+            "file_path": file_path,
+        });
+
+        if let Some(path) = json_path {
+            params["json_path"] = json!(path);
+        }
+
+        if let Some(val) = value {
+            params["value"] = val;
+        }
+
+        ToolCall {
+            id: id.to_string(),
+            name: "json_edit_tool".to_string(),
+            parameters: params,
+            metadata: None,
+        }
+    }
+
+    async fn create_temp_json_file(content: serde_json::Value) -> NamedTempFile {
+        let temp_file = NamedTempFile::new().unwrap();
+        let json_str = serde_json::to_string_pretty(&content).unwrap();
+        fs::write(temp_file.path(), json_str).await.unwrap();
+        temp_file
+    }
+
+    #[tokio::test]
+    async fn test_view_entire_file() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "name": "test",
+            "version": "1.0.0",
+            "config": {
+                "enabled": true
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-1",
+            "view",
+            temp_file.path().to_str().unwrap(),
+            None,
+            None,
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+        assert!(result.content.contains("\"name\""));
+        assert!(result.content.contains("\"test\""));
+    }
+
+    #[tokio::test]
+    async fn test_view_with_simple_jsonpath() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "database": {
+                "host": "localhost",
+                "port": 5432
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-2",
+            "view",
+            temp_file.path().to_str().unwrap(),
+            Some("$.database.host"),
+            None,
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+        assert!(result.content.contains("localhost"));
+    }
+
+    #[tokio::test]
+    async fn test_set_simple_dot_notation() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "config": {
+                "port": 3000
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-3",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$.config.port"),
+            Some(json!(8080)),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success, "Result: {:?}", result);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(updated_data["config"]["port"], 8080);
+    }
+
+    #[tokio::test]
+    async fn test_set_with_bracket_notation() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "bulk-actions-dropdown": {
+                "accessibility": {
+                    "toggle-menu": "Old value"
+                }
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+
+        let call = create_tool_call(
+            "test-4",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$[\"bulk-actions-dropdown\"][\"accessibility\"][\"toggle-menu\"]"),
+            Some(json!("Toggle bulk select menu")),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(
+            updated_data["bulk-actions-dropdown"]["accessibility"]["toggle-menu"],
+            "Toggle bulk select menu",
+            "The nested structure should be preserved, not flattened into a single key"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_with_mixed_notation() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "my-config": {
+                "database": {
+                    "host": "localhost"
+                }
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+
+        // Mix of bracket and dot notation
+        let call = create_tool_call(
+            "test-5",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$[\"my-config\"].database.host"),
+            Some(json!("remote-server")),
+        );
+
+        let _result = tool.execute(call).await.unwrap();
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(
+            updated_data["my-config"]["database"]["host"],
+            "remote-server"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_new_property() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "config": {
+                "existing": "value"
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-6",
+            "add",
+            temp_file.path().to_str().unwrap(),
+            Some("$.config.new_property"),
+            Some(json!("new value")),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(updated_data["config"]["new_property"], "new value");
+        assert_eq!(updated_data["config"]["existing"], "value");
+    }
+
+    #[tokio::test]
+    async fn test_add_nested_path_that_doesnt_exist() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "config": {}
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-7",
+            "add",
+            temp_file.path().to_str().unwrap(),
+            Some("$.config.database.connection.pool"),
+            Some(json!(10)),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(updated_data["config"]["database"]["connection"]["pool"], 10);
+    }
+
+    #[tokio::test]
+    async fn test_remove_property() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "config": {
+                "to_keep": "keep this",
+                "to_remove": "remove this"
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-8",
+            "remove",
+            temp_file.path().to_str().unwrap(),
+            Some("$.config.to_remove"),
+            None,
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(updated_data["config"]["to_keep"], "keep this");
+        assert!(updated_data["config"]["to_remove"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_remove_with_bracket_notation() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "my-key": {
+                "nested-key": "value"
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-9",
+            "remove",
+            temp_file.path().to_str().unwrap(),
+            Some("$[\"my-key\"][\"nested-key\"]"),
+            None,
+        );
+
+        let _result = tool.execute(call).await.unwrap();
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(updated_data["my-key"].is_object());
+        assert!(updated_data["my-key"]["nested-key"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_set_root_value() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({"old": "data"});
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-10",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$"),
+            Some(json!({"new": "data"})),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(updated_data["new"], "data");
+        assert!(updated_data["old"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_error_on_nonexistent_file() {
+        let tool = JsonEditTool::new();
+        let call = create_tool_call("test-11", "view", "/nonexistent/file.json", None, None);
+
+        let result = tool.execute(call).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_error_on_invalid_json() {
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), "not valid json").await.unwrap();
+
+        let tool = JsonEditTool::new();
+        let call = create_tool_call(
+            "test-12",
+            "view",
+            temp_file.path().to_str().unwrap(),
+            None,
+            None,
+        );
+
+        let result = tool.execute(call).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+
+    #[tokio::test]
+    async fn test_error_on_invalid_jsonpath() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({"key": "value"});
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-13",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("invalid_path"),
+            Some(json!("new value")),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(!result.success);
+        assert!(
+            result.content.contains("JSONPath must start with")
+                || result.content.contains("Invalid JSONPath")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complex_nested_structure() {
+        let tool = JsonEditTool::new();
+        let test_data = json!({
+            "translations": {
+                "en": {
+                    "buttons": {
+                        "submit": "Submit",
+                        "cancel": "Cancel"
+                    }
+                }
+            }
+        });
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-14",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$.translations.en.buttons.submit"),
+            Some(json!("Send")),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success);
+
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            updated_data["translations"]["en"]["buttons"]["submit"],
+            "Send"
+        );
+        assert_eq!(
+            updated_data["translations"]["en"]["buttons"]["cancel"],
+            "Cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_user_reported_issue_bracket_notation_keys_with_hyphens() {
+        // This test specifically addresses the user's reported issue where
+        // keys like $["bulk-actions-dropdown"]["accessibility"]["toggle-menu"]
+        // were being created as a single flattened key instead of nested objects
+        let tool = JsonEditTool::new();
+        let test_data = json!({});
+
+        let temp_file = create_temp_json_file(test_data).await;
+        let call = create_tool_call(
+            "test-15",
+            "set",
+            temp_file.path().to_str().unwrap(),
+            Some("$[\"bulk-actions-dropdown\"][\"accessibility\"][\"toggle-menu\"]"),
+            Some(json!("Toggle Zap bulk select menu")),
+        );
+
+        let result = tool.execute(call).await.unwrap();
+        assert!(result.success, "Operation should succeed");
+
+        // Verify the JSON structure is properly nested, not flattened
+        let content = fs::read_to_string(temp_file.path()).await.unwrap();
+        let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // The structure should be nested objects, not a single key
+        assert!(updated_data.is_object(), "Root should be an object");
+        assert!(
+            updated_data.get("bulk-actions-dropdown").is_some(),
+            "Should have 'bulk-actions-dropdown' key"
+        );
+        assert!(
+            updated_data["bulk-actions-dropdown"].is_object(),
+            "'bulk-actions-dropdown' should be an object"
+        );
+        assert!(
+            updated_data["bulk-actions-dropdown"]["accessibility"].is_object(),
+            "'accessibility' should be an object"
+        );
+        assert_eq!(
+            updated_data["bulk-actions-dropdown"]["accessibility"]["toggle-menu"],
+            "Toggle Zap bulk select menu",
+            "Final value should be set correctly"
+        );
+
+        // Make sure the problematic flattened key doesn't exist
+        let flattened_key = "[\"bulk-actions-dropdown\"][\"accessibility\"][\"toggle-menu\"]";
+        assert!(
+            updated_data.get(flattened_key).is_none(),
+            "Should NOT have a flattened key like '{}'",
+            flattened_key
+        );
+    }
+}
