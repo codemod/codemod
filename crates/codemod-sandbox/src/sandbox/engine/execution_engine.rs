@@ -59,7 +59,6 @@ where
         script_name = script_name
     );
 
-    // TODO: Add params to the codemod
     let params: HashMap<String, serde_json::Value> = options.params.unwrap_or_default();
 
     // Initialize QuickJS runtime and context
