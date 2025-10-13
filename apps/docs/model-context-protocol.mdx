@@ -3,6 +3,8 @@ title: "Codemod MCP"
 sidebarTitle: 'MCP'
 ---
 
+import { MCPDemo } from "/snippets/mcp-demo.mdx";
+
 Codemod MCP (Model Context Protocol) provides AI assistants with tools for code analysis, AST manipulation, and codemod creation. The MCP server enables AI tools like Claude, Cursor, and others to understand code structure, create codemods, and perform automated code transformations.
 
 ## Quick setup
@@ -45,6 +47,10 @@ The Codemod MCP server provides these tools for AI assistants:
 - **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
 
 ## Building Codemod packages with MCP
+
+<Frame>
+  <MCPDemo />
+</Frame>
 
 <Steps>
   <Step title="Ask the AI for a specific codemod">
