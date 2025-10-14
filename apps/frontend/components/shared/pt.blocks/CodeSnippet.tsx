@@ -109,7 +109,7 @@ export function CodeSnippet(props: { code: CodeBlockProps }) {
 
 export default function CodeSnippetBlock(props: { code: CodeBlockProps }) {
   return (
-    <div className="mt-10">
+    <div className="mt-10 [p+&]:mt-0">
       <CodeSnippet {...props} />
     </div>
   );
