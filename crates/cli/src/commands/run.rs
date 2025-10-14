@@ -107,25 +107,8 @@ pub async fn handler(
 
     let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
-    let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
+    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
-
-    let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
-    let codemod_config: Option<CodemodManifest> = if codemod_config_path.exists() {
-        let codemod_config_content = fs::read_to_string(&codemod_config_path)?;
-        let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
-            .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
-        Some(codemod_config)
-    } else {
-        None
-    };
-
-    let capabilities = codemod_config.and_then(|config| config.capabilities);
-
-    if let Some(capabilities) = capabilities {
-        let capabilities_str = capabilities.join(",");
-        params.insert("capabilities".to_string(), capabilities_str);
-    }
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(

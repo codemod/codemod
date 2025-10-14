@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-llrt-capabilities"
-version = "1.0.17"
+version = "1.0.18"
 dependencies = [
  "llrt_modules",
  "serde",
