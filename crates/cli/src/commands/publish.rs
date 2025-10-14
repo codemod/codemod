@@ -1,3 +1,4 @@
+use crate::utils::manifest::{CodemodManifest, RegistryConfig};
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
@@ -7,7 +8,7 @@ use clap::Args;
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_yaml;
 use std::collections::HashMap;
 use std::fs;
@@ -38,75 +39,6 @@ pub struct Command {
     /// Validate and pack without uploading
     #[arg(long)]
     dry_run: bool,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct CodemodManifest {
-    schema_version: String,
-    name: String,
-    version: String,
-    description: String,
-    author: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    license: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    copyright: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    repository: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    homepage: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bugs: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    registry: Option<RegistryConfig>,
-    workflow: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    targets: Option<TargetConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dependencies: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    keywords: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    readme: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    changelog: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    documentation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    validation: Option<ValidationConfig>,
-    pub capabilities: Option<Vec<String>>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct RegistryConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    access: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scope: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    visibility: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct TargetConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    languages: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    frameworks: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    versions: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct ValidationConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    strict: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    require_tests: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_test_coverage: Option<u32>,
 }
 
 #[derive(Deserialize, Debug)]

@@ -9,7 +9,6 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
-#[cfg(feature = "native")]
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
