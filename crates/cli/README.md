@@ -23,14 +23,14 @@
 [![License](https://img.shields.io/github/license/codemod/codemod)](https://github.com/codemod/codemod/blob/main/LICENSE)
 [![npm version](https://img.shields.io/npm/v/codemod.svg)](https://www.npmjs.com/package/codemod)
 
-The **Codemod CLI** is an open-source command-line tool for building, testing, and running **codemod packages**—automated code transformations that help teams modernize codebases, upgrade frameworks, and refactor at scale.
+**Codemod CLI** is an open-source command-line tool for building, testing, and running **codemod packages**—automated code transformations that help teams modernize codebases, upgrade frameworks, and refactor at scale.
 
-Whether you're an individual developer tackling tech debt, an OSS maintainer shipping upgrade paths, or a platform team coordinating migrations across hundreds of services, the Codemod CLI gives you the tools to automate repetitive code changes reliably.
+Whether you're an individual developer tackling tech debt, an OSS maintainer shipping upgrade paths, or a platform team coordinating migrations across hundreds of services, Codemod CLI gives you the tools to automate repetitive code changes reliably.
 
 ## Installation
 
 ```bash
-npm install -g codemod
+npm install -g codemod@latest
 ```
 
 Or use via `npx` without installation:
@@ -56,7 +56,7 @@ npx codemod login
 npx codemod publish
 
 # 4. Run from registry
-npx codemod @your-org/my-codemod
+npx codemod @your-org/example-codemod
 ```
 
 ## What are Codemod Packages?
