@@ -19,7 +19,7 @@
 # Codemod
 
 [![Community](https://img.shields.io/badge/slack-join-e9a820)](https://codemod.com/community)
-[![License](https://img.shields.io/github/license/codemod-com/codemod)](LICENSE)
+[![License](https://img.shields.io/github/license/codemod/codemod)](LICENSE)
 
 Codemod is the AI-powered, community-led platform for automating code migrations, framework upgrades, and large-scale changes.
 
@@ -44,7 +44,7 @@ npx codemod workflow run -w my-codemod/workflow.yaml
 npx codemod publish my-codemod
 
 # 4) Run it from the Registry
-npx codemod @codemod-com/my-codemod
+npx codemod @codemod/my-codemod
 ```
 
 See the full [CLI reference](https://docs.codemod.com/cli/cli-reference) for every command and option.
