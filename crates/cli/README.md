@@ -49,7 +49,7 @@ cd my-codemod
 # You can create codemod packages with the help of AI using Codemod MCP or Studio
 
 # 2. Run it locally
-npx codemod workflow run -w . -t /path/to/target
+npx codemod workflow run -w ./example-codemod -t /abs/path/to/repo
 
 # 3. Publish to registry
 npx codemod login
