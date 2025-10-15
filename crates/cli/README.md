@@ -11,7 +11,7 @@
     <br />
     <a href="https://go.codemod.com/app">Platform</a>
     ·
-    <a href="https://codemod.com/community">Community</a>
+    <a href="https://go.codemod.com/community">Community</a>
     ·
     <a href="https://docs.codemod.com">Docs</a>
   </p>
@@ -19,7 +19,7 @@
 
 # Codemod CLI
 
-[![Community](https://img.shields.io/badge/slack-join-e9a820)](https://codemod.com/community)
+[![Community](https://img.shields.io/badge/slack-join-e9a820)](https://go.codemod.com/community)
 [![License](https://img.shields.io/github/license/codemod/codemod)](https://github.com/codemod/codemod/blob/main/LICENSE)
 [![npm version](https://img.shields.io/npm/v/codemod.svg)](https://www.npmjs.com/package/codemod)
 
@@ -231,7 +231,7 @@ For teams coordinating migrations across multiple repositories:
 - **[jssg Documentation](https://docs.codemod.com/jssg)** – JavaScript ast-grep reference
 
 ### Get Help
-- **[Slack Community](https://codemod.com/community)** – Ask questions and share codemods
+- **[Slack Community](https://go.codemod.com/community)** – Ask questions and share codemods
 - **[GitHub Discussions](https://github.com/codemod/codemod/discussions)** – Long-form Q&A
 - **[GitHub Issues](https://github.com/codemod/codemod/issues)** – Report bugs or request features
 
