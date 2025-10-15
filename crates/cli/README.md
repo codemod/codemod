@@ -231,7 +231,7 @@ For teams coordinating migrations across multiple repositories:
 - **[jssg Documentation](https://docs.codemod.com/jssg)** – JavaScript ast-grep reference
 
 ### Get Help
-- **[Slack Community](https://go.codemod.com/community)** – Ask questions and share codemods
+- **[Slack Community](https://codemod.com/community)** – Ask questions and share codemods
 - **[GitHub Discussions](https://github.com/codemod/codemod/discussions)** – Long-form Q&A
 - **[GitHub Issues](https://github.com/codemod/codemod/issues)** – Report bugs or request features
 
