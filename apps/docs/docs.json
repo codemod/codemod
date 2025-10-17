@@ -30,7 +30,15 @@
           },
           {
             "group": "Codemod Platform",
-            "pages": ["migrations", "insights", "codemod-studio"]
+            "pages": [
+              "migrations",
+              "insights",
+              "codemod-studio",
+              {
+                "group": "Integrations",
+                "pages": ["integrations/github"]
+              }
+            ]
           },
           {
             "group": "OSS & Community",
