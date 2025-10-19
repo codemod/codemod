@@ -35,6 +35,7 @@
               "insights",
               "codemod-studio",
               {
+                "icon": "plug",
                 "group": "Integrations",
                 "pages": [
                   "integrations/github",
