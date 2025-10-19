@@ -36,7 +36,11 @@
               "codemod-studio",
               {
                 "group": "Integrations",
-                "pages": ["integrations/github"]
+                "pages": [
+                  "integrations/github",
+                  "integrations/gitlab",
+                  "integrations/jira"
+                ]
               }
             ]
           },
