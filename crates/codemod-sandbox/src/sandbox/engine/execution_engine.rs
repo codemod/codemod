@@ -9,13 +9,8 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
-<<<<<<< HEAD
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
-=======
-#[cfg(feature = "native")]
-use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
@@ -42,11 +37,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
     pub params: Option<HashMap<String, String>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
-<<<<<<< HEAD
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
-=======
-    pub capabilities: Option<Vec<String>>,
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -85,7 +76,6 @@ where
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
         for capability in capabilities {
-<<<<<<< HEAD
             match capability {
                 LlrtSupportedModules::Fetch => {
                     module_builder.enable_fetch();
@@ -97,43 +87,6 @@ where
                     module_builder.enable_child_process();
                 }
                 _ => {}
-=======
-            match capability.as_str() {
-                "fetch" => {
-                    module_builder.enable_fetch();
-                }
-                "fs" => {
-                    module_builder.enable_fs();
-                }
-                "child_process" => {
-                    module_builder.enable_child_process();
-                }
-                "abort" => {}
-                "assert" => {}
-                "buffer" => {}
-                "console" => {}
-                "crypto" => {}
-                "events" => {}
-                "exceptions" => {}
-                "os" => {}
-                "path" => {}
-                "perf_hooks" => {}
-                "process" => {}
-                "stream_web" => {}
-                "string_decoder" => {}
-                "timers" => {}
-                "tty" => {}
-                "url" => {}
-                "util" => {}
-                "zlib" => {}
-                _ => {
-                    return Err(ExecutionError::Runtime {
-                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                            message: format!("Unknown capability: {capability:?}"),
-                        },
-                    });
-                }
->>>>>>> 722b83c9 (refactor: add capabilities feature for native jssg codemod run)
             }
         }
     }

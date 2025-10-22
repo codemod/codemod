@@ -890,6 +890,7 @@ fix:
                         max_threads: None,
                         dry_run: Some(true),
                         language: Some("typescript".to_string()),
+                        capabilities: None,
                     }),
                     env: None,
                     condition: None,
