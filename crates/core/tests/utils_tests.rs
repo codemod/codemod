@@ -148,7 +148,6 @@ fn test_validate_workflow_valid() {
                 env: HashMap::new(),
             },
         ],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -192,7 +191,6 @@ fn test_validate_workflow_duplicate_node_id() {
                 env: HashMap::new(),
             },
         ],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -228,7 +226,6 @@ fn test_validate_workflow_nonexistent_dependency() {
             steps: vec![],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -278,7 +275,6 @@ fn test_validate_workflow_cyclic_dependency() {
                 env: HashMap::new(),
             },
         ],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -383,7 +379,6 @@ fn test_validate_workflow_duplicate_template_id() {
             },
         ],
         nodes: vec![],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -436,7 +431,6 @@ fn test_validate_workflow_nonexistent_template_reference() {
             }],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -476,7 +470,6 @@ fn test_validate_workflow_invalid_matrix_strategy() {
             steps: vec![],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -539,7 +532,6 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 env: HashMap::new(),
             },
         ],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -658,7 +650,6 @@ fn test_validate_workflow_self_dependency() {
             steps: vec![],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -713,7 +704,6 @@ fn test_validate_workflow_valid_matrix_strategy_with_values() {
             steps: vec![],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -747,7 +737,6 @@ fn test_validate_workflow_valid_matrix_strategy_with_from_state() {
             steps: vec![],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -779,7 +768,6 @@ fn test_validate_workflow_with_template_outputs() {
             env: HashMap::new(),
         }],
         nodes: vec![],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -817,7 +805,6 @@ fn test_validate_workflow_with_step_env_vars() {
             }],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -898,7 +885,6 @@ fix:
             ],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
@@ -940,7 +926,6 @@ fn test_validate_workflow_with_invalid_config_path() {
             }],
             env: HashMap::new(),
         }],
-        capabilities: None,
     };
 
     // Validate the workflow
