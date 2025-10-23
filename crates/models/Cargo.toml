@@ -26,6 +26,7 @@ ts-rs = { version = "11.0", features = [
     "serde-json-impl",
     "serde-compat",
 ] }
+codemod-llrt-capabilities.workspace = true
 
 [features]
 docker = []

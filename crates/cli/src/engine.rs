@@ -9,6 +9,7 @@ use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
@@ -82,6 +83,7 @@ pub fn create_engine(
     allow_dirty: bool,
     params: HashMap<String, String>,
     registry: Option<String>,
+    capabilities: Option<Vec<LlrtSupportedModules>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -111,6 +113,7 @@ pub fn create_engine(
         params,
         registry_client,
         capabilities_security_callback: Some(capabilities_security_callback),
+        capabilities,
         ..WorkflowRunConfig::default()
     };
 

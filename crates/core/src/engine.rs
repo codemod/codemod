@@ -78,7 +78,6 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
-use std::str::FromStr;
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -305,6 +304,7 @@ impl Engine {
         workflow: Workflow,
         params: HashMap<String, String>,
         bundle_path: Option<PathBuf>,
+        capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
         self.validate_codemod_dependencies(&workflow, &[]).await?;
@@ -319,6 +319,7 @@ impl Engine {
             tasks: Vec::new(),
             started_at: Utc::now(),
             ended_at: None,
+            capabilities: capabilities.clone(),
         };
 
         self.state_adapter
@@ -1267,6 +1268,7 @@ impl Engine {
                     &workflow_run.workflow,
                     &workflow_run.bundle_path,
                     &[],
+                    &workflow_run.capabilities,
                 )
                 .await;
 
@@ -1393,6 +1395,7 @@ impl Engine {
         workflow: &Workflow,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
+        capabilities: &Option<Vec<LlrtSupportedModules>>,
     ) -> Result<()> {
         match action {
             StepAction::RunScript(run) => {
@@ -1451,6 +1454,7 @@ impl Engine {
                         workflow,
                         bundle_path,
                         dependency_chain,
+                        capabilities,
                     ))
                     .await?;
                 }
@@ -1460,33 +1464,12 @@ impl Engine {
                 self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
-                let capabilities = if let Some(cap_str) = params.clone().get("capabilities") {
-                    let cap_vec = cap_str
-                        .split(",")
-                        .map(|s| s.to_string())
-                        .collect::<Vec<_>>();
-                    let mut parsed_caps = Vec::new();
-                    for v in cap_vec {
-                        match LlrtSupportedModules::from_str(&v) {
-                            Ok(cap) => parsed_caps.push(cap),
-                            Err(e) => {
-                                return Err(Error::Template(format!(
-                                    "Invalid capability string '{}': {}",
-                                    v, e
-                                )));
-                            }
-                        }
-                    }
-                    Some(parsed_caps)
-                } else {
-                    None
-                };
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     js_ast_grep,
                     Some(params.clone()),
                     task.matrix_values.clone(),
-                    capabilities,
+                    capabilities.clone(),
                     self.workflow_run_config
                         .capabilities_security_callback
                         .as_ref()
@@ -1504,6 +1487,7 @@ impl Engine {
                     state,
                     bundle_path,
                     dependency_chain,
+                    capabilities,
                 ))
                 .await
             }
@@ -1925,6 +1909,7 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
+        capabilities: &Option<Vec<LlrtSupportedModules>>,
     ) -> Result<()> {
         info!("Executing codemod step: {}", codemod.source);
 
@@ -1982,6 +1967,7 @@ impl Engine {
             state,
             bundle_path,
             &new_chain,
+            capabilities,
         )
         .await
     }
@@ -1998,6 +1984,7 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
+        capabilities: &Option<Vec<LlrtSupportedModules>>,
     ) -> Result<()> {
         let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
@@ -2109,6 +2096,7 @@ impl Engine {
                     &codemod_workflow,
                     &Some(resolved_package.package_dir.clone()),
                     dependency_chain,
+                    capabilities,
                 ))
                 .await?;
             }

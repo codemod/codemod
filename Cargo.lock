@@ -692,6 +692,7 @@ name = "butterflow-models"
 version = "1.0.18"
 dependencies = [
  "chrono",
+ "codemod-llrt-capabilities",
  "evalexpr",
  "regex",
  "reqwest 0.12.23",
@@ -1059,6 +1060,7 @@ version = "1.0.18"
 dependencies = [
  "llrt_modules",
  "serde",
+ "ts-rs",
 ]
 
 [[package]]

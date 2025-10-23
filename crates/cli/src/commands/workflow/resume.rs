@@ -63,6 +63,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         // TODO: Load params from workflow run
         HashMap::new(),
         None,
+        None,
     )?;
 
     if args.trigger_all {

@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+
 use crate::node::Node;
 use crate::template::Template;
 use ts_rs::TS;
@@ -120,11 +122,6 @@ pub struct Workflow {
 
     /// Nodes in the workflow
     pub nodes: Vec<Node>,
-
-    /// Capabilities
-    #[serde(default)]
-    #[ts(optional, as = "Option<Vec<String>>")]
-    pub capabilities: Option<Vec<String>>,
 }
 
 /// Represents the state schema for a workflow
@@ -172,6 +169,11 @@ pub struct WorkflowRun {
     /// The absolute path to the root directory of the workflow bundle
     #[ts(optional=nullable)]
     pub bundle_path: Option<PathBuf>,
+
+    /// Capabilities used in the workflow run
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<LlrtSupportedModules>>")]
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
 
 /// Status of a workflow run

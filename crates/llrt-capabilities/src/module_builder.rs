@@ -5,6 +5,7 @@ use llrt_modules::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use ts_rs::TS;
 
 pub const UNSAFE_MODULES: &[LlrtSupportedModules] = &[
     LlrtSupportedModules::Fetch,
@@ -40,7 +41,7 @@ pub struct LlrtModuleBuilder {
     pub builder: ModuleBuilder,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum LlrtSupportedModules {
     Abort,
