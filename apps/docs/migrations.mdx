@@ -1,65 +1,48 @@
 ---
-title: 'Migration Campaigns'
+title: 'Campaigns'
 sidebarTitle: 'Campaigns'
 icon: 'arrow-up-right-dots'
 ---
 
 import { CodemodWorkflowsDemo } from "/snippets/codemod-workflows-demo.mdx";
 
-Migration Campaigns let engineering teams orchestrate sweeping code changes—framework upgrades, API refactors, or dependency clean-ups—across any number of repositories.
+Campaigns let engineering teams centrally automate and orchestrate large code changes like security patches, language or framework upgrades, API updates, i18n, and other major refactors or optimizations across teams and repos.
 
-By combining Codemod’s AI-powered runbooks with deterministic automations, campaigns dramatically lower migration cost and risk while giving you full visibility into progress.
+[Codemod Campaigns](https://app.codemod.com/projects) provide:
 
-<Info>
-  Migration Campaigns are designed for enterprise engineering teams. To start a new migration campaign, simply [contact us](https://go.codemod.com/contact) and we'll add a demo of the requested migration to your dashboard. See [i18n migrations](https://codemod.com/i18n) for real-world examples of enterprise campaigns.
-</Info>
+- **Campaign configuration** - Different teams or repos have different needs. Edit parameters, defined in workflow.yaml, right from the UI.
+- **Centralized state management** - Auto-create and track tasks and PRs across the organization with a shared persistent state.
+- **Multi-repo orchestration** - Run workflows across multiple repos with ease.
 
-## Before you start: plan with Insights
 
-Use **[Codemod Insights](/insights)** dashboards to measure how widespread a pattern is, estimate effort, and decide which repositories to include in your campaign. Once priorities are clear, spin up a new Migration Campaign and execute with confidence.
-
-<Tip>
-  Not sure where to begin? [We'll help you](https://go.codemod.com/contact) surface high-impact, low-effort migrations you can tackle right away.
-</Tip>
-
-## Running a Migration Campaign
-
+## Starting a Campaign
 <Frame>
   <CodemodWorkflowsDemo />
 </Frame>
-
-[Codemod campaigns](https://app.codemod.com/projects) provide:
-
-- **Visual parameter configuration** - Edit workflow parameters through the UI instead of YAML
-- **Centralized state management** - Coordinate migrations with persistent state across repos and teams  
-- **Multi-repo orchestration** - Run workflows across your entire codebase with progress tracking
-- **Business insights** - Track migration progress with custom metrics and dashboards
 
 <Tip>
   Make sure the <a href="https://github.com/apps/codemod">Codemod GitHub App</a> is installed on repositories you plan to migrate.
 </Tip>
 
 <Steps>
-  <Step title="Open Migration Campaigns">
-    In the Codemod app, navigate to **Campaigns -> Create Workflow**.
-
-    <Note>
-      The Campaigns section is visible only on [pro tier or above](https://codemod.com/pricing) or upon request.
-    </Note>
+  <Step title="Create">
+    Navigate to **[Campaigns -> Create Campaign](https://app.codemod.com/workflows/create/registry)** in the Codemod app.
   </Step>
-  <Step title="Create campaign">
-    Give your campaign a descriptive name and pick the repositories you wish to target.
+  <Step title="Configure">
+    Configure:
+    - **Codemod package** – The Codemod package that you want to run. This can be an existing package, a custom pro codemod (for enterprise customers), or one you create yourself. You can build Codemod packages using Codemod MCP or Studio.
+    - **Target Repository** – The repository that you want to run the Codemod package on.
+    - **Campaign Name & Description** – Give your Campaign a descriptive name and description.
   </Step>
-  <Step title="Define workflow">
-    Compose one or more steps—codemods, scripts, or manual approvals—into a repeatable workflow that Codemod will run for every affected repo.
-  </Step>
-  <Step title="Run & track">
-    Start the campaign and watch progress roll in. Codemod opens pull-requests, tracks status, and surfaces metrics so you always know what’s left.
+  <Step title="Run">
+    Click **Run** to initiate the Campaign.
+    
+    Each Campaign defines one or more steps that Codemod will run for the target repository. Codemod opens pull requests, tracks status, and surfaces metrics so you always know what's left.
   </Step>
 </Steps>
 
 ## Creating custom workflows
 
-While a campaign may be as simple as a single automated codemod, most migrations involve a sequence of steps. You can design those steps by building [Codemod Packages](/cli/packages). Pro and enterprise customers can request custom workflows.
+While a Campaign may be as simple as a single automated codemod, most migrations involve a sequence of steps. You can design those steps by building [Codemod workflows](/cli/workflows). Pro and enterprise customers can request custom workflows.
 
-<Card title="Learn more about codemod packages →" icon="terminal" href="/cli/packages" />
+<Card title="Learn more about Codemod workflows →" icon="play" href="/cli/workflows" />
