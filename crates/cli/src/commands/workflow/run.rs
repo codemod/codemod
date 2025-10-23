@@ -80,6 +80,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.allow_dirty,
         params,
         None,
+        None,
     )?;
 
     // Run workflow using the extracted workflow runner

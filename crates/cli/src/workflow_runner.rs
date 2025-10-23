@@ -19,7 +19,12 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
 
     // Run workflow
     let workflow_run_id = engine
-        .run_workflow(workflow, config.params, Some(config.bundle_path))
+        .run_workflow(
+            workflow,
+            config.params,
+            Some(config.bundle_path),
+            config.capabilities,
+        )
         .await
         .context("Failed to run workflow")?;
 

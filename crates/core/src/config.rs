@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
 
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},
@@ -27,6 +28,7 @@ pub struct WorkflowRunConfig {
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
     pub registry_client: RegistryClient,
     pub dry_run: bool,
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
 }
 
@@ -42,6 +44,7 @@ impl Default for WorkflowRunConfig {
             pre_run_callback: Arc::new(None),
             registry_client: RegistryClient::default(),
             dry_run: false,
+            capabilities: None,
             capabilities_security_callback: None,
         }
     }

@@ -34,6 +34,12 @@ llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features =
   "zlib",
 ], optional = true }
 serde.workspace = true
+ts-rs = { version = "11.0", features = [
+    "chrono-impl",
+    "uuid-impl",
+    "serde-json-impl",
+    "serde-compat",
+] }
 
 [features]
 native = [
