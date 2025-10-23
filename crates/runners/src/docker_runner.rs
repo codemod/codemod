@@ -26,7 +26,12 @@ impl Default for DockerRunner {
 
 #[async_trait]
 impl Runner for DockerRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        admin: bool,
+    ) -> Result<String> {
         // Create environment variables array
         let env_args: Vec<String> = env
             .iter()
@@ -41,8 +46,13 @@ impl Runner for DockerRunner {
         cmd.arg("run")
             .arg("--rm")
             .arg("--name")
-            .arg(&container_name)
-            .args(env_args)
+            .arg(&container_name);
+
+        if admin {
+            cmd.arg("--privileged");
+        }
+
+        cmd.args(env_args)
             .arg("alpine:latest")
             .arg("sh")
             .arg("-c")
