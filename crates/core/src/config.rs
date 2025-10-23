@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},

@@ -5,19 +5,19 @@
 try:
     with open("file.txt", "r") as f:
         data = f.read()
-except IOError, e:
+except IOError as e:
     print("Error reading file: {}".format(e))
 
 # Another example with variable
 try:
     config = json.loads(data)
-except ValueError, err:
+except ValueError as err:
     logging.error("Invalid JSON format: %s", err)
 
 # Handling multiple exceptions (old style)
 try:
     result = process_data(data)
-except (KeyError, TypeError), error:
+except (KeyError, TypeError) as error:
     print("Processing failed: {}".format(error))
 
 # Not everything needs updating

@@ -1,4 +1,4 @@
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use ignore::{
     overrides::{Override, OverrideBuilder},

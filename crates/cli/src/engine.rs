@@ -9,7 +9,7 @@ use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;

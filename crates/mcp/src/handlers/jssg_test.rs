@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ast_grep_language::SupportLang;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
