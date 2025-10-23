@@ -5,6 +5,7 @@ use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
+use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
@@ -95,6 +96,12 @@ where
     // Add AstGrepModule
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+
+    // Add WorkflowGlobalModule
+    let workflow_global_path = std::env::temp_dir().join("codemod_workflow_global.txt");
+    std::env::set_var("WORKFLOW_GLOBAL", &workflow_global_path);
+    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
+    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
