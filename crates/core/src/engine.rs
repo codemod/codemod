@@ -2188,12 +2188,23 @@ impl Engine {
             task.workflow_run_id.to_string(),
         );
 
+        let command = if run.ends_with(".sh") {
+            self.workflow_run_config
+                .bundle_path
+                .join(run)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            run.to_string()
+        };
+
         // Resolve variables
         let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref())?;
+            resolve_string_with_expression(&command, params, state, task.matrix_values.as_ref())?;
 
+        let is_root = unsafe { libc::geteuid() } == 0;
         // Execute the command
-        let output = runner.run_command(&resolved_command, &env).await?;
+        let output = runner.run_command(&resolved_command, &env, is_root).await?;
 
         // Get the current task
         let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;

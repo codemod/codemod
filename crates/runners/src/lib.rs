@@ -8,7 +8,12 @@ use butterflow_models::Result;
 #[async_trait]
 pub trait Runner: Send + Sync {
     /// Run a command
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String>;
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        admin: bool,
+    ) -> Result<String>;
 }
 
 pub mod direct_runner;

@@ -26,7 +26,12 @@ impl Default for PodmanRunner {
 
 #[async_trait]
 impl Runner for PodmanRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        admin: bool,
+    ) -> Result<String> {
         // Create environment variables array
         let env_args: Vec<String> = env
             .iter()
@@ -35,9 +40,13 @@ impl Runner for PodmanRunner {
 
         // Create the podman command
         let mut cmd = Command::new("podman");
-        cmd.arg("run")
-            .arg("--rm")
-            .args(env_args)
+        cmd.arg("run").arg("--rm");
+
+        if admin {
+            cmd.arg("--privileged");
+        }
+
+        cmd.args(env_args)
             .arg("alpine:latest")
             .arg("sh")
             .arg("-c")
