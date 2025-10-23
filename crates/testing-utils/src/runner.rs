@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::future::Future;

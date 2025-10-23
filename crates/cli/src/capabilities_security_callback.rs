@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use butterflow_core::execution::CodemodExecutionConfig;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 type CapabilitiesSecurityCallback =
     Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;

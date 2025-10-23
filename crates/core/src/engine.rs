@@ -44,7 +44,7 @@ use butterflow_runners::Runner;
 use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,

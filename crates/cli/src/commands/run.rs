@@ -9,7 +9,7 @@ use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_telemetry::send_event::BaseEvent;
 use console::style;
 use log::info;

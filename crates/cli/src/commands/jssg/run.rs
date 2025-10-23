@@ -7,7 +7,7 @@ use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{

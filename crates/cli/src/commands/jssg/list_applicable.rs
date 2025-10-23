@@ -3,7 +3,7 @@ use ast_grep_config::CombinedScan;
 use ast_grep_language::SupportLang;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;

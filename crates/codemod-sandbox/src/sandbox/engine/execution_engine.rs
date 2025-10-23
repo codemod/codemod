@@ -10,7 +10,7 @@ use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
-use codemod_llrt_capabilities::module_builder::LlrtSupportedModules;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
