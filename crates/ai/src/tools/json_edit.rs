@@ -648,7 +648,7 @@ mod tests {
             Some(json!("Toggle bulk select menu")),
         );
 
-        let result = tool.execute(call).await.unwrap();
+        let _ = tool.execute(call).await.unwrap();
 
         let content = fs::read_to_string(temp_file.path()).await.unwrap();
         let updated_data: serde_json::Value = serde_json::from_str(&content).unwrap();

@@ -122,7 +122,12 @@ impl Default for DirectRunner {
 
 #[async_trait]
 impl Runner for DirectRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        admin: bool,
+    ) -> Result<String> {
         // Check if the command starts with a shebang line
         if command.starts_with("#!/") {
             // Create a temporary file for the script
@@ -148,7 +153,13 @@ impl Runner for DirectRunner {
             }
 
             // Create the command
-            let mut cmd = Command::new(&script_path);
+            let mut cmd = if admin {
+                let mut cmd = Command::new("sudo");
+                cmd.arg(&script_path);
+                cmd
+            } else {
+                Command::new(&script_path)
+            };
 
             // Add environment variables
             for (key, value) in env {
@@ -177,9 +188,26 @@ impl Runner for DirectRunner {
                 "-c"
             };
 
-            // Create the command
-            let mut cmd = Command::new(shell);
-            cmd.arg(shell_arg).arg(command);
+            let mut cmd = if admin {
+                if cfg!(target_os = "windows") {
+                    let mut cmd = Command::new("powershell");
+                    cmd.arg("-Command").arg(format!(
+                        "Start-Process {} -ArgumentList '{} \"{}\"' -Verb RunAs -Wait -NoNewWindow",
+                        shell,
+                        shell_arg,
+                        command.replace("\"", "\\\"")
+                    ));
+                    cmd
+                } else {
+                    let mut cmd = Command::new("sudo");
+                    cmd.arg(shell).arg(shell_arg).arg(command);
+                    cmd
+                }
+            } else {
+                let mut cmd = Command::new(shell);
+                cmd.arg(shell_arg).arg(command);
+                cmd
+            };
 
             // Add environment variables
             for (key, value) in env {
