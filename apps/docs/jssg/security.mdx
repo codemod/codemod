@@ -118,10 +118,6 @@ Use these exact strings in the `capabilities` array:
     
     export default transform;
     ```
-
-    <Warning>
-      File system access is relative to the directory where `codemod` is executed. Use `process.cwd()` to get the working directory.
-    </Warning>
   </Step>
 </Steps>
 
@@ -193,11 +189,14 @@ You can also enable capabilities via CLI flags when running a codemod:
 
 ```bash
 # Enable specific capabilities
-codemod --allow-fs path/to/codemod
-codemod --allow-fetch --allow-fs path/to/codemod
+codemod jssg run --allow-fs path/to/codemod
+codemod jssg run --allow-fetch --allow-fs path/to/codemod
 
 # Enable all capabilities (use with caution!)
-codemod --allow-fs --allow-fetch --allow-child-process path/to/codemod
+codemod jssg run --allow-fs --allow-fetch --allow-child-process path/to/codemod
+
+# Or with a workflow
+codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/workflow.yaml --target path/to/repo
 ```
 
 <Info>
@@ -246,27 +245,6 @@ codemod --allow-fs --allow-fetch --allow-child-process path/to/codemod
 <Warning>
   **Untrusted codemods**: Never run codemods from untrusted sources with capabilities enabled without reviewing the code first.
 </Warning>
-
-### Auditing a codemod
-
-Before running a codemod with capabilities, review:
-
-1. **`Check codemod.yaml`**: What capabilities does it request?
-2. **Read the transform**: How does it use those capabilities?
-3. **Verify sources**: Is it from a trusted author or organization?
-4. **`Use --dry-run`**: Test without making actual changes first
-
-```bash
-# Review the codemod first
-cat codemod.yaml
-cat scripts/codemod.ts
-
-# Dry run to see proposed changes
-codemod workflow run --dry-run
-
-# Apply only after review
-codemod workflow run
-```
 
 ## Next steps
 
