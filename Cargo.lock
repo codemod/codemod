@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-core"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-models"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "codemod-llrt-capabilities",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-runners"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-scheduler"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "butterflow-models",
  "chrono",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-state"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "codemod"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ast-grep-config",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-ai"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "coro-core",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-llrt-capabilities"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "llrt_modules",
  "serde",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-mcp"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-sandbox"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-telemetry"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7976,7 +7976,7 @@ dependencies = [
 
 [[package]]
 name = "testing-utils"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "codemod-llrt-capabilities",
@@ -9820,7 +9820,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.0.18"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "butterflow-models",
