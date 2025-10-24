@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.1.0)'
+        description: "Version to release (e.g., 0.1.0)"
         required: true
         type: string
 
@@ -189,9 +189,9 @@ jobs:
           title: "Update changelog for ${{ github.ref_name }}"
           body: |
             This PR updates the changelog for the release `${{ github.ref_name }}`.
-            
+
             Generated changelog:
-            
+
             ${{ steps.git-cliff.outputs.content }}
           branch: changelog-update-${{ github.ref_name }}
           base: main
@@ -234,8 +234,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "18"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -267,32 +267,27 @@ jobs:
           mkdir -p crates/cli/npm/platforms/linux-x64-gnu
           mkdir -p crates/cli/npm/platforms/linux-arm64-gnu
           mkdir -p crates/cli/npm/platforms/win32-x64-msvc
-          
+
           # Copy binaries to platform packages
           cp artifacts/aarch64-apple-darwin/codemod-darwin-aarch64 crates/cli/npm/platforms/darwin-arm64/codemod
           cp artifacts/x86_64-apple-darwin/codemod-darwin-x86_64 crates/cli/npm/platforms/darwin-x64/codemod
           cp artifacts/x86_64-unknown-linux-gnu/codemod-linux-x86_64-gnu crates/cli/npm/platforms/linux-x64-gnu/codemod
           cp artifacts/aarch64-unknown-linux-gnu/codemod-linux-aarch64-gnu crates/cli/npm/platforms/linux-arm64-gnu/codemod
           cp artifacts/x86_64-pc-windows-msvc/codemod-windows-x86_64.exe crates/cli/npm/platforms/win32-x64-msvc/codemod.exe
-          
+
           # Make binaries executable
           chmod +x crates/cli/npm/platforms/*/codemod
-
-      - name: Include the README.md in the npm package
-        run: |
-          # Copy README.md to the npm package directory
-          cp crates/cli/README.md crates/cli/npm/README.md
 
       - name: Update package versions
         run: |
           # Update main package version
           sed -i 's/"version": "0.0.0"/"version": "${{ steps.version.outputs.version }}"/' crates/cli/npm/package.json
-          
+
           # Update platform package versions
           for platform in crates/cli/npm/platforms/*/package.json; do
             sed -i 's/"version": "0.0.0"/"version": "${{ steps.version.outputs.version }}"/' "$platform"
           done
-          
+
           # Update optional dependencies versions in main package
           sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
 
@@ -303,7 +298,7 @@ jobs:
           # Verify npm authentication
           echo "Verifying npm authentication..."
           npm whoami
-          
+
           # Publish each platform package with error handling
           for platform in crates/cli/npm/platforms/*/; do
             platform_name=$(basename "$platform")
