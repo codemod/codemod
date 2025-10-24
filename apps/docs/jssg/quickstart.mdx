@@ -6,11 +6,15 @@ Build a working JavaScript ast-grep (jssg) codemod in minutes.
 
 ## What is jssg?
 
-JavaScript ast-grep (jssg) is a secure JavaScript runtime for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
+JavaScript ast-grep (jssg) is a **secure JavaScript runtime** for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
 
 <Info>
 jssg is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility.
 </Info>
+
+<Warning>
+jssg follows a **deny-by-default security model**. Unsafe operations like file system access (`fs`), network requests (`fetch`), and process spawning (`child_process`) are disabled by default. See [Security & Capabilities](/jssg/security) to learn how to enable them.
+</Warning>
 
 **How it works:**
 - A jssg codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
@@ -137,17 +141,33 @@ This will scaffold a new folder with the required files and structure.
 
 ## Next steps
 
-<Columns cols={2}>
+<CardGroup cols={2}>
+  <Card
+    title="Security & Capabilities"
+    href="/jssg/security"
+    icon="shield-check"
+  >
+    Learn about jssg's security model and how to enable file system, network, and process capabilities.
+  </Card>
   <Card
     title="Test your codemod"
     href="/jssg/testing"
+    icon="flask"
   >
-    Learn how to validate your codemod with before/after fixtures and the <code>jssg test</code> runner.
+    Validate your codemod with before/after fixtures and the test runner.
   </Card>
   <Card
     title="jssg reference"
     href="/jssg/reference"
+    icon="book"
   >
-    Explore the full API reference for the jssg runtime, including node navigation, editing, and pattern matching.
+    Explore the full API reference for node navigation, editing, and pattern matching.
   </Card>
-</Columns>
+  <Card
+    title="Advanced patterns"
+    href="/jssg/advanced"
+    icon="code"
+  >
+    Learn advanced transformation techniques and best practices.
+  </Card>
+</CardGroup>

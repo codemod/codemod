@@ -1,0 +1,299 @@
+---
+title: "Security & Capabilities"
+description: "Understand jssg's deny-by-default security model and how to enable capabilities for file system, network, and process operations"
+---
+
+jssg follows a **deny-by-default security model** for sensitive operations. This means potentially unsafe modules like file system access, network requests, and child processes are disabled by default and must be explicitly enabled.
+
+## Why deny-by-default?
+
+Codemods run arbitrary code transformations on your codebase. By restricting capabilities by default, jssg ensures:
+
+- **Safe execution**: Untrusted codemods cannot access sensitive resources without explicit permission
+- **Audit trail**: The `capabilities` field in `codemod.yaml` provides a clear record of what permissions a codemod requires
+- **Principle of least privilege**: Codemods only get the minimum permissions they need
+
+## Unsafe modules (require explicit permission)
+
+These modules require explicit opt-in via the `capabilities` field:
+
+<CardGroup cols={3}>
+<Card title="fs" icon="folder">
+  **File system access**
+  
+  Read and write files on disk
+</Card>
+
+<Card title="fetch" icon="globe">
+  **Network requests**
+  
+  Make HTTP/HTTPS requests
+</Card>
+
+<Card title="child_process" icon="terminal">
+  **Process spawning**
+  
+  Execute external commands
+</Card>
+</CardGroup>
+
+
+## Default (safe) modules
+
+These modules are **always available** and require no special permissions:
+
+<AccordionGroup>
+<Accordion title="Core utilities (13 modules)">
+  - `assert` - Assertion testing
+  - `buffer` - Binary data manipulation
+  - `console` - Logging and debugging
+  - `crypto` - Cryptographic operations
+  - `events` - Event emitter patterns
+  - `os` - Operating system information (read-only)
+  - `path` - File path utilities
+  - `perf_hooks` - Performance measurement
+  - `process` - Process information (read-only, no spawning)
+  - `string_decoder` - String encoding/decoding
+  - `timers` - Timer functions
+  - `tty` - TTY operations
+  - `util` - Utility functions
+</Accordion>
+
+<Accordion title="Web standards (3 modules)">
+  - `stream_web` - Web Streams API
+  - `url` - URL parsing and manipulation
+  - `zlib` - Compression/decompression
+</Accordion>
+</AccordionGroup>
+
+<Info>
+All default modules are considered safe because they don't perform file I/O, network requests, or process spawning.
+</Info>
+
+## Enabling capabilities
+
+To enable unsafe modules, add a `capabilities` field to your `codemod.yaml` file:
+
+```yaml codemod.yaml
+name: my-codemod
+version: 1.0.0
+capabilities:
+  - fs          # Enable file system access
+  - fetch       # Enable network requests
+  - child_process  # Enable spawning processes
+```
+
+<Warning>
+Only enable capabilities that your codemod actually needs. Each capability increases the potential security risk if the codemod is untrusted.
+</Warning>
+
+### Capability names
+
+Use these exact strings in the `capabilities` array:
+
+| Capability | Modules Enabled | Use Case |
+|------------|----------------|----------|
+| `fs` | `fs`, `fs/promises` | Reading/writing files, checking file existence |
+| `fetch` | `fetch` global | Making HTTP requests to APIs |
+| `child_process` | `child_process` | Running Git, npm, or other CLI tools |
+
+## Usage examples
+
+### File system operations
+
+<Steps>
+<Step title="Enable fs capability">
+```yaml codemod.yaml
+capabilities:
+  - fs
+```
+</Step>
+
+<Step title="Use fs in your transform">
+```ts scripts/codemod.ts
+import type { Transform } from "codemod:ast-grep";
+import { readFileSync } from "fs";
+
+const transform: Transform = (root) => {
+  // Read a configuration file
+  const config = JSON.parse(readFileSync("./config.json", "utf-8"));
+  
+  // ... use config in transformation
+};
+
+export default transform;
+```
+
+<Warning>
+File system access is relative to the directory where `codemod` is executed. Use `process.cwd()` to get the working directory.
+</Warning>
+</Step>
+</Steps>
+
+### Network requests
+
+<Steps>
+<Step title="Enable fetch capability">
+```yaml codemod.yaml
+capabilities:
+  - fetch
+```
+</Step>
+
+<Step title="Use fetch in your transform">
+```ts scripts/codemod.ts
+import type { Transform } from "codemod:ast-grep";
+
+const transform: Transform = async (root) => {
+  // Fetch latest API definitions
+  const response = await fetch("https://api.example.com/schema.json");
+  const schema = await response.json();
+  
+  // ... use schema in transformation
+};
+
+export default transform;
+```
+
+<Info>
+Note the `async` transform function when using fetch or other asynchronous operations.
+</Info>
+</Step>
+</Steps>
+
+### Running external commands
+
+<Steps>
+<Step title="Enable child_process capability">
+```yaml codemod.yaml
+capabilities:
+  - child_process
+```
+</Step>
+
+<Step title="Spawn processes in your transform">
+```ts scripts/codemod.ts
+import type { Transform } from "codemod:ast-grep";
+import { execSync } from "child_process";
+
+const transform: Transform = (root) => {
+  // Get current git branch
+  const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+    encoding: "utf-8"
+  }).trim();
+  
+  // ... use branch info in transformation
+};
+
+export default transform;
+```
+
+<Warning>
+Always validate and sanitize any user input before passing it to `execSync` or `spawn` to prevent command injection vulnerabilities.
+</Warning>
+</Step>
+</Steps>
+
+## CLI override flags
+
+You can also enable capabilities via CLI flags when running a codemod:
+
+```bash
+# Enable specific capabilities
+codemod --allow-fs path/to/codemod
+codemod --allow-fetch --allow-fs path/to/codemod
+
+# Enable all capabilities (use with caution!)
+codemod --allow-fs --allow-fetch --allow-child-process path/to/codemod
+```
+
+<Info>
+CLI flags take precedence over `codemod.yaml`. This is useful for testing or one-off runs where you trust the codemod source.
+</Info>
+
+## Best practices
+
+<AccordionGroup>
+<Accordion title="Minimize required capabilities">
+  Only request capabilities your codemod truly needs. For example, if you only need to read files, document that your codemod won't write or delete files.
+</Accordion>
+
+<Accordion title="Document why capabilities are needed">
+  In your README, explain why each capability is required and what operations use it.
+  
+  ```markdown README.md
+  ## Required Capabilities
+  
+  - **fs**: Reads `package.json` to detect project dependencies
+  - **fetch**: Calls an external API to get data
+  ```
+</Accordion>
+
+<Accordion title="Validate inputs when using child_process">
+  Never pass unsanitized user input to shell commands:
+  
+  ```ts
+  // ❌ BAD: Command injection vulnerability
+  const userInput = options.branch;
+  execSync(`git checkout ${userInput}`);
+  
+  // ✅ GOOD: Validate input first
+  const userInput = options.branch;
+  if (!/^[a-zA-Z0-9_-]+$/.test(userInput)) {
+    throw new Error("Invalid branch name");
+  }
+  execSync(`git checkout ${userInput}`);
+  ```
+</Accordion>
+
+<Accordion title="Consider publishing capability-free versions">
+  If possible, provide a version of your codemod that works without unsafe capabilities for maximum trust.
+</Accordion>
+</AccordionGroup>
+
+## Security considerations
+
+<Warning>
+**Untrusted codemods**: Never run codemods from untrusted sources with capabilities enabled without reviewing the code first.
+</Warning>
+
+### Auditing a codemod
+
+Before running a codemod with capabilities, review:
+
+1. **Check `codemod.yaml`**: What capabilities does it request?
+2. **Read the transform**: How does it use those capabilities?
+3. **Verify sources**: Is it from a trusted author or organization?
+4. **Use `--dry-run`**: Test without making actual changes first
+
+```bash
+# Review the codemod first
+cat codemod.yaml
+cat scripts/codemod.ts
+
+# Dry run to see proposed changes
+codemod workflow run --dry-run
+
+# Apply only after review
+codemod workflow run
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    href="/jssg/quickstart"
+    icon="rocket"
+  >
+    Build your first jssg codemod
+  </Card>
+  <Card
+    title="Advanced patterns"
+    href="/jssg/advanced"
+    icon="code"
+  >
+    Learn advanced transformation techniques
+  </Card>
+</CardGroup>
+
