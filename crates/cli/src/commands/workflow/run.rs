@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{Context, Result};
 use butterflow_core::utils;
@@ -44,6 +45,10 @@ pub struct Command {
     /// Allow child process access
     #[arg(long)]
     allow_child_process: bool,
+
+    /// No interactive mode
+    #[arg(long)]
+    no_interactive: bool,
 }
 
 /// Run a workflow
@@ -52,21 +57,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
 
     // Parse parameters
-    let mut params = utils::parse_params(&args.params).context("Failed to parse parameters")?;
+    let params = utils::parse_params(&args.params).context("Failed to parse parameters")?;
+    let workflow_dir = workflow_file_path.parent().unwrap();
 
-    let mut capabilities = Vec::new();
-    if args.allow_fs {
-        capabilities.push("fs".to_string());
-    }
-    if args.allow_fetch {
-        capabilities.push("fetch".to_string());
-    }
-    if args.allow_child_process {
-        capabilities.push("child_process".to_string());
-    }
-    if !capabilities.is_empty() {
-        params.insert("capabilities".to_string(), capabilities.join(","));
-    }
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        None,
+        Some(workflow_dir.to_path_buf()),
+    );
 
     let target_path = args
         .target_path
@@ -80,7 +82,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.allow_dirty,
         params,
         None,
-        None,
+        Some(capabilities),
+        args.no_interactive,
     )?;
 
     // Run workflow using the extracted workflow runner

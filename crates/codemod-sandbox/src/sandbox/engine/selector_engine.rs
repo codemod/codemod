@@ -6,6 +6,7 @@ use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{FromJs, IntoJs};
@@ -19,6 +20,7 @@ pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
     pub language: SupportLang,
     pub resolver: Arc<R>,
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
 
 /// Extract a selector from a codemod module using QuickJS
@@ -51,7 +53,23 @@ where
     })?;
 
     // Set up built-in modules
-    let module_builder = LlrtModuleBuilder::build();
+    let mut module_builder = LlrtModuleBuilder::build();
+    if let Some(capabilities) = options.capabilities {
+        for capability in capabilities {
+            match capability {
+                LlrtSupportedModules::Fetch => {
+                    module_builder.enable_fetch();
+                }
+                LlrtSupportedModules::Fs => {
+                    module_builder.enable_fs();
+                }
+                LlrtSupportedModules::ChildProcess => {
+                    module_builder.enable_child_process();
+                }
+                _ => {}
+            }
+        }
+    }
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 

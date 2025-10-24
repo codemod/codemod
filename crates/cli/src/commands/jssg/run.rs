@@ -1,4 +1,6 @@
 use crate::engine::create_progress_callback;
+use crate::utils::resolve_capabilities::resolve_capabilities;
+use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
@@ -7,7 +9,6 @@ use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
@@ -47,6 +48,10 @@ pub struct Command {
     /// Allow dirty git status
     #[arg(long)]
     pub allow_dirty: bool,
+
+    /// No interaction mode
+    #[arg(long)]
+    pub no_interactive: bool,
 
     /// Parameters to pass to the codemod
     #[arg(long = "param", value_name = "KEY=VALUE")]
@@ -94,23 +99,17 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
-    let mut capabilities = Vec::new();
-    if args.allow_fs {
-        capabilities.push(LlrtSupportedModules::Fs);
-    }
-    if args.allow_fetch {
-        capabilities.push(LlrtSupportedModules::Fetch);
-    }
-    if args.allow_child_process {
-        capabilities.push(LlrtSupportedModules::ChildProcess);
-    }
-    let capabilities = if capabilities.is_empty() {
-        None
-    } else {
-        Some(capabilities.into_iter().collect())
-    };
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        None,
+        Some(script_base_dir.to_path_buf()),
+    );
 
-    let capabilities_security_callback = capabilities_security_callback();
+    let capabilities_security_callback = capabilities_security_callback(args.no_interactive);
     let pre_run_callback = PreRunCallback {
         callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
             capabilities_security_callback(config).unwrap_or_else(|e| {
@@ -130,7 +129,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         dry_run: args.dry_run,
         languages: Some(vec![args.language.clone()]),
         threads: args.max_threads,
-        capabilities: capabilities.clone(),
+        capabilities: Some(capabilities),
     };
 
     let started = Instant::now();

@@ -22,7 +22,7 @@ pub struct WorkflowRunConfig {
     pub workflow_file_path: PathBuf,
     pub bundle_path: PathBuf,
     pub target_path: PathBuf,
-    pub params: HashMap<String, String>,
+    pub params: HashMap<String, serde_json::Value>,
     pub wait_for_completion: bool,
     pub progress_callback: Arc<Option<ProgressCallback>>,
     pub pre_run_callback: Arc<Option<PreRunCallback>>,

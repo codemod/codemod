@@ -76,7 +76,7 @@ pub fn resolve_state_path<'a>(state: &'a HashMap<String, Value>, path: &str) -> 
 /// This function handles complex boolean expressions, not just variable substitution
 pub fn resolve_expressions(
     expression: &str,
-    params: &HashMap<String, String>,
+    params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
 ) -> Result<EvalValue> {
@@ -84,11 +84,8 @@ pub fn resolve_expressions(
 
     for (key, value) in params {
         let context_key = format!("params.{}", key);
-        if let Ok(num) = value.parse::<f64>() {
-            context.set_value(context_key, EvalValue::Float(num))?;
-        } else {
-            context.set_value(context_key, EvalValue::String(value.clone()))?;
-        }
+        let eval_value = convert_value_to_eval_value(value);
+        context.set_value(context_key, eval_value)?;
     }
 
     for (key, value) in state {
@@ -111,7 +108,7 @@ pub fn resolve_expressions(
 /// First tries to resolve as an expression with operators, falls back to simple variable resolution
 pub fn evaluate_condition(
     condition: &str,
-    params: &HashMap<String, String>,
+    params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
 ) -> Result<bool> {
@@ -130,7 +127,7 @@ pub fn evaluate_condition(
 /// Example: "Hello ${{ params.name }} ${{ 1 + 2 }}" -> "Hello John Doe 3"
 pub fn resolve_string_with_expression(
     template: &str,
-    params: &HashMap<String, String>,
+    params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
 ) -> Result<String> {
@@ -167,13 +164,13 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
-    fn create_test_params() -> HashMap<String, String> {
+    fn create_test_params() -> HashMap<String, Value> {
         let mut params = HashMap::new();
-        params.insert("environment".to_string(), "production".to_string());
-        params.insert("skip_tests".to_string(), "false".to_string());
-        params.insert("version".to_string(), "2.1".to_string());
-        params.insert("max_attempts".to_string(), "5".to_string());
-        params.insert("empty_param".to_string(), "".to_string());
+        params.insert("environment".to_string(), json!("production"));
+        params.insert("skip_tests".to_string(), json!("false"));
+        params.insert("version".to_string(), json!("2.1"));
+        params.insert("max_attempts".to_string(), json!("5"));
+        params.insert("empty_param".to_string(), json!(""));
         params
     }
 
@@ -637,7 +634,7 @@ mod tests {
 
         // Test string "false" should be falsy
         let mut test_params = HashMap::new();
-        test_params.insert("false_string".to_string(), "false".to_string());
+        test_params.insert("false_string".to_string(), json!("false"));
         assert!(
             !evaluate_condition("params.false_string", &test_params, &HashMap::new(), None)
                 .unwrap()
@@ -647,11 +644,11 @@ mod tests {
     #[test]
     fn test_evaluate_condition_boolean_conversions() {
         let mut params = HashMap::new();
-        params.insert("flag".to_string(), "true".to_string());
-        params.insert("zero".to_string(), "0".to_string());
-        params.insert("false_str".to_string(), "false".to_string());
-        params.insert("empty".to_string(), "".to_string());
-        params.insert("number".to_string(), "42".to_string());
+        params.insert("flag".to_string(), json!("true"));
+        params.insert("zero".to_string(), json!("0"));
+        params.insert("false_str".to_string(), json!("false"));
+        params.insert("empty".to_string(), json!(""));
+        params.insert("number".to_string(), json!("42"));
 
         let state = HashMap::new();
 
@@ -693,8 +690,8 @@ mod tests {
     #[test]
     fn test_resolve_string_with_expression_basic() {
         let mut params = HashMap::new();
-        params.insert("name".to_string(), "John Doe".to_string());
-        params.insert("age".to_string(), "25".to_string());
+        params.insert("name".to_string(), json!("John Doe"));
+        params.insert("age".to_string(), json!("25"));
 
         let state = HashMap::new();
 
@@ -747,8 +744,8 @@ mod tests {
     #[test]
     fn test_resolve_string_with_expression_with_params_and_state() {
         let mut params = HashMap::new();
-        params.insert("base".to_string(), "10".to_string());
-        params.insert("multiplier".to_string(), "3".to_string());
+        params.insert("base".to_string(), json!("10"));
+        params.insert("multiplier".to_string(), json!("3"));
 
         let mut state = HashMap::new();
         state.insert("bonus".to_string(), json!(5));
@@ -769,7 +766,7 @@ mod tests {
     #[test]
     fn test_resolve_string_with_expression_boolean_and_comparison() {
         let mut params = HashMap::new();
-        params.insert("environment".to_string(), "production".to_string());
+        params.insert("environment".to_string(), json!("production"));
 
         let mut state = HashMap::new();
         state.insert("ready".to_string(), json!(true));
@@ -830,7 +827,7 @@ mod tests {
     #[test]
     fn test_resolve_string_with_expression_whitespace() {
         let mut params = HashMap::new();
-        params.insert("name".to_string(), "Alice".to_string());
+        params.insert("name".to_string(), json!("Alice"));
 
         let state = HashMap::new();
 
@@ -899,7 +896,7 @@ mod tests {
     #[test]
     fn test_resolve_string_with_expression_empty_values() {
         let mut params = HashMap::new();
-        params.insert("empty".to_string(), "".to_string());
+        params.insert("empty".to_string(), json!(""));
 
         let mut state = HashMap::new();
         state.insert("null_value".to_string(), json!(null));

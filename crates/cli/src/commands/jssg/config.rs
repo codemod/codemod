@@ -22,7 +22,7 @@ pub struct TestConfig {
     pub expect_errors: Option<Vec<String>>,
 
     /// Parameters to pass to the codemod
-    pub params: Option<HashMap<String, String>>,
+    pub params: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Merged configuration from CLI args and config files
@@ -34,7 +34,7 @@ pub struct ResolvedTestConfig {
     pub timeout: u64,
     pub ignore_whitespace: bool,
     pub expect_errors: Vec<String>,
-    pub params: Option<HashMap<String, String>>,
+    pub params: Option<HashMap<String, serde_json::Value>>,
 
     // Global-only options (CLI args only)
     pub filter: Option<String>,

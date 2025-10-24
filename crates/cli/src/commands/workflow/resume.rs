@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::engine::create_engine;
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::resolve_workflow_source;
 use anyhow::{Context, Result};
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
@@ -42,6 +43,22 @@ pub struct Command {
     /// Optional target path to run the codemod on (default: current directory)
     #[arg(long = "target", short = 't')]
     target_path: Option<PathBuf>,
+
+    /// Allow fs access
+    #[arg(long)]
+    allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    allow_child_process: bool,
+
+    /// No interactive mode
+    #[arg(long)]
+    no_interactive: bool,
 }
 
 /// Resume a workflow
@@ -55,6 +72,18 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
 
+    let workflow_dir = workflow_file_path.parent().unwrap();
+
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        None,
+        Some(workflow_dir.to_path_buf()),
+    );
+
     let (engine, _) = create_engine(
         workflow_file_path,
         target_path,
@@ -63,7 +92,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         // TODO: Load params from workflow run
         HashMap::new(),
         None,
-        None,
+        Some(capabilities),
+        args.no_interactive,
     )?;
 
     if args.trigger_all {

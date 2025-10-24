@@ -8,10 +8,13 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 type CapabilitiesSecurityCallback =
     Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
 
-pub fn capabilities_security_callback() -> CapabilitiesSecurityCallback {
+pub fn capabilities_security_callback(no_interaction: bool) -> CapabilitiesSecurityCallback {
     let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
 
     Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
+        if no_interaction {
+            return Ok(());
+        }
         let checked = checked_capabilities.lock().unwrap();
         let need_to_check = config
             .capabilities

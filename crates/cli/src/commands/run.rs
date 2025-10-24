@@ -1,6 +1,7 @@
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
@@ -9,7 +10,6 @@ use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_telemetry::send_event::BaseEvent;
 use console::style;
 use log::info;
@@ -47,6 +47,22 @@ pub struct Command {
     /// Optional target path to run the codemod on (default: current directory)
     #[arg(long = "target", short = 't')]
     target_path: Option<PathBuf>,
+
+    /// Allow fs access
+    #[arg(long)]
+    allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    allow_child_process: bool,
+
+    /// No interactive mode
+    #[arg(long)]
+    no_interactive: bool,
 }
 
 pub async fn handler(
@@ -124,12 +140,15 @@ pub async fn handler(
         None
     };
 
-    let capabilities = codemod_config
-        .and_then(|config| config.capabilities)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| s.parse::<LlrtSupportedModules>().unwrap())
-        .collect();
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        codemod_config,
+        None,
+    );
 
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(
@@ -140,6 +159,7 @@ pub async fn handler(
         params,
         args.registry.clone(),
         Some(capabilities),
+        args.no_interactive,
     )?;
 
     run_workflow(&engine, config).await?;
