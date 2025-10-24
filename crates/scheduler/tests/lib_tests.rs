@@ -34,6 +34,7 @@ fn create_basic_node(id: &str, depends_on: Vec<&str>) -> Node {
             options: None,
         }),
         steps: vec![Step {
+            id: Some(format!("step1_{id}")),
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running {id}'")),
             env: None,
@@ -69,6 +70,7 @@ fn create_matrix_node_values(
             options: None,
         }),
         steps: vec![Step {
+            id: Some(id.to_string()),
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running matrix {id}'")),
             env: None,
@@ -100,6 +102,7 @@ fn create_matrix_node_from_state(id: &str, depends_on: Vec<&str>, state_key: &st
             options: None,
         }),
         steps: vec![Step {
+            id: Some(id.to_string()),
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running matrix from state {id}'")),
             env: None,
@@ -132,6 +135,7 @@ fn create_manual_node(
             options: None,
         }),
         steps: vec![Step {
+            id: Some(id.to_string()),
             name: "Step 1".to_string(),
             action: StepAction::RunScript(format!("echo 'Running manual {id}'")),
             env: None,

@@ -430,6 +430,7 @@ fn test_validate_workflow_nonexistent_template_reference() {
             strategy: None,
             runtime: None,
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::UseTemplate(butterflow_models::step::TemplateUse {
                     template: "nonexistent".to_string(), // Non-existent template
@@ -819,6 +820,7 @@ fn test_validate_workflow_with_step_env_vars() {
             strategy: None,
             runtime: None,
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::RunScript("echo $STEP_VAR".to_string()),
                 env: Some(step_env),
@@ -876,6 +878,7 @@ fix:
             runtime: None,
             steps: vec![
                 Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::AstGrep(UseAstGrep {
                         include: Some(vec!["**/*.ts".to_string()]),
@@ -889,6 +892,7 @@ fix:
                     condition: None,
                 },
                 Step {
+                    id: Some("step-2".to_string()),
                     name: "Step 2".to_string(),
                     action: StepAction::JSAstGrep(UseJSAstGrep {
                         js_file: "codemod.ts".to_string(),
@@ -933,6 +937,7 @@ fn test_validate_workflow_with_invalid_config_path() {
             strategy: None,
             runtime: None,
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::AstGrep(UseAstGrep {
                     config_file: "config.yaml".to_string(),
