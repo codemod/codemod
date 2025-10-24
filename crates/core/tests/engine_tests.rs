@@ -17,6 +17,7 @@ use butterflow_models::trigger::TriggerType;
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use serde_json::json;
 use uuid::Uuid;
 
 // Helper function to create a simple test workflow
@@ -381,9 +382,14 @@ fn create_template_workflow() -> Workflow {
                     inputs: HashMap::from([
                         (
                             "repo_url".to_string(),
-                            "https://github.com/example/repo".to_string(),
+                            serde_json::Value::String(
+                                "https://github.com/example/repo".to_string(),
+                            ),
                         ),
-                        ("branch".to_string(), "feature/test".to_string()),
+                        (
+                            "branch".to_string(),
+                            serde_json::Value::String("feature/test".to_string()),
+                        ),
                     ]),
                 }),
                 env: None,
@@ -1196,11 +1202,11 @@ async fn test_variable_resolution_workflow() {
 
     // Create parameters for variable resolution
     let mut params = HashMap::new();
-    params.insert("repo_name".to_string(), "example-repo".to_string());
-    params.insert("branch".to_string(), "main".to_string());
+    params.insert("repo_name".to_string(), json!("example-repo"));
+    params.insert("branch".to_string(), json!("main"));
     params.insert(
         "repo_url".to_string(),
-        "https://github.com/example/repo".to_string(),
+        json!("https://github.com/example/repo"),
     );
 
     let workflow_run_id = engine
@@ -1272,21 +1278,19 @@ async fn test_workflow_with_params() {
 
     // Create parameters
     let mut params = HashMap::new();
-    params.insert("test_param".to_string(), "test_value".to_string());
+    params.insert("test_param".to_string(), json!("test_value"));
 
     let workflow_run_id = engine
         .run_workflow(workflow, params, None, None)
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the workflow run
     let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
 
-    // Check that the parameters were saved
-    assert_eq!(workflow_run.params.get("test_param").unwrap(), "test_value");
+    assert_eq!(
+        workflow_run.params.get("test_param").unwrap(),
+        &json!("test_value")
+    );
 }
 
 #[tokio::test]
@@ -3676,7 +3680,7 @@ async fn test_workflow_condition_with_params_true() {
 
     // Create parameters with my_cond set to true
     let mut params = HashMap::new();
-    params.insert("my_cond".to_string(), "true".to_string());
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(true));
 
     let workflow_run_id = engine
         .run_workflow(workflow, params, None, None)
@@ -3727,7 +3731,7 @@ async fn test_workflow_condition_with_params_false() {
 
     // Create parameters with my_cond set to false
     let mut params = HashMap::new();
-    params.insert("my_cond".to_string(), "false".to_string());
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(false));
 
     let workflow_run_id = engine
         .run_workflow(workflow, params, None, None)

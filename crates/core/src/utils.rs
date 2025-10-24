@@ -190,7 +190,7 @@ fn dfs_cycle_detect<'a>(
 }
 
 /// Parse parameters from command line arguments
-pub fn parse_params(params: &[String]) -> Result<HashMap<String, String>> {
+pub fn parse_params(params: &[String]) -> Result<HashMap<String, serde_json::Value>> {
     let mut result = HashMap::new();
 
     for param in params {
@@ -201,7 +201,10 @@ pub fn parse_params(params: &[String]) -> Result<HashMap<String, String>> {
             )));
         }
 
-        result.insert(parts[0].to_string(), parts[1].to_string());
+        let value = serde_json::from_str(parts[1])
+            .unwrap_or_else(|_| serde_json::Value::String(parts[1].to_string()));
+
+        result.insert(parts[0].to_string(), value);
     }
 
     Ok(result)

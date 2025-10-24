@@ -35,7 +35,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub file_path: &'a Path,
     pub content: &'a str,
     pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
-    pub params: Option<HashMap<String, String>>,
+    pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
 }
@@ -60,7 +60,7 @@ where
     );
 
     // TODO: Add params to the codemod
-    let params: HashMap<String, String> = options.params.unwrap_or_default();
+    let params: HashMap<String, serde_json::Value> = options.params.unwrap_or_default();
 
     // Initialize QuickJS runtime and context
     let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
@@ -192,11 +192,16 @@ where
                     message: e.to_string(),
                 },
             })?;
-            run_options.set("params", params).map_err(|e| ExecutionError::Runtime {
+
+            let params_js = params.into_iter()
+                .map(|(k, v)| (k, JsValue(v)))
+                .collect::<HashMap<String, JsValue>>();
+            run_options.set("params", params_js).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: e.to_string(),
                 },
             })?;
+
             run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: e.to_string(),

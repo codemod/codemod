@@ -1,3 +1,4 @@
+use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -302,7 +303,7 @@ impl Engine {
     pub async fn run_workflow(
         &self,
         workflow: Workflow,
-        params: HashMap<String, String>,
+        params: HashMap<String, serde_json::Value>,
         bundle_path: Option<PathBuf>,
         capabilities: Option<Vec<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
@@ -1165,6 +1166,13 @@ impl Engine {
             .get_workflow_run(task.workflow_run_id)
             .await?;
 
+        let resolved_params = workflow_run
+            .workflow
+            .params
+            .as_ref()
+            .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
+            .unwrap_or_else(|| workflow_run.params);
+
         let node = workflow_run
             .workflow
             .nodes
@@ -1241,7 +1249,7 @@ impl Engine {
             if let Some(condition) = &step.condition {
                 let should_execute = evaluate_condition(
                     condition,
-                    &workflow_run.params,
+                    &resolved_params,
                     &state,
                     task.matrix_values.as_ref(),
                 )
@@ -1263,7 +1271,7 @@ impl Engine {
                     &step.env,
                     node,
                     &task,
-                    &workflow_run.params,
+                    &resolved_params,
                     &state,
                     &workflow_run.workflow,
                     &workflow_run.bundle_path,
@@ -1324,22 +1332,19 @@ impl Engine {
         let mut env = HashMap::new();
 
         // Add workflow parameters
-        for (key, value) in &workflow_run.params {
+        for (key, value) in &resolved_params {
             env.insert(format!("PARAM_{}", key.to_uppercase()), value.clone());
         }
 
         // Add node environment variables
         for (key, value) in &node.env {
-            env.insert(key.clone(), value.clone());
+            env.insert(key.clone(), serde_json::to_value(value.clone())?);
         }
 
         // Add matrix values
         if let Some(matrix_values) = &task.matrix_values {
             for (key, value) in matrix_values {
-                env.insert(
-                    format!("MATRIX_{}", key.to_uppercase()),
-                    serde_json::to_string(value).unwrap_or(value.to_string()),
-                );
+                env.insert(format!("MATRIX_{}", key.to_uppercase()), value.clone());
             }
         }
 
@@ -1390,7 +1395,7 @@ impl Engine {
         step_env: &Option<HashMap<String, String>>,
         node: &Node,
         task: &Task,
-        params: &HashMap<String, String>,
+        params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         workflow: &Workflow,
         bundle_path: &Option<PathBuf>,
@@ -1617,7 +1622,7 @@ impl Engine {
         &self,
         id: String,
         js_ast_grep: &UseJSAstGrep,
-        params: Option<HashMap<String, String>>,
+        params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
         capabilities: Option<Vec<LlrtSupportedModules>>,
         capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
@@ -1701,6 +1706,7 @@ impl Engine {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
+            capabilities: capabilities.clone(),
         })
         .await
         .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
@@ -1828,7 +1834,7 @@ impl Engine {
         _step_env: &Option<HashMap<String, String>>,
         _node: &Node,
         task: &Task,
-        params: &HashMap<String, String>,
+        params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
     ) -> Result<()> {
         // Resolve the prompt with parameters, state, and matrix values
@@ -1905,7 +1911,7 @@ impl Engine {
         step_env: &Option<HashMap<String, String>>,
         node: &Node,
         task: &Task,
-        params: &HashMap<String, String>,
+        params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
@@ -1980,7 +1986,7 @@ impl Engine {
         step_env: &Option<HashMap<String, String>>,
         _node: &Node,
         task: &Task,
-        params: &HashMap<String, String>,
+        params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
@@ -2003,7 +2009,7 @@ impl Engine {
             .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
 
         // Prepare parameters for the codemod workflow
-        let mut codemod_params = params.clone();
+        let mut codemod_params = HashMap::new();
 
         // Add arguments as parameters if provided
         if let Some(args) = &codemod.args {
@@ -2069,12 +2075,8 @@ impl Engine {
         for node in &codemod_workflow.nodes {
             for step in &node.steps {
                 if let Some(condition) = &step.condition {
-                    let should_execute = evaluate_condition(
-                        condition,
-                        &codemod_params,
-                        state,
-                        task.matrix_values.as_ref(),
-                    )?;
+                    let should_execute =
+                        evaluate_condition(condition, params, state, task.matrix_values.as_ref())?;
 
                     if !should_execute {
                         info!(
@@ -2091,7 +2093,7 @@ impl Engine {
                     &step.env,
                     node,
                     task, // Use the current task context
-                    &codemod_params,
+                    params,
                     state,
                     &codemod_workflow,
                     &Some(resolved_package.package_dir.clone()),
@@ -2115,7 +2117,7 @@ impl Engine {
         step_env: &Option<HashMap<String, String>>,
         node: &Node,
         task: &Task,
-        params: &HashMap<String, String>,
+        params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<()> {

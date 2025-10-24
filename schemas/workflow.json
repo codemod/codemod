@@ -314,8 +314,7 @@
               "type": [
                 "number",
                 "null"
-              ],
-              "format": "double"
+              ]
             },
             "type": {
               "type": "string",
@@ -717,9 +716,7 @@
         "inputs": {
           "description": "Inputs to pass to the template",
           "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
+          "additionalProperties": true,
           "default": {}
         },
         "template": {

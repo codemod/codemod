@@ -76,14 +76,16 @@ pub fn create_progress_callback() -> ProgressCallback {
 }
 
 /// Create an engine based on configuration
+#[allow(clippy::too_many_arguments)]
 pub fn create_engine(
     workflow_file_path: PathBuf,
     target_path: PathBuf,
     dry_run: bool,
     allow_dirty: bool,
-    params: HashMap<String, String>,
+    params: HashMap<String, serde_json::Value>,
     registry: Option<String>,
     capabilities: Option<Vec<LlrtSupportedModules>>,
+    no_interactive: bool,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -102,7 +104,7 @@ pub fn create_engine(
 
     let registry_client = create_registry_client(registry)?;
 
-    let capabilities_security_callback = capabilities_security_callback();
+    let capabilities_security_callback = capabilities_security_callback(no_interactive);
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(Some(progress_callback)),

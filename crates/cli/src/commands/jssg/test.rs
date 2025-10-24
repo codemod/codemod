@@ -16,6 +16,8 @@ use codemod_sandbox::{
 };
 use testing_utils::{TestOptions, TestRunner, TestSource, TransformationResult};
 
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+
 use super::config::{ResolvedTestConfig, TestConfig};
 
 #[derive(Args, Debug, Clone)]
@@ -134,21 +136,15 @@ pub async fn handler(args: &Command) -> Result<()> {
         .to_path_buf();
 
     // Create and run test runner
-    let mut capabilities = Vec::new();
-    if args.allow_fs {
-        capabilities.push(LlrtSupportedModules::Fs);
-    }
-    if args.allow_fetch {
-        capabilities.push(LlrtSupportedModules::Fetch);
-    }
-    if args.allow_child_process {
-        capabilities.push(LlrtSupportedModules::ChildProcess);
-    }
-    let capabilities = if capabilities.is_empty() {
-        None
-    } else {
-        Some(capabilities.into_iter().collect())
-    };
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        None,
+        Some(script_base_dir.to_path_buf()),
+    );
 
     let tsconfig_path = find_tsconfig(&script_base_dir);
     let resolver = Arc::new(OxcResolver::new(script_base_dir, tsconfig_path)?);
@@ -222,7 +218,7 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let mut runner = TestRunner::new(options, test_source);
     let summary = runner
-        .run_tests(&extensions, execution_fn, capabilities.clone())
+        .run_tests(&extensions, execution_fn, Some(capabilities))
         .await?;
 
     if !summary.is_success() {

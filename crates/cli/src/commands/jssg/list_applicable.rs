@@ -3,7 +3,6 @@ use ast_grep_config::CombinedScan;
 use ast_grep_language::SupportLang;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
@@ -13,6 +12,8 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
+
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -69,21 +70,15 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let resolver = Arc::new(OxcResolver::new(script_base_dir.clone(), tsconfig_path)?);
 
-    let mut capabilities = Vec::new();
-    if args.allow_fs {
-        capabilities.push(LlrtSupportedModules::Fs);
-    }
-    if args.allow_fetch {
-        capabilities.push(LlrtSupportedModules::Fetch);
-    }
-    if args.allow_child_process {
-        capabilities.push(LlrtSupportedModules::ChildProcess);
-    }
-    let capabilities = if capabilities.is_empty() {
-        None
-    } else {
-        Some(capabilities.into_iter().collect())
-    };
+    let capabilities = resolve_capabilities(
+        ResolveCapabilitiesArgs {
+            allow_fs: args.allow_fs,
+            allow_fetch: args.allow_fetch,
+            allow_child_process: args.allow_child_process,
+        },
+        None,
+        Some(script_base_dir.to_path_buf()),
+    );
 
     let config = CodemodExecutionConfig {
         pre_run_callback: None,
@@ -95,13 +90,14 @@ pub async fn handler(args: &Command) -> Result<()> {
         dry_run: false,
         languages: Some(vec![args.language.clone()]),
         threads: args.max_threads,
-        capabilities,
+        capabilities: Some(capabilities),
     };
 
     let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
         script_path: js_file_path,
         language: args.language.parse().unwrap(),
         resolver: resolver.clone(),
+        capabilities: config.capabilities.clone(),
     })
     .await?;
     let combined_scan: Option<Arc<CombinedScan<SupportLang>>> = selector_config

@@ -303,9 +303,18 @@ fn test_parse_params() {
 
     // Verify the parsed parameters
     assert_eq!(result.len(), 3);
-    assert_eq!(result.get("key1"), Some(&"value1".to_string()));
-    assert_eq!(result.get("key2"), Some(&"value2".to_string()));
-    assert_eq!(result.get("key3"), Some(&"value with spaces".to_string()));
+    assert_eq!(
+        result.get("key1"),
+        Some(&serde_json::Value::String("value1".to_string()))
+    );
+    assert_eq!(
+        result.get("key2"),
+        Some(&serde_json::Value::String("value2".to_string()))
+    );
+    assert_eq!(
+        result.get("key3"),
+        Some(&serde_json::Value::String("value with spaces".to_string()))
+    );
 }
 
 #[test]
@@ -613,8 +622,14 @@ fn test_parse_params_with_empty_value() {
 
     // Verify the parsed parameters
     assert_eq!(result.len(), 2);
-    assert_eq!(result.get("key1"), Some(&"".to_string()));
-    assert_eq!(result.get("key2"), Some(&"value2".to_string()));
+    assert_eq!(
+        result.get("key1"),
+        Some(&serde_json::Value::String("".to_string()))
+    );
+    assert_eq!(
+        result.get("key2"),
+        Some(&serde_json::Value::String("value2".to_string()))
+    );
 }
 
 #[test]
@@ -626,8 +641,14 @@ fn test_parse_params_with_multiple_equals() {
 
     // Verify the parsed parameters
     assert_eq!(result.len(), 2);
-    assert_eq!(result.get("key1"), Some(&"value1=extra".to_string()));
-    assert_eq!(result.get("key2"), Some(&"value2".to_string()));
+    assert_eq!(
+        result.get("key1"),
+        Some(&serde_json::Value::String("value1=extra".to_string()))
+    );
+    assert_eq!(
+        result.get("key2"),
+        Some(&serde_json::Value::String("value2".to_string()))
+    );
 }
 
 #[test]

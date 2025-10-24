@@ -61,8 +61,8 @@ pub struct TemplateUse {
 
     /// Inputs to pass to the template
     #[serde(default)]
-    #[ts(optional, as = "Option<HashMap<String, String>>")]
-    pub inputs: HashMap<String, String>,
+    #[ts(optional, as = "Option<HashMap<String, serde_json::Value>>")]
+    pub inputs: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
