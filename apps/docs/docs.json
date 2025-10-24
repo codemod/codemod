@@ -64,7 +64,8 @@
                   "/jssg/quickstart",
                   "/jssg/testing",
                   "/jssg/reference",
-                  "/jssg/advanced"
+                  "/jssg/advanced",
+                  "/jssg/security"
                 ]
               }
             ]
