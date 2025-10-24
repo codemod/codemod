@@ -1,72 +1,63 @@
 /**
- * Workflow Global Module
+ * Workflow Step Outputs Module
  * 
- * This module provides functions to store and retrieve global variables
- * across workflow executions.
+ * This module provides functions to store and retrieve step outputs
+ * across workflow executions, similar to GitHub Actions.
  */
 
 /**
- * Sets a global variable by name and value.
+ * Sets a step output value.
  * 
- * In native mode, the variable is appended to the file specified by
- * the WORKFLOW_GLOBAL environment variable.
+ * Step outputs allow you to share data between steps in a workflow.
+ * Similar to GitHub Actions, you can reference outputs like:
+ * ${{ steps.my_step.outputs.my_output }}
  * 
- * In WASM mode, the variable is stored in memory.
+ * In native mode, outputs are appended to the file specified by
+ * the STEP_OUTPUTS environment variable.
  * 
- * @param name - The name of the variable to set
- * @param variable - The value to store (as a string)
+ * In WASM mode, outputs are stored in memory.
+ * 
+ * @param stepId - The unique identifier of the step
+ * @param outputName - The name of the output variable
+ * @param value - The value to store (as a string)
  * 
  * @example
  * ```typescript
- * import { setGlobalVariable } from 'codemod:workflow';
+ * import { setStepOutput } from 'codemod:workflow';
  * 
- * // Store a string
- * setGlobalVariable('userName', 'John Doe');
+ * // In a step with id="build"
+ * setStepOutput('build', 'version', '1.2.3');
+ * setStepOutput('build', 'artifact_path', '/tmp/build/app.zip');
  * 
- * // Store a number (as string)
- * setGlobalVariable('count', '42');
- * 
- * // Store JSON
- * setGlobalVariable('user', JSON.stringify({ name: 'Jane', age: 30 }));
+ * // Later steps can access these via:
+ * // ${{ steps.build.outputs.version }}
+ * // ${{ steps.build.outputs.artifact_path }}
  * ```
  */
-export declare function setGlobalVariable(name: string, variable: string ): void;
+export declare function setStepOutput(outputName: string, value: string): void;
 
 /**
- * Gets a global variable by name.
+ * Gets a step output value.
  * 
- * Returns the value as a string if found, or null if the variable doesn't exist.
+ * Returns the value as a string if found, or null if the output doesn't exist.
  * 
- * The function automatically detects the type of stored data:
- * - JSON objects and arrays are parsed and stringified back
- * - Numbers (integers and floats) are returned as strings
- * - Regular strings are returned as-is
- * 
- * @param name - The name of the variable to retrieve
+ * @param stepId - The unique identifier of the step
+ * @param outputName - The name of the output variable
  * @returns The value as a string, or null if not found
  * 
  * @example
  * ```typescript
- * import { getGlobalVariable } from 'codemod:workflow';
+ * import { getStepOutput } from 'codemod:workflow';
  * 
- * // Get a string
- * const name = getGlobalVariable('userName');
- * console.log(name); // 'John Doe'
+ * // Get output from a previous step
+ * const version = getStepOutput('build', 'version');
+ * console.log(version); // '1.2.3'
  * 
- * // Get a number (parse if needed)
- * const count = getGlobalVariable('count');
- * const numericCount = parseInt(count || '0');
- * 
- * // Get JSON (parse the result)
- * const userData = getGlobalVariable('user');
- * if (userData) {
- *   const user = JSON.parse(userData);
- *   console.log(user.name); // 'Jane'
+ * // Check if output exists
+ * const artifactPath = getStepOutput('build', 'artifact_path');
+ * if (artifactPath) {
+ *   console.log(`Artifact ready at: ${artifactPath}`);
  * }
- * 
- * // Non-existent variable
- * const missing = getGlobalVariable('nonExistent');
- * console.log(missing); // null
  * ```
  */
-export declare function getGlobalVariable(name: string): string;
+export declare function getStepOutput(stepId: string, outputName: string): string | null;

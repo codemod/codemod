@@ -440,6 +440,14 @@
           },
           "default": null
         },
+        "id": {
+          "description": "Unique identifier for the step (optional, used for referencing step outputs)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "if": {
           "description": "Conditional expression to determine if this step should be executed",
           "type": [

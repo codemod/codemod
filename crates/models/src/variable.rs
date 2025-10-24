@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use crate::error::Error;
 use crate::Result;
 
-/// Convert a serde_json::Value to evalexpr::EvalValue
-/// Handles type conversion including string-to-number parsing
 fn convert_value_to_eval_value(value: &Value) -> EvalValue {
     match value {
         Value::String(s) => {
@@ -34,8 +32,6 @@ fn convert_value_to_eval_value(value: &Value) -> EvalValue {
     }
 }
 
-/// Resolve a dot notation path in a HashMap<String, Value>
-/// For example: resolve_state_path(state, "x.y.0.z") gets state["x"]["y"][0]["z"]
 pub fn resolve_state_path<'a>(state: &'a HashMap<String, Value>, path: &str) -> Result<&'a Value> {
     let parts: Vec<&str> = path.split('.').collect();
 
@@ -72,13 +68,12 @@ pub fn resolve_state_path<'a>(state: &'a HashMap<String, Value>, path: &str) -> 
     Ok(current_value)
 }
 
-/// Resolve expressions with operators like ==, !=, &&, ||, !
-/// This function handles complex boolean expressions, not just variable substitution
 pub fn resolve_expressions(
     expression: &str,
     params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
+    steps: Option<&HashMap<String, HashMap<String, String>>>,
 ) -> Result<EvalValue> {
     let mut context = HashMapContext::new();
 
@@ -101,6 +96,19 @@ pub fn resolve_expressions(
         }
     }
 
+    if let Some(steps_map) = steps {
+        for (step_id, outputs) in steps_map {
+            for (output_name, output_value) in outputs {
+                let context_key = format!("steps.{}.outputs.{}", step_id, output_name);
+                if let Ok(num) = output_value.parse::<f64>() {
+                    context.set_value(context_key, EvalValue::Float(num))?;
+                } else {
+                    context.set_value(context_key, EvalValue::String(output_value.clone()))?;
+                }
+            }
+        }
+    }
+
     eval_with_context(expression, &context).map_err(Error::ExpressionEvaluation)
 }
 
@@ -111,8 +119,9 @@ pub fn evaluate_condition(
     params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
+    steps: Option<&HashMap<String, HashMap<String, String>>>,
 ) -> Result<bool> {
-    let result = resolve_expressions(condition, params, state, matrix_values)?;
+    let result = resolve_expressions(condition, params, state, matrix_values, steps)?;
     match result {
         EvalValue::Boolean(v) => Ok(v),
         EvalValue::Empty => Ok(false),
@@ -130,6 +139,7 @@ pub fn resolve_string_with_expression(
     params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
+    steps: Option<&HashMap<String, HashMap<String, String>>>,
 ) -> Result<String> {
     // regex to find all ${{ }} patterns
     let re = Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}")
@@ -141,7 +151,7 @@ pub fn resolve_string_with_expression(
         let full_match = captures.get(0).unwrap().as_str();
         let expression = captures.get(1).unwrap().as_str().trim();
 
-        let eval_result = resolve_expressions(expression, params, state, matrix_values)?;
+        let eval_result = resolve_expressions(expression, params, state, matrix_values, steps)?;
 
         let replacement = match eval_result {
             EvalValue::String(s) => s,
@@ -204,7 +214,8 @@ mod tests {
                 r#"params.environment == "production""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -215,7 +226,8 @@ mod tests {
                 r#"params.environment == "staging""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -227,7 +239,8 @@ mod tests {
                 r#"params.environment != "staging""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -238,7 +251,8 @@ mod tests {
                 r#"params.environment != "production""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -246,8 +260,14 @@ mod tests {
 
         // Boolean equality
         assert_eq!(
-            resolve_expressions("state.deploy_ready == true", &params, &state, Some(&matrix))
-                .unwrap(),
+            resolve_expressions(
+                "state.deploy_ready == true",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -256,7 +276,8 @@ mod tests {
                 "state.config_loaded == false",
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -271,32 +292,62 @@ mod tests {
 
         // Numeric comparisons - should return boolean results
         assert_eq!(
-            resolve_expressions("params.version > 2.0", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("params.version > 2.0", &params, &state, Some(&matrix), None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("params.version >= 2.1", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "params.version >= 2.1",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("state.retry_count < 5", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "state.retry_count < 5",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("state.retry_count <= 3", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "state.retry_count <= 3",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("params.version < 2.0", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("params.version < 2.0", &params, &state, Some(&matrix), None)
+                .unwrap(),
             EvalValue::Boolean(false)
         );
 
         assert_eq!(
-            resolve_expressions("state.retry_count > 5", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "state.retry_count > 5",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(false)
         );
     }
@@ -313,7 +364,8 @@ mod tests {
                 r#"params.environment == "production" && params.skip_tests == "false""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -324,7 +376,8 @@ mod tests {
                 r#"params.environment == "staging" && params.skip_tests == "false""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -336,7 +389,8 @@ mod tests {
                 r#"params.environment == "production" || params.environment == "staging""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -347,7 +401,8 @@ mod tests {
                 r#"params.environment == "staging" || params.skip_tests == "false""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -358,7 +413,8 @@ mod tests {
                 r#"params.environment == "staging" || params.skip_tests == "true""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -370,19 +426,34 @@ mod tests {
                 r#"!(params.environment == "staging")"#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("!(state.config_loaded)", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "!(state.config_loaded)",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("!(state.deploy_ready)", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "!(state.deploy_ready)",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(false)
         );
     }
@@ -399,7 +470,8 @@ mod tests {
                 r#"(params.environment == "production" || params.environment == "staging") && params.skip_tests != "true" && state.retry_count < 5"#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             ).unwrap(),
             EvalValue::Boolean(true)
         );
@@ -410,7 +482,8 @@ mod tests {
                 r#"!(params.skip_tests == "true") && (state.deploy_ready == true)"#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -422,7 +495,8 @@ mod tests {
                 r#"params.version >= 2.0 && state.deploy_ready == true && os == "linux""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -437,19 +511,20 @@ mod tests {
 
         // Matrix value access
         assert_eq!(
-            resolve_expressions(r#"os == "linux""#, &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(r#"os == "linux""#, &params, &state, Some(&matrix), None).unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Numeric matrix value
         assert_eq!(
-            resolve_expressions("node_version == 18", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("node_version == 18", &params, &state, Some(&matrix), None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Boolean matrix value
         assert_eq!(
-            resolve_expressions("parallel == true", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("parallel == true", &params, &state, Some(&matrix), None).unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -459,7 +534,8 @@ mod tests {
                 r#"os == "linux" && params.environment == "production""#,
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -477,6 +553,7 @@ mod tests {
                 r#"params.environment == "production" && state.deploy_ready == true"#,
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -491,13 +568,13 @@ mod tests {
 
         // String numbers should work with numeric comparisons
         assert_eq!(
-            resolve_expressions("params.max_attempts > 3", &params, &state, None).unwrap(),
+            resolve_expressions("params.max_attempts > 3", &params, &state, None, None).unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Numbers should work with other numbers (not mixed string/number)
         assert_eq!(
-            resolve_expressions("state.retry_count == 3", &params, &state, None).unwrap(),
+            resolve_expressions("state.retry_count == 3", &params, &state, None, None).unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -507,6 +584,7 @@ mod tests {
                 r#"params.environment == "production""#,
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -521,13 +599,14 @@ mod tests {
 
         // Empty string should be falsy when compared to boolean
         assert_eq!(
-            resolve_expressions("params.empty_param == true", &params, &state, None).unwrap(),
+            resolve_expressions("params.empty_param == true", &params, &state, None, None).unwrap(),
             EvalValue::Boolean(false)
         );
 
         // Empty string comparisons
         assert_eq!(
-            resolve_expressions(r#"params.empty_param == """#, &params, &state, None).unwrap(),
+            resolve_expressions(r#"params.empty_param == """#, &params, &state, None, None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -543,30 +622,39 @@ mod tests {
 
         // Test that we can return string values
         assert_eq!(
-            resolve_expressions("params.environment", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("params.environment", &params, &state, Some(&matrix), None)
+                .unwrap(),
             EvalValue::String("production".to_string())
         );
 
         // Test that we can return numeric values
         assert_eq!(
-            resolve_expressions("state.retry_count", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("state.retry_count", &params, &state, Some(&matrix), None).unwrap(),
             EvalValue::Int(3)
         );
 
         assert_eq!(
-            resolve_expressions("params.version", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("params.version", &params, &state, Some(&matrix), None).unwrap(),
             EvalValue::Float(2.1)
         );
 
         // Test that we can return boolean values
         assert_eq!(
-            resolve_expressions("state.deploy_ready", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions("state.deploy_ready", &params, &state, Some(&matrix), None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Test arithmetic operations
         assert_eq!(
-            resolve_expressions("state.retry_count + 2", &params, &state, Some(&matrix)).unwrap(),
+            resolve_expressions(
+                "state.retry_count + 2",
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
             EvalValue::Int(5)
         );
 
@@ -576,6 +664,7 @@ mod tests {
             &params,
             &state,
             Some(&matrix),
+            None,
         ) {
             Ok(EvalValue::String(s)) => assert_eq!(s, "production-env"),
             Ok(_) => panic!("Expected string result"),
@@ -583,8 +672,14 @@ mod tests {
                 // evalexpr might not support string concatenation, which is fine
                 // Let's test a simpler expression instead
                 assert_eq!(
-                    resolve_expressions("params.max_attempts", &params, &state, Some(&matrix))
-                        .unwrap(),
+                    resolve_expressions(
+                        "params.max_attempts",
+                        &params,
+                        &state,
+                        Some(&matrix),
+                        None
+                    )
+                    .unwrap(),
                     EvalValue::Float(5.0)
                 );
             }
@@ -602,7 +697,8 @@ mod tests {
             r#"params.environment == "production" && params.skip_tests != "true""#,
             &params,
             &state,
-            Some(&matrix)
+            Some(&matrix),
+            None
         )
         .unwrap());
 
@@ -610,7 +706,8 @@ mod tests {
             r#"params.environment == "staging""#,
             &params,
             &state,
-            Some(&matrix)
+            Some(&matrix),
+            None
         )
         .unwrap());
     }
@@ -622,23 +719,27 @@ mod tests {
 
         // Test that evaluate_condition properly converts non-boolean EvalValues to boolean
         // String values should be truthy if non-empty
-        assert!(evaluate_condition("params.environment", &params, &state, None).unwrap());
-        assert!(!evaluate_condition("params.empty_param", &params, &state, None).unwrap());
+        assert!(evaluate_condition("params.environment", &params, &state, None, None).unwrap());
+        assert!(!evaluate_condition("params.empty_param", &params, &state, None, None).unwrap());
 
         // Numeric values should be truthy if non-zero
-        assert!(evaluate_condition("state.retry_count", &params, &state, None).unwrap());
+        assert!(evaluate_condition("state.retry_count", &params, &state, None, None).unwrap());
 
         // Boolean values should return as-is
-        assert!(evaluate_condition("state.deploy_ready", &params, &state, None).unwrap());
-        assert!(!evaluate_condition("state.config_loaded", &params, &state, None).unwrap());
+        assert!(evaluate_condition("state.deploy_ready", &params, &state, None, None).unwrap());
+        assert!(!evaluate_condition("state.config_loaded", &params, &state, None, None).unwrap());
 
         // Test string "false" should be falsy
         let mut test_params = HashMap::new();
         test_params.insert("false_string".to_string(), json!("false"));
-        assert!(
-            !evaluate_condition("params.false_string", &test_params, &HashMap::new(), None)
-                .unwrap()
-        );
+        assert!(!evaluate_condition(
+            "params.false_string",
+            &test_params,
+            &HashMap::new(),
+            None,
+            None
+        )
+        .unwrap());
     }
 
     #[test]
@@ -653,17 +754,21 @@ mod tests {
         let state = HashMap::new();
 
         // Test truthy values using direct variable access
-        assert!(evaluate_condition("params.flag", &params, &state, None).unwrap());
-        assert!(evaluate_condition("params.number", &params, &state, None).unwrap());
+        assert!(evaluate_condition("params.flag", &params, &state, None, None).unwrap());
+        assert!(evaluate_condition("params.number", &params, &state, None, None).unwrap());
 
         // Test falsy values
-        assert!(!evaluate_condition("params.zero", &params, &state, None).unwrap());
-        assert!(!evaluate_condition("params.false_str", &params, &state, None).unwrap());
-        assert!(!evaluate_condition("params.empty", &params, &state, None).unwrap());
+        assert!(!evaluate_condition("params.zero", &params, &state, None, None).unwrap());
+        assert!(!evaluate_condition("params.false_str", &params, &state, None, None).unwrap());
+        assert!(!evaluate_condition("params.empty", &params, &state, None, None).unwrap());
 
         // Test with comparison expressions to ensure they return proper booleans
-        assert!(evaluate_condition(r#"params.flag == "true""#, &params, &state, None).unwrap());
-        assert!(!evaluate_condition(r#"params.flag == "false""#, &params, &state, None).unwrap());
+        assert!(
+            evaluate_condition(r#"params.flag == "true""#, &params, &state, None, None).unwrap()
+        );
+        assert!(
+            !evaluate_condition(r#"params.flag == "false""#, &params, &state, None, None).unwrap()
+        );
     }
 
     #[test]
@@ -676,15 +781,20 @@ mod tests {
             "params.environment == ", // Invalid syntax
             &params,
             &state,
+            None,
             None
         )
         .is_err());
 
         // Undefined variable should return an error
-        assert!(resolve_expressions("params.nonexistent == true", &params, &state, None).is_err());
+        assert!(
+            resolve_expressions("params.nonexistent == true", &params, &state, None, None).is_err()
+        );
 
         // Test that evaluate_condition handles errors from resolve_expressions properly
-        assert!(evaluate_condition("params.nonexistent == true", &params, &state, None).is_err());
+        assert!(
+            evaluate_condition("params.nonexistent == true", &params, &state, None, None).is_err()
+        );
     }
 
     #[test]
@@ -697,7 +807,7 @@ mod tests {
 
         // Basic variable substitution
         assert_eq!(
-            resolve_string_with_expression("Hello ${{ params.name }}", &params, &state, None)
+            resolve_string_with_expression("Hello ${{ params.name }}", &params, &state, None, None)
                 .unwrap(),
             "Hello John Doe"
         );
@@ -708,6 +818,7 @@ mod tests {
                 "Hello ${{ params.name }}, you are ${{ params.age }} years old",
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -722,20 +833,27 @@ mod tests {
 
         // Basic arithmetic
         assert_eq!(
-            resolve_string_with_expression("Result: ${{ 1 + 2 }}", &params, &state, None).unwrap(),
+            resolve_string_with_expression("Result: ${{ 1 + 2 }}", &params, &state, None, None)
+                .unwrap(),
             "Result: 3"
         );
 
         // More complex arithmetic
         assert_eq!(
-            resolve_string_with_expression("Calculation: ${{ 10 * 3 - 5 }}", &params, &state, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Calculation: ${{ 10 * 3 - 5 }}",
+                &params,
+                &state,
+                None,
+                None
+            )
+            .unwrap(),
             "Calculation: 25"
         );
 
         // Float arithmetic
         assert_eq!(
-            resolve_string_with_expression("Float: ${{ 2.5 + 1.5 }}", &params, &state, None)
+            resolve_string_with_expression("Float: ${{ 2.5 + 1.5 }}", &params, &state, None, None)
                 .unwrap(),
             "Float: 4"
         );
@@ -756,6 +874,7 @@ mod tests {
                 "Total: ${{ params.base * params.multiplier + state.bonus }}",
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -774,8 +893,14 @@ mod tests {
 
         // Boolean values
         assert_eq!(
-            resolve_string_with_expression("Ready: ${{ state.ready }}", &params, &state, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Ready: ${{ state.ready }}",
+                &params,
+                &state,
+                None,
+                None
+            )
+            .unwrap(),
             "Ready: true"
         );
 
@@ -785,6 +910,7 @@ mod tests {
                 "Is production: ${{ params.environment == \"production\" }}",
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -797,6 +923,7 @@ mod tests {
                 "Deploy ready: ${{ params.environment == \"production\" && state.ready == true && state.count >= 5 }}",
                 &params,
                 &state,
+                None,
                 None
             ).unwrap(),
             "Deploy ready: true"
@@ -817,7 +944,8 @@ mod tests {
                 "Running on ${{ os }} with version ${{ version }}",
                 &params,
                 &state,
-                Some(&matrix)
+                Some(&matrix),
+                None
             )
             .unwrap(),
             "Running on linux with version 18"
@@ -833,13 +961,19 @@ mod tests {
 
         // Test whitespace handling inside expressions
         assert_eq!(
-            resolve_string_with_expression("Hello ${{    params.name    }}", &params, &state, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Hello ${{    params.name    }}",
+                &params,
+                &state,
+                None,
+                None
+            )
+            .unwrap(),
             "Hello Alice"
         );
 
         assert_eq!(
-            resolve_string_with_expression("Math: ${{  1  +  2  }}", &params, &state, None)
+            resolve_string_with_expression("Math: ${{  1  +  2  }}", &params, &state, None, None)
                 .unwrap(),
             "Math: 3"
         );
@@ -852,7 +986,7 @@ mod tests {
 
         // String with no expressions should be returned as-is
         assert_eq!(
-            resolve_string_with_expression("Hello world", &params, &state, None).unwrap(),
+            resolve_string_with_expression("Hello world", &params, &state, None, None).unwrap(),
             "Hello world"
         );
 
@@ -862,6 +996,7 @@ mod tests {
                 "Not an expression: {{ params.name }}",
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -879,6 +1014,7 @@ mod tests {
             "Invalid: ${{ params.nonexistent }}",
             &params,
             &state,
+            None,
             None
         )
         .is_err());
@@ -888,6 +1024,7 @@ mod tests {
             "Invalid syntax: ${{ 1 + }}",
             &params,
             &state,
+            None,
             None
         )
         .is_err());
@@ -903,8 +1040,14 @@ mod tests {
 
         // Empty string
         assert_eq!(
-            resolve_string_with_expression("Value: '${{ params.empty }}'", &params, &state, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Value: '${{ params.empty }}'",
+                &params,
+                &state,
+                None,
+                None
+            )
+            .unwrap(),
             "Value: ''"
         );
 
@@ -914,6 +1057,7 @@ mod tests {
                 "Null: '${{ state.null_value }}'",
                 &params,
                 &state,
+                None,
                 None
             )
             .unwrap(),
@@ -926,9 +1070,13 @@ mod tests {
         let params = HashMap::new();
         let state = HashMap::new();
 
-        assert!(
-            resolve_string_with_expression("Hello ${{ params.name }}", &params, &state, None)
-                .is_err()
-        );
+        assert!(resolve_string_with_expression(
+            "Hello ${{ params.name }}",
+            &params,
+            &state,
+            None,
+            None
+        )
+        .is_err());
     }
 }

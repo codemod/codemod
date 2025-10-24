@@ -110,6 +110,11 @@ impl Default for Engine {
     }
 }
 
+pub struct CapabilitiesData {
+    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    pub capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
+}
+
 impl Engine {
     /// Create a new engine with a local state adapter
     pub fn new() -> Self {
@@ -1247,11 +1252,13 @@ impl Engine {
                 .await?;
 
             if let Some(condition) = &step.condition {
+                // TODO: Load step outputs from STEP_OUTPUTS file and pass here
                 let should_execute = evaluate_condition(
                     condition,
                     &resolved_params,
                     &state,
                     task.matrix_values.as_ref(),
+                    None, // step outputs
                 )
                 .unwrap_or_default();
 
@@ -1269,6 +1276,7 @@ impl Engine {
                     runner.as_ref(),
                     &step.action,
                     &step.env,
+                    &step.id,
                     node,
                     &task,
                     &resolved_params,
@@ -1393,6 +1401,7 @@ impl Engine {
         runner: &dyn Runner,
         action: &StepAction,
         step_env: &Option<HashMap<String, String>>,
+        step_id: &Option<String>,
         node: &Node,
         task: &Task,
         params: &HashMap<String, serde_json::Value>,
@@ -1432,11 +1441,13 @@ impl Engine {
 
                 for template_step in &template.steps {
                     if let Some(condition) = &template_step.condition {
+                        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
                         let should_execute = evaluate_condition(
                             condition,
                             &combined_params,
                             state,
                             task.matrix_values.as_ref(),
+                            None, // step outputs
                         )?;
 
                         if !should_execute {
@@ -1452,6 +1463,7 @@ impl Engine {
                         runner,
                         &template_step.action,
                         &template_step.env,
+                        &template_step.id,
                         node,
                         task,
                         &combined_params,
@@ -1471,14 +1483,18 @@ impl Engine {
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
+                    step_id.clone().unwrap_or_default(),
                     js_ast_grep,
                     Some(params.clone()),
                     task.matrix_values.clone(),
-                    capabilities.clone(),
-                    self.workflow_run_config
-                        .capabilities_security_callback
-                        .as_ref()
-                        .map(|callback| Arc::new(callback.clone())),
+                    &CapabilitiesData {
+                        capabilities: capabilities.clone(),
+                        capabilities_security_callback: self
+                            .workflow_run_config
+                            .capabilities_security_callback
+                            .as_ref()
+                            .map(|callback| Arc::new(callback.clone())),
+                    },
                 )
                 .await
             }
@@ -1621,11 +1637,11 @@ impl Engine {
     pub async fn execute_js_ast_grep_step(
         &self,
         id: String,
+        step_id: String,
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
-        capabilities: Option<HashSet<LlrtSupportedModules>>,
-        capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
+        capabilities_data: &CapabilitiesData,
     ) -> Result<()> {
         let js_file_path = self
             .workflow_run_config
@@ -1663,7 +1679,8 @@ impl Engine {
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
         );
 
-        let capabilities_security_callback_clone = capabilities_security_callback.clone();
+        let capabilities_security_callback_clone =
+            capabilities_data.capabilities_security_callback.clone();
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
@@ -1687,7 +1704,7 @@ impl Engine {
                 .clone()
                 .unwrap_or("typescript".to_string())]),
             threads: js_ast_grep.max_threads,
-            capabilities: capabilities.clone(),
+            capabilities: capabilities_data.capabilities.clone(),
         };
 
         // Set language first to get default extensions
@@ -1706,7 +1723,7 @@ impl Engine {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
-            capabilities: capabilities.clone(),
+            capabilities: capabilities_data.capabilities.clone(),
         })
         .await
         .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
@@ -1738,6 +1755,7 @@ impl Engine {
                 };
 
                 // Execute the async codemod using the captured runtime handle
+                std::env::set_var("CODEMOD_STEP_ID", &step_id);
                 let execution_result = runtime_handle.block_on(async {
                     execute_codemod_with_quickjs(JssgExecutionOptions {
                         script_path: &js_file_path_clone,
@@ -1838,11 +1856,13 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
     ) -> Result<()> {
         // Resolve the prompt with parameters, state, and matrix values
+        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
         let resolved_prompt = resolve_string_with_expression(
             &ai_config.prompt,
             params,
             state,
             task.matrix_values.as_ref(),
+            None, // step outputs
         )?;
 
         info!("Executing AI agent step with prompt: {}", resolved_prompt);
@@ -2075,9 +2095,13 @@ impl Engine {
         for node in &codemod_workflow.nodes {
             for step in &node.steps {
                 if let Some(condition) = &step.condition {
-                    let should_execute =
-                        evaluate_condition(condition, params, state, task.matrix_values.as_ref())?;
-
+                    let should_execute = evaluate_condition(
+                        condition,
+                        params,
+                        state,
+                        task.matrix_values.as_ref(),
+                        None,
+                    )?;
                     if !should_execute {
                         info!(
                             "Skipping codemod step '{}' - condition not met: {}",
@@ -2091,6 +2115,7 @@ impl Engine {
                     runner.as_ref(),
                     &step.action,
                     &step.env,
+                    &step.id,
                     node,
                     task, // Use the current task context
                     params,
@@ -2189,8 +2214,9 @@ impl Engine {
         );
 
         // Resolve variables
+        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
         let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref())?;
+            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
 
         // Execute the command
         let output = runner.run_command(&resolved_command, &env).await?;
