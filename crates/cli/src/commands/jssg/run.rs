@@ -169,7 +169,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 selector_config: None,
                 params: Some(params.clone()),
                 matrix_values: None,
-                capabilities: capabilities_for_closure.as_deref().map(|v| v.to_vec()),
+                capabilities: capabilities_for_closure.clone(),
             };
 
             // Execute the codemod on this file

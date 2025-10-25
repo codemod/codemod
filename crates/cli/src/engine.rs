@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -84,7 +84,7 @@ pub fn create_engine(
     allow_dirty: bool,
     params: HashMap<String, serde_json::Value>,
     registry: Option<String>,
-    capabilities: Option<Vec<LlrtSupportedModules>>,
+    capabilities: Option<HashSet<LlrtSupportedModules>>,
     no_interactive: bool,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();

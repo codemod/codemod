@@ -1,6 +1,7 @@
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -203,7 +204,7 @@ impl JssgTestHandler {
         let execution_fn = Box::new(
             move |input_code: &str,
                   input_path: &Path,
-                  capabilities: Option<Vec<LlrtSupportedModules>>| {
+                  capabilities: Option<HashSet<LlrtSupportedModules>>| {
                 let codemod_path = codemod_path.clone();
                 let resolver = resolver.clone();
                 let input_code = input_code.to_string();
@@ -219,7 +220,7 @@ impl JssgTestHandler {
                         selector_config: None,
                         params: None,
                         matrix_values: None,
-                        capabilities,
+                        capabilities: capabilities.clone(),
                     };
                     let execution_output = execute_codemod_with_quickjs(options).await?;
 

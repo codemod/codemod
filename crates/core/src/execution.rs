@@ -5,6 +5,7 @@ use ignore::{
     WalkBuilder, WalkState,
 };
 use std::{
+    collections::HashSet,
     error::Error,
     path::{Path, PathBuf},
     sync::{
@@ -61,7 +62,7 @@ pub struct CodemodExecutionConfig {
     /// Number of threads to use
     pub threads: Option<usize>,
     /// Capabilities
-    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
 impl CodemodExecutionConfig {

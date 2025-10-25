@@ -10,7 +10,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{FromJs, IntoJs};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
     pub language: SupportLang,
     pub resolver: Arc<R>,
-    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
 /// Extract a selector from a codemod module using QuickJS

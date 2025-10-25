@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -28,7 +28,7 @@ pub struct WorkflowRunConfig {
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
     pub registry_client: RegistryClient,
     pub dry_run: bool,
-    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
 }
 

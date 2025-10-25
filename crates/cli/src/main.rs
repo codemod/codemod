@@ -126,6 +126,8 @@ enum JssgCommands {
     Test(commands::jssg::test::Command),
     /// List applicable JavaScript code transformations
     ListApplicable(commands::jssg::list_applicable::Command),
+    /// Execute a JavaScript file directly
+    Exec(commands::jssg::exec::Command),
 }
 
 /// Check if a string looks like a package name that should be run
@@ -293,6 +295,9 @@ async fn main() -> Result<()> {
             }
             JssgCommands::ListApplicable(args) => {
                 commands::jssg::list_applicable::handler(args).await?;
+            }
+            JssgCommands::Exec(args) => {
+                commands::jssg::exec::handler(args).await?;
             }
         },
         Some(Commands::Init(args)) => {

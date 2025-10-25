@@ -1,5 +1,5 @@
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use std::{fs, path::PathBuf};
+use std::{collections::HashSet, fs, path::PathBuf};
 
 use crate::utils::{ancestor_search::find_in_ancestors, manifest::CodemodManifest};
 
@@ -17,7 +17,7 @@ fn load_manifest_from_working_dir(working_directory: &PathBuf) -> Option<Codemod
 }
 
 /// Extracts and parses capabilities from a manifest
-fn extract_capabilities(manifest: CodemodManifest) -> Vec<LlrtSupportedModules> {
+fn extract_capabilities(manifest: CodemodManifest) -> HashSet<LlrtSupportedModules> {
     manifest
         .capabilities
         .unwrap_or_default()
@@ -30,8 +30,8 @@ pub(crate) fn resolve_capabilities(
     args: ResolveCapabilitiesArgs,
     manifest: Option<CodemodManifest>,
     working_directory: Option<PathBuf>,
-) -> Vec<LlrtSupportedModules> {
-    let mut capabilities = Vec::new();
+) -> HashSet<LlrtSupportedModules> {
+    let mut capabilities = HashSet::new();
 
     // Load capabilities from codemod.yaml in working directory ancestors
     if let Some(working_directory) = working_directory {
@@ -47,13 +47,13 @@ pub(crate) fn resolve_capabilities(
 
     // Add capabilities from CLI args
     if args.allow_fs {
-        capabilities.push(LlrtSupportedModules::Fs);
+        capabilities.insert(LlrtSupportedModules::Fs);
     }
     if args.allow_fetch {
-        capabilities.push(LlrtSupportedModules::Fetch);
+        capabilities.insert(LlrtSupportedModules::Fetch);
     }
     if args.allow_child_process {
-        capabilities.push(LlrtSupportedModules::ChildProcess);
+        capabilities.insert(LlrtSupportedModules::ChildProcess);
     }
 
     capabilities

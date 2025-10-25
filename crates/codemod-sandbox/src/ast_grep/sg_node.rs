@@ -10,7 +10,7 @@ use ast_grep_language::SupportLang;
 use rquickjs::{class, class::Trace, methods, Ctx, Exception, IntoJs, JsLifetime, Result, Value};
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
@@ -55,7 +55,7 @@ impl<'js> SgRootRjs<'js> {
         let static_node_match: NodeMatch<'static, TSDoc> =
             unsafe { std::mem::transmute(node_match) };
         Ok(SgNodeRjs {
-            root: Arc::downgrade(&self.inner),
+            root: Arc::clone(&self.inner),
             inner_node: static_node_match,
             _phantom: PhantomData,
         })
@@ -126,8 +126,8 @@ impl<'js> SgRootRjs<'js> {
 #[derive(Trace, Clone)]
 #[class(rename_all = "camelCase")]
 pub struct SgNodeRjs<'js> {
-    #[qjs(skip_trace)] // Weak reference to the root
-    pub(crate) root: Weak<SgRootInner>,
+    #[qjs(skip_trace)] // Strong reference to keep root alive
+    pub(crate) root: Arc<SgRootInner>,
     #[qjs(skip_trace)] // NodeMatch is not Trace
     pub(crate) inner_node: NodeMatch<'static, TSDoc>,
     #[qjs(skip_trace)]
@@ -542,13 +542,10 @@ impl<'js> SgNodeRjs<'js> {
     }
 
     #[qjs(rename = "getRoot")]
-    pub fn get_root(&self, ctx: Ctx<'js>) -> Result<SgRootRjs<'js>> {
-        match self.root.upgrade() {
-            Some(inner) => Ok(SgRootRjs {
-                inner,
-                _phantom: PhantomData,
-            }),
-            None => Err(Exception::throw_reference(&ctx, "Root has been dropped")),
-        }
+    pub fn get_root(&self, _ctx: Ctx<'js>) -> Result<SgRootRjs<'js>> {
+        Ok(SgRootRjs {
+            inner: Arc::clone(&self.root),
+            _phantom: PhantomData,
+        })
     }
 }

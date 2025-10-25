@@ -1,7 +1,7 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -305,7 +305,7 @@ impl Engine {
         workflow: Workflow,
         params: HashMap<String, serde_json::Value>,
         bundle_path: Option<PathBuf>,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<&HashSet<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
         self.validate_codemod_dependencies(&workflow, &[]).await?;
@@ -320,7 +320,7 @@ impl Engine {
             tasks: Vec::new(),
             started_at: Utc::now(),
             ended_at: None,
-            capabilities: capabilities.clone(),
+            capabilities: capabilities.cloned(),
         };
 
         self.state_adapter
@@ -344,7 +344,7 @@ impl Engine {
 
     /// Resume a workflow run
     pub async fn resume_workflow(&self, workflow_run_id: Uuid, task_ids: Vec<Uuid>) -> Result<()> {
-        // TODO: Do we need this?
+        // Just make sure the workflow run exists
         let _workflow_run = self
             .state_adapter
             .lock()
@@ -1276,7 +1276,7 @@ impl Engine {
                     &workflow_run.workflow,
                     &workflow_run.bundle_path,
                     &[],
-                    &workflow_run.capabilities,
+                    &self.workflow_run_config.capabilities,
                 )
                 .await;
 
@@ -1400,7 +1400,7 @@ impl Engine {
         workflow: &Workflow,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
-        capabilities: &Option<Vec<LlrtSupportedModules>>,
+        capabilities: &Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<()> {
         match action {
             StepAction::RunScript(run) => {
@@ -1624,7 +1624,7 @@ impl Engine {
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
         capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
     ) -> Result<()> {
         let js_file_path = self
@@ -1748,7 +1748,7 @@ impl Engine {
                         selector_config: selector_config.clone(),
                         params: params.clone(),
                         matrix_values: matrix_input.clone(),
-                        capabilities: config.capabilities.as_deref().map(|v| v.to_vec()),
+                        capabilities: config.capabilities.clone(),
                     })
                     .await
                 });
@@ -1915,7 +1915,7 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
-        capabilities: &Option<Vec<LlrtSupportedModules>>,
+        capabilities: &Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<()> {
         info!("Executing codemod step: {}", codemod.source);
 
@@ -1990,7 +1990,7 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
-        capabilities: &Option<Vec<LlrtSupportedModules>>,
+        capabilities: &Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<()> {
         let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
