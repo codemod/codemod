@@ -14,7 +14,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
-    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -177,7 +177,7 @@ where
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
-                    root: Arc::downgrade(&parsed_content.inner),
+                    root: Arc::clone(&parsed_content.inner),
                     inner_node: node_match,
                     _phantom: PhantomData,
                 }).collect())
@@ -268,6 +268,113 @@ where
                     },
                 })
             }
+        };
+        execution.await
+    })
+    .await
+}
+
+/// Options for executing a standalone JavaScript file
+pub struct SimpleJsExecutionOptions<'a, R> {
+    pub script_path: &'a Path,
+    pub resolver: Arc<R>,
+}
+
+/// Execute a standalone JavaScript file with QuickJS (like node script.js)
+/// This provides all LLRT capabilities and ast-grep module but doesn't
+/// impose any file transformation workflow
+pub async fn execute_js_with_quickjs<'a, R>(
+    options: SimpleJsExecutionOptions<'a, R>,
+) -> Result<(), ExecutionError>
+where
+    R: ModuleResolver + 'static,
+{
+    let script_name = options
+        .script_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("script.js");
+
+    let js_code = format!(
+        include_str!("scripts/exec_script.txt"),
+        script_name = script_name
+    );
+
+    let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+            message: format!("Failed to create AsyncRuntime: {e}"),
+        },
+    })?;
+
+    let mut module_builder = LlrtModuleBuilder::build();
+    module_builder.enable_fetch();
+    module_builder.enable_fs();
+    module_builder.enable_child_process();
+
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
+
+    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
+    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+
+    let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
+    let fs_loader = QuickJSLoader;
+
+    runtime
+        .set_loader(
+            (built_in_resolver, fs_resolver),
+            (built_in_loader, fs_loader),
+        )
+        .await;
+
+    let context = AsyncContext::full(&runtime)
+        .await
+        .map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ContextCreationFailed {
+                message: format!("Failed to create AsyncContext: {e}"),
+            },
+        })?;
+
+    // Execute JavaScript code
+    async_with!(context => |ctx| {
+        global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to attach global modules: {e}"),
+            },
+        })?;
+
+        let execution = async {
+            // Place the entry module in the same directory as the script for proper resolution
+            let entry_module_path = options
+                .script_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("__codemod_exec_entry.js");
+            let entry_module_name = entry_module_path
+                .to_str()
+                .unwrap_or("__codemod_exec_entry.js");
+
+            let module = Module::declare(ctx.clone(), entry_module_name, js_code)
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to declare module: {e}"),
+                    },
+                })?;
+
+            // Evaluate module
+            let _ = module
+                .eval()
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            while ctx.execute_pending_job() {}
+
+            Ok(())
         };
         execution.await
     })

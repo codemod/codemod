@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -86,8 +86,8 @@ pub struct WorkflowRun {
 
     /// Capabilities used in the workflow run
     #[serde(default)]
-    #[ts(optional, as = "Option<Vec<LlrtSupportedModules>>")]
-    pub capabilities: Option<Vec<LlrtSupportedModules>>,
+    #[ts(optional, as = "Option<HashSet<LlrtSupportedModules>>")]
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
 /// Status of a workflow run

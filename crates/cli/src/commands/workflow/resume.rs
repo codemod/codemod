@@ -63,8 +63,6 @@ pub struct Command {
 
 /// Resume a workflow
 pub async fn handler(args: &Command) -> Result<()> {
-    println!("Resuming workflow {}...", args.id);
-
     let target_path = args
         .target_path
         .clone()
@@ -82,6 +80,10 @@ pub async fn handler(args: &Command) -> Result<()> {
         },
         None,
         Some(workflow_dir.to_path_buf()),
+    );
+    println!(
+        "Resuming workflow {} with capabilities: {:?}",
+        args.id, capabilities
     );
 
     let (engine, _) = create_engine(

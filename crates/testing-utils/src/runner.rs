@@ -2,8 +2,8 @@ use anyhow::Result;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
-use std::future::Future;
 use std::pin::Pin;
+use std::{collections::HashSet, future::Future};
 use tokio::time::timeout;
 
 use crate::{
@@ -23,7 +23,7 @@ pub type ExecutionFn<'a> = Box<
     dyn Fn(
             &str,
             &std::path::Path,
-            Option<Vec<LlrtSupportedModules>>,
+            Option<HashSet<LlrtSupportedModules>>,
         ) -> Pin<Box<dyn Future<Output = Result<TransformationResult>> + 'a>>
         + 'a,
 >;
@@ -80,7 +80,7 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         if self.options.watch {
             return self
@@ -96,7 +96,7 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
@@ -176,7 +176,7 @@ impl TestRunner {
         test_case: &UnifiedTestCase,
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<()> {
         let should_expect_error = test_case.should_expect_error(&options.expect_errors);
 
@@ -297,7 +297,7 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
-        capabilities: Option<Vec<LlrtSupportedModules>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
         let initial_summary = self

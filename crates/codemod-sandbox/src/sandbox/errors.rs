@@ -66,6 +66,9 @@ pub enum RuntimeError {
 
     #[error("Context creation failed: {message}")]
     ContextCreationFailed { message: String },
+
+    #[error("QuickJS error")]
+    QuickJS(#[from] rquickjs::Error),
 }
 
 #[derive(Debug, Error)]

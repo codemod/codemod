@@ -23,7 +23,7 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
             workflow,
             config.params,
             Some(config.bundle_path),
-            config.capabilities,
+            config.capabilities.as_ref(),
         )
         .await
         .context("Failed to run workflow")?;

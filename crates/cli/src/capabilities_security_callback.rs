@@ -19,7 +19,7 @@ pub fn capabilities_security_callback(no_interaction: bool) -> CapabilitiesSecur
         let need_to_check = config
             .capabilities
             .as_ref()
-            .unwrap_or(&Vec::new())
+            .unwrap_or(&HashSet::new())
             .iter()
             .filter(|c| !checked.contains(c))
             .cloned()
