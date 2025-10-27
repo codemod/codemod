@@ -54,7 +54,6 @@
                 "group": "Workflows",
                 "pages": [
                   "cli/packages/quickstart",
-                  "cli/packages/package-structure",
                   "cli/packages/building-workflows"
                 ]
               },
@@ -195,6 +194,10 @@
     {
       "source": "/scanner",
       "destination": "/insights"
+    },
+    {
+      "source": "/migrations",
+      "destination": "/campaigns"
     }
   ],
   "contextual": {

@@ -50,10 +50,45 @@ For more details on building and running codemod packages, see the [Codemod Pack
 
 ---
 
-## Advanced Concepts
+## Command Relationships
 
-- <a href="#codemod-workflow">**Codemod Packages:**</a> Orchestrate complex, multi-step codemod processes.
-- <a href="#codemod-jssg">**JS ast-grep (jssg):**</a> Run codemods written in JavaScript/TypeScript to transform code in any language using the high-performance ast-grep engine.
+The Codemod CLI provides different commands for different stages of development:
+
+### High-Level Commands (Production)
+```bash
+# Run a published package from the registry
+npx codemod @org/my-package
+
+# Run a local workflow package
+npx codemod workflow run -w ./my-package/
+```
+**Use for**: Production codemods, multi-step workflows, parameterized transforms
+
+### Quick Testing Commands (Development)
+```bash
+# Test a jssg transform directly
+npx codemod jssg run ./transform.ts ./src --language tsx
+
+# Test jssg transform with fixtures
+npx codemod jssg test ./transform.ts --language tsx
+```
+**Use for**: Rapid iteration, testing patterns, development
+
+### Package Lifecycle
+```bash
+# Scaffold a new package
+npx codemod init
+
+# Validate workflow
+npx codemod workflow validate -w workflow.yaml
+
+# Publish to registry
+npx codemod publish
+```
+
+<Info>
+  **When to use what**: Use `codemod workflow run` for orchestrated, multi-step transformations with parameters. Use `codemod jssg run` for quick testing of a single jssg transform during development.
+</Info>
 
 ---
 
@@ -63,11 +98,21 @@ Codemod CLI is accessible using the `npx codemod` command. The following command
 
 ### `codemod workflow`
 
-Manage and execute workflow YAMLs.
+Manage and execute [codemod packages](/cli/packages/quickstart).
+
+A codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
+
+**When to use**:
+- ✅ Production codemods with multiple steps
+- ✅ Parameterized transformations
+- ✅ Multi-repo orchestration
+- ✅ State management and resumption
+
+**Learn more**: [Building Workflows](/cli/packages/building-workflows)
 
 **`workflow run`**
 
-Run a [codemod package](/cli/packages/quickstart).
+Run a complete codemod package.
 
 - Use `npx codemod workflow run -w <path>` for local codemod packages and directories
 - Use `npx codemod <package-name>` to run packages directly from the [Codemod Registry](https://app.codemod.com/registry)
@@ -208,16 +253,25 @@ npx codemod workflow cancel -i <ID>
 
 ### `codemod jssg`
 
-JS ast-grep (jssg) is a toolkit for running JavaScript/TypeScript codemods using the high-performance ast-grep engine. It enables fast, large-scale code transformations with a familiar API and robust language support.
+Run [jssg (JS ast-grep)](/jssg/quickstart) transforms directly without a workflow.
 
-`codemod jssg` lets you run ast-grep codemods directly from the CLI, without needing to define a workflow. It's built for speed and simplicity, making ast-grep codemods a first-class experience.
+jssg is the **primary transformation engine** for Codemod. These commands let you test jssg transforms quickly during development.
+
+**When to use**:
+- ✅ Quick testing of a single transform
+- ✅ Iterating on pattern matching
+- ✅ Development and debugging
+
+**When NOT to use**:
+- ❌ Multi-step transformations → use `codemod workflow`
+- ❌ Parameterized transforms → use `codemod workflow` with `--param`
+- ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  **When should I use JS ast-grep (jssg)?**
-
-  - When you want to quickly run or test an ast-grep codemod on your codebase.
-  - For more complex transformations that require granular AST access and manipulation than a YAML rule can provide. Read more about [when to define workflows](#when-should-i-define-a-workflow-instead).
+  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Building Workflows: JS ast-grep step](/cli/packages/building-workflows#js-ast-grep-step).
 </Tip>
+
+**Learn more**: [jssg documentation](/jssg/quickstart)
 
 <Steps>
   <Step title="Write your codemod">
