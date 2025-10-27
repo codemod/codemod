@@ -3,4 +3,4 @@
 	url = https://github.com/awslabs/llrt
 [submodule "submodules/rolldown"]
 	path = submodules/rolldown
-	url = git@github.com:rolldown/rolldown.git
+	url = https://github.com/rolldown-rs/rolldown.git
