@@ -28,7 +28,7 @@ import { APIKeyDemo } from "/snippets/api-key-demo.mdx";
     npx codemod workflow run -w /path/to/my-codemod/workflow.yaml
     ```
 
-    This runs your local codemod package on your codebase to test it before publishing.
+    This runs your local Codemod package on your codebase to test it before publishing.
   </Step>
   <Step title="Publish your codemod">
     ```bash
@@ -46,7 +46,7 @@ import { APIKeyDemo } from "/snippets/api-key-demo.mdx";
   </Step>
 </Steps>
 
-For more details on building and running codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
+For more details on building and running Codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
 
 ---
 
@@ -98,9 +98,9 @@ Codemod CLI is accessible using the `npx codemod` command. The following command
 
 ### `codemod workflow`
 
-Manage and execute [codemod packages](/cli/packages/quickstart).
+Manage and execute [Codemod packages](/cli/packages/quickstart).
 
-A codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
+A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
 
 **When to use**:
 - ✅ Production codemods with multiple steps
@@ -112,9 +112,9 @@ A codemod package is a directory containing `workflow.yaml` and transformation s
 
 **`workflow run`**
 
-Run a complete codemod package.
+Run a complete Codemod package.
 
-- Use `npx codemod workflow run -w <path>` for local codemod packages and directories
+- Use `npx codemod workflow run -w <path>` for local Codemod packages and directories
 - Use `npx codemod <package-name>` to run packages directly from the [Codemod Registry](https://app.codemod.com/registry)
 
 <CodeGroup>
@@ -435,7 +435,7 @@ npx codemod jssg test <codemod_file> [options]
 
 ### `codemod init`
 
-Initialize a new codemod package project.
+Initialize a new Codemod package project.
 
 ```bash
 npx codemod init [PATH] [options]
@@ -544,7 +544,7 @@ npx codemod whoami [--registry <REGISTRY>] [--detailed]
 
 ### `codemod publish`
 
-Publish a codemod package to a registry.
+Publish a Codemod package to a registry.
 
 ```bash
 npx codemod publish [PATH] [options]
@@ -752,7 +752,7 @@ npx codemod search [OPTIONS] [QUERY]
 
 ### `codemod cache`
 
-Manage the local package cache for codemod packages.
+Manage the local package cache for Codemod packages.
 
 **`cache info`**
 

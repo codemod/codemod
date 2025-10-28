@@ -16,7 +16,7 @@ Codemod CLI and workflow features are free for local use. For large-scale refact
 ---
 
 <Tip>
-  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/model-context-protocol) to create your codemod package with the help of AI.
+  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/model-context-protocol) to create your Codemod package with the help of AI.
 </Tip>
 
 ## Package Structure
@@ -31,13 +31,13 @@ my-codemod-package/
 └─ rules/
 ```
 
-The folder—called a **codemod package**—is the root when you run `npx codemod workflow run -w ./my-codemod-package/`.
+The folder—called a **Codemod package**—is the root when you run `npx codemod workflow run -w ./my-codemod-package/`.
 
 <Info>
 You can combine types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths and reference them from <code>workflow.yaml</code>.
 </Info>
 
-A codemod package is a directory containing your `workflow.yaml` and any scripts, rules, or assets referenced by your workflow.
+A Codemod package is a directory containing your `workflow.yaml` and any scripts, rules, or assets referenced by your workflow.
 
 <Steps>
 <Step title="Scaffolding packages">
@@ -71,7 +71,7 @@ A codemod package is a directory containing your `workflow.yaml` and any scripts
 
 ## Package Metadata (codemod.yaml)
 
-The `codemod.yaml` file defines your codemod package's metadata and configuration.
+The `codemod.yaml` file defines your Codemod package's metadata and configuration.
 
 Example codemod.yaml file:
 
@@ -255,7 +255,7 @@ During scaffolding, the CLI sets <code>public</code>/<code>private</code> based 
 
 ## Workflow File (workflow.yaml)
 
-The `workflow.yaml` file defines your codemod package's workflow. A workflow is a collection of nodes that are executed in order. A workflow has four top-level keys:
+The `workflow.yaml` file defines your Codemod package's workflow. A workflow is a collection of nodes that are executed in order. A workflow has four top-level keys:
 
 ```yaml workflow.yaml
 version: "1"
@@ -606,7 +606,7 @@ To use a Codemod Registry step:
   <Step title="Find or publish a codemod to the Codemod Registry:">
     You can:
     - find and use an existing codemod in [Codemod Registry](https://go.codemod.com/registry), or
-    - [publish a codemod package](/cli/cli-reference#publish-codemod) to Codemod Registry.
+    - [publish a Codemod package](/cli/cli-reference#publish-codemod) to Codemod Registry.
   </Step>
   <Step title="Add a Codemod Registry step to your workflow:">
     ```yaml workflow.yaml
@@ -665,7 +665,7 @@ To use a Codemod Registry step:
       **Aggregate multiple codemods:**
 
       <Info>
-        You can <b>aggregate multiple codemods</b> by adding more than one <code>codemod</code> step in the same node. A codemod package may itself orchestrate other codemods, enabling nested compositions for larger upgrades.
+        You can <b>aggregate multiple codemods</b> by adding more than one <code>codemod</code> step in the same node. A Codemod package may itself orchestrate other codemods, enabling nested compositions for larger upgrades.
       </Info>
 
     ```yaml workflow.yaml
@@ -1074,7 +1074,7 @@ nodes:
     Explore the full command and option reference for Codemod CLI.
   </Card>
   <Card title="Build with Codemod MCP" icon="robot" href="/model-context-protocol">
-    Learn how to build codemod packages in your IDE using Codemod MCP.
+    Learn how to build Codemod packages in your IDE using Codemod MCP.
   </Card>
 </CardGroup>
 
