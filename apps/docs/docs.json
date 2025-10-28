@@ -185,7 +185,11 @@
     },
     {
       "source": "/building-codemods/package-requirements",
-      "destination": "/cli/packages/package-structure"
+      "destination": "/cli/packages/building-workflows"
+    },
+    {
+      "source": "/cli/packages/package-structure",
+      "destination": "/cli/packages/building-workflows"
     },
     {
       "source": "/building-codemods/codemod2",
