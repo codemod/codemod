@@ -1,5 +1,6 @@
 ---
-title: "Building workflows"
+title: "Codemod Package Structure"
+sidebarTitle: "Package structure"
 ---
 
 <Info>
@@ -15,12 +16,246 @@ Codemod CLI and workflow features are free for local use. For large-scale refact
 ---
 
 <Tip>
-  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/cli/mcp) to create your codemod package with the help of AI.
+  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/model-context-protocol) to create your Codemod package with the help of AI.
 </Tip>
 
-## Workflow File
+## Package Structure
 
-A workflow has four top-level keys:
+### Directory Layout
+
+```
+my-codemod-package/
+├─ codemod.yaml
+├─ workflow.yaml
+├─ scripts/
+└─ rules/
+```
+
+The folder—called a **Codemod package**—is the root when you run `npx codemod workflow run -w ./my-codemod-package/`.
+
+<Info>
+You can combine types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths and reference them from <code>workflow.yaml</code>.
+</Info>
+
+A Codemod package is a directory containing your `workflow.yaml` and any scripts, rules, or assets referenced by your workflow.
+
+<Steps>
+<Step title="Scaffolding packages">
+  ```bash
+  npx codemod init
+  ```
+</Step>
+
+<Step title="Validating workflows">
+  ```bash
+  npx codemod workflow validate -w workflow.yaml
+  ```
+</Step>
+
+<Step title="Running workflows">
+  <CodeGroup>
+
+  ```bash Running a package
+  npx codemod workflow run -w ./my-codemod-package/
+  ```
+
+  ```bash Directly running a workflow file
+  npx codemod workflow run -w workflow.yaml
+  ```
+
+  </CodeGroup>
+</Step>
+</Steps>
+
+---
+
+## Package Metadata (codemod.yaml)
+
+The `codemod.yaml` file defines your Codemod package's metadata and configuration.
+
+Example codemod.yaml file:
+
+```yaml codemod.yaml
+schema_version: "1.0"
+
+name: "my-awesome-codemod"
+version: "0.1.0"
+description: "Transform legacy patterns to modern syntax"
+author: "Your Name <you@example.com>"
+license: "MIT"
+workflow: "workflow.yaml"
+category: "migration"
+
+targets:
+  languages: ["typescript"]
+
+keywords: ["upgrade", "breaking-change", "react", "v17-to-v18"]
+
+registry:
+  access: "public"
+  visibility: "public"
+```
+
+<Accordion title="Available codemod.yaml fields">
+
+<ParamField path="schema_version" type="string" required default="1.0">
+Codemod workflow schema version.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+Codemod package name (unique within scope).
+
+**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+
+**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+
+Valid examples:
+- <code>remove-console-logs</code>
+- <code>@scope/remove-console-logs</code> (using `@organization-or-project-scope/name` provides better discoverability in the [Codemod Registry](https://go.codemod.com/registry))
+</ParamField>
+
+<ParamField path="version" type="string" required default="0.1.0">
+Semantic version of the package.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+Brief description of what the codemod does.
+</ParamField>
+
+<ParamField path="author" type="string" required>
+Author name and email, e.g., `Jane Doe <jane@example.com>`.
+</ParamField>
+
+<ParamField path="license" type="string" required default="MIT">
+License identifier (SPDX), e.g., <code>MIT</code>.
+</ParamField>
+
+<ParamField path="workflow" type="string" required default="workflow.yaml">
+Relative path to your workflow file.
+</ParamField>
+
+<ParamField path="category" type="string" default="migration">
+Category for the codemod.
+</ParamField>
+
+<ParamField path="targets.languages" type="string[]">
+Languages targeted by this codemod (selected language during `codemod init`; editable later).
+</ParamField>
+
+<ParamField path="keywords" type="string[]">
+Keyword tags are an optional feature helping developers quickly identify the purpose, scope, and relevance of a codemod. They also enable better search, filtering, and reporting when managing many codemods across frameworks and projects.
+
+Example: `keywords: ["react", "v18-to-v19", "migration"]`
+
+<Accordion title="Best practices and conventions">
+
+  - Keep tags concise (1–2 words).
+  - Use lowercase for consistency.
+  - Don't overload with tags — 2–4 per codemod is ideal.
+  - Prioritize **transformation type + framework/library + version (if relevant)**.
+
+  ---
+
+  **1. Transformation Type Tags**
+
+  Consider these categories when describing **why** the codemod exists:
+
+  - **`upgrade`** – helps upgrade code to newer versions (encompasses both breaking changes and feature adoption).
+    You may also consider adding **one** of the following tags:
+    - **`breaking-change`** – adapts code to framework/library breaking API changes.
+    - **`feature-adoption`** – helps adoption of new optional or incremental features.
+  - **`security`** – addresses known vulnerabilities or unsafe patterns.
+  - **`cross-migration`** – replaces one library/framework with another.
+  - **`i18n`** – internationalization migrations or improvements.
+  - **`a11y`** – accessibility improvements and compliance.
+  - **`standardization`** – unifies patterns, conventions, or APIs across a codebase.
+  - **`code-mining`** – identifies, flags, or extracts patterns without transforming. Use if codemod is for *detection-only*.
+
+  **Rule of thumb**: Pick one primary type tag per codemod. Avoid mixing `breaking-change` and `feature-adoption` in the same codemod.
+
+  ---
+
+  **2. Target Version Tags**
+
+  Use these to indicate the **framework/library version** the codemod prepares for.
+
+  - Format: `vX` or `vX-to-vY` (for upgrades).
+  - Examples:
+      - `v17-to-v18` (React 17 → 18)
+      - `v5-to-v6` (React Router 5 → 6)
+      - `v16` (Angular 16 breaking changes)
+
+  **Rule of thumb**: If the codemod is version-specific, always tag it.
+
+  ---
+
+  **3. Framework / Library / SDK Tags**
+
+  Always add the **ecosystem name** to improve discoverability.
+
+  - Examples:
+      - `react`
+      - `nextjs`
+      - `nodejs`
+      - `angular`
+      - `msw`
+      - `i18next`
+
+  **Rule of thumb**: Use the official, common name of the framework/library.
+
+  ---
+
+  **4. Example Tag Sets**
+
+  Here are some examples to illustrate how tags combine:
+
+  - **React Root API Upgrade (17 → 18)**
+      - Tags: `upgrade`, `breaking-change`, `v17-to-v18`, `react`
+  - **Adopt React Hooks**
+      - Tags: `upgrade`, `feature-adoption`, `react`
+  - **Migrate from Moment.js to Day.js**
+      - Tags: `cross-migration`, `momentjs`, `dayjs`
+  - **Remove Hardcoded Strings for i18n**
+      - Tags: `i18n`, `i18next`
+  - **Add ARIA labels for accessibility**
+      - Tags: `a11y`, `react`
+  - **Detect Insecure crypto API usage**
+      - Tags: `security`, `nodejs`, `crypto`
+
+</Accordion>
+</ParamField>
+
+<ParamField path="registry.access" type="string" default="public">
+Access controls who can run/use the codemod (once they can see it).
+
+- <strong>public</strong>: Anyone can run the codemod.
+- <strong>private</strong>: Only the owner can run the codemod.
+- <strong>pro</strong>: Only Pro plan users can run the codemod.
+
+<Tip>
+Access applies on top of visibility. For example, <code>visibility: public</code> with <code>access: pro</code> shows the package publicly, but only Pro users can run it.
+</Tip>
+</ParamField>
+
+<ParamField path="registry.visibility" type="string" default="public">
+Visibility controls who can see the package in the Registry (search, listings, and UI).
+
+- <strong>public</strong>: Everyone can see the package in the Registry.
+- <strong>private</strong>: Only the owner can see the package.
+- <strong>org</strong>: Members of the package's organization scope can see the package.
+- <strong>user</strong>: Visible only to the publishing user (user-scoped visibility).
+
+<Info>
+During scaffolding, the CLI sets <code>public</code>/<code>private</code> based on <code>--private</code>. You can change to any supported value above when publishing.
+</Info>
+</ParamField>
+
+</Accordion>
+---
+
+## Workflow File (workflow.yaml)
+
+The `workflow.yaml` file defines your Codemod package's workflow. A workflow is a collection of nodes that are executed in order. A workflow has four top-level keys:
 
 ```yaml workflow.yaml
 version: "1"
@@ -33,113 +268,9 @@ nodes: []
 | Key                       | Required | Purpose                                           |
 | ------------------------- | -------- | ------------------------------------------------- |
 | `version`                 | ✓        | Declare workflow schema version (default: `"1"`). |
+| [`nodes`](#nodes)         | ✓        | Executable DAG.                                   |
 | [`state`](#shared-state)  |          | Declares shared-state schema.                     |
 | [`templates`](#templates) |          | Re-usable blocks.                                 |
-| [`nodes`](#nodes)         | ✓        | Executable DAG.                                   |
-
----
-
-## Shared State
-
-State enables workflows to persist data across runs and coordinate work across repositories and teams:
-
-- **Sharding:** Distribute work across teams or repositories  
-- **Progress tracking:** Resume interrupted migrations without losing work
-- **Coordination:** Maintain consistency across related codebases
-
-<Info>
-The Codemod app provides centralized state management for large-scale refactoring across many repos. See [i18n automation](https://codemod.com/i18n) for examples of coordinated multi-repo migrations.
-</Info>
-
-```yaml
-version: "1"
-state:
-  schema:
-    - name: shards
-      type: array
-      items:
-        type: object
-        properties:
-          team:    { type: string }
-          shardId: { type: string }
-nodes: []
-```
-
-You can also declare state schema using an object map:
-
-  ```yaml
-  version: "1"
-  state:
-    schema:
-      shards:
-        type: array
-        items:
-          type: object
-          properties:
-            team:    { type: string }
-            shardId: { type: string }
-  nodes: []
-  ```
-
----
-
-## Parameters
-
-Parameters make workflows configurable and reusable across different projects and teams. Define them in your workflow with a schema:
-
-```yaml workflow.yaml
-version: "1"
-params:
-  schema:
-    library:
-      name: "Library"
-      description: "Internationalization library to use"
-      type: string
-      default: "next-intl"
-    shardingMethod:
-      name: "Sharding Method"
-      type: string
-      default: "directory"
-    prSize:
-      name: "PR Size"
-      type: string
-      default: "50"
-nodes:
-  - id: transform
-    steps:
-      - name: Run transform
-        js-ast-grep:
-          js_file: ./src/codemod.ts
-          language: tsx
-```
-
-**Access parameters in jssg codemods via `options.params`:**
-
-```ts codemod.ts
-export default function transform(root: SgRoot<TSX>, options) {
-  // Access parameters
-  const library = options.params?.library || "next-intl";
-  const catalogMethod = options.params?.catalogFileSelectionMethod;
-  
-  // Access matrix values (when using matrix strategy)
-  if (options.matrixValues?.shard && options.matrixValues._meta_files) {
-    // This task is part of a matrix - use shard info
-    const fits = fitsInShard(filename, options.matrixValues);
-  }
-}
-```
-
-<Note>
-**Parameters vs Matrix Values:** `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](#matrix-strategy) for details.
-</Note>
-
-**Common parameter use cases:**
-- **Sharding configuration:** Method (`directory`, `codeowner`) and targets
-- **PR settings:** Size limits, auto AI review, pre/post run scripts
-
-<Info>
-**Enterprise Features:** In the Codemod app, you can configure parameters visually through the UI. See [Campaigns](/migrations) for running parameterized workflows at scale.
-</Info>
 
 ---
 
@@ -192,98 +323,43 @@ nodes:
   Environment variables for the node or step.
 </ParamField>
 
-### Step
+### Steps
 
-Steps are the atomic actions inside a node; they run sequentially and each step performs one action 
-- [`run`](#shell-command-step)
-- [`ast-grep`](#yaml-ast-grep-step)
-- [`js-ast-grep`](#js-ast-grep-step)
-- [`codemod`](#codemod-registry-step)
-- [`ai`](#ai-step)
+Steps are the atomic actions inside a node. They run sequentially and each step performs one transformation or action using a specific engine:
 
-All step types support the following field:
+- [`js-ast-grep`](#js-ast-grep-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
+- [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with YAML rules
+- [`run`](#shell-command-step) - Shell commands for external tools and setup
+- [`ai`](#ai-step) - LLM-powered transformations and reviews
+- [`codemod`](#codemod-registry-step) - Compose other published codemods
 
-<ParamField path="if" type="string">
-    Conditional expression to gate the step. `if` is evaluated before executing any step type.
-    
-    Expression evaluation supports referencing `params.x` and `state.x`, and any matrix value keys (injected as-is). Supported operators include `==`, `!=`, `>`, `<`, `&&`, and `||`.
+#### jssg (JS ast-grep) step
 
-    Example: `params.autoAIReview`.
-    
-    See [Variable resolution](#variable-resolution) for the full expression and interpolation grammar.
-  </ParamField>
+Runs JavaScript/TypeScript codemods with full programmatic control over AST transformations. Use jssg for:
+- Complex transformations requiring logic (loops, conditions, functions)
+- AST manipulations beyond find/replace
+- Cross-file analysis or coordination
+- Type-safe transformations with TypeScript
 
+<Tip>
+  New to jssg? Start with the <a href="/jssg/quickstart">jssg quickstart</a> to write your first transform, then see the <a href="/jssg/reference">jssg API reference</a> for the complete API.
+</Tip>
 
+To use a jssg step:
 
-<AccordionGroup>
-
-  <Accordion title="Shell command step">
-    Runs shell commands on the host. Use for setup/cleanup, invoking external tools, or glue logic between transformations.
-    ```yaml
-    steps:
-      - name: Install dependencies
-        run: |
-          npm install
-          npm run build
+<Steps>
+  <Step title="Create a jssg codemod:">
+    Under `scripts/` folder, create a new jssg codemod.
+    ```ts scripts/codemod.ts
+    export default function transform(root: SgRoot<TSX>, options) {
+      // Your transform logic here
+    }
     ```
 
-    <ParamField path="name" type="string" required>
-      Step label.
-    </ParamField>
-
-    <ParamField path="run" type="string">
-      Inline shell command to execute.
-    </ParamField>
-
-    <ParamField path="env" type="object">
-      Step-level environment variables applied to the process environment for this `run` step.
-    </ParamField>
-  </Accordion>
-
-
-
-  <Accordion title="YAML ast-grep step">
-    Executes ast-grep using a YAML config. Use for fast, declarative pattern matching and structured find/replace.
-    ```yaml
-    steps:
-      - name: Apply ast-grep rules
-        ast-grep:
-          config_file: "rules/config.yml"
-          base_path: "./src"
-          include:
-            - "**/*.js"
-          exclude:
-            - "**/*.test.js"
-    ```
-
-    <ParamField path="ast-grep.config_file" type="string" required>
-      Path to the ast-grep configuration file (.yaml).
-    </ParamField>
-
-    <ParamField path="ast-grep.include" type="string[]">
-      Include glob patterns.
-    </ParamField>
-
-    <ParamField path="ast-grep.exclude" type="string[]">
-      Exclude glob patterns.
-    </ParamField>
-
-    <ParamField path="ast-grep.base_path" type="string">
-      Base path for resolving globs.
-    </ParamField>
-
-    <ParamField path="ast-grep.max_threads" type="number">
-      Maximum concurrent threads.
-    </ParamField>
-  </Accordion>
-
-  <Accordion title="JS ast-grep (jssg) step">
-    Runs a TypeScript/JavaScript codemod powered by ast-grep. Use when you need programmatic logic beyond YAML rules.
-    
-    <Tip>
-      New to jssg? Start with the <a href="/jssg/quickstart">jssg quickstart</a> to scaffold a package and write your first transform.
-    </Tip>
-    ```yaml
+    Learn more about how to write jssg codemods: [jssg documentation](/jssg/quickstart).
+  </Step>
+  <Step title="Add a jssg step to your workflow:">
+    ```yaml workflow.yaml
     steps:
       - name: Run jssg codemod
         js-ast-grep:
@@ -294,6 +370,25 @@ All step types support the following field:
             - "**/*.ts"
             - "**/*.tsx"
     ```
+
+    <Accordion title="Available parameters">
+    <ParamField path="name" type="string" required>
+      Step label.
+    </ParamField>
+
+    <ParamField path="if" type="string">
+      Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`.
+      
+      ```yaml
+      - name: Transform only for specific shard
+        if: params.shardingMethod == "directory"
+        js-ast-grep:
+          js_file: "src/codemod.ts"
+          language: "tsx"
+      ```
+      
+      See [Variable resolution](#variable-resolution) for full syntax.
+    </ParamField>
 
     <ParamField path="js-ast-grep.js_file" type="string" required>
       Path to the JS/TS file that implements the codemod.
@@ -324,76 +419,53 @@ All step types support the following field:
     </ParamField>
   </Accordion>
 
-  <Accordion title="Codemod Registry step">
-    Runs another codemod by package name (or local path). Use to compose larger migrations by chaining codemods.
-    ```yaml
-    steps:
-      - name: Run registry codemod
-        codemod:
-          source: "@scope/package"
-          args: ["--flag", "value"]
-          env:
-            NODE_ENV: production
-          working_dir: "."
-    ```
+  </Step>
+</Steps>
 
-    <ParamField path="codemod.source" type="string" required>
-      Codemod source (registry package or local path).
+#### AI step
 
-      <Tip>
-        <b>Version pinning</b>: specify an exact version in <code>source</code> (e.g., <code>@scope/pkg@1.2.3</code>) for reproducible runs. If you omit the version, the latest published version is used.
-      </Tip>
+Calls an AI agent with a prompt. This is helpful when your workflow requires leveraging LLM intelligence for more complex tasks for capabilities beyond deterministic transformations.
+
+To use a AI step:
+
+<Steps>
+  <Step title="Set the environment variables:">
+  You can either set the environment variables in your shell or in your environment file.
+  ```bash .env
+  LLM_API_KEY=YOUR_KEY
+  LLM_PROVIDER=openai # or anthropic, azure_openai
+  LLM_MODEL=gpt-4o # or the model you want to use
+  LLM_BASE_URL=https://api.openai.com/v1 # or the base URL of the provider you want to use
+  ```
+  </Step>
+
+  <Step title="Add an AI step to your workflow:">
+  ```yaml workflow.yaml
+  steps:
+    - name: Review diffs with AI
+      ai:
+        prompt: |
+          Summarize risky changes and suggest tests.
+        model: "gpt-4o"
+  ```
+
+  <Accordion title="Available parameters">
+    <ParamField path="name" type="string" required>
+      Step label.
     </ParamField>
 
-    <ParamField path="codemod.args" type="string[]">
-      CLI arguments passed to the codemod.
-    </ParamField>
-
-    <ParamField path="codemod.env" type="object">
-      Environment variables used during execution.
-    </ParamField>
-
-    <ParamField path="codemod.working_dir" type="string">
-      Working directory for execution.
-    </ParamField>
-
-    <ParamField path="env" type="object">
-      Step-level environment variables. For `codemod` steps, these are forwarded to the invoked workflow as parameters with an `env_` prefix (e.g., `FOO` → `env_FOO`). They are not applied to the OS environment of the nested workflow.
-    </ParamField>
-
-    **Aggregate multiple codemods:**
-
-    <Info>
-      You can <b>aggregate multiple codemods</b> by adding more than one <code>codemod</code> step in the same node. A codemod package may itself orchestrate other codemods, enabling nested compositions for larger upgrades.
-    </Info>
-
-    ```yaml
-    steps:
-      - name: Convert `createRequireFromPath` to `createRequire`
-        codemod:
-          source: "@nodejs/create-require-from-path"
-      - name: Handle DEP0147 (`fs.rmdir` to `fs.rm`)
-        codemod:
-          source: "@nodejs/rmdir"
-    ```
-
-    <Info>
-      - Steps in a node **run sequentially** from top to bottom.
-      - Use [`depends_on`](#param-depends-on) or a matrix [`strategy`](#matrix-strategy) across multiple nodes for gating/parallelism.
-      - If a step fails, the node fails and subsequent steps in that node are skipped.
-    </Info>
-  </Accordion>
-
-  <Accordion title="AI step">
-    Calls an AI agent with a prompt. Use for generating change plans or reviews; validate outputs and prefer dry runs in critical paths.
-    ```yaml
-    steps:
-      - name: Review diffs with AI
+    <ParamField path="if" type="string">
+      Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`.
+      
+      ```yaml
+      - name: AI review only if enabled
+        if: params.autoAIReview
         ai:
-          prompt: |
-            Summarize risky changes and suggest tests.
-          model: "gpt-4o"
-    ```
+          prompt: "Review the changes"
+      ```
+      
+      See [Variable resolution](#variable-resolution) for full syntax.
+    </ParamField>
 
     <ParamField path="ai.prompt" type="string" required>
       Prompt to send to the AI agent.
@@ -404,7 +476,7 @@ All step types support the following field:
     </ParamField>
 
     <ParamField path="ai.system_prompt" type="string">
-      System prompt to scope the AI agent’s behavior.
+      System prompt to scope the AI agent's behavior.
     </ParamField>
 
     <ParamField path="ai.max_steps" type="number" default="30">
@@ -416,7 +488,7 @@ All step types support the following field:
     </ParamField>
 
     <ParamField path="ai.endpoint" type="string">
-      LLM base URL. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
+      LLM base URL. If omitted, defaults to the provider's standard endpoint for the selected protocol. You can override with a custom endpoint.
     </ParamField>
 
     <ParamField path="ai.api_key" type="string">
@@ -432,17 +504,357 @@ All step types support the following field:
       ```
 
       <Tip>
-        LLM_BASE_URL is optional. If omitted, defaults to the provider’s standard endpoint for the selected protocol. You can override with a custom endpoint.
+        LLM_BASE_URL is optional. If omitted, defaults to the provider's standard endpoint for the selected protocol. You can override with a custom endpoint.
       </Tip>
+    </ParamField>
+  </Accordion>
+  </Step>
+</Steps>
 
+#### YAML ast-grep step
+
+Executes ast-grep using declarative YAML rules. Use for simple, fast pattern matching when you don't need programmatic logic.
+
+**When to use YAML ast-grep**:
+- Simple find/replace transformations
+- No conditional logic needed
+- Fastest to write for basic patterns
+
+**When to use [jssg](#jssg-js-ast-grep) instead**:
+- Need conditional logic or loops
+- Complex AST manipulations
+- Cross-file coordination
+
+To use a YAML ast-grep step:
+
+<Steps>
+  <Step title="Create a YAML ast-grep rules file:">
+    Under `rules/` folder, create a new YAML ast-grep rules file.
+    ```yaml rules/config.yml
+    id: replace-console-log
+    language: typescript
+    rule:
+      any:
+        - pattern: console.log($ARG)
+        - pattern: console.debug($ARG)
+    fix: logger.log($ARG)
+    ```
+
+    Learn more about how to write YAML ast-grep rules: [ast-grep YAML reference](https://ast-grep.github.io/reference/yaml.html)
+  </Step>
+  <Step title="Add a YAML ast-grep step to your workflow:">
+    ```yaml workflow.yaml
+    steps:
+      - name: "Scan {language} files and apply fixes"
+        ast-grep:
+          config_file: "rules/config.yml"
+          base_path: "./src"
+          include:
+            - "**/*.js"
+          exclude:
+            - "**/*.test.js"
+    ```
+
+    <Accordion title="Available parameters">
+      <ParamField path="name" type="string" required>
+        Step label.
+      </ParamField>
+
+      <ParamField path="if" type="string">
+        Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`.
+        
+        ```yaml
+        - name: Apply rules only for TypeScript
+          if: params.language == "typescript"
+          ast-grep:
+            config_file: "rules/typescript.yml"
+        ```
+        
+        See [Variable resolution](#variable-resolution) for full syntax.
+      </ParamField>
+
+      <ParamField path="ast-grep.config_file" type="string" required>
+        Path to the ast-grep configuration file (.yaml).
+      </ParamField>
+
+      <ParamField path="ast-grep.include" type="string[]">
+        Include glob patterns.
+      </ParamField>
+
+      <ParamField path="ast-grep.exclude" type="string[]">
+        Exclude glob patterns.
+      </ParamField>
+
+      <ParamField path="ast-grep.base_path" type="string">
+        Base path for resolving globs.
+      </ParamField>
+
+      <ParamField path="ast-grep.max_threads" type="number">
+        Maximum concurrent threads.
+      </ParamField>
+    </Accordion>
+  </Step>
+</Steps>
+
+#### Codemod Registry step
+
+Runs another codemod by package name (or local path). Use to compose larger migrations by chaining codemods.
+
+To use a Codemod Registry step:
+
+<Steps>
+  <Step title="Find or publish a codemod to the Codemod Registry:">
+    You can:
+    - find and use an existing codemod in [Codemod Registry](https://go.codemod.com/registry), or
+    - [publish a Codemod package](/cli/cli-reference#publish-codemod) to Codemod Registry.
+  </Step>
+  <Step title="Add a Codemod Registry step to your workflow:">
+    ```yaml workflow.yaml
+    steps:
+      - name: Run registry codemod
+        codemod:
+          source: "@scope/package"
+          args: ["--flag", "value"]
+          env:
+            NODE_ENV: production
+            working_dir: "."
+    ```
+
+    <Accordion title="Available parameters">
+      <ParamField path="name" type="string" required>
+        Step label.
+      </ParamField>
+
+      <ParamField path="if" type="string">
+        Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`.
+        
+        ```yaml
+        - name: Run only for React 18
+          if: params.reactVersion == "18"
+          codemod:
+            source: "@codemod/react-18-19"
+        ```
+        
+        See [Variable resolution](#variable-resolution) for full syntax.
+      </ParamField>
+
+      <ParamField path="codemod.source" type="string" required>
+        Codemod source (registry package or local path).
+
+        <Tip>
+          <b>Version pinning</b>: specify an exact version in <code>source</code> (e.g., <code>@scope/pkg@1.2.3</code>) for reproducible runs. If you omit the version, the latest published version is used.
+        </Tip>
+      </ParamField>
+
+      <ParamField path="codemod.args" type="string[]">
+        CLI arguments passed to the codemod.
+      </ParamField>
+
+      <ParamField path="codemod.env" type="object">
+        Environment variables used during execution.
+      </ParamField>
+
+      <ParamField path="codemod.working_dir" type="string">
+        Working directory for execution.
+      </ParamField>
+
+      <ParamField path="env" type="object">
+        Step-level environment variables. For `codemod` steps, these are forwarded to the invoked workflow as parameters with an `env_` prefix (e.g., `FOO` → `env_FOO`). They are not applied to the OS environment of the nested workflow.
+      </ParamField>
+
+      **Aggregate multiple codemods:**
+
+      <Info>
+        You can <b>aggregate multiple codemods</b> by adding more than one <code>codemod</code> step in the same node. A Codemod package may itself orchestrate other codemods, enabling nested compositions for larger upgrades.
+      </Info>
+
+    ```yaml workflow.yaml
+      steps:
+        - name: Convert `createRequireFromPath` to `createRequire`
+          codemod:
+            source: "@nodejs/create-require-from-path"
+        - name: Handle DEP0147 (`fs.rmdir` to `fs.rm`)
+          codemod:
+            source: "@nodejs/rmdir"
+      ```
+
+      <Info>
+        - Steps in a node **run sequentially** from top to bottom.
+        - Use [`depends_on`](#param-depends-on) or a matrix [`strategy`](#matrix-strategy) across multiple nodes for gating/parallelism.
+        - If a step fails, the node fails and subsequent steps in that node are skipped.
+      </Info>
+    </Accordion>
+  </Step>
+</Steps>
+
+#### Shell command step
+Runs shell commands on the host. Use for setup/cleanup, invoking external tools, or glue logic between transformations.
+
+```yaml workflow.yaml
+steps:
+  - name: Install dependencies
+    run: |
+      npm install
+      npm run build
+```
+
+<Accordion title="Available parameters">
+  <ParamField path="name" type="string" required>
+    Step label.
+  </ParamField>
+
+  <ParamField path="if" type="string">
+    Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`.
+    
+    ```yaml
+    - name: Run only in production
+      if: params.environment == "production"
+      run: npm run deploy
+    ```
+    
+    See [Variable resolution](#variable-resolution) for full syntax.
+    </ParamField>
+
+  <ParamField path="run" type="string" required>
+    Inline shell command to execute.
+    </ParamField>
+
+  <ParamField path="env" type="object">
+    Step-level environment variables applied to the process environment for this `run` step.
     </ParamField>
   </Accordion>
 
-</AccordionGroup>
+---
+
+## Shared State
+
+State enables workflows to persist data across runs and coordinate work across repositories and teams:
+
+- **Sharding:** Distribute work across teams or repositories  
+- **Progress tracking:** Resume interrupted migrations without losing work
+- **Coordination:** Maintain consistency across related codebases
+
+<Info>
+The Codemod app provides centralized state management for large-scale refactoring across many repos. Pro codemods like [i18n codemod](https://codemod.com/i18n) use state to coordinate multi-repo migrations.
+</Info>
+
+```yaml workflow.yaml
+version: "1"
+state:
+  schema:
+    - name: shards
+      type: array
+      items:
+        type: object
+        properties:
+          team:    { type: string }
+          shardId: { type: string }
+nodes: []
+```
+
+You can also declare state schema using an object map:
+
+  ```yaml workflow.yaml
+  version: "1"
+  state:
+    schema:
+      shards:
+        type: array
+        items:
+          type: object
+          properties:
+            team:    { type: string }
+            shardId: { type: string }
+  nodes: []
+  ```
+
+---
+
+## Parameters
+
+Parameters make workflows configurable and reusable across different projects and teams. Define them in your workflow with a schema:
+
+```yaml workflow.yaml
+version: "1"
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Internationalization library to use"
+      type: string
+      default: "next-intl"
+    shardingMethod:
+      name: "Sharding Method"
+      type: string
+      default: "directory"
+    prSize:
+      name: "PR Size"
+      type: string
+      default: "50"
+nodes:
+  - id: transform
+    steps:
+      - name: Run transform
+        js-ast-grep:
+          js_file: ./src/codemod.ts
+          language: tsx
+```
+
+### Accessing Parameters in Steps
+
+Parameters are exposed differently depending on the step type:
+
+**In jssg transforms** - access via `options.params`:
+
+```ts codemod.ts
+export default function transform(root: SgRoot<TSX>, options) {
+  // Access parameters
+  const library = options.params?.library || "next-intl";
+  const catalogMethod = options.params?.catalogFileSelectionMethod;
+  
+  // Use parameters to drive behavior
+  if (library === "react-i18next") {
+    // Apply react-i18next specific logic
+  }
+}
+```
+
+<Info>
+  For complete jssg parameter patterns and examples, see [jssg Advanced: Accessing Parameters](/jssg/advanced#accessing-parameters).
+</Info>
+
+**In shell steps** - parameters become environment variables with `PARAM_` prefix:
+
+```yaml workflow.yaml
+- name: Run script
+  run: |
+    echo "Library: $PARAM_LIBRARY"
+```
+
+**In codemod steps** - forwarded with `env_` prefix:
+
+```yaml workflow.yaml
+- name: Run nested codemod
+  codemod:
+    source: "@org/package"
+  env:
+    LIBRARY: ${{ params.library }}
+# The nested workflow receives env_LIBRARY
+```
+
+**Common parameter use cases:**
+- **Sharding configuration:** Method (`directory`, `codeowner`) and targets
+- **PR settings:** Size limits, auto AI review, pre/post run scripts
+
+<Info>
+**Enterprise Features:** In the Codemod app, you can configure parameters visually through the UI. See [Campaigns](/migrations) for running parameterized workflows at scale.
+</Info>
+
+---
 
 ## Matrix Strategy
 
-```yaml
+```yaml workflow.yaml
 version: "1"
 state:
   schema:
@@ -476,11 +888,42 @@ nodes:
   </Info>
 </Accordion>
 
+### Accessing Matrix Values in Steps
+
+Matrix values are exposed differently per step type:
+
+**In jssg transforms** - access via `options.matrixValues`:
+
+```ts scripts/codemod.ts
+const transform: Transform<TSX> = async (root, options) => {
+  const team = options.matrixValues?.team;
+  const shardId = options.matrixValues?.shardId;
+  
+  // Use for sharding logic
+  if (team && !isOwnedByTeam(root.filename(), team)) {
+    return null; // Skip files not owned by this team
+  }
+};
+```
+
+<Info>
+  For complete jssg sharding patterns and examples, see [jssg Advanced: Accessing Matrix Values](/jssg/advanced#accessing-matrix-values).
+</Info>
+
+**In shell steps** - matrix values become environment variables:
+
+```yaml workflow.yaml
+- name: Process shard
+  run: |
+    echo "Team: $team"
+    echo "Shard: $shardId"
+```
+
 ---
 
 ## Manual Trigger
 
-```yaml
+```yaml workflow.yaml
 version: "1"
 nodes:
   - id: manual-approval
@@ -538,7 +981,7 @@ nodes:
   <Accordion title="Cyclic Dependency Example">
     If your workflow has a cycle:
 
-    ```yaml
+    ```yaml workflow.yaml
     nodes:
       - id: a
         name: Task A
@@ -556,7 +999,7 @@ nodes:
 
     You'll see:
 
-    ```bash
+    ```bash console
     ✗ Workflow definition is invalid
     Error: Cyclic dependency detected: a → b → a
     ```
@@ -630,7 +1073,8 @@ nodes:
   <Card title="Codemod CLI Reference" icon="terminal" href="/cli/cli-reference">
     Explore the full command and option reference for Codemod CLI.
   </Card>
-  <Card title="Build Workflows with Codemod MCP" icon="robot" href="/cli/mcp">
-    Learn how to build codemod workflows in your IDE using Codemod MCP.
+  <Card title="Build with Codemod MCP" icon="robot" href="/model-context-protocol">
+    Learn how to build Codemod packages in your IDE using Codemod MCP.
   </Card>
 </CardGroup>
+

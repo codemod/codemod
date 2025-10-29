@@ -1,9 +1,9 @@
 ---
 title: "Quickstart"
-description: "Create your first codemod package and run it locally."
+description: "Create your first Codemod package and run it locally."
 ---
 
-A **codemod package** is a set of files that define an automated code transformation. Codemod Packages let you create, test, and distribute reusable transformations that update source code across entire codebases.
+A **Codemod package** is a set of files that define an automated code transformation. Codemod Packages let you create, test, and distribute reusable transformations that update source code across entire codebases.
 
 Packages range from quick, single-file refactors to advanced, multi-step migrations. They're fully portable—run them locally, in CI, or share with your team.
 
@@ -14,9 +14,9 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
 </Frame>
 
 <Steps>
-  <Step title="Create a new codemod package">
+  <Step title="Create a new Codemod package">
 
-    Scaffold a new codemod package:
+    Scaffold a new Codemod package:
 
     ```bash
     npx codemod init
@@ -41,13 +41,13 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
   </Step>
 
   <Step title="Explore the generated project">
-    An example codemod package:
+    An example Codemod package:
 
     ```plaintext
     example-codemod/
     ├── .gitignore
     ├── README.md
-    ├── codemod.yaml        # Codemod package manifest and metadata
+    ├── codemod.yaml        #  manifest and metadata
     ├── workflow.yaml       # Workflow definition for running the codemod
     ├── scripts/            # JS/TS codemods and shell scripts
     │   └── codemod.ts      # JS ast-grep codemod entry point
@@ -59,7 +59,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
       You can combine different codemod types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths you prefer as long as you reference them correctly from <code>workflow.yaml</code>.
     </Info>
 
-    Check out the [codemod package structure](/cli/packages/package-structure) for more details.
+    Check out the [Codemod package structure](/cli/packages/package-structure) for more details.
   </Step>
 
   <Step title="Understand an example workflow">
@@ -107,7 +107,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
     Learn more about building workflows [here](/cli/packages/building-workflows).
   </Step>
 
-  <Step title="Validate & run your codemod package">
+  <Step title="Validate & run your Codemod package">
     ```bash
     npx codemod workflow validate -w workflow.yaml
     npx codemod workflow run -w workflow.yaml
