@@ -41,13 +41,13 @@ codemod-sandbox = { path = "crates/codemod-sandbox" }
 codemod-telemetry = { path = "crates/telemetry" }
 codemod-mcp = { path = "crates/mcp" }
 testing-utils = { path = "crates/testing-utils" }
-rmcp = { version = "0.6", features = ["server"] }
+rmcp = { version = "0.8", features = ["server"] }
 codemod-llrt-capabilities = { path = "crates/llrt-capabilities" }
 
 anyhow = "1.0"
-ast-grep-core = "0.38.6"
-ast-grep-config = "0.38.6"
-ast-grep-language = "0.38.6"
+ast-grep-core = "0.39.7"
+ast-grep-config = "0.39.7"
+ast-grep-language = "0.39.7"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
