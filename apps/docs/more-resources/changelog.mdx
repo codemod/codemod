@@ -28,6 +28,8 @@ mode: "center"
 
 **Stripe-powered subscriptions:** Seamless billing management directly in organization settings, with pro plan access controls for premium features and enterprise codemods.
 
+**jssg security & capabilities:** jssg now enforces a deny-by-default security model. File system access, network requests, and process spawning are disabled by default and must be explicitly enabled via the `capabilities` field in `codemod.yaml` or CLI flags. This ensures untrusted codemods cannot access sensitive resources without explicit permission, providing better security and auditability.
+
 **Platform upgrades:**
 - Next.js 16 and React 19 for improved performance and developer experience
 - Enhanced authentication flows and session handling
