@@ -1488,7 +1488,9 @@ impl Engine {
                     Some(params.clone()),
                     task.matrix_values.clone(),
                     &CapabilitiesData {
-                        capabilities: capabilities.clone(),
+                        capabilities: capabilities
+                            .as_ref()
+                            .map(|v| v.clone().into_iter().collect()),
                         capabilities_security_callback: self
                             .workflow_run_config
                             .capabilities_security_callback
@@ -1704,7 +1706,10 @@ impl Engine {
                 .clone()
                 .unwrap_or("typescript".to_string())]),
             threads: js_ast_grep.max_threads,
-            capabilities: capabilities_data.capabilities.clone(),
+            capabilities: capabilities_data
+                .capabilities
+                .as_ref()
+                .map(|v| v.clone().into_iter().collect()),
         };
 
         // Set language first to get default extensions
@@ -1723,7 +1728,10 @@ impl Engine {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
-            capabilities: capabilities_data.capabilities.clone(),
+            capabilities: capabilities_data
+                .capabilities
+                .as_ref()
+                .map(|v| v.clone().into_iter().collect()),
         })
         .await
         .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
