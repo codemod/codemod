@@ -5,6 +5,11 @@ use ts_rs::TS;
 /// Represents a step in a node
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Step {
+    /// Unique identifier for the step (optional, used for referencing step outputs)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub id: Option<String>,
+
     /// Human-readable name
     pub name: String,
 

@@ -80,6 +80,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let dirty_check = dirty_git_check::dirty_check();
     dirty_check(&target_directory, args.allow_dirty);
 
+    std::env::set_var("CODEMOD_STEP_ID", "jssg");
+
     // Verify the JavaScript file exists
     if !js_file_path.exists() {
         anyhow::bail!(
