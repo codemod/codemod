@@ -7,10 +7,10 @@ A **Codemod package** is a set of files that define an automated code transforma
 
 Packages range from quick, single-file refactors to advanced, multi-step migrations. They're fully portable—run them locally, in CI, or share with your team.
 
-import { CLIDemo } from "/snippets/cli-demo.mdx";
+import { PackagesDemo } from "/snippets/packages-demo.mdx";
 
 <Frame>
-    <CLIDemo />
+    <PackagesDemo />
 </Frame>
 
 <Steps>
@@ -65,7 +65,7 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
   <Step title="Understand an example workflow">
     The generated <code>workflow.yaml</code> will differ depending on the codemod type you select:
 
-    ```yaml Combined (jssg + yaml + shell + ai)
+    ```yaml Combined (jssg + ai + yaml + registry + shell)
     version: "1"
     nodes:
       - id: run-all
@@ -82,7 +82,13 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
                 - "**/*.ts"
                 - "**/*.tsx"
 
-          # 2) YAML ast-grep
+          # 2) AI step
+          - name: "AI review"
+            ai:
+              prompt: |
+                Summarize risky changes and suggest tests.
+
+          # 3) YAML ast-grep
           - name: "Apply YAML ast-grep rules"
             ast-grep:
               config_file: "rules/config.yml"
@@ -92,13 +98,16 @@ import { CLIDemo } from "/snippets/cli-demo.mdx";
               exclude:
                 - "**/*.test.ts"
 
-          # 3) AI step
-          - name: "AI review"
-            ai:
-              prompt: |
-                Summarize risky changes and suggest tests.
-          
-          # 4) Shell command
+          # 4) Codemod Registry
+          - name: "Run registry codemod"
+            codemod:
+              source: "@scope/package"
+              args: ["--flag", "value"]
+              env:
+                NODE_ENV: production
+              working_dir: "."
+
+          # 5) Shell command
           - name: "Format code"
             run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
 

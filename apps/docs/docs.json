@@ -31,7 +31,7 @@
           {
             "group": "Codemod Platform",
             "pages": [
-              "migrations",
+              "campaigns",
               "insights",
               "codemod-studio",
               {
