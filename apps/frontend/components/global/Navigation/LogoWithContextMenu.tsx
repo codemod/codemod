@@ -120,7 +120,7 @@ export default function LogoWithContextMenu() {
               <Icon name="type" className="h-5 w-5" />
               <span>Copy wordmark as a SVG</span>
             </DropdownMenu.Item>
-            <DropdownMenu.Item asChild>
+            {/* <DropdownMenu.Item asChild>
               <a
                 href="https://brand.codemod.com/"
                 target="_blank"
@@ -130,7 +130,7 @@ export default function LogoWithContextMenu() {
                 <Icon name="drafting" className="h-5 w-5" />
                 <span>Brand guidelines</span>
               </a>
-            </DropdownMenu.Item>
+            </DropdownMenu.Item> */}
             <DropdownMenu.Item asChild>
               <Link
                 href="/"
