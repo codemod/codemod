@@ -10,7 +10,7 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
-use llrt_modules::module_builder::ModuleBuilder;
+use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use rquickjs::{
     async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
 };
@@ -57,13 +57,13 @@ where
             },
         })?;
 
-    runtime.block_on(async { execute_codemod_simple(options).await })
+    runtime.block_on(async { execute_codemod_in_memory(options).await })
 }
 
 /// Execute a codemod with simplified options (async version)
 ///
 /// This function executes the codemod entirely in memory without filesystem access.
-pub async fn execute_codemod_simple<R>(
+pub async fn execute_codemod_in_memory<R>(
     options: InMemoryExecutionOptions<'_, R>,
 ) -> Result<ExecutionResult, ExecutionError>
 where
@@ -90,8 +90,9 @@ where
 
     let ast_grep = AstGrep::new(options.content, options.language);
 
-    let module_builder = ModuleBuilder::default();
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) = module_builder.build();
+    let module_builder = LlrtModuleBuilder::build();
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
 
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
@@ -172,7 +173,7 @@ where
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
-                    root: Arc::downgrade(&parsed_content.inner),
+                    root: Arc::clone(&parsed_content.inner),
                     inner_node: node_match,
                     _phantom: PhantomData,
                 }).collect())
