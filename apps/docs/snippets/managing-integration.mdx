@@ -1,0 +1,13 @@
+export const ManagingIntegration = ({ provider, settingsPath = "Settings → Integrations", actionText = "Configure or Disconnect" }) => {
+  return (
+    <>
+      <h2>Managing the Integration</h2>
+      <p>To disconnect or modify the {provider} integration:</p>
+      <ol>
+        <li>Go to Codemod <strong>{settingsPath}</strong></li>
+        <li>Find your {provider} integration and click <strong>{actionText}</strong></li>
+      </ol>
+    </>
+  );
+};
+

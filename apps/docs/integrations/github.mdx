@@ -3,6 +3,10 @@ title: "GitHub Integration"
 icon: "github"
 ---
 
+import AddOrganizationStep from "/snippets/add-organization-step.mdx";
+import { ManagingIntegration } from "/snippets/managing-integration.mdx";
+import { NeedHelpFooter } from "/snippets/need-help-footer.mdx";
+
 Connect Codemod to your GitHub repositories to enable automated code transformations across your codebase.
 
 ## Why Integrate GitHub?
@@ -11,25 +15,7 @@ Integrating Codemod with GitHub allows you to apply codemods directly to your re
 
 ## Setting Up the Integration
 
-### Step 1: Navigate to "add organization"
-
-Sign in to [Codemod](https://app.codemod.com). Click on team switcher and click on "Add Organization"
-
-<img
-  src="/apps/docs/images/integrations/github-step-add-org-dark.png"
-  alt="Screenshot of how you can add organization in Codemod platform"
-  title="Screenshot of how you can add organization in Codemod platform"
-  className="hidden dark:block mx-auto"
-  style={{ width:"58%" }}
-/>
-
-<img
-  src="/apps/docs/images/integrations/github-step-add-org-light.png"
-  alt="Screenshot of how you can add organization in Codemod platform"
-  title="Screenshot of how you can add organization in Codemod platform"
-  className="block dark:hidden mx-auto"
-  style={{ width:"58%" }}
-/>
+<AddOrganizationStep />
 
 ### Step 2: Connect GitHub
 
@@ -118,13 +104,8 @@ These permissions allow Codemod to read your code, create branches with transfor
 - You can revoke access at any time through your GitHub settings
 - All code transformations are submitted as pull requests for your review
 
-## Managing the Integration
-
-To disconnect or modify the GitHub integration:
-
-1. Go to Codemod **Settings** → **Integrations**
-2. Click **Configure** or **Disconnect** next to the GitHub integration
+<ManagingIntegration provider="GitHub" />
 
 ---
 
-**Need help?** If you encounter any issues setting up the GitHub integration, please contact our support team or visit our documentation for troubleshooting steps.
+<NeedHelpFooter provider="GitHub" />
