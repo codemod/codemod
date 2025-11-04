@@ -206,5 +206,10 @@
   ],
   "contextual": {
     "options": ["copy", "view", "chatgpt", "claude"]
+  },
+  "integrations": {
+    "ga4": {
+      "measurementId": "G-RW6RM5EL6S"
+    }
   }
 }
