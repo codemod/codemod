@@ -328,7 +328,7 @@ nodes:
 Steps are the atomic actions inside a node. They run sequentially and each step performs one transformation or action using a specific engine:
 
 - [`js-ast-grep`](#jssg-js-ast-grep-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
-- [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with ast-grepYAML rules
+- [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with ast-grep YAML rules
 - [`run`](#shell-command-step) - Run shell commands (e.g. setup, cleanup, invoking external tools)
 - [`ai`](#ai-step) - LLM-powered transformations and tasks (e.g. non-deterministic transformations, code reviews, summarization)
 - [`codemod`](#codemod-registry-step) - Run codemods from the Codemod Registry
