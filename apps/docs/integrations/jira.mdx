@@ -3,6 +3,9 @@ title: "Jira Integration"
 icon: "jira"
 ---
 
+import { ManagingIntegration } from "/snippets/managing-integration.mdx";
+import { NeedHelpFooter } from "/snippets/need-help-footer.mdx";
+
 Connect Codemod to your Jira workspace to sync issues with your projects and automatically track progress of your code transformation campaigns.
 
 ## Why Integrate Jira?
@@ -84,7 +87,7 @@ Before proceeding, you'll need to create an Atlassian API token:
 Fill in the Jira integration form with your workspace details:
 
 <ParamField body="baseUrl" type="string" required>
-Your Jira Cloud instance URL (e.g., https://your-domain.atlassian.net)
+Your Jira Cloud instance URL (e.g., `https://your-domain.atlassian.net`)
 </ParamField>
 
 <ParamField body="email" type="string" required>
@@ -308,7 +311,7 @@ These permissions are typically included with standard Jira user accounts. Admin
 
 <AccordionGroup>
 <Accordion title="Authentication failed">
-- Verify your Jira base URL is correct (should be https://your-domain.atlassian.net)
+- Verify your Jira base URL is correct (should be `https://your-domain.atlassian.net`)
 - Check that your email matches your Jira account email exactly
 - Ensure your API token is valid and hasn't expired
 - Try generating a new API token from Atlassian
@@ -348,12 +351,11 @@ Keep your Jira API token secure and never share it publicly or commit it to vers
 - **Regular Rotation**: Consider rotating API tokens regularly for enhanced security
 - **Access Review**: Regularly review which projects and issues have access in your Jira workspace
 
-## Managing the Integration
-
-To disconnect or modify the Jira integration:
-
-1. Go to **Organization Settings** → **Project Management Integrations**
-2. Find your Jira integration and click **"Disconnect"** or the configure buttons
+<ManagingIntegration 
+  provider="Jira" 
+  settingsPath="Organization Settings → Project Management Integrations"
+  actionText='"Disconnect" or the configure buttons'
+/>
 
 To revoke access from Jira's side:
 
@@ -362,4 +364,4 @@ To revoke access from Jira's side:
 
 ---
 
-**Need help?** If you encounter any issues setting up the Jira integration, please contact our support team or visit our documentation for additional troubleshooting steps.
+<NeedHelpFooter provider="Jira" troubleshootingText="additional troubleshooting steps" />

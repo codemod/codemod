@@ -316,7 +316,7 @@ nodes:
 </ParamField>
 
 <ParamField path="steps" type="array" required>
-  Ordered list of [steps](#step).
+  Ordered list of [steps](#steps).
 </ParamField>
 
 <ParamField path="env" type="object">
@@ -327,23 +327,11 @@ nodes:
 
 Steps are the atomic actions inside a node. They run sequentially and each step performs one transformation or action using a specific engine:
 
-- [`js-ast-grep`](#js-ast-grep-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
-- [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with YAML rules
-- [`run`](#shell-command-step) - Shell commands for external tools and setup
-- [`ai`](#ai-step) - LLM-powered transformations and reviews
-- [`codemod`](#codemod-registry-step) - Compose other published codemods
-
-#### jssg (JS ast-grep) step
-
-Runs JavaScript/TypeScript codemods with full programmatic control over AST transformations. Use jssg for:
-- Complex transformations requiring logic (loops, conditions, functions)
-- AST manipulations beyond find/replace
-- Cross-file analysis or coordination
-- Type-safe transformations with TypeScript
-
-<Tip>
-  New to jssg? Start with the <a href="/jssg/quickstart">jssg quickstart</a> to write your first transform, then see the <a href="/jssg/reference">jssg API reference</a> for the complete API.
-</Tip>
+- [`js-ast-grep`](#jssg-js-ast-grep-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
+- [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with ast-grep YAML rules
+- [`run`](#shell-command-step) - Run shell commands (e.g. setup, cleanup, invoking external tools)
+- [`ai`](#ai-step) - LLM-powered transformations and tasks (e.g. non-deterministic transformations, code reviews, summarization)
+- [`codemod`](#codemod-registry-step) - Run codemods from the Codemod Registry
 
 To use a jssg step:
 
