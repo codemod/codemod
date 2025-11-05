@@ -3,4 +3,4 @@ tab_spaces = 4
 edition = "2021"
 newline_style = "Unix"
 use_field_init_shorthand = true
-ignore = ["submodules/llrt/llrt_modules/**"]
+ignore = ["submodules/**"]

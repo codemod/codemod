@@ -1,6 +1,3 @@
-[submodule "submodules/llrt"]
-	path = submodules/llrt
-	url = https://github.com/awslabs/llrt
 [submodule "submodules/rolldown"]
 	path = submodules/rolldown
 	url = https://github.com/rolldown-rs/rolldown.git

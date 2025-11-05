@@ -16,7 +16,6 @@ members = [
 resolver = "2"
 
 exclude = [
-  "submodules/llrt/llrt_modules",
   "submodules/rolldown/crates/rolldown",
 ]
 
