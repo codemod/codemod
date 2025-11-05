@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-llrt_modules = { path = "../../submodules/llrt/llrt_modules", default-features = false, features = [
+llrt_modules = { git = "https://github.com/mohebifar/llrt.git", package = "llrt_modules", rev = "881cb810f2aaa1d91c3ecc4a80d950d038ef9717", default-features = false, features = [
   "console",
   "abort",
   "assert",
