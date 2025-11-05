@@ -26,7 +26,13 @@
         "groups": [
           {
             "group": "Getting Started",
-            "pages": ["introduction", "quickstart"]
+            "pages": [
+              "introduction",
+              {
+                "group": "Quickstart",
+                "pages": ["quickstart-enterprise", "quickstart-oss"]
+              }
+            ]
           },
           {
             "group": "Codemod Platform",
@@ -66,12 +72,9 @@
                   "/jssg/advanced",
                   "/jssg/security"
                 ]
-              }
+              },
+              "registry"
             ]
-          },
-          {
-            "group": "Quick Links",
-            "pages": ["external-links/codemod-registry"]
           },
           {
             "group": "Other Resources",
@@ -202,6 +205,10 @@
     {
       "source": "/migrations",
       "destination": "/campaigns"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/quickstart-oss"
     }
   ],
   "contextual": {
