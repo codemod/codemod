@@ -250,6 +250,24 @@ During scaffolding, the CLI sets <code>public</code>/<code>private</code> based 
 </Info>
 </ParamField>
 
+<ParamField path="capabilities" type="string[]" default="[]">
+Array of capabilities required by this codemod for accessing sensitive operations.
+
+**Available capabilities:**
+- `fs` - File system access (`fs`, `fs/promises`)
+- `fetch` - Network requests (global `fetch`)
+- `child_process` - Process spawning (`child_process`)
+
+<Warning>
+Only enable capabilities your codemod actually needs. Each capability increases security risk for untrusted codemods.
+</Warning>
+
+<Tip>
+See <a href="/jssg/security">Security & Capabilities</a> for detailed information about the security model and usage examples.
+Expand commentComment on line R224Resolved
+</Tip>
+</ParamField>
+
 </Accordion>
 ---
 

@@ -1,0 +1,172 @@
+---
+title: "Quickstart: Enterprise Engineering Teams"
+sidebarTitle: 'Enterprise'
+---
+
+This guide helps engineering leaders and progressive enterprise teams set up Codemod Platform to automate and track large-scale code transformations across your organization.
+
+<Tip>
+Looking to build and publish codemods for the open-source community? See the [OSS Quickstart](/quickstart-oss) for framework builders & OSS community.
+</Tip>
+
+## What Codemod Helps You Solve
+
+Codemod Platform enables large engineering teams to automate and orchestrate code transformations at scale. Common use cases include:
+
+<CardGroup cols={2}>
+  <Card title="Framework & library upgrades" icon="arrow-up">
+    Automate upgrades to newer versions of frameworks (React, Next.js, Vue, etc.) across your entire codebase with Campaigns and track adoption with Insights.
+  </Card>
+
+  <Card title="Security patches & compliance" icon="shield">
+    Apply security patches and compliance fixes across multiple repositories simultaneously, ensuring consistent updates organization-wide.
+  </Card>
+
+  <Card title="API migrations & deprecations" icon="exchange">
+    Migrate from deprecated APIs to new versions by tracking usage patterns with Insights, then applying changes with Campaigns.
+  </Card>
+
+  <Card title="Internationalization (i18n)" icon="globe">
+    Implement i18n patterns across your codebase using multi-step workflows to extract strings, configure translations, and update code patterns.
+  </Card>
+
+  <Card title="Tech unification after M&A" icon="code-merge">
+    Standardize code patterns, module systems (CommonJS → ESM), and coding standards across merged codebases.
+  </Card>
+
+  <Card title="Dependency consistency" icon="link">
+    Maintain consistency across repositories, apply lint fixes, and perform other sweeping codebase-wide maintenance tasks.
+  </Card>
+</CardGroup>
+
+## Getting started
+
+By the end of this guide, you'll have:
+- Set up your Codemod organization with GitHub/GitLab integration
+- Created a Campaign to orchestrate migrations across repositories
+- Set up Insights dashboards to track progress
+- Invited team members and configured permissions
+
+<Steps>
+  <Step title="Sign up and create your organization">
+    [Sign in to Codemod](https://app.codemod.com) using GitHub, GitLab, or SSO.
+
+    Then create an organization for your team:
+
+    1. Click on the team switcher and select **"Add Organization"**
+    2. Choose your Git provider (GitHub or GitLab)
+    3. Enter your organization details
+
+    ![Create Org](/images/guides/create-org.png)
+  </Step>
+
+  <Step title="Install the GitHub or GitLab App">
+    Connect Codemod to your repositories by installing the integration:
+
+    <CardGroup cols={2}>
+      <Card title="GitHub" icon="github" href="/integrations/github">
+        Install the Codemod GitHub App
+      </Card>
+      <Card title="GitLab" icon="gitlab" href="/integrations/gitlab">
+        Set up group access tokens
+      </Card>
+    </CardGroup>
+
+    <Warning>
+      If the user requesting installation isn't an organization admin, they may see an error. Ask an organization admin to approve the installation.
+    </Warning>
+  </Step>
+
+  <Step title="Create your first Campaign">
+    Campaigns let you orchestrate code transformations across multiple repositories with centralized tracking and state management.
+
+    **1. Choose a Codemod package:**
+    
+    When creating a Campaign, you can select from several Codemod package options:
+    
+     <Card title="Pro codemods" icon="pro">
+        Pre-built, enterprise-grade transformations available to <a href="https://codemod.com/pricing" target="_blank">Pro and Enterprise plan</a> customers. These are tailored to your codebase by Codemod experts for complex use cases and patterns.
+    </Card>
+    <Card title="Build your own" icon="wrench">
+        Create your own custom Codemod package manually or with AI assistance using <a href="/model-context-protocol">Codemod MCP</a> or <a href="/codemod-studio">Codemod Studio</a>.
+    </Card>
+    <Card title="Public registry" icon="globe">
+        Browse and use community Codemod packages from <a href="https://go.codemod.com/registry" target="_blank">Codemod Registry</a>.
+    </Card>
+
+    **2. Create a Campaign:**
+    1. Navigate to [Campaigns → Create Campaign](https://app.codemod.com/workflows/create/registry)
+    2. Select a Codemod package
+    3. Choose target repositories
+    4. Configure campaign parameters (if the package supports them)
+    5. Click **Run** to start the Campaign
+
+    Learn more: [Campaigns Documentation](/campaigns)
+  </Step>
+
+  <Step title="Set up Insights dashboards">
+    Codemod Insights helps you track migration progress, identify modernization opportunities, and measure the impact of code transformations across your codebase.
+
+    **Create your first dashboard:**
+    1. Go to [Insights → Create Dashboard](https://app.codemod.com/insights)
+    2. Create a dashboard for a specific migration or initiative (e.g., "React 18 Migration", "Security Updates", "i18n Migration")
+    3. Add widgets to track patterns.
+
+    **Configure widgets:**
+    - Define queries using [ast-grep YAML rules](https://ast-grep.github.io/reference/yaml.html)
+    - Generate rules easily with [Codemod Studio](/codemod-studio#using-codemod-ai)
+    - Track patterns like API usage, deprecated patterns, or adoption metrics
+
+    Learn more: [Insights Documentation](/insights)
+  </Step>
+
+  <Step title="Invite team members and configure permissions">
+    Add team members to your organization to collaborate on migrations:
+
+    1. Go to **Organization Settings** → **Members**
+    2. Click **Invite Members**
+    3. Enter email addresses and assign roles:
+       - **Admin**: Full access to organization settings and features
+       - **Member**: Can create and manage Campaigns, view Insights
+       - **Viewer**: Read-only access to Campaigns and Insights
+
+    <Tip>
+      Configure GitHub organization role synchronization if you're using GitHub. This automatically syncs team member roles from your GitHub organization.
+    </Tip>
+  </Step>
+</Steps>
+
+## Advanced Enterprise Features
+
+Once you're comfortable with the basics, explore these enterprise capabilities to scale your migrations:
+
+<Card title="Private Registry" icon="lock" href="/registry#private-registry">
+Publish organization-specific codemods accessible only to your team. Maintain internal codemods for proprietary patterns, standards, and company-specific transformations.
+
+<b>Learn more:</b> [Codemod Registry](/registry#private-registry)
+</Card>
+
+<Card title="Advanced Campaign Features" icon="sliders" href="/cli/packages/building-workflows">
+Leverage powerful Campaign capabilities including parameter editing during runs, manual task approval gates, state management across multiple runs, and matrix strategies for parallel execution.
+
+<b>Learn more:</b> [Building Workflows](/cli/packages/building-workflows) covers manual triggers, matrix strategies, state management, and parameters.
+</Card>
+
+<Card title="Project Management Integrations" icon="tasks" href="/integrations/jira">
+Connect Jira to sync Campaign progress with your project management tools. Link Campaigns to Jira epics for unified tracking and bidirectional status updates.
+
+<b>Learn more:</b> [Jira Integration](/integrations/jira)
+</Card>
+
+## Getting Help
+
+
+<CardGroup>
+  <Card title="Slack Community" icon="slack" href="https://go.codemod.com/community">
+    Join our <b>Slack Community</b> for support, answers, and help from the Codemod team & community.
+  </Card>
+  <Card title="Contact Us" icon="message-code" href="https://codemod.com/contact">
+  Visit our contact page for support, questions, or to get in touch with the Codemod team.
+</Card>
+</CardGroup>
+
