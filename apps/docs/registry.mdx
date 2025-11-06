@@ -101,8 +101,6 @@ cd my-codemod
 npx codemod publish
 ```
 
-Learn more about the [`publish` command and available options](/cli/cli-reference#codemod-publish).
-
 During the first publish, you'll be prompted to:
 - Choose an organization or user scope
 - Set access level (public or private)
@@ -111,15 +109,18 @@ During the first publish, you'll be prompted to:
 **Unpublishing packages:**
 
 ```bash
-# Unpublish a package
-npx codemod unpublish <package-name>
+# Unpublish a specific version
+npx codemod unpublish <package-name> --version 1.0.0
+
+# Unpublish all versions (requires --force)
+npx codemod unpublish <package-name> --force
 ```
 
 <Warning>
-  Unpublishing is a destructive action. Consider deprecating packages instead of unpublishing if others may depend on them.
+  Unpublishing is a destructive action. Consider deprecating packages instead of unpublishing if others may depend on them. You must use `--version` to unpublish a specific version, or `--force` to unpublish all versions.
 </Warning>
 
-Learn more about the [`unpublish` command and available options](/cli/cli-reference#codemod-unpublish).
+Learn more about the [`publish`](/cli/cli-reference#codemod-publish) and [`unpublish`](/cli/cli-reference#codemod-unpublish) commands.
 
 ### Configuring Access and Visibility
 
