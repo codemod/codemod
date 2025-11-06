@@ -2,7 +2,8 @@ use crate::engine::{create_download_progress_callback, create_progress_callback}
 use anyhow::Result;
 use ast_grep_config::CombinedScan;
 use butterflow_core::execution::{
-    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, LanguageCodemodExecutionConfig,
+    ProgressCallbackCodemodExecutionConfig,
 };
 use clap::Args;
 use codemod_ast_grep_dynamic_lang::DynamicLang;
@@ -11,7 +12,6 @@ use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
 use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use log::info;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -92,16 +92,18 @@ pub async fn handler(args: &Command) -> Result<()> {
             progress_callback: Arc::new(Some(create_progress_callback())),
             download_progress_callback: Some(create_download_progress_callback()),
         },
-        Some(target_directory.to_path_buf()),
-        None,
         GlobsCodemodExecutionConfig {
+            target_path: Some(target_directory.to_path_buf()),
+            base_path: Some(script_base_dir.to_path_buf()),
             include_globs: None,
             exclude_globs: None,
         },
         false,
-        Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
+        LanguageCodemodExecutionConfig {
+            languages: Some(vec![SupportedLanguage::from_str(&args.language).unwrap()]),
+            capabilities: Some(capabilities),
+        },
         args.max_threads,
-        Some(capabilities),
     )
     .await;
 

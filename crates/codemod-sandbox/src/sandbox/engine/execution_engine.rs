@@ -5,7 +5,6 @@ use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 #[cfg(feature = "native")]
-use crate::tree_sitter::SupportedLanguage;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
@@ -19,7 +18,6 @@ use rquickjs::{IntoJs, Object};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 /// Result of executing a codemod on a single file
@@ -34,7 +32,7 @@ pub enum ExecutionResult {
 pub struct JssgExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    pub language: SupportedLanguage,
+    pub language: DynamicLang,
     pub file_path: &'a Path,
     pub content: &'a str,
     pub selector_config: Option<Arc<Box<RuleConfig<DynamicLang>>>>,
@@ -71,16 +69,7 @@ where
         },
     })?;
 
-    let ast_grep = AstGrep::new(
-        options.content,
-        DynamicLang::from_str(&options.language.to_string()).map_err(|e| {
-            ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            }
-        })?,
-    );
+    let ast_grep = AstGrep::new(options.content, options.language);
 
     if let Some(selector_config) = &options.selector_config {
         let matches: Vec<_> = ast_grep
@@ -207,7 +196,7 @@ where
                 None
             };
 
-            let language_str = options.language.to_string();
+            let language_str = options.language.name();
 
             let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -224,7 +213,7 @@ where
                 },
             })?;
 
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
+            run_options.set("language", language_str).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: e.to_string(),
                 },
@@ -407,9 +396,10 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use crate::tree_sitter::load_tree_sitter;
+    use crate::tree_sitter::{load_tree_sitter, SupportedLanguage};
     use std::fs;
     use std::path::Path;
+    use std::str::FromStr;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -470,7 +460,7 @@ function example() {
         let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -512,7 +502,7 @@ function example() {
         let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -555,7 +545,7 @@ function example() {
         let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -598,7 +588,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -645,7 +635,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -681,10 +671,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: nonexistent_path,
             resolver,
-            language: SupportedLanguage::Javascript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,

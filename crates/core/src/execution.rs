@@ -86,6 +86,8 @@ pub struct CodemodExecutionConfig {
 }
 
 pub struct GlobsCodemodExecutionConfig {
+    pub target_path: Option<PathBuf>,
+    pub base_path: Option<PathBuf>,
     pub include_globs: Option<Vec<String>>,
     pub exclude_globs: Option<Vec<String>>,
 }
@@ -95,19 +97,22 @@ pub struct ProgressCallbackCodemodExecutionConfig {
     pub download_progress_callback: Option<DownloadProgressCallback>,
 }
 
+pub struct LanguageCodemodExecutionConfig {
+    pub languages: Option<Vec<SupportedLanguage>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+}
+
 impl CodemodExecutionConfig {
     pub async fn new(
         pre_run_callback: Option<PreRunCallback>,
         callbacks: ProgressCallbackCodemodExecutionConfig,
-        target_path: Option<PathBuf>,
-        base_path: Option<PathBuf>,
         globs: GlobsCodemodExecutionConfig,
         dry_run: bool,
-        languages: Option<Vec<SupportedLanguage>>,
+        language_config: LanguageCodemodExecutionConfig,
         threads: Option<usize>,
-        capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Self {
-        let languages = languages.clone().unwrap_or_default();
+        let languages = language_config.languages.unwrap_or_default();
+        let capabilities = language_config.capabilities;
         let _ = load_tree_sitter(
             &languages,
             callbacks
@@ -125,8 +130,8 @@ impl CodemodExecutionConfig {
         Self {
             pre_run_callback,
             progress_callback: callbacks.progress_callback,
-            target_path,
-            base_path,
+            target_path: globs.target_path,
+            base_path: globs.base_path,
             include_globs: globs.include_globs,
             exclude_globs: globs.exclude_globs,
             dry_run,

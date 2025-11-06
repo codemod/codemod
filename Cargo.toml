@@ -48,7 +48,6 @@ codemod-ast-grep-dynamic-lang = { path = "crates/ast-grep-dynamic-lang" }
 anyhow = "1.0"
 ast-grep-core = "0.39.7"
 ast-grep-config = "0.39.7"
-ast-grep-language = "0.39.7"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
@@ -64,6 +63,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "http2",
   "json",
   "gzip",
+  "stream",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
