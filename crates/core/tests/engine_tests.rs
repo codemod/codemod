@@ -2464,7 +2464,64 @@ export default function transform(ast) {
 
     // Test that invalid language is properly rejected
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("invalid-language"));
+    println!("Error message: {}", error_msg);
+    assert!(
+        error_msg.contains("Unsupported language") || error_msg.contains("unknown language"),
+        "Expected error about unsupported/unknown language, got: {}",
+        error_msg
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_execute_js_ast_grep_step_missing_language() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Create a simple codemod file
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  return ast;
+}
+"#,
+    );
+
+    // Create test file
+    create_test_file(temp_path, "test.js", "console.log('test');");
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: None,
+                include: None,
+                exclude: None,
+                max_threads: None,
+                dry_run: Some(false),
+                language: None, // No language specified
+                capabilities: None,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    // Test that missing language is properly rejected
+    let error_msg = result.unwrap_err().to_string();
+    println!("Error message for missing language: {}", error_msg);
+    assert!(error_msg.contains("Language must be specified for JS AST Grep step"));
 }
 
 // Helper function to create a workflow with JSAstGrep step

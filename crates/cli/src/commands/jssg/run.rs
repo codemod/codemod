@@ -6,18 +6,17 @@ use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
 use butterflow_core::execution::{
-    CodemodExecutionConfig, GlobsCodemodExecutionConfig, ProgressCallbackCodemodExecutionConfig,
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, LanguageCodemodExecutionConfig,
+    PreRunCallback, ProgressCallbackCodemodExecutionConfig,
 };
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
-use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
-use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
 use log::{debug, error, warn};
@@ -25,7 +24,6 @@ use std::sync::Arc;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    str::FromStr,
     time::Instant,
 };
 #[derive(Args, Debug)]
@@ -131,16 +129,21 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             progress_callback: Arc::new(Some(create_progress_callback())),
             download_progress_callback: Some(create_download_progress_callback()),
         },
-        Some(target_directory.to_path_buf()),
-        None,
         GlobsCodemodExecutionConfig {
+            target_path: Some(target_directory.to_path_buf()),
+            base_path: Some(script_base_dir.to_path_buf()),
             include_globs: None,
             exclude_globs: None,
         },
         args.dry_run,
-        Some(vec![args.language.clone()]),
+        LanguageCodemodExecutionConfig {
+            languages: Some(vec![args
+                .language
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse language: {e}"))?]),
+            capabilities: Some(capabilities),
+        },
         args.max_threads,
-        Some(capabilities),
     )
     .await;
 
