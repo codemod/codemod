@@ -1,7 +1,8 @@
 use super::traits::ModuleResolver;
 use crate::sandbox::errors::ResolverError;
 use oxc_resolver::{
-    ResolveOptions, Resolver, ResolverGeneric, TsconfigOptions, TsconfigReferences,
+    ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery, TsconfigOptions,
+    TsconfigReferences,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,10 +38,13 @@ impl OxcResolver {
                 "default".into(),
             ],
             main_fields: vec!["module".into(), "main".into()],
-            tsconfig: tsconfig_path.map(|path| TsconfigOptions {
-                config_file: path,
-                references: TsconfigReferences::Auto,
-            }),
+            tsconfig: match tsconfig_path {
+                Some(path) => Some(TsconfigDiscovery::Manual(TsconfigOptions {
+                    config_file: path,
+                    references: TsconfigReferences::Auto,
+                })),
+                None => Some(TsconfigDiscovery::Auto),
+            },
             ..ResolveOptions::default()
         };
 

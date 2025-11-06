@@ -76,7 +76,7 @@ impl RolldownBundler {
             ..Default::default()
         };
 
-        let mut bundler = Bundler::new(bundler_options);
+        let mut bundler = Bundler::new(bundler_options)?;
 
         let _result = bundler
             .write()
