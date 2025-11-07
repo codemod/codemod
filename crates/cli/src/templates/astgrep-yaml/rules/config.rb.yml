@@ -1,8 +1,0 @@
-# Codemod Studio uses ast-grep to match and rewrite code.
-# https://ast-grep.github.io/guide/rule-config.html#rule
-id: replace-puts-with-logger
-language: ruby
-rule:
-  pattern: puts $$$ARGS
-fix:
-  logger.info($$$ARGS)
