@@ -1,0 +1,15 @@
+id: remove-redundant-vendor-prefixes
+language: css
+rule:
+  kind: declaration
+  has:
+    kind: property_name
+    regex: "^(-webkit-|-moz-|-ms-|-o-)"
+  inside:
+    kind: block
+    has:
+      kind: declaration
+      has:
+        kind: property_name
+        regex: "^(border-radius|box-shadow|transition|transform|background|flex-direction)$"
+fix: ""

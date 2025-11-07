@@ -108,7 +108,32 @@ const JS_APPLY_SCRIPT_FOR_RUST: &str =
 const JS_APPLY_SCRIPT_FOR_GO: &str = include_str!("../templates/js-astgrep/scripts/codemod.go.ts");
 const JS_APPLY_SCRIPT_FOR_JAVA: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.java.ts");
+const JS_APPLY_SCRIPT_FOR_HTML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.html.ts");
+const JS_APPLY_SCRIPT_FOR_CSS: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.css.ts");
+const JS_APPLY_SCRIPT_FOR_KOTLIN: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.kt.ts");
+const JS_APPLY_SCRIPT_FOR_ANGULAR: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.angular.ts");
+const JS_APPLY_SCRIPT_FOR_CSHARP: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.cs.ts");
+const JS_APPLY_SCRIPT_FOR_CPP: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.cpp.ts");
+const JS_APPLY_SCRIPT_FOR_C: &str = include_str!("../templates/js-astgrep/scripts/codemod.c.ts");
+const JS_APPLY_SCRIPT_FOR_PHP: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.php.ts");
+const JS_APPLY_SCRIPT_FOR_RUBY: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.rb.ts");
+const JS_APPLY_SCRIPT_FOR_ELIXIR: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.ex.ts");
+const JS_APPLY_SCRIPT_FOR_JSON: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
+const JS_APPLY_SCRIPT_FOR_YAML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
+
+// fixtures
 const JS_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.js");
 const JS_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.js");
 const GO_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.go");
@@ -121,6 +146,38 @@ const RUST_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fix
 const JAVA_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.java");
 const JAVA_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.java");
+const HTML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.html");
+const HTML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.html");
+const CSS_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.css");
+const CSS_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.css");
+const KOTLIN_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.kt");
+const KOTLIN_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.kt");
+const ANGULAR_TEST_INPUT: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/input-angular.ts");
+const ANGULAR_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected-angular.ts");
+const CSHARP_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.cs");
+const CSHARP_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.cs");
+const CPP_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.cpp");
+const CPP_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.cpp");
+const C_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.c");
+const C_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.c");
+const PHP_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.php");
+const PHP_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.php");
+const RUBY_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.rb");
+const RUBY_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.rb");
+const ELIXIR_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.ex");
+const ELIXIR_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.ex");
+const JSON_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.json");
+const JSON_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.json");
+const YAML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.yaml");
+const YAML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.yaml");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -132,6 +189,29 @@ const ASTGREP_PATTERNS_FOR_RUST: &str =
 const ASTGREP_PATTERNS_FOR_GO: &str = include_str!("../templates/astgrep-yaml/rules/config.go.yml");
 const ASTGREP_PATTERNS_FOR_JAVA: &str =
     include_str!("../templates/astgrep-yaml/rules/config.java.yml");
+const ASTGREP_PATTERNS_FOR_HTML: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.html.yml");
+const ASTGREP_PATTERNS_FOR_CSS: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.css.yml");
+const ASTGREP_PATTERNS_FOR_KOTLIN: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.kt.yml");
+const ASTGREP_PATTERNS_FOR_ANGULAR: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.angular.yml");
+const ASTGREP_PATTERNS_FOR_CSHARP: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.cs.yml");
+const ASTGREP_PATTERNS_FOR_CPP: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.cpp.yml");
+const ASTGREP_PATTERNS_FOR_C: &str = include_str!("../templates/astgrep-yaml/rules/config.c.yml");
+const ASTGREP_PATTERNS_FOR_PHP: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.php.yml");
+const ASTGREP_PATTERNS_FOR_RUBY: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.rb.yml");
+const ASTGREP_PATTERNS_FOR_ELIXIR: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.ex.yml");
+const ASTGREP_PATTERNS_FOR_JSON: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.json.yml");
+const ASTGREP_PATTERNS_FOR_YAML: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.yaml.yml");
 
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
@@ -372,6 +452,18 @@ fn select_language() -> Result<String> {
         "Rust",
         "Go",
         "Java",
+        "HTML",
+        "CSS",
+        "Kotlin",
+        "Angular",
+        "C#",
+        "C++",
+        "C",
+        "PHP",
+        "Ruby",
+        "Elixir",
+        "Json",
+        "Yaml",
         "Other",
     ];
 
@@ -383,6 +475,18 @@ fn select_language() -> Result<String> {
         "Rust" => "rust",
         "Go" => "go",
         "Java" => "java",
+        "HTML" => "html",
+        "CSS" => "css",
+        "Kotlin" => "kotlin",
+        "Angular" => "angular",
+        "C#" => "csharp",
+        "C++" => "cpp",
+        "C" => "c",
+        "PHP" => "php",
+        "Ruby" => "ruby",
+        "Elixir" => "elixir",
+        "Json" => "json",
+        "Yaml" => "yaml",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -494,6 +598,18 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "rust" => JS_APPLY_SCRIPT_FOR_RUST.to_string(),
         "go" => JS_APPLY_SCRIPT_FOR_GO.to_string(),
         "java" => JS_APPLY_SCRIPT_FOR_JAVA.to_string(),
+        "html" => JS_APPLY_SCRIPT_FOR_HTML.to_string(),
+        "css" => JS_APPLY_SCRIPT_FOR_CSS.to_string(),
+        "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN.to_string(),
+        "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR.to_string(),
+        "csharp" => JS_APPLY_SCRIPT_FOR_CSHARP.to_string(),
+        "cpp" => JS_APPLY_SCRIPT_FOR_CPP.to_string(),
+        "c" => JS_APPLY_SCRIPT_FOR_C.to_string(),
+        "php" => JS_APPLY_SCRIPT_FOR_PHP.to_string(),
+        "ruby" => JS_APPLY_SCRIPT_FOR_RUBY.to_string(),
+        "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
+        "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
+        "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -518,6 +634,18 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "rust" => ASTGREP_PATTERNS_FOR_RUST,
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
+        "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "css" => ASTGREP_PATTERNS_FOR_CSS,
+        "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
+        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
+        "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
+        "cpp" => ASTGREP_PATTERNS_FOR_CPP,
+        "c" => ASTGREP_PATTERNS_FOR_C,
+        "php" => ASTGREP_PATTERNS_FOR_PHP,
+        "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
+        "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+        "json" => ASTGREP_PATTERNS_FOR_JSON,
+        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
         _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
     };
     fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -547,6 +675,18 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "rust" => JS_APPLY_SCRIPT_FOR_RUST,
         "go" => JS_APPLY_SCRIPT_FOR_GO,
         "java" => JS_APPLY_SCRIPT_FOR_JAVA,
+        "html" => JS_APPLY_SCRIPT_FOR_HTML,
+        "css" => JS_APPLY_SCRIPT_FOR_CSS,
+        "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN,
+        "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR,
+        "csharp" => JS_APPLY_SCRIPT_FOR_CSHARP,
+        "cpp" => JS_APPLY_SCRIPT_FOR_CPP,
+        "c" => JS_APPLY_SCRIPT_FOR_C,
+        "php" => JS_APPLY_SCRIPT_FOR_PHP,
+        "ruby" => JS_APPLY_SCRIPT_FOR_RUBY,
+        "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
+        "json" => JS_APPLY_SCRIPT_FOR_JSON,
+        "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
@@ -561,6 +701,18 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "rust" => ASTGREP_PATTERNS_FOR_RUST,
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
+        "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "css" => ASTGREP_PATTERNS_FOR_CSS,
+        "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
+        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
+        "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
+        "cpp" => ASTGREP_PATTERNS_FOR_CPP,
+        "c" => ASTGREP_PATTERNS_FOR_C,
+        "php" => ASTGREP_PATTERNS_FOR_PHP,
+        "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
+        "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+        "json" => ASTGREP_PATTERNS_FOR_JSON,
+        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
         _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
     };
     fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -663,6 +815,99 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.java"),
             JAVA_TEST_EXPECTED,
+        )?;
+    } else if config.language == "csharp" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.cs"),
+            CSHARP_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.cs"),
+            CSHARP_TEST_EXPECTED,
+        )?;
+    } else if config.language == "cpp" {
+        fs::write(tests_dir.join("fixtures").join("input.cpp"), CPP_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.cpp"),
+            CPP_TEST_EXPECTED,
+        )?;
+    } else if config.language == "c" {
+        fs::write(tests_dir.join("fixtures").join("input.c"), C_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.c"),
+            C_TEST_EXPECTED,
+        )?;
+    } else if config.language == "php" {
+        fs::write(tests_dir.join("fixtures").join("input.php"), PHP_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.php"),
+            PHP_TEST_EXPECTED,
+        )?;
+    } else if config.language == "ruby" {
+        fs::write(tests_dir.join("fixtures").join("input.rb"), RUBY_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.rb"),
+            RUBY_TEST_EXPECTED,
+        )?;
+    } else if config.language == "elixir" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.ex"),
+            ELIXIR_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.ex"),
+            ELIXIR_TEST_EXPECTED,
+        )?;
+    } else if config.language == "html" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.html"),
+            HTML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.html"),
+            HTML_TEST_EXPECTED,
+        )?;
+    } else if config.language == "css" {
+        fs::write(tests_dir.join("fixtures").join("input.css"), CSS_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.css"),
+            CSS_TEST_EXPECTED,
+        )?;
+    } else if config.language == "kotlin" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.kt"),
+            KOTLIN_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.kt"),
+            KOTLIN_TEST_EXPECTED,
+        )?;
+    } else if config.language == "angular" {
+        fs::write(
+            tests_dir.join("fixtures").join("input-angular.ts"),
+            ANGULAR_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected-angular.ts"),
+            ANGULAR_TEST_EXPECTED,
+        )?;
+    } else if config.language == "json" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.json"),
+            JSON_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.json"),
+            JSON_TEST_EXPECTED,
+        )?;
+    } else if config.language == "yaml" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.yaml"),
+            YAML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.yaml"),
+            YAML_TEST_EXPECTED,
         )?;
     }
 

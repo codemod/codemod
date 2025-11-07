@@ -1,0 +1,54 @@
+# Docker Compose v2 format - should be modernized to v3+
+version: '3.8'
+
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./html:/usr/share/nginx/html
+    depends_on:
+      - api
+    links:
+      - api:backend
+    
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DB_HOST: database
+    depends_on:
+      - database
+    links:
+      - database:db
+      
+  database:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
+
+# Already modern v3 format - should remain unchanged
+---
+version: '3.8'
+
+services:
+  modern-app:
+    image: node:16-alpine
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
