@@ -15,7 +15,7 @@ class UserManager(private val userService: UserService) {
         if (user != null) {
             val email = user.getEmail()
             val emailSafe = email ?: return "No email available"
-return email
+            return email
         }
         return "User not found"
     }

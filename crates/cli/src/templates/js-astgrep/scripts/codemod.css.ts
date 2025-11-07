@@ -23,22 +23,7 @@ async function transform(root: SgRoot): Promise<string> {
       }
     });
 
-    if (propertyNameNode) {
-      const propertyText = propertyNameNode.text();
-      
-      // Extract standard property name by removing vendor prefix
-      let standardProperty = propertyText;
-      if (propertyText.startsWith('-webkit-')) {
-        standardProperty = propertyText.substring(8);
-      } else if (propertyText.startsWith('-moz-')) {
-        standardProperty = propertyText.substring(5);
-      } else if (propertyText.startsWith('-ms-')) {
-        standardProperty = propertyText.substring(4);
-      } else if (propertyText.startsWith('-o-')) {
-        standardProperty = propertyText.substring(3);
-      }
-      
-      // Check if standard property exists in the same rule block
+    if (propertyNameNode) {      
       const block = declaration.parent(); // Get the containing block
       if (block) {
         edits.push(declaration.replace(""));

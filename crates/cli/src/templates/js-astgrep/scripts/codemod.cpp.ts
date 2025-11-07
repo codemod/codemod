@@ -22,8 +22,8 @@ async function transform(root: SgRoot<CPP>): Promise<string> {
   const deleteStatements = rootNode.findAll({
     rule: {
       any: [
-        { pattern: "delete $VAR" },
-        { pattern: "delete[] $VAR" }
+        { pattern: "delete $VAR;" },
+        { pattern: "delete[] $VAR;" }
       ]
     },
   });
@@ -33,11 +33,10 @@ async function transform(root: SgRoot<CPP>): Promise<string> {
     ...ptrDeclarations.map(node => {
       const type = node.getMatch("TYPE")?.text();
       const varName = node.getMatch("VAR")?.text();
-      const constructor = node.getMatch("CONSTRUCTOR")?.text();
       const args = node.getMatch("ARGS");
       const argsText = args ? args.text() : "";
       
-      return node.replace(`auto ${varName} = std::make_unique<${type}>(${argsText})`);
+      return node.replace(`auto ${varName} = std::make_unique<${type}>(${argsText});`);
     }),
     
     // Convert array allocations to vector or array
@@ -46,7 +45,7 @@ async function transform(root: SgRoot<CPP>): Promise<string> {
       const varName = node.getMatch("VAR")?.text();
       const size = node.getMatch("SIZE")?.text();
       
-      return node.replace(`std::vector<${type}> ${varName}(${size})`);
+      return node.replace(`std::vector<${type}> ${varName}(${size});`);
     }),
     
     // Remove delete statements

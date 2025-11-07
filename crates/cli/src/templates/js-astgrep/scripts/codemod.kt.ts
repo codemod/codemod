@@ -37,7 +37,7 @@ async function transform(root: SgRoot<Kotlin>): Promise<string> {
       const body = node.getMatch("BODY")?.text();
       const defaultValue = node.getMatch("DEFAULT")?.text();
       return node.replace(`val ${variableName}Safe = ${variableName} ?: return ${defaultValue}
-${body}`);
+            ${body}`);
     })
   ];
 

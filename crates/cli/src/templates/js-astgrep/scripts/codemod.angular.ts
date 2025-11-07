@@ -41,23 +41,26 @@ async function transform(root: SgRoot<Angular>): Promise<string> {
       const ternaryMatch = ternary.match(/([^?]+) *\? *([^:]+) *: *(.*)/);
       if (!ternaryMatch) return null;
       
-      const conditionPart = ternaryMatch[1]?.trim();
+      let conditionPart = ternaryMatch[1]?.trim();
       const truePart = ternaryMatch[2]?.trim();
       const falsePart = ternaryMatch[3]?.trim();
       
-      // Create a template string segment
-      return `\${${conditionPart} ? ${truePart} : ${falsePart}}`;
+      if(conditionPart && conditionPart[0] == "[") {
+        conditionPart = conditionPart.slice(1, conditionPart.length);
+      }
+
+      // Create a template string segment using string concatenation to avoid double evaluation
+      return '${' + conditionPart + ' ? ' + truePart + ' : ' + falsePart + '}';
     }).filter(Boolean);
     
     // if (templateParts.length === 0) return null;
-    
+
     // Construct the new class binding with template string
+    
     const newClassBinding = `[class]="\`${templateParts?.join(' ')}\`.trim()"`;
     
     return node.replace(newClassBinding);
   }) // Remove null edits
-
-  console.log(edits);
   
   // Apply all changes
   const newSource = rootNode.commitEdits(edits);

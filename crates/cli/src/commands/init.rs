@@ -155,9 +155,9 @@ const KOTLIN_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixt
 const KOTLIN_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.kt");
 const ANGULAR_TEST_INPUT: &str =
-    include_str!("../templates/js-astgrep/tests/fixtures/input-angular.ts");
+    include_str!("../templates/js-astgrep/tests/fixtures/input.angular.html");
 const ANGULAR_TEST_EXPECTED: &str =
-    include_str!("../templates/js-astgrep/tests/fixtures/expected-angular.ts");
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.angular.html");
 const CSHARP_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.cs");
 const CSHARP_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.cs");

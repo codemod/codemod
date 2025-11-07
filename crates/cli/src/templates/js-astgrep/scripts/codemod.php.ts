@@ -64,7 +64,6 @@ async function transform(root: SgRoot<PHP>): Promise<string> {
     // Convert mysql_fetch_array to PDO fetch
     ...fetchArrayNodes.map(node => {
       // Get the first argument (the result variable) from the arguments
-      const argsNode = node.field("arguments");
       return node.replace(`$result->fetch(PDO::FETCH_BOTH)`);
     }),
     
