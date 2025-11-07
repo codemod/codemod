@@ -9,13 +9,14 @@ use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use rquickjs::{
     async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// In-memory execution options for executing a codemod on a string
@@ -23,13 +24,13 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// The JavaScript codemod source code (not a file path)
     pub codemod_source: &'a str,
     /// The programming language of the source code to transform
-    pub language: SupportLang,
+    pub language: DynamicLang,
     /// The source code to transform
     pub content: &'a str,
     /// Optional module resolver (if None, a no-op resolver is used)
     pub resolver: Option<Arc<R>>,
     /// Optional selector config for pre-filtering
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<DynamicLang>>>>,
     /// Optional parameters passed to the codemod
     pub params: Option<HashMap<String, String>>,
     /// Optional matrix values for parameterized codemods
@@ -88,7 +89,14 @@ where
         },
     })?;
 
-    let ast_grep = AstGrep::new(options.content, options.language);
+    let ast_grep = AstGrep::new(
+        options.content,
+        DynamicLang::from_str(options.language.name()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: e.to_string(),
+            },
+        })?,
+    );
 
     let module_builder = LlrtModuleBuilder::build();
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
@@ -181,7 +189,7 @@ where
                 None
             };
 
-            let language_str = options.language.to_string();
+            let language_str = options.language.name();
 
             let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -193,7 +201,7 @@ where
                     message: e.to_string(),
                 },
             })?;
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
+            run_options.set("language", language_str).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: e.to_string(),
                 },
@@ -268,12 +276,13 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use crate::tree_sitter::{load_tree_sitter, SupportedLanguage};
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_execute_codemod_sync_simple() {
+    #[tokio::test]
+    async fn test_execute_codemod_sync_simple() {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let codemod_content = r#"
@@ -297,16 +306,20 @@ export default function transform(root) {
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "console.log('Hello, world!');";
 
-        let result = execute_codemod_sync(InMemoryExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None)
+            .await
+            .expect("Failed to load tree-sitter");
+        let result = execute_codemod_in_memory(InMemoryExecutionOptions {
             codemod_source: codemod_content,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             content,
             resolver: Some(resolver),
             selector_config: None,
             params: None,
             matrix_values: None,
             file_path: None,
-        });
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Modified(new_content)) => {

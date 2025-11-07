@@ -5,20 +5,26 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
 use crate::config::{CapabilitiesSecurityCallback, WorkflowRunConfig};
-use crate::execution::{CodemodExecutionConfig, PreRunCallback};
+use crate::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, LanguageCodemodExecutionConfig,
+    PreRunCallback, ProgressCallbackCodemodExecutionConfig,
+};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_sandbox::sandbox::engine::{
     extract_selector_with_quickjs, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
 };
+use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -50,7 +56,7 @@ use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
-
+use serde::Deserialize;
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
     notify: Arc<Notify>,
@@ -79,6 +85,10 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct Rule {
+    language: String,
+}
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -1523,32 +1533,53 @@ impl Engine {
         }
 
         let config_path_clone = config_path.clone();
+        let config_content = tokio::fs::read_to_string(&config_path_clone).await?;
+        let mut languages = Vec::new();
+        for content in config_content.split("---") {
+            let parsed = serde_yaml::Deserializer::from_str(content);
+            let rule = Rule::deserialize(parsed)
+                .map_err(|e| Error::StepExecution(format!("Failed to parse rule: {e:?}")))?;
+            languages.push(SupportedLanguage::from_str(&rule.language).map_err(|e| {
+                Error::StepExecution(format!(
+                    "Unsupported language '{}': {:?}",
+                    &rule.language, e
+                ))
+            })?);
+        }
+
+        let execution_config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            GlobsCodemodExecutionConfig {
+                target_path: Some(self.workflow_run_config.target_path.clone()),
+                base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
+                include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            self.workflow_run_config.dry_run,
+            LanguageCodemodExecutionConfig {
+                languages: Some(languages),
+                capabilities: None,
+            },
+            ast_grep.max_threads,
+        )
+        .await;
 
         with_combined_scan(
             &config_path_clone.to_string_lossy(),
             |combined_scan_with_rule| {
-                let rule_refs = combined_scan_with_rule.rule_refs.clone();
-                let languages = rule_refs.iter().map(|r| r.language).collect::<Vec<_>>();
-
-                let execution_config = CodemodExecutionConfig {
-                    pre_run_callback: None,
-                    progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    target_path: Some(self.workflow_run_config.target_path.clone()),
-                    base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
-                    include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
-                    exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-                    dry_run: self.workflow_run_config.dry_run,
-                    languages: Some(languages.iter().map(|l| l.to_string()).collect()),
-                    threads: ast_grep.max_threads,
-                    capabilities: None,
-                };
-
                 // Clone variables needed in the closure
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                let _ = execution_config.execute(|path, config| {
+                execution_config.execute(|path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
@@ -1608,7 +1639,7 @@ impl Engine {
                         let callback = callback.callback.clone();
                         callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
                     }
-                });
+                })?;
 
                 Ok(())
             },
@@ -1663,8 +1694,18 @@ impl Engine {
                 .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
         );
 
+        // Validate language - it must be specified
+        let lang_str = js_ast_grep.language.as_ref().ok_or_else(|| {
+            Error::StepExecution("Language must be specified for JS AST Grep step".to_string())
+        })?;
+
+        // Parse to SupportedLanguage first for downloading/registration
+        let supported_language: SupportedLanguage = lang_str
+            .parse()
+            .map_err(|e| Error::StepExecution(format!("Failed to parse language: {e}")))?;
+
         let capabilities_security_callback_clone = capabilities_security_callback.clone();
-        let pre_run_callback = PreRunCallback {
+        let _pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
                     callback(config).unwrap_or_else(|e| {
@@ -1674,33 +1715,36 @@ impl Engine {
                 }
             })),
         };
-        let config = CodemodExecutionConfig {
-            pre_run_callback: Some(pre_run_callback),
-            progress_callback: self.workflow_run_config.progress_callback.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
-            base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
-            include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
-            exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-            dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
-            languages: Some(vec![js_ast_grep
-                .language
-                .clone()
-                .unwrap_or("typescript".to_string())]),
-            threads: js_ast_grep.max_threads,
-            capabilities: capabilities.clone(),
-        };
 
-        // Set language first to get default extensions
-        let language = if let Some(lang_str) = &js_ast_grep.language {
-            lang_str
-                .parse()
-                .map_err(|e| Error::StepExecution(format!("Invalid language '{lang_str}': {e}")))?
-        } else {
-            // Parse TypeScript as default
-            "typescript".parse().map_err(|e| {
-                Error::StepExecution(format!("Failed to parse default language: {e}"))
-            })?
-        };
+        // Create config with SupportedLanguage to trigger download/registration
+        let config = CodemodExecutionConfig::new(
+            None,
+            ProgressCallbackCodemodExecutionConfig {
+                progress_callback: self.workflow_run_config.progress_callback.clone(),
+                download_progress_callback: self
+                    .workflow_run_config
+                    .download_progress_callback
+                    .clone(),
+            },
+            GlobsCodemodExecutionConfig {
+                target_path: Some(self.workflow_run_config.target_path.clone()),
+                base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
+                include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
+                exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            },
+            js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
+            LanguageCodemodExecutionConfig {
+                languages: Some(vec![supported_language]),
+                capabilities: capabilities.clone(),
+            },
+            js_ast_grep.max_threads,
+        )
+        .await;
+
+        // Now parse to DynamicLang for actual use (language is now registered)
+        let language: DynamicLang = lang_str
+            .parse()
+            .map_err(|e| Error::StepExecution(format!("Failed to parse language: {e}")))?;
 
         let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
             script_path: &js_file_path,

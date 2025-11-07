@@ -8,7 +8,7 @@ use anyhow::Result;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::{
-    execution::{CodemodExecutionConfig, ProgressCallback},
+    execution::{CodemodExecutionConfig, DownloadProgressCallback, ProgressCallback},
     registry::RegistryClient,
 };
 
@@ -25,6 +25,7 @@ pub struct WorkflowRunConfig {
     pub params: HashMap<String, serde_json::Value>,
     pub wait_for_completion: bool,
     pub progress_callback: Arc<Option<ProgressCallback>>,
+    pub download_progress_callback: Option<DownloadProgressCallback>,
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
     pub registry_client: RegistryClient,
     pub dry_run: bool,
@@ -41,6 +42,7 @@ impl Default for WorkflowRunConfig {
             params: HashMap::new(),
             wait_for_completion: true,
             progress_callback: Arc::new(None),
+            download_progress_callback: None,
             pre_run_callback: Arc::new(None),
             registry_client: RegistryClient::default(),
             dry_run: false,

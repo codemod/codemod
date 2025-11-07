@@ -1,14 +1,6 @@
-use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
-use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
-
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -16,6 +8,13 @@ use codemod_sandbox::{
     },
     utils::project_discovery::find_tsconfig,
 };
+use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 use testing_utils::{
     ReporterType, TestOptions, TestRunner, TestSource, TransformationResult, TransformationTestCase,
 };
@@ -148,7 +147,7 @@ impl JssgTestHandler {
         request: RunJssgTestRequest,
     ) -> Result<RunJssgTestResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Parse language
-        let language: SupportLang = request
+        let language: DynamicLang = request
             .language
             .parse()
             .map_err(|_| format!("Unsupported language: {}", request.language))?;
@@ -198,6 +197,8 @@ impl JssgTestHandler {
             ignore_whitespace: false,
             context_lines: 3,
             expect_errors: vec![],
+            language: language.name().parse().ok(),
+            download_progress_callback: None,
         };
 
         // Create execution function
@@ -247,12 +248,12 @@ impl JssgTestHandler {
         let test_source = TestSource::Cases(transformation_test_cases);
 
         // Get file extensions for the language
-        let extensions = get_extensions_for_language(language);
+        let extensions = get_extensions_for_language(language.name());
 
         // Create and run test runner in a blocking task
         let summary = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                let mut runner = TestRunner::new(test_options, test_source);
+                let mut runner = TestRunner::new(test_options, test_source).await;
                 runner.run_tests(&extensions, execution_fn, None).await
             })
         })

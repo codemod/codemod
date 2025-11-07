@@ -378,7 +378,7 @@ fn collect_files_in_directory(
     dir: &Path,
     extensions: &[&str],
 ) -> Result<HashMap<PathBuf, TestFile>, TestError> {
-    let mut files = HashMap::new();
+    let mut files: HashMap<_, _> = HashMap::new();
 
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

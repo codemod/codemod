@@ -1,5 +1,8 @@
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
+use codemod_sandbox::{
+    sandbox::engine::language_data::get_extensions_for_language,
+    tree_sitter::{load_tree_sitter, SupportedLanguage},
+};
 use ignore::{
     overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
@@ -28,6 +31,21 @@ pub struct ProgressCallback {
     pub callback: Arc<ProgressCallbackFn>,
 }
 
+type DownloadProgressCallbackFn = Box<dyn Fn(u64, u64) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct DownloadProgressCallback {
+    pub callback: Arc<DownloadProgressCallbackFn>,
+}
+
+impl std::fmt::Debug for DownloadProgressCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DownloadProgressCallback")
+            .field("callback", &"<function>")
+            .finish()
+    }
+}
+
 /// Shared execution context to minimize Arc cloning in parallel processing
 struct SharedExecutionContext<'a, F>
 where
@@ -47,6 +65,8 @@ pub struct CodemodExecutionConfig {
     pub pre_run_callback: Option<PreRunCallback>,
     /// Callback to report progress
     pub progress_callback: Arc<Option<ProgressCallback>>,
+    /// Download progress callback
+    pub download_progress_callback: Option<DownloadProgressCallback>,
     /// Path to the target file or directory
     pub target_path: Option<PathBuf>,
     /// Path to the base directory relative to the target path
@@ -58,14 +78,69 @@ pub struct CodemodExecutionConfig {
     /// Dry run mode
     pub dry_run: bool,
     /// Language
-    pub languages: Option<Vec<String>>,
+    pub languages: Option<Vec<SupportedLanguage>>,
     /// Number of threads to use
     pub threads: Option<usize>,
     /// Capabilities
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
+pub struct GlobsCodemodExecutionConfig {
+    pub target_path: Option<PathBuf>,
+    pub base_path: Option<PathBuf>,
+    pub include_globs: Option<Vec<String>>,
+    pub exclude_globs: Option<Vec<String>>,
+}
+
+pub struct ProgressCallbackCodemodExecutionConfig {
+    pub progress_callback: Arc<Option<ProgressCallback>>,
+    pub download_progress_callback: Option<DownloadProgressCallback>,
+}
+
+pub struct LanguageCodemodExecutionConfig {
+    pub languages: Option<Vec<SupportedLanguage>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+}
+
 impl CodemodExecutionConfig {
+    pub async fn new(
+        pre_run_callback: Option<PreRunCallback>,
+        callbacks: ProgressCallbackCodemodExecutionConfig,
+        globs: GlobsCodemodExecutionConfig,
+        dry_run: bool,
+        language_config: LanguageCodemodExecutionConfig,
+        threads: Option<usize>,
+    ) -> Self {
+        let languages = language_config.languages.unwrap_or_default();
+        let capabilities = language_config.capabilities;
+        let _ = load_tree_sitter(
+            &languages,
+            callbacks
+                .download_progress_callback
+                .as_ref()
+                .map(|c| c.callback.clone()),
+        )
+        .await
+        .map_err(|e| {
+            Box::new(std::io::Error::other(format!(
+                "Failed to load tree-sitter language: {e:?}"
+            )))
+        });
+
+        Self {
+            pre_run_callback,
+            progress_callback: callbacks.progress_callback,
+            target_path: globs.target_path,
+            base_path: globs.base_path,
+            include_globs: globs.include_globs,
+            exclude_globs: globs.exclude_globs,
+            dry_run,
+            languages: Some(languages),
+            download_progress_callback: callbacks.download_progress_callback,
+            threads,
+            capabilities,
+        }
+    }
     /// Execute the codemod by iterating through files and calling the provided callback
     pub fn execute<F>(&self, callback: F) -> Result<(), Box<dyn Error>>
     where
@@ -87,6 +162,7 @@ impl CodemodExecutionConfig {
 
         let globs = self.build_globs(&search_base)?;
 
+        // Pre-scan to count total files for accurate progress reporting
         let total_files = self.count_files(&search_base, &globs)?;
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
@@ -238,7 +314,7 @@ impl CodemodExecutionConfig {
                 .is_some_and(|langs| !langs.is_empty())
         {
             for language in self.languages.as_ref().unwrap() {
-                for extension in get_extensions_for_language(language.parse().unwrap()) {
+                for extension in get_extensions_for_language(language.to_string().as_str()) {
                     builder
                         .add(format!("**/*{extension}").as_str())
                         .map_err(|e| format!("Failed to add language pattern: {e}"))?;
@@ -254,6 +330,18 @@ impl CodemodExecutionConfig {
                     .map_err(|e| format!("Invalid include glob '{glob}': {e}"))?;
                 has_patterns = true;
             }
+        } else if let Some(languages) = &self.languages {
+            for language in languages {
+                for extension in get_extensions_for_language(language.to_string().as_str()) {
+                    builder
+                        .add(format!("**/*{extension}").as_str())
+                        .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
+                }
+            }
+        } else {
+            builder
+                .add("**/*")
+                .map_err(|e| format!("Failed to add default include pattern: {e}"))?;
         }
 
         if let Some(ref exclude_globs) = self.exclude_globs {
