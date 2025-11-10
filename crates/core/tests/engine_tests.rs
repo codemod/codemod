@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 
-use butterflow_core::engine::Engine;
+use butterflow_core::engine::{CapabilitiesData, Engine};
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
     WorkflowStatus,
@@ -44,6 +44,7 @@ fn create_long_running_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("long-running-step".to_string()),
                 name: "Long Running Step".to_string(),
                 action: StepAction::RunScript("sleep 2 && echo 'Done'".to_string()),
                 env: None,
@@ -78,6 +79,7 @@ fn create_test_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
@@ -102,6 +104,7 @@ fn create_test_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
@@ -138,6 +141,7 @@ fn create_manual_trigger_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
@@ -164,6 +168,7 @@ fn create_manual_trigger_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
@@ -200,6 +205,7 @@ fn create_manual_node_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
@@ -224,7 +230,8 @@ fn create_manual_node_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
-                    name: "Step 1".to_string(),
+                    id: Some("step-2".to_string()),
+                    name: "Step 2".to_string(),
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
                     condition: None,
@@ -260,6 +267,7 @@ fn create_matrix_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
@@ -301,6 +309,7 @@ fn create_matrix_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Processing region ${region}'".to_string()),
                     env: None,
@@ -343,6 +352,7 @@ fn create_template_workflow() -> Workflow {
             options: None,
         }),
         steps: vec![Step {
+            id: Some("step-1".to_string()),
             name: "Clone repository".to_string(),
             action: StepAction::RunScript(
                 "echo 'Cloning repository ${inputs.repo_url} branch ${inputs.branch}'".to_string(),
@@ -376,6 +386,7 @@ fn create_template_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::UseTemplate(butterflow_models::step::TemplateUse {
                     template: "checkout-repo".to_string(),
@@ -430,6 +441,7 @@ fn create_matrix_from_state_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Setting up state'".to_string()),
                     env: None,
@@ -458,6 +470,7 @@ fn create_matrix_from_state_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Processing file ${file}'".to_string()),
                     env: None,
@@ -839,6 +852,7 @@ fn create_env_var_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::RunScript("echo 'Using env var: $TEST_ENV_VAR'".to_string()),
                 env: Some(HashMap::from([(
@@ -879,6 +893,7 @@ fn create_variable_resolution_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::RunScript(
                     "echo 'Processing repo: ${params.repo_name} on branch: ${params.branch}'"
@@ -919,6 +934,7 @@ fn create_env_vars_test_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("test-environment-variables".to_string()),
                 name: "Test Environment Variables".to_string(),
                 action: StepAction::RunScript(
                     r#"echo "CODEMOD_TASK_ID=$CODEMOD_TASK_ID"
@@ -1400,6 +1416,7 @@ async fn test_codemod_environment_variables_in_matrix() {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("setup-node".to_string()),
                     name: "Setup".to_string(),
                     action: StepAction::RunScript("echo 'Setup complete'".to_string()),
                     env: None,
@@ -1437,6 +1454,7 @@ async fn test_codemod_environment_variables_in_matrix() {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("test-environment-variables-in-matrix".to_string()),
                     name: "Test Environment Variables in Matrix".to_string(),
                     action: StepAction::RunScript(
                         r#"echo "Matrix region: $region"
@@ -1539,6 +1557,7 @@ async fn test_cyclic_dependency_workflow() {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
@@ -1563,6 +1582,7 @@ async fn test_cyclic_dependency_workflow() {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("step-2".to_string()),
                     name: "Step 1".to_string(),
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
@@ -1610,6 +1630,7 @@ async fn test_invalid_template_reference() {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("step-1".to_string()),
                 name: "Step 1".to_string(),
                 action: StepAction::UseTemplate(butterflow_models::step::TemplateUse {
                     template: "non-existent-template".to_string(), // This template doesn't exist
@@ -1700,6 +1721,7 @@ message: "Found var declaration"
     };
 
     let step = Step {
+        id: Some("step-1".to_string()),
         name: "Test AST Grep".to_string(),
         action: StepAction::AstGrep(ast_grep_step),
         env: None,
@@ -1975,6 +1997,7 @@ function helper() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -1987,8 +2010,10 @@ function helper() {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2058,6 +2083,7 @@ interface ApiResponse {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "ts-codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -2070,8 +2096,10 @@ interface ApiResponse {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2119,6 +2147,7 @@ var count = 0;
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "dry-run-codemod.js".to_string(),
                 base_path: None, // Use current directory
@@ -2131,8 +2160,10 @@ var count = 0;
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2160,6 +2191,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "nonexistent-codemod.js".to_string(),
                 base_path: None,
@@ -2172,8 +2204,10 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2229,6 +2263,7 @@ build/
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2241,8 +2276,10 @@ build/
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2256,6 +2293,7 @@ build/
     let result_no_gitignore = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2268,8 +2306,10 @@ build/
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2313,6 +2353,7 @@ export default function transform(ast) {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "hidden-codemod.js".to_string(),
                 base_path: None,
@@ -2325,8 +2366,10 @@ export default function transform(ast) {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2365,6 +2408,7 @@ export default function transform(ast) {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: None,
@@ -2377,8 +2421,10 @@ export default function transform(ast) {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
@@ -2413,6 +2459,7 @@ fn create_js_ast_grep_workflow() -> Workflow {
                 options: None,
             }),
             steps: vec![Step {
+                id: Some("js-ast-grep-step".to_string()),
                 name: "JS AST Grep Step".to_string(),
                 action: StepAction::JSAstGrep(UseJSAstGrep {
                     js_file: "codemod.js".to_string(),
@@ -2533,6 +2580,7 @@ fn create_realistic_state_write_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("evaluate-codeowners".to_string()),
                     name: "Create matrix data".to_string(),
                     action: StepAction::RunScript(
                         r#"#!/bin/bash
@@ -2573,6 +2621,7 @@ cat $STATE_OUTPUTS"#.to_string(),
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("run-codemod-ts".to_string()),
                     name: "Run TS codemod".to_string(),
                     action: StepAction::RunScript(
                         "echo 'Running TS codemod for team ${team} on shard ${shardId}'".to_string(),
@@ -2603,6 +2652,7 @@ cat $STATE_OUTPUTS"#.to_string(),
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("run-codemod-html".to_string()),
                     name: "Run HTML codemod".to_string(),
                     action: StepAction::RunScript(
                         "echo 'Running HTML codemod for team ${team} on shard ${shardId}'".to_string(),
@@ -3611,12 +3661,14 @@ fn create_conditional_workflow() -> Workflow {
             }),
             steps: vec![
                 Step {
+                    id: Some("always-runs".to_string()),
                     name: "Always runs".to_string(),
                     action: StepAction::RunScript("echo 'This step always runs'".to_string()),
                     env: None,
                     condition: None,
                 },
                 Step {
+                    id: Some("conditional-step".to_string()),
                     name: "Conditional step".to_string(),
                     action: StepAction::RunScript(
                         "echo 'This step runs conditionally'".to_string(),
@@ -3655,6 +3707,7 @@ fn create_nonexistent_variable_workflow() -> Workflow {
                     options: None,
                 }),
                 steps: vec![Step {
+                    id: Some("test-non-existent-variable".to_string()),
                     name: "Test non-existent variable".to_string(),
                     action: StepAction::RunScript("echo 'Value: ${nonexistent.variable}' && echo 'Another: ${params.missing_param}'".to_string()),
                     env: Some(HashMap::from([

@@ -101,6 +101,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         anyhow::bail!("Codemod file '{}' does not exist", codemod_path.display());
     }
 
+    std::env::set_var("CODEMOD_STEP_ID", "jssg");
+
     let current_dir = std::env::current_dir()?;
     let base_config = TestConfig::load_hierarchical(&current_dir, None)?;
 
