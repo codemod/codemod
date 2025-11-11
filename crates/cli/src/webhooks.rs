@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
+// Default Make.com webhook URL (public endpoint, not a secret)
 const DEFAULT_MAKE_WEBHOOK_URL: &str = "https://hook.us1.make.com/x57ucqxc7k08kmq1948nlozpf57nr9p5";
 const MAKE_WEBHOOK_URL_ENV: &str = "CODEMOD_MAKE_WEBHOOK_URL";
 
@@ -17,7 +18,7 @@ enum WebhookEventType {
 
 #[derive(Serialize, Debug)]
 struct MakeWebhookPayload {
-    event_type: String,
+    event_type: WebhookEventType,
     package_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     package_version: Option<String>,
@@ -36,7 +37,7 @@ async fn send_webhook(payload: MakeWebhookPayload) -> Result<()> {
     let webhook_url = std::env::var(MAKE_WEBHOOK_URL_ENV)
         .unwrap_or_else(|_| DEFAULT_MAKE_WEBHOOK_URL.to_string());
 
-    debug!("Sending webhook to Make.com: event_type={}, package={}", payload.event_type, payload.package_name);
+    debug!("Sending webhook to Make.com: event_type={:?}, package={}", payload.event_type, payload.package_name);
     debug!("Webhook URL: {}", webhook_url);
 
     // Send the webhook request
@@ -83,7 +84,7 @@ pub async fn send_publish_webhook(
 
     // Prepare the payload
     let payload = MakeWebhookPayload {
-        event_type: WebhookEventType::Publish.to_string(),
+        event_type: WebhookEventType::Publish,
         package_name: package_name.to_string(),
         package_version: Some(package_version.to_string()),
         package_versions: None,
@@ -103,18 +104,17 @@ pub async fn send_unpublish_webhook(
     github_url: Option<&str>,
 ) -> Result<()> {
     // Prepare the payload
+    // Note: versions should never be empty in practice (unpublish API always returns at least one version)
     let payload = MakeWebhookPayload {
-        event_type: WebhookEventType::Unpublish.to_string(),
+        event_type: WebhookEventType::Unpublish,
         package_name: package_name.to_string(),
-        package_version: if versions.len() == 1 {
-            Some(versions[0].clone())
-        } else {
-            None
+        package_version: match versions.len() {
+            1 => Some(versions[0].clone()),
+            _ => None,
         },
-        package_versions: if versions.len() > 1 {
-            Some(versions.to_vec())
-        } else {
-            None
+        package_versions: match versions.len() {
+            n if n > 1 => Some(versions.to_vec()),
+            _ => None,
         },
         codemod_yaml: None,
         username: username.to_string(),
@@ -122,14 +122,5 @@ pub async fn send_unpublish_webhook(
     };
 
     send_webhook(payload).await
-}
-
-impl ToString for WebhookEventType {
-    fn to_string(&self) -> String {
-        match self {
-            WebhookEventType::Publish => "publish".to_string(),
-            WebhookEventType::Unpublish => "unpublish".to_string(),
-        }
-    }
 }
 
