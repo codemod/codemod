@@ -17,6 +17,7 @@ use tempfile::TempDir;
 use walkdir::WalkDir;
 
 use crate::auth::TokenStorage;
+use crate::webhooks;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
 
@@ -145,6 +146,21 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             None,
         )
         .await;
+
+    // Send webhook event to Make.com
+    let github_url = manifest.repository.as_deref();
+    if let Err(e) = webhooks::send_publish_webhook(
+        &package_path,
+        &manifest.name,
+        &manifest.version,
+        &auth.user.username,
+        github_url,
+    )
+    .await
+    {
+        // Log warning but don't fail the publish if webhook fails
+        warn!("Failed to send webhook event: {}", e);
+    }
 
     println!("✅ Package published successfully!");
     println!("📦 {}", format_package_name(&response.package));
