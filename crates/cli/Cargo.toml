@@ -45,7 +45,7 @@ urlencoding = "2.1"
 humantime = "2.1"
 inquire = "0.7"
 console = "0.15"
-rolldown = { path = "../../submodules/rolldown/crates/rolldown" }
+rolldown = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
 
 # OIDC and HTTP dependencies
 reqwest = { workspace = true, features = ["stream", "multipart"] }
