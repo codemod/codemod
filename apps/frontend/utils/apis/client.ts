@@ -1,5 +1,5 @@
 import { env } from "@/env";
-import type { ApiError } from "@codemod-com/utilities";
+import type { ApiError } from "@/types/api";
 import axios, { type AxiosError } from "axios";
 import toast from "react-hot-toast";
 

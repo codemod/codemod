@@ -1,4 +1,4 @@
-import type { Result } from "@codemod-com/api-types";
+import type { Result } from "@/types/github";
 import { Response, type Server } from "miragejs";
 import type { AppRegistry } from "..";
 import { EXECUTION_STATUS } from "../../mocks/endpoints/gh-run";

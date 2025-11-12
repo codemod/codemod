@@ -8,8 +8,6 @@ import publicConfig from "@/config";
 import { loadGlobalData } from "@/data/sanity";
 import { GLOBAL_QUERY } from "@/data/sanity/queries";
 import { getOgImages } from "@/data/sanity/resolveSanityRouteMetadata";
-import { mergeDeepRight } from "ramda";
-import { metadata } from "./studio-jscodeshift/studioMetadata";
 
 const LiveVisualEditing = dynamic(
   () => import("@/components/LiveVisualEditing"),
@@ -51,9 +49,7 @@ export async function generateMetadata(_: any, state: any): Promise<Metadata> {
     },
   };
 
-  return pathname.includes("/studio")
-    ? mergeDeepRight(globalOg, metadata)
-    : globalOg;
+  return globalOg;
 }
 
 export default async function Layout({

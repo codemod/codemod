@@ -1,13 +1,5 @@
 import { getRedirect } from "@/data/sanity/redirects";
-// @TODO @codemod-com/utilities imports node runtime libs, cannot be used in midddleware
-// @TODO modular import @codemod-com/utilities/constants
-// import {
-//   CODEMOD_STUDIO_URL,
-//   OLD_STUDIO_HOSTNAME,
-// } from "@codemod-com/utilities";
-
-const CODEMOD_STUDIO_URL = "https://codemod.com/studio";
-const OLD_STUDIO_HOSTNAME = "codemod.studio";
+import { CODEMOD_STUDIO_URL, OLD_STUDIO_HOSTNAME } from "./constants";
 
 import { type NextRequest, NextResponse } from "next/server";
 

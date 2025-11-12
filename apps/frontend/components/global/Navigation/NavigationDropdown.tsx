@@ -1,4 +1,4 @@
-import useDebounce from "@/app/(website)/studio-jscodeshift/src/hooks/useDebounce";
+import useDebounce from "@/hooks/useDebounce";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { AnimatePresence, motion } from "framer-motion";
 import type React from "react";

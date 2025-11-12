@@ -1,6 +1,7 @@
 import { FEATURE_FLAG_QUERY_KEY } from "@/utils/strings";
-import { isServer } from "@studio/config";
 import { useState } from "react";
+
+const isServer = typeof window === "undefined";
 
 const useFeatureFlags = () => {
   const [features] = useState(() => {

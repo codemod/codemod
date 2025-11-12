@@ -11,12 +11,6 @@
     "clean": {
       "cache": false
     },
-    "@codemod-com/database#build": {
-      "dependsOn": ["^build"],
-      "outputs": [
-        "./node_modules/.pnpm/@prisma+client@5.15.1_prisma@5.15.1/node_modules/.prisma/client"
-      ]
-    },
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["build/**", "dist/**"]

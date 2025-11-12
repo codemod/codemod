@@ -73,11 +73,7 @@ const config = {
       "@radix-ui/react-tooltip",
     ],
   },
-  transpilePackages: [
-    "@codemod-com/api-types",
-    "@codemod-com/utilities",
-    "@codemod.com/codemod-utils",
-  ],
+  transpilePackages: [],
   async headers() {
     return [
       {
@@ -99,18 +95,6 @@ const config = {
   },
   async redirects() {
     return [
-      {
-        source: "/studio",
-        has: [
-          {
-            type: "query",
-            key: "c",
-          },
-        ],
-        destination: "/studio-jscodeshift",
-        permanent: true,
-      },
-
       {
         source: "/studio",
         destination: "https://app.codemod.com/studio",

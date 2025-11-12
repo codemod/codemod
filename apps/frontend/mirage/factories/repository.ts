@@ -1,4 +1,4 @@
-import type { GithubRepository } from "@codemod-com/api-types";
+import type { GithubRepository } from "@/types/github";
 import { faker } from "@faker-js/faker";
 import { Factory } from "miragejs";
 

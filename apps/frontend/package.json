@@ -2,7 +2,6 @@
   "name": "@codemod-com/frontend",
   "private": true,
   "scripts": {
-    "dev:ai": "cd ../modgpt && npm run start & cd ../../../ee && uvicorn app:app & npm run dev",
     "build": "next build",
     "dev": "next",
     "dev:turbo": "next dev --turbo",
@@ -37,9 +36,6 @@
     "@clerk/clerk-react": "catalog:",
     "@clerk/nextjs": "catalog:",
     "@clerk/themes": "catalog:",
-    "@codemod-com/api-types": "workspace:*",
-    "@codemod-com/utilities": "workspace:*",
-    "@codemod.com/codemod-utils": "workspace:*",
     "@faker-js/faker": "catalog:",
     "@hookform/resolvers": "catalog:",
     "@monaco-editor/react": "^4.4.6",
