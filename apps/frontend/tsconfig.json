@@ -25,11 +25,6 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
-      "@features/*": ["./app/(website)/studio-jscodeshift/features/*"],
-      "@studio/main/*": ["./app/(website)/studio-jscodeshift/main/*"],
-      "@studio/*": ["./app/(website)/studio-jscodeshift/src/*"],
-      "@chatbot/*": ["./app/(website)/studio-jscodeshift/features/modGPT/*"],
-      "@gr-run/*": ["./app/(website)/studio-jscodeshift/features/GHRun/*"],
       "tslib": ["node_modules/tslib"],
       "ts-morph": ["node_modules/ts-morph"],
       "@utils/*": ["./utils/*"],

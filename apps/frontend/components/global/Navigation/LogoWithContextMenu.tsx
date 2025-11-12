@@ -3,7 +3,7 @@ import Icon, {
   codemodLogoString,
 } from "@/components/shared/Icon";
 import Logo from "@/components/shared/Logo";
-import { CODEMOD_STUDIO_URL } from "@codemod-com/utilities";
+import { CODEMOD_STUDIO_URL } from "@/constants";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";

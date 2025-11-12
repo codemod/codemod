@@ -1,18 +1,16 @@
 import WButton from "@/components/shared/Button";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import { SignIn as SignInIcon } from "@phosphor-icons/react";
-import { Button as SButton } from "@studio/components/ui/button";
 
 import { useRouter } from "next/navigation";
 
 const AuthButtons = ({
-  variant = "studio",
+  variant = "www",
   redirectUrl,
 }: {
   variant: "studio" | "www";
   redirectUrl: string;
 }) => {
-  const isStudio = variant === "studio";
   const router = useRouter();
 
   const signUserIn = () => {
@@ -20,17 +18,12 @@ const AuthButtons = ({
     router.push(`/auth/sign-in?${queryParams}`);
   };
 
-  const Button = isStudio ? SButton : WButton;
+  const Button = WButton;
   return (
     <>
       <SignedOut>
-        <Button
-          onClick={signUserIn}
-          size="sm"
-          variant="outline"
-          intent="inline"
-        >
-          {isStudio && <SignInIcon className="mr-2 h-4 w-4" />}
+        <Button onClick={signUserIn} intent="inline">
+          {variant === "studio" && <SignInIcon className="mr-2 h-4 w-4" />}
           Sign in
         </Button>
       </SignedOut>

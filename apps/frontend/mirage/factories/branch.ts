@@ -1,4 +1,4 @@
-import type { GHBranch } from "@codemod-com/api-types";
+import type { GHBranch } from "@/types/github";
 import { faker } from "@faker-js/faker";
 import { Factory } from "miragejs";
 
