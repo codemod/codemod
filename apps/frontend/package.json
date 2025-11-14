@@ -67,7 +67,6 @@
     "@sanity/react-loader": "catalog:",
     "@sanity/table": "catalog:",
     "@sanity/vision": "catalog:",
-    "@sanity/visual-editing": "catalog:",
     "@swc/wasm-web": "catalog:",
     "@t3-oss/env-nextjs": "catalog:",
     "@tailwindcss/typography": "catalog:",

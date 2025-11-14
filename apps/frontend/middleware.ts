@@ -62,13 +62,11 @@ export async function middleware(request: NextRequest) {
     // https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
 
     const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
-    const sanityOrigins =
-      "https://www.sanity.io https://*.sanity.studio https://*.sanity.app";
 
     const cspHeader = `
         default-src 'self';
         script-src 'self' 'unsafe-eval' 'unsafe-inline' https://summary-walrus-25.clerk.accounts.dev https://clerk.codemod.com https://vercel.live https://cdn.jsdelivr.net https://www.googletagmanager.com https://challenges.cloudflare.com/ https://*.doubleclick.net https://googleads.g.doubleclick.net;
-        frame-src 'self' https://codemod.com https://challenges.cloudflare.com/ https://vercel.live ${codehikeUrls} https://*.doubleclick.net https://www.googletagmanager.com ${sanityOrigins};
+        frame-src 'self' https://codemod.com https://challenges.cloudflare.com/ https://vercel.live ${codehikeUrls} https://*.doubleclick.net https://www.googletagmanager.com https://www.sanity.io https://*.sanity.studio https://*.sanity.app;
         connect-src *.google-analytics.com https://clerk.codemod.com https://api.short.io https://backend.codemod.com https://codemod.com https://vitals.vercel-insights.com https://summary-walrus-25.clerk.accounts.dev https://*.vercel.app https://vercel.live wss://backend.codemod.com wss://*.api.sanity.io ${codehikeUrls} ${analyticsUrls};
         style-src 'self' 'unsafe-inline' https://vercel.live;
         img-src 'self' blob: data: https://*.google-analytics.com https://*.googletagmanager.com https://img.clerk.com https://cdn.sanity.io https://image.mux.com https://vercel.com https://avatars.githubusercontent.com;
@@ -76,7 +74,7 @@ export async function middleware(request: NextRequest) {
         object-src 'none';
         base-uri 'self';
         form-action 'self';
-        frame-ancestors 'self' https://codemod.com ${sanityOrigins};
+        frame-ancestors 'self' https://codemod.com https://www.sanity.io https://*.sanity.studio https://*.sanity.app;
         block-all-mixed-content;
         upgrade-insecure-requests;
         media-src 'self' https://cdn.sanity.io https://image.mux.com https://stream.mux.com;
