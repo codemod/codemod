@@ -1,7 +1,7 @@
 "use client";
 
 import { useLiveMode } from "@sanity/react-loader";
-import { VisualEditing } from "next-sanity/visual-editing";
+import { VisualEditing } from "next-sanity";
 import { usePathname } from "next/navigation";
 
 import { client } from "@/data/sanity/client";
