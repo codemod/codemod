@@ -88,7 +88,8 @@ const config = {
             value:
               "default-src 'self'; " +
               "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ 'unsafe-inline' 'unsafe-eval'; " +
-              "frame-src https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; " +
+              "frame-src 'self' https://codemod.com https://*.codemod.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://vercel.live https://*.vercel.app https://www.sanity.io https://*.sanity.studio https://*.sanity.app; " +
+              "frame-ancestors 'self' https://codemod.com https://*.codemod.com https://www.sanity.io https://*.sanity.studio https://*.sanity.app; " +
               "style-src 'self' 'unsafe-inline'; " +
               "img-src * data: blob:; " +
               "connect-src *;",
