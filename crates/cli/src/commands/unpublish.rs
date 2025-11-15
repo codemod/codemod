@@ -6,6 +6,7 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::TokenStorage;
+use crate::webhooks;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -131,6 +132,19 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
 
     println!("💬 {}", response.message);
+
+    // Send webhook event to Make.com
+    if let Err(e) = webhooks::send_unpublish_webhook(
+        &response.unpublished.name,
+        &response.unpublished.versions,
+        &auth.user.username,
+        None, // GitHub URL not available in unpublish response
+    )
+    .await
+    {
+        // Log warning but don't fail the unpublish if webhook fails
+        warn!("Failed to send webhook event: {}", e);
+    }
 
     // Warning about irreversible action
     println!();
