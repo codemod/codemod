@@ -15,23 +15,8 @@ tokio = { version = "1.0", features = [
   "fs",
 ], optional = true }
 bytes = "1.0"
-oxc_resolver = "11.6"
-swc_core = { version = "33.0", features = [
-  "common",
-  "base",
-  "ecma_ast_serde",
-  "ecma_codegen",
-  "ecma_minifier",
-  "ecma_transforms",
-  "ecma_transforms_typescript",
-  "ecma_transforms_optimization",
-  "ecma_transforms_react",
-  "ecma_parser",
-  "ecma_parser_typescript",
-  "ecma_utils",
-  "ecma_visit",
-] }
-swc_ts_fast_strip = "27.0.1"
+oxc_resolver = "11.13.1"
+oxc = { version = "0.97.0", features = ["transformer", "codegen", "semantic"] }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
