@@ -1,5 +1,15 @@
 # @codemod.com/jssg-types
 
+## 1.1.0
+
+### Minor Changes
+
+- cd61dde: feat: add workflow globals types
+
+### Patch Changes
+
+- b57fac1: Add support llrt types for jssg-types package
+
 ## 1.0.7
 
 ### Patch Changes
