@@ -4,7 +4,6 @@ import AuthProvider from "@/app/context/AuthProvider";
 import { GithubPermissions } from "@/components/GithubPermissions";
 import { TokenBuilder } from "@/components/TokenBuilder";
 import Button from "@/components/shared/Button";
-import { TechLogo } from "@/components/shared/Icon";
 import Icon from "@/components/shared/Icon";
 import type { NavigationPayload, SanityLinkType } from "@/types";
 import AuthButtons from "@auth/AuthButtons";
@@ -132,7 +131,7 @@ export function DesktopNavigationItems({ items }: DesktopNavigationProps) {
             icon: (
               <Languages className="size-5 transition-colors group-hover:text-black" />
             ),
-            label: "Localization",
+            label: "Internationalization",
             description: "Replace hard-coded strings with i18n keys",
           },
         ]}
@@ -151,7 +150,7 @@ export function DesktopNavigationItems({ items }: DesktopNavigationProps) {
           </span>
         </NavigationLink>
       ))}
-      <NavigationLink
+      {/* <NavigationLink
         hideExternalIcon
         href={`https://github.com/codemod-com/codemod`}
       >
@@ -169,7 +168,7 @@ export function DesktopNavigationItems({ items }: DesktopNavigationProps) {
           />
           <span className="">{"Star us"}</span>
         </span>
-      </NavigationLink>
+      </NavigationLink> */}
     </div>
   );
 }
