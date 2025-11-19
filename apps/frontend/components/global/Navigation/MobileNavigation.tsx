@@ -1,6 +1,6 @@
 "use client";
 
-import Icon, { TechLogo } from "@/components/shared/Icon";
+import Icon from "@/components/shared/Icon";
 import LinkButton from "@/components/shared/LinkButton";
 import type { NavigationPayload, SanityLinkType } from "@/types";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -111,7 +111,7 @@ export function MobileDropdown({
                   icon: (
                     <Languages className="size-5 transition-colors group-hover:text-black" />
                   ),
-                  label: "Localization",
+                  label: "Internationalization",
                   description: "Replace hard-coded strings with i18n keys",
                 },
               ]}
@@ -132,7 +132,7 @@ export function MobileDropdown({
                 </NavigationLink>
               </MobileDropdownItem>
             ))}
-            <NavigationLink
+            {/* <NavigationLink
               className="w-full p-s transition-colors rounded-[8px] hover:bg-primary-light/5 dark:hover:bg-primary-dark/5"
               hideExternalIcon
               href={`https://github.com/codemod-com/codemod`}
@@ -145,7 +145,7 @@ export function MobileDropdown({
                 />
                 <span className="">{"Star us"}</span>
               </span>
-            </NavigationLink>
+            </NavigationLink> */}
 
             <motion.div
               className="flex gap-s pt-m"
@@ -161,11 +161,11 @@ export function MobileDropdown({
                     key={item._key}
                     className="w-full"
                     href={item?.href}
-                    glow={index === 0 && isDarkMode}
+                    glow={index === 1 && isDarkMode}
                     intent={
                       isDarkMode
                         ? "secondary"
-                        : index === 0
+                        : index === 1
                           ? "primary"
                           : "secondary"
                     }
