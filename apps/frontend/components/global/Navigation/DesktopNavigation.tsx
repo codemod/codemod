@@ -189,8 +189,8 @@ export function DesktopNavigationRight(props: {
       {props.items?.map((item, index) => (
         <NavigationLink hideExternalIcon key={item._key} href={item?.href}>
           <Button
-            glow={index === 0}
-            intent={index === 0 ? "secondary" : "inline"}
+            glow={index === 1}
+            intent={index === 1 ? "secondary" : "inline"}
           >
             {item?.label}
           </Button>
