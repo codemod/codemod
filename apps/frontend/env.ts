@@ -22,6 +22,8 @@ export const env = createEnv({
     HUBSPOT_NEWSLETTER_FORM_ID: z.string(),
     RECAPTCHA_SECRET_KEY: z.string(),
     IS_PREVIEW: z.string().optional(),
+    PAYLOAD_SECRET: z.string().optional(),
+    DATABASE_URI: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_API_URL: z.string(),
@@ -71,5 +73,7 @@ export const env = createEnv({
     HUBSPOT_NEWSLETTER_FORM_ID: process.env.HUBSPOT_NEWSLETTER_FORM_ID,
     RECAPTCHA_SECRET_KEY: process.env.RECAPTCHA_SECRET_KEY,
     IS_PREVIEW: process.env.IS_PREVIEW,
+    PAYLOAD_SECRET: process.env.PAYLOAD_SECRET,
+    DATABASE_URI: process.env.DATABASE_URI,
   },
 });

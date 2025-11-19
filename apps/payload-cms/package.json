@@ -1,0 +1,28 @@
+{
+  "name": "@codemod-com/payload-cms",
+  "version": "0.0.0",
+  "description": "Payload CMS backend matching Sanity content structure",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "payload build",
+    "generate:types": "payload generate:types",
+    "generate:importmap": "payload generate:importmap"
+  },
+  "dependencies": {
+    "payload": "^3.64.0",
+    "@payloadcms/db-postgres": "^3.64.0",
+    "@payloadcms/richtext-lexical": "^3.64.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@codemod-com/tsconfig": "workspace:*",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.5",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  }
+}

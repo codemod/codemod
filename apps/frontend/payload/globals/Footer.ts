@@ -1,0 +1,78 @@
+import { GlobalConfig } from "payload";
+import { linkField } from "../fields/shared/link";
+import { imageWithAltField } from "../fields/shared/imageWithAlt";
+
+export const Footer: GlobalConfig = {
+  slug: "footer",
+  admin: {
+    group: "Site Configuration",
+  },
+  access: {
+    read: () => true,
+  },
+  versions: {
+    drafts: true,
+  },
+  fields: [
+    {
+      name: "title",
+      type: "text",
+      defaultValue: "Footer",
+      admin: {
+        hidden: true,
+      },
+    },
+    {
+      name: "footerText",
+      type: "richText",
+      required: true,
+      label: "Footer Text",
+    },
+    {
+      name: "socialLinks",
+      type: "array",
+      label: "Social links",
+      fields: [
+        {
+          ...linkField,
+          name: "link",
+          label: "Link",
+        },
+        {
+          name: "icon",
+          type: "text",
+          label: "Icon",
+          admin: {
+            description: "Icon name/identifier",
+          },
+        },
+      ],
+    },
+    {
+      name: "footerNavigationItems",
+      type: "array",
+      label: "Footer Navigation items",
+      fields: [
+        {
+          name: "submenu",
+          type: "select",
+          required: true,
+          label: "Submenu",
+          options: [
+            { label: "Product", value: "product" },
+            { label: "Company", value: "company" },
+            { label: "Legal", value: "legal" },
+          ],
+        },
+        {
+          name: "links",
+          type: "array",
+          label: "Footer Links",
+          fields: [linkField],
+        },
+      ],
+    },
+  ],
+};
+
+export default Footer;

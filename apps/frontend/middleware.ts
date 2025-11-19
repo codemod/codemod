@@ -18,13 +18,25 @@ export async function middleware(request: NextRequest) {
   }
 
   const pathname = request.nextUrl.pathname;
+
+  // Detect Payload routes and set header for layout
+  const isPayloadRoute =
+    pathname.startsWith("/admin") || pathname.startsWith("/api/payload");
+
   // @TODO fix sanity in middleware error
   const redirect = await getRedirect(pathname);
 
   if (redirect) {
-    return NextResponse.redirect(new URL(redirect.destination, request.url), {
-      status: redirect.permanent ? 301 : 302,
-    });
+    const response = NextResponse.redirect(
+      new URL(redirect.destination, request.url),
+      {
+        status: redirect.permanent ? 301 : 302,
+      },
+    );
+    if (isPayloadRoute) {
+      response.headers.set("x-is-payload-route", "true");
+    }
+    return response;
   }
 
   // only backend should be able to call this endpoint
@@ -53,6 +65,20 @@ export async function middleware(request: NextRequest) {
 
   const analyticsUrls =
     "https://*.google-analytics.com https://*.googletagmanager.com https://*.doubleclick.net https://www.google.com https://googleads.g.doubleclick.net https://td.doubleclick.net";
+
+  // Skip CSP for Payload routes - they handle their own CSP
+  if (isPayloadRoute) {
+    const headers = new Headers(request.headers);
+    headers.set("x-is-payload-route", "true");
+
+    const response = NextResponse.next({
+      request: {
+        headers,
+      },
+    });
+    response.headers.set("x-is-payload-route", "true");
+    return response;
+  }
 
   if (
     !request.nextUrl.pathname.startsWith("/api") &&

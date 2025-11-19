@@ -1,4 +1,5 @@
 import MonacoEditorPlugin from "monaco-editor-webpack-plugin";
+import { withPayload } from "@payloadcms/next/withPayload";
 
 /** @type {import('next').NextConfig} */
 const config = {
@@ -135,4 +136,4 @@ const config = {
   },
 };
 
-export default config;
+export default withPayload(config);

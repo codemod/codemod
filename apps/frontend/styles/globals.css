@@ -39,8 +39,6 @@
   border-radius: 14px;
   border: 3px solid var(--scrollbar-primary);
 }
-@tailwind components;
-@tailwind utilities;
 
 @layer utilities {
   /* Hide scrollbar for Chrome, Safari and Opera */

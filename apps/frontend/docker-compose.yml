@@ -1,0 +1,24 @@
+version: '3.9'
+services:
+  postgres:
+    image: 'postgres:16'
+    container_name: payload_postgres
+    environment:
+      POSTGRES_USER: 'payload_user'
+      POSTGRES_PASSWORD: 'payload_password'
+      POSTGRES_DB: 'payload_db'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+
+
+

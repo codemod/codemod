@@ -6,14 +6,24 @@ import { GoogleAnalytics, GoogleTagManager } from "@next/third-parties/google";
 import { Analytics } from "@vercel/analytics/react";
 import { cx } from "cva";
 import Script from "next/script";
+import { headers } from "next/headers";
 
-import "@/styles/globals.css";
-
+// DO NOT import global CSS here - it will affect Payload routes
+// Global CSS is imported in (website)/layout.tsx instead
 export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const headersList = await headers();
+  const isPayloadRoute = headersList.get("x-is-payload-route") === "true";
+
+  // For Payload routes, let Payload's RootLayout handle everything - no interference
+  // This prevents our global CSS and HTML structure from affecting Payload
+  if (isPayloadRoute) {
+    return <>{children}</>;
+  }
+
   const gtmId = process.env.NEXT_PUBLIC_GTM_ID;
   const gaId = process.env.NEXT_PUBLIC_GA_ID;
 

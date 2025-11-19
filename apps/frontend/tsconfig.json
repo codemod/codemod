@@ -25,6 +25,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
+      "@payload-config": ["./payload.config.ts"],
       "@features/*": ["./app/(website)/studio-jscodeshift/features/*"],
       "@studio/main/*": ["./app/(website)/studio-jscodeshift/main/*"],
       "@studio/*": ["./app/(website)/studio-jscodeshift/src/*"],

@@ -11,6 +11,10 @@ import { getOgImages } from "@/data/sanity/resolveSanityRouteMetadata";
 import { mergeDeepRight } from "ramda";
 import { metadata } from "./studio-jscodeshift/studioMetadata";
 
+// Import global CSS only for website routes, not Payload routes
+// This prevents Tailwind's base reset from affecting Payload CMS
+import "@/styles/globals.css";
+
 const LiveVisualEditing = dynamic(
   () => import("@/components/LiveVisualEditing"),
 );

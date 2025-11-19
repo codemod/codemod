@@ -101,6 +101,7 @@
     }
   },
   "dependencies": {
+    "@payloadcms/plugin-seo": "^3.64.0",
     "langchain": "catalog:",
     "react-use": "catalog:"
   }
