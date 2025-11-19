@@ -14,6 +14,7 @@ import BlogPosts from "./payload/BlogPosts";
 import Pages from "./payload/Pages";
 import Job from "./payload/Job";
 import CTAs from "./payload/CTAs";
+import { richTextBlocks } from "./payload/blocks/richTextBlocks";
 
 // Globals
 import Home from "./payload/globals/Home";

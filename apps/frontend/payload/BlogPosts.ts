@@ -2,6 +2,13 @@ import { CollectionConfig } from "payload";
 import { imageWithAltField } from "./fields/shared/imageWithAlt";
 import { publishStatusField } from "./fields/shared/publishStatus";
 import { formatSlug } from "./utils/formatSlug";
+import { richTextBlocks } from "./blocks/richTextBlocks";
+import {
+  BlocksFeature,
+  lexicalEditor,
+  CodeBlock,
+  EXPERIMENTAL_TableFeature,
+} from "@payloadcms/richtext-lexical";
 
 export const BlogPosts: CollectionConfig = {
   slug: "blog-posts",
@@ -130,6 +137,13 @@ export const BlogPosts: CollectionConfig = {
       admin: {
         description: "Main article content with rich text formatting",
       },
+      editor: lexicalEditor({
+        features: ({ defaultFeatures }) => [
+          ...defaultFeatures,
+          EXPERIMENTAL_TableFeature(), // Built-in experimental table feature
+          BlocksFeature({ blocks: [CodeBlock(), ...richTextBlocks] }),
+        ],
+      }),
     },
 
     // Article-specific fields
