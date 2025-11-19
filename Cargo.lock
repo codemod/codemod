@@ -1040,6 +1040,7 @@ dependencies = [
  "ignore",
  "libloading",
  "serde",
+ "serde_json",
  "serde_yaml",
  "target-triple",
  "thiserror 2.0.16",

@@ -8,15 +8,24 @@ repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+build = "src/build.rs"
 
 [dependencies]
 ast-grep-core.workspace = true
 ignore.workspace = true
 libloading = "0.8.8"
 serde.workspace = true
+serde_json.workspace = true
 target-triple = "0.1.4"
 thiserror.workspace = true
 tree-sitter = "0.25.6"
 
+[build-dependencies]
+serde_json.workspace = true
+
 [dev-dependencies]
 serde_yaml.workspace = true
+
+[features]
+default = ["embedded_libs"]
+embedded_libs = []

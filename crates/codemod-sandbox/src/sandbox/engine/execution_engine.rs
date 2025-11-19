@@ -403,7 +403,8 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use crate::tree_sitter::{load_tree_sitter, SupportedLanguage};
+    use crate::tree_sitter::load_tree_sitter;
+    use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
     use std::fs;
     use std::path::Path;
     use std::str::FromStr;

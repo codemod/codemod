@@ -6,11 +6,11 @@ use butterflow_core::execution::{
     ProgressCallbackCodemodExecutionConfig,
 };
 use clap::Args;
+use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
 use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
-use codemod_sandbox::tree_sitter::SupportedLanguage;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use std::str::FromStr;
 use std::sync::Arc;

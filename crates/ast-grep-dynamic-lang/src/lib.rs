@@ -12,9 +12,10 @@ use std::borrow::Cow;
 use std::fs::canonicalize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{RwLock, RwLockReadGuard};
+use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 mod custom_lang;
+pub mod supported_langs;
 
 pub use custom_lang::{CustomLang, LibraryPath};
 
@@ -30,6 +31,7 @@ pub struct DynamicLang {
 
 impl DynamicLang {
     pub fn all_langs() -> Vec<Self> {
+        Self::ensure_initialized();
         Self::langs()
             .iter()
             .enumerate()
@@ -41,6 +43,7 @@ impl DynamicLang {
     }
 
     pub fn file_types(&self) -> Types {
+        Self::ensure_initialized();
         let mut builder = TypesBuilder::new();
         let inner = self.inner();
         let mapping = LANG_INDEX.read().unwrap();
@@ -79,6 +82,7 @@ impl<'de> Deserialize<'de> for DynamicLang {
 impl FromStr for DynamicLang {
     type Err = String;
     fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::ensure_initialized();
         let langs = Self::langs();
         for (i, lang) in langs.iter().enumerate() {
             if lang.name == name {
@@ -137,6 +141,46 @@ unsafe fn load_ts_language(
 // Replaced unsafe global statics with thread-safe RwLocks
 static DYNAMIC_LANG: RwLock<Vec<Inner>> = RwLock::new(vec![]);
 static LANG_INDEX: RwLock<Vec<(String, u32)>> = RwLock::new(vec![]);
+static INITIALIZED: OnceLock<()> = OnceLock::new();
+
+#[cfg(feature = "embedded_libs")]
+mod embedded {
+    include!(concat!(env!("OUT_DIR"), "/embedded_libs.rs"));
+}
+
+#[cfg(feature = "embedded_libs")]
+fn load_embedded_lib_to_temp(name: &str, data: &[u8]) -> Result<PathBuf, DynamicLangError> {
+    use std::io::Write;
+
+    let temp_dir = std::env::temp_dir().join("codemod_embedded_libs");
+    std::fs::create_dir_all(&temp_dir)?;
+
+    // Create a unique filename based on the library name
+    let extension = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+
+    let temp_file = temp_dir.join(format!("{}.{}", name, extension));
+
+    // Only write if file doesn't exist or is different
+    let should_write = if temp_file.exists() {
+        std::fs::read(&temp_file).ok() != Some(data.to_vec())
+    } else {
+        true
+    };
+
+    if should_write {
+        let mut file = std::fs::File::create(&temp_file)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+    }
+
+    Ok(temp_file)
+}
 
 #[derive(Default)]
 pub struct Registration {
@@ -149,6 +193,31 @@ pub struct Registration {
 }
 
 impl DynamicLang {
+    #[cfg(feature = "embedded_libs")]
+    pub fn ensure_initialized() {
+        INITIALIZED.get_or_init(|| {
+            let embedded_libs = embedded::get_embedded_libs();
+            let registrations: Result<Vec<Registration>, DynamicLangError> = embedded_libs
+                .iter()
+                .map(|(name, lib)| -> Result<Registration, DynamicLangError> {
+                    let temp_path = load_embedded_lib_to_temp(name, lib.data)?;
+                    Ok(Registration {
+                        lang_name: name.to_string(),
+                        lib_path: temp_path,
+                        symbol: lib.symbol.clone(),
+                        meta_var_char: lib.meta_var_char,
+                        expando_char: lib.expando_char,
+                        extensions: lib.extensions.clone(),
+                    })
+                })
+                .collect();
+
+            if let Ok(regs) = registrations {
+                let _ = Self::register(regs);
+            }
+        });
+    }
+
     pub fn register(regs: Vec<Registration>) -> Result<(), DynamicLangError> {
         let mut langs = vec![];
         let mut mapping = vec![];
@@ -199,6 +268,7 @@ impl DynamicLang {
     }
 
     fn langs() -> RwLockReadGuard<'static, Vec<Inner>> {
+        Self::ensure_initialized();
         DYNAMIC_LANG.read().unwrap()
     }
 }
@@ -235,6 +305,7 @@ impl Language for DynamicLang {
     }
 
     fn from_path<P: AsRef<Path>>(path: P) -> Option<Self> {
+        Self::ensure_initialized();
         let ext = path.as_ref().extension()?.to_str()?;
         let mapping = LANG_INDEX.read().ok()?;
         let langs = Self::langs();

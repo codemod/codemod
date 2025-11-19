@@ -1,5 +1,5 @@
 use butterflow_core::execution::DownloadProgressCallback;
-use codemod_sandbox::tree_sitter::SupportedLanguage;
+use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
 use libtest_mimic::Arguments;
 use std::str::FromStr;
 use std::time::Duration;

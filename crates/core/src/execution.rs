@@ -1,7 +1,7 @@
+use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
-    sandbox::engine::language_data::get_extensions_for_language,
-    tree_sitter::{load_tree_sitter, SupportedLanguage},
+    sandbox::engine::language_data::get_extensions_for_language, tree_sitter::load_tree_sitter,
 };
 use ignore::{
     overrides::{Override, OverrideBuilder},
