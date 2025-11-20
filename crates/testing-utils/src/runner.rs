@@ -1,6 +1,6 @@
 use anyhow::Result;
+use codemod_ast_grep_dynamic_lang::load_tree_sitter::load_tree_sitter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::tree_sitter::load_tree_sitter;
 use libtest_mimic::{run, Trial};
 use similar::TextDiff;
 use std::pin::Pin;

@@ -1,11 +1,11 @@
+use codemod_ast_grep_dynamic_lang::supported_langs::{
+    get_extensions_for_language, SupportedLanguage,
+};
 use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::{
-    sandbox::{
-        engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
-        resolvers::OxcResolver,
-    },
+    sandbox::{engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use testing_utils::{
@@ -248,7 +249,8 @@ impl JssgTestHandler {
         let test_source = TestSource::Cases(transformation_test_cases);
 
         // Get file extensions for the language
-        let extensions = get_extensions_for_language(language.name());
+        let extensions =
+            get_extensions_for_language(SupportedLanguage::from_str(language.name()).unwrap());
 
         // Create and run test runner in a blocking task
         let summary = tokio::task::spawn_blocking(move || {

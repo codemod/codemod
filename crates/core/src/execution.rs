@@ -1,8 +1,7 @@
+use codemod_ast_grep_dynamic_lang::load_tree_sitter::load_tree_sitter;
+use codemod_ast_grep_dynamic_lang::supported_langs::get_extensions_for_language;
 use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::{
-    sandbox::engine::language_data::get_extensions_for_language, tree_sitter::load_tree_sitter,
-};
 use ignore::{
     overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
@@ -113,6 +112,7 @@ impl CodemodExecutionConfig {
     ) -> Self {
         let languages = language_config.languages.unwrap_or_default();
         let capabilities = language_config.capabilities;
+        println!("languages: {:?}", languages);
         let _ = load_tree_sitter(
             &languages,
             callbacks
@@ -314,7 +314,7 @@ impl CodemodExecutionConfig {
                 .is_some_and(|langs| !langs.is_empty())
         {
             for language in self.languages.as_ref().unwrap() {
-                for extension in get_extensions_for_language(language.to_string().as_str()) {
+                for extension in get_extensions_for_language(*language) {
                     builder
                         .add(format!("**/*{extension}").as_str())
                         .map_err(|e| format!("Failed to add language pattern: {e}"))?;
@@ -332,7 +332,7 @@ impl CodemodExecutionConfig {
             }
         } else if let Some(languages) = &self.languages {
             for language in languages {
-                for extension in get_extensions_for_language(language.to_string().as_str()) {
+                for extension in get_extensions_for_language(*language) {
                     builder
                         .add(format!("**/*{extension}").as_str())
                         .map_err(|e| format!("Failed to add default include pattern: {e}"))?;

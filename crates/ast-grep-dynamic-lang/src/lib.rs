@@ -15,6 +15,8 @@ use std::str::FromStr;
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 mod custom_lang;
+pub mod download_utils;
+pub mod load_tree_sitter;
 pub mod supported_langs;
 
 pub use custom_lang::{CustomLang, LibraryPath};
@@ -84,8 +86,9 @@ impl FromStr for DynamicLang {
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         Self::ensure_initialized();
         let langs = Self::langs();
+        let name_lower = name.to_lowercase();
         for (i, lang) in langs.iter().enumerate() {
-            if lang.name == name {
+            if lang.name.to_lowercase() == name_lower {
                 return Ok(DynamicLang {
                     index: i as LangIndex,
                     expando: lang.expando_char,
@@ -193,7 +196,6 @@ pub struct Registration {
 }
 
 impl DynamicLang {
-    #[cfg(feature = "embedded_libs")]
     pub fn ensure_initialized() {
         INITIALIZED.get_or_init(|| {
             let embedded_libs = embedded::get_embedded_libs();
@@ -213,7 +215,21 @@ impl DynamicLang {
                 .collect();
 
             if let Ok(regs) = registrations {
-                let _ = Self::register(regs);
+                let mut langs = vec![];
+                let mut mapping = vec![];
+                for reg in regs {
+                    if let Err(e) = Self::register_one(reg, &mut langs, &mut mapping) {
+                        eprintln!("Failed to register language: {}", e);
+                    }
+                }
+                {
+                    let mut lang_guard = DYNAMIC_LANG.write().unwrap();
+                    *lang_guard = langs;
+                }
+                {
+                    let mut map_guard = LANG_INDEX.write().unwrap();
+                    *map_guard = mapping;
+                }
             }
         });
     }

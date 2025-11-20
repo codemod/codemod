@@ -3,14 +3,14 @@ use crate::engine::create_download_progress_callback;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use anyhow::Result;
 use clap::Args;
+use codemod_ast_grep_dynamic_lang::supported_langs::{
+    get_extensions_for_language, SupportedLanguage,
+};
 use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::{
-    sandbox::{
-        engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
-        resolvers::OxcResolver,
-    },
+    sandbox::{engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
 use std::collections::HashSet;
@@ -216,7 +216,8 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let test_source = TestSource::Directory(test_directory);
 
-    let extensions = get_extensions_for_language(default_language_str);
+    let extensions =
+        get_extensions_for_language(SupportedLanguage::from_str(default_language_str).unwrap());
 
     let mut runner = TestRunner::new(options, test_source).await;
     let summary = runner

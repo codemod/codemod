@@ -1,34 +1,52 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+#[path = "src/supported_langs.rs"]
+mod supported_langs;
+
+#[path = "src/download_utils.rs"]
+mod download_utils;
+
+use download_utils::{download_file, get_system_info};
+use supported_langs::{get_extensions_for_language, SupportedLanguage};
+
 fn main() {
-    println!("cargo:rustc-check-cfg=cfg(feature = \"embedded_libs\")");
+    println!("cargo:rustc-check-cfg=cfg(feature, values(\"embedded_libs\"))");
 
-    let pre_register_config = env::var("PRE_REGISTER_JSON_CONFIG").unwrap_or_default();
+    let pre_tree_sitter_register = env::var("PRE_TREE_SITTER_REGISTER").unwrap_or_default();
+    let url = std::env::var("TREE_SITTER_BASE_URL")
+        .unwrap_or_else(|_| "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com".to_string());
+    println!("cargo:rustc-env=TREE_SITTER_BASE_URL={url}");
 
-    if pre_register_config.is_empty() {
+    println!("pre_tree_sitter_register: {}", pre_tree_sitter_register);
+
+    if pre_tree_sitter_register.is_empty() || pre_tree_sitter_register == "false" {
         let out_dir = env::var("OUT_DIR").unwrap();
         let dest_path = PathBuf::from(&out_dir).join("embedded_libs.rs");
-        fs::write(&dest_path, "// No embedded libraries\n")
-            .expect("Failed to write empty embedded_libs.rs");
+        let empty_code = r#"// No embedded libraries
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+pub struct EmbeddedLib {
+    pub data: &'static [u8],
+    pub symbol: String,
+    pub meta_var_char: Option<char>,
+    pub expando_char: Option<char>,
+    pub extensions: Vec<String>,
+}
+
+static EMBEDDED_LIBS: OnceLock<HashMap<String, EmbeddedLib>> = OnceLock::new();
+
+pub fn get_embedded_libs() -> &'static HashMap<String, EmbeddedLib> {
+    EMBEDDED_LIBS.get_or_init(HashMap::new)
+}
+"#;
+        fs::write(&dest_path, empty_code).expect("Failed to write empty embedded_libs.rs");
         return;
     }
 
     println!("cargo:rustc-cfg=feature = \"embedded_libs\"");
-
-    let json_content = if PathBuf::from(&pre_register_config).exists() {
-        println!("cargo:rerun-if-changed={}", pre_register_config);
-        fs::read_to_string(&pre_register_config)
-            .expect("Failed to read PRE_REGISTER_JSON_CONFIG file")
-    } else {
-        pre_register_config
-    };
-
-    // Parse the JSON config
-    let config: HashMap<String, serde_json::Value> =
-        serde_json::from_str(&json_content).expect("Failed to parse PRE_REGISTER_JSON_CONFIG");
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = PathBuf::from(&out_dir).join("embedded_libs.rs");
@@ -52,51 +70,35 @@ fn main() {
     generated_code.push_str("    EMBEDDED_LIBS.get_or_init(|| {\n");
     generated_code.push_str("        let mut map = HashMap::new();\n");
 
-    // Process each language in the config
-    for (lang_name, lang_config) in config.iter() {
-        let obj = lang_config
-            .as_object()
-            .expect("Language config must be an object");
+    let languages = SupportedLanguage::all_langs();
 
-        // Get library path
-        let lib_path = if let Some(lib_path_value) = obj.get("libraryPath") {
-            if lib_path_value.is_string() {
-                lib_path_value.as_str().unwrap().to_string()
-            } else if lib_path_value.is_object() {
-                // Platform-specific paths
-                let platform_map = lib_path_value.as_object().unwrap();
-                let target = env::var("TARGET").unwrap();
+    let (os, arch, extension) = get_system_info();
 
-                if let Some(path) = platform_map.get(&target) {
-                    path.as_str().expect("Path must be a string").to_string()
-                } else {
-                    eprintln!(
-                        "No library path for target {} in language {}",
-                        target, lang_name
-                    );
-                    continue;
-                }
-            } else {
-                eprintln!("Invalid libraryPath format for language {}", lang_name);
-                continue;
+    // Create a tokio runtime for async downloads
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+    for language in languages {
+        let lang_name = language.to_string();
+        let extensions = get_extensions_for_language(language);
+
+        // Build the download URL
+        let final_url = format!(
+            "{url}/tree-sitter/parsers/tree-sitter-{lang_name}/latest/{os}-{arch}.{extension}"
+        );
+
+        // Build the library path for caching in tmp directory
+        let lib_path = env::temp_dir()
+            .join("codemod_tree_sitter_libs")
+            .join(&lang_name)
+            .join(format!("{os}-{arch}.{extension}"));
+
+        // Download the file if it doesn't exist
+        if !lib_path.exists() {
+            println!("Downloading tree-sitter parser for {lang_name}...");
+            if let Err(e) = rt.block_on(async { download_file(&final_url, &lib_path, None).await })
+            {
+                panic!("Failed to download tree-sitter parser for {lang_name}: {e}");
             }
-        } else {
-            eprintln!("No libraryPath found for language {}", lang_name);
-            continue;
-        };
-
-        // Resolve the absolute path
-        let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let absolute_lib_path = PathBuf::from(&manifest_dir)
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join(&lib_path);
-
-        if !absolute_lib_path.exists() {
-            eprintln!("Library not found at path: {:?}", absolute_lib_path);
-            continue;
         }
 
         // Generate a safe variable name
@@ -110,44 +112,11 @@ fn main() {
         generated_code.push_str(&format!(
             "        const {}: &[u8] = include_bytes!(\"{}\");\n",
             bytes_var,
-            absolute_lib_path.to_string_lossy().replace('\\', "\\\\")
+            lib_path.to_string_lossy().replace('\\', "\\\\")
         ));
 
-        // Get language symbol
-        let symbol = obj
-            .get("languageSymbol")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("tree_sitter_{}", lang_name));
-
-        // Get meta_var_char
-        let meta_var_char = obj
-            .get("metaVarChar")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.chars().next())
-            .map(|c| format!("Some('{}')", c))
-            .unwrap_or_else(|| "None".to_string());
-
-        // Get expando_char
-        let expando_char = obj
-            .get("expandoChar")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.chars().next())
-            .map(|c| format!("Some('{}')", c))
-            .unwrap_or_else(|| "None".to_string());
-
-        // Get extensions
-        let extensions = obj
-            .get("extensions")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| format!("\"{}\".to_string()", s))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
+        // Generate the symbol name
+        let symbol = format!("tree_sitter_{}", lang_name.replace('-', "_"));
 
         // Add to map
         generated_code.push_str(&format!(
@@ -159,12 +128,19 @@ fn main() {
             "            symbol: \"{}\".to_string(),\n",
             symbol
         ));
-        generated_code.push_str(&format!("            meta_var_char: {},\n", meta_var_char));
-        generated_code.push_str(&format!("            expando_char: {},\n", expando_char));
-        generated_code.push_str(&format!("            extensions: vec![{}],\n", extensions));
+        generated_code.push_str("            meta_var_char: Some('$'),\n");
+        generated_code.push_str("            expando_char: Some('$'),\n");
+        generated_code.push_str(&format!(
+            "            extensions: vec![{}],\n",
+            extensions
+                .iter()
+                .map(|s| format!("\"{}\".to_string()", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         generated_code.push_str("        });\n");
 
-        println!("cargo:rerun-if-changed={}", absolute_lib_path.display());
+        println!("cargo:rerun-if-changed={}", lib_path.display());
     }
 
     generated_code.push_str("        map\n");
@@ -172,7 +148,8 @@ fn main() {
     generated_code.push_str("}\n");
 
     // Write the generated code
-    fs::write(&dest_path, generated_code).expect("Failed to write generated code");
+    println!("generated_code: {}", generated_code);
+    fs::write(&dest_path, &generated_code).expect("Failed to write generated code");
 
     println!("cargo:rerun-if-env-changed=PRE_REGISTER_JSON_CONFIG");
 }

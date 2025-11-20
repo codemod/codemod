@@ -8,20 +8,28 @@ repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
-build = "src/build.rs"
 
 [dependencies]
 ast-grep-core.workspace = true
+dirs.workspace = true
 ignore.workspace = true
 libloading = "0.8.8"
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 target-triple = "0.1.4"
 thiserror.workspace = true
+tokio.workspace = true
+tokio-stream = "0.1.17"
 tree-sitter = "0.25.6"
 
 [build-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1.17"
+reqwest.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true

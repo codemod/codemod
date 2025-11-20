@@ -1037,13 +1037,17 @@ name = "codemod-ast-grep-dynamic-lang"
 version = "1.2.1"
 dependencies = [
  "ast-grep-core",
+ "dirs",
  "ignore",
  "libloading",
+ "reqwest 0.12.23",
  "serde",
  "serde_json",
  "serde_yaml",
  "target-triple",
  "thiserror 2.0.16",
+ "tokio",
+ "tokio-stream",
  "tree-sitter",
 ]
 
