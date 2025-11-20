@@ -4,6 +4,7 @@ use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
+use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
@@ -14,7 +15,6 @@ use rquickjs::{CatchResultExt, FromJs, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use crate::workflow_global::WorkflowGlobalModule;
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
     pub language: DynamicLang,
