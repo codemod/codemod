@@ -31,6 +31,7 @@ import { MetaTitleComponent as MetaTitleComponent_a8a977ebc872c5d5ea7ee689724c08
 import { MetaDescriptionComponent as MetaDescriptionComponent_a8a977ebc872c5d5ea7ee689724c0860 } from "@payloadcms/plugin-seo/client";
 import { MetaImageComponent as MetaImageComponent_a8a977ebc872c5d5ea7ee689724c0860 } from "@payloadcms/plugin-seo/client";
 import { PreviewComponent as PreviewComponent_a8a977ebc872c5d5ea7ee689724c0860 } from "@payloadcms/plugin-seo/client";
+import { IconPicker as IconPicker_e9e2bf969415f060c7a102f3cdbba7fa } from "@/payload/components/IconPicker";
 
 export const importMap = {
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalCell":
@@ -99,4 +100,6 @@ export const importMap = {
     MetaImageComponent_a8a977ebc872c5d5ea7ee689724c0860,
   "@payloadcms/plugin-seo/client#PreviewComponent":
     PreviewComponent_a8a977ebc872c5d5ea7ee689724c0860,
+  "@/payload/components/IconPicker#IconPicker":
+    IconPicker_e9e2bf969415f060c7a102f3cdbba7fa,
 };

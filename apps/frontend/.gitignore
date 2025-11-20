@@ -43,3 +43,14 @@ yarn-error.log*
 # Env files created by scripts for working locally
 .env
 studio/.env.development
+
+# Migration mapping files (contains sensitive IDs)
+payload/migration-maps/*.json
+
+# Temp migration files
+temp-media-downloads/
+
+# Database backups (contains sensitive data)
+payload/backups/*.sql
+payload/backups/*.sql.gz
+payload/backups/*.tar.gz

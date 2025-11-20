@@ -25,8 +25,12 @@ export const Footer: GlobalConfig = {
     {
       name: "footerText",
       type: "richText",
-      required: true,
+      required: false,
       label: "Footer Text",
+      admin: {
+        description:
+          "Footer text content. Note: Rich text from Sanity needs manual migration from PortableText to Lexical.",
+      },
     },
     {
       name: "socialLinks",

@@ -25,7 +25,17 @@ export const Settings: GlobalConfig = {
       ...imageWithAltField,
       name: "fallbackOgImage",
       label: "Fallback sharing image",
-      required: true,
+      required: false,
+      fields: [
+        {
+          ...imageWithAltField.fields[0],
+          required: false, // Make lightImage optional
+        },
+        ...imageWithAltField.fields.slice(1).map((field) => ({
+          ...field,
+          required: field.name === "alt" ? false : field.required, // Make alt optional
+        })),
+      ],
       admin: {
         description:
           "Will be used as the sharing image of all pages that don't define a custom one in their SEO fields.",

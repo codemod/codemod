@@ -1,6 +1,5 @@
 import { GlobalConfig } from "payload";
 import { linkField } from "../fields/shared/link";
-import { styledCtaField } from "../fields/shared/styledCta";
 
 export const GlobalLabels: GlobalConfig = {
   slug: "global-labels",
@@ -136,10 +135,27 @@ export const GlobalLabels: GlobalConfig = {
           },
         },
         {
-          ...styledCtaField,
           name: "documentationPopupLink",
+          type: "group",
           dbName: "docLink",
           label: "Documentation Popup Link",
+          fields: [
+            {
+              name: "label",
+              type: "text",
+              required: true,
+              label: "Button label",
+            },
+            {
+              name: "link",
+              type: "text",
+              required: true,
+              label: "URL",
+              admin: {
+                description: "e.g. https://example.com or /about-page",
+              },
+            },
+          ],
         },
         {
           name: "runSectionTitle",
@@ -223,6 +239,7 @@ export const GlobalLabels: GlobalConfig = {
         {
           name: "ctaTitle",
           type: "text",
+          dbName: "ctaSectionTitle",
           label: "CTA Title",
         },
         {
@@ -234,9 +251,26 @@ export const GlobalLabels: GlobalConfig = {
           },
         },
         {
-          ...styledCtaField,
           name: "cta",
+          type: "group",
           label: "CTA",
+          fields: [
+            {
+              name: "label",
+              type: "text",
+              required: true,
+              label: "Button label",
+            },
+            {
+              name: "link",
+              type: "text",
+              required: true,
+              label: "URL",
+              admin: {
+                description: "e.g. https://example.com or /about-page",
+              },
+            },
+          ],
         },
       ],
     },
