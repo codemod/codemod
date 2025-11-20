@@ -48,6 +48,7 @@
     "@payloadcms/next": "catalog:",
     "@payloadcms/plugin-seo": "catalog:",
     "@payloadcms/richtext-lexical": "catalog:",
+    "@payloadcms/ui": "^3.64.0",
     "@phosphor-icons/react": "catalog:",
     "@portabletext/react": "catalog:",
     "@portabletext/types": "catalog:",

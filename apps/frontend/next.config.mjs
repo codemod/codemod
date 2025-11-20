@@ -78,6 +78,7 @@ const config = {
     "@codemod-com/api-types",
     "@codemod-com/utilities",
     "@codemod.com/codemod-utils",
+    "@payloadcms/ui",
   ],
   async headers() {
     return [

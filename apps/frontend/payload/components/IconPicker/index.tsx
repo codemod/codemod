@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback } from "react";
 import type { TextFieldClientComponent } from "payload";
+import { useField } from "@payloadcms/ui";
 import { IconId } from "@/components/shared/Icon";
 import Icon from "@/components/shared/Icon";
 
@@ -12,7 +13,11 @@ const iconOptions = Object.entries(IconId).map(([label, value]) => ({
 }));
 
 export const IconPicker: TextFieldClientComponent = (props) => {
-  const { value, onChange } = props;
+  const { path } = props;
+
+  // Use Payload's useField hook - it automatically gets the field from context
+  const { value, setValue } = useField<string>({ path: path || "icon" });
+
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -26,14 +31,27 @@ export const IconPicker: TextFieldClientComponent = (props) => {
 
   const handleSelect = useCallback(
     (iconValue: string) => {
-      if (onChange) {
-        onChange(iconValue);
-      }
+      setValue(iconValue);
       setIsOpen(false);
       setSearch("");
     },
-    [onChange],
+    [setValue],
   );
+
+  const handleClear = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setValue("");
+    },
+    [setValue],
+  );
+
+  // Check if value exists (can be string or empty string)
+  const selectedIcon =
+    value && typeof value === "string" && value.trim()
+      ? iconOptions.find((opt) => opt.value === value)
+      : null;
 
   return (
     <div className="field-type icon-picker">
@@ -48,9 +66,10 @@ export const IconPicker: TextFieldClientComponent = (props) => {
           display: "flex",
           alignItems: "center",
           gap: "12px",
+          position: "relative",
         }}
       >
-        {value ? (
+        {selectedIcon ? (
           <>
             <div
               style={{
@@ -63,16 +82,38 @@ export const IconPicker: TextFieldClientComponent = (props) => {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                flexShrink: 0,
               }}
             >
-              <Icon name={value as any} />
+              <Icon name={selectedIcon.value as any} />
             </div>
-            <span>
-              {iconOptions.find((opt) => opt.value === value)?.label || value}
-            </span>
+            <span style={{ flex: 1 }}>{selectedIcon.label}</span>
+            <button
+              onClick={handleClear}
+              type="button"
+              style={{
+                padding: "4px 8px",
+                border: "1px solid var(--theme-elevation-200)",
+                borderRadius: "4px",
+                backgroundColor: "var(--theme-elevation-100)",
+                cursor: "pointer",
+                fontSize: "12px",
+                color: "var(--theme-elevation-800)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor =
+                  "var(--theme-elevation-200)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor =
+                  "var(--theme-elevation-100)";
+              }}
+            >
+              Clear
+            </button>
           </>
         ) : (
-          <span style={{ color: "var(--theme-elevation-400)" }}>
+          <span style={{ color: "var(--theme-elevation-400)", flex: 1 }}>
             Click to select an icon
           </span>
         )}
@@ -91,6 +132,7 @@ export const IconPicker: TextFieldClientComponent = (props) => {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
+            padding: "20px",
           }}
           onClick={() => {
             setIsOpen(false);
@@ -102,14 +144,40 @@ export const IconPicker: TextFieldClientComponent = (props) => {
               backgroundColor: "var(--theme-elevation-0)",
               borderRadius: "8px",
               padding: "24px",
-              maxWidth: "800px",
+              maxWidth: "900px",
+              width: "100%",
               maxHeight: "80vh",
               overflow: "auto",
-              width: "90%",
+              boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 style={{ marginTop: 0, marginBottom: "16px" }}>Select Icon</h2>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h2 style={{ margin: 0 }}>Select Icon</h2>
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setSearch("");
+                }}
+                type="button"
+                style={{
+                  padding: "8px 16px",
+                  border: "1px solid var(--theme-elevation-200)",
+                  borderRadius: "4px",
+                  backgroundColor: "var(--theme-elevation-100)",
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
             <input
               type="text"
               placeholder="Search for an icon..."
@@ -121,12 +189,14 @@ export const IconPicker: TextFieldClientComponent = (props) => {
                 marginBottom: "16px",
                 border: "1px solid var(--theme-elevation-200)",
                 borderRadius: "4px",
+                fontSize: "14px",
               }}
+              autoFocus
             />
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
                 gap: "12px",
               }}
             >
@@ -135,29 +205,40 @@ export const IconPicker: TextFieldClientComponent = (props) => {
                   key={icon.value}
                   onClick={() => handleSelect(icon.value)}
                   style={{
-                    padding: "12px",
-                    border: "1px solid var(--theme-elevation-200)",
+                    padding: "16px",
+                    border:
+                      selectedIcon?.value === icon.value
+                        ? "2px solid var(--theme-elevation-400)"
+                        : "1px solid var(--theme-elevation-200)",
                     borderRadius: "4px",
                     cursor: "pointer",
                     textAlign: "center",
-                    transition: "background-color 0.2s",
+                    transition: "all 0.2s",
+                    backgroundColor:
+                      selectedIcon?.value === icon.value
+                        ? "var(--theme-elevation-50)"
+                        : "transparent",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor =
-                      "var(--theme-elevation-50)";
+                    if (selectedIcon?.value !== icon.value) {
+                      e.currentTarget.style.backgroundColor =
+                        "var(--theme-elevation-50)";
+                    }
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = "transparent";
+                    if (selectedIcon?.value !== icon.value) {
+                      e.currentTarget.style.backgroundColor = "transparent";
+                    }
                   }}
                 >
                   <div
                     style={{
                       backgroundColor: "white",
                       color: "black",
-                      padding: "4px",
+                      padding: "8px",
                       borderRadius: "4px",
-                      width: "36px",
-                      height: "36px",
+                      width: "48px",
+                      height: "48px",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -170,6 +251,8 @@ export const IconPicker: TextFieldClientComponent = (props) => {
                     style={{
                       fontSize: "12px",
                       color: "var(--theme-elevation-600)",
+                      fontWeight:
+                        selectedIcon?.value === icon.value ? 600 : 400,
                     }}
                   >
                     {icon.label}
@@ -177,6 +260,17 @@ export const IconPicker: TextFieldClientComponent = (props) => {
                 </div>
               ))}
             </div>
+            {filteredIcons.length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "40px",
+                  color: "var(--theme-elevation-400)",
+                }}
+              >
+                No icons found matching "{search}"
+              </div>
+            )}
           </div>
         </div>
       )}
