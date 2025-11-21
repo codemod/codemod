@@ -9,8 +9,54 @@ import {
 // Note: CodeBlock is built-in from @payloadcms/richtext-lexical
 // We use CodeBlock() instead of a custom code snippet block
 
-// Note: Payload has built-in image support in Lexical
-// We only need the custom "Linked Image" block below
+// Image Block (regular images without links)
+export const imageBlock: Block = {
+  slug: "image",
+  labels: {
+    singular: "Image",
+    plural: "Images",
+  },
+  fields: [
+    {
+      name: "lightImage",
+      type: "upload",
+      relationTo: "media",
+      label: "Light Mode Image",
+      admin: {
+        description:
+          "Image for light mode (optional if dark mode image is provided)",
+      },
+    },
+    {
+      name: "darkImage",
+      type: "upload",
+      relationTo: "media",
+      label: "Dark Mode Image",
+      admin: {
+        description:
+          "Image for dark mode (optional if light mode image is provided)",
+      },
+    },
+    {
+      name: "alt",
+      type: "text",
+      label: "Alt Text",
+      validate: (value: string | null | undefined, { siblingData }: any) => {
+        const hasLight = !!siblingData?.lightImage;
+        const hasDark = !!siblingData?.darkImage;
+        if ((hasLight || hasDark) && (!value || value.trim() === "")) {
+          return "Alt text is required when an image is provided";
+        }
+        return true;
+      },
+    },
+    {
+      name: "caption",
+      type: "text",
+      label: "Caption",
+    },
+  ],
+};
 
 // Linked Image Block
 // Using flat fields to avoid Payload UI state conflicts with multiple upload fields
