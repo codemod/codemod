@@ -1256,7 +1256,7 @@ dependencies = [
  "libc",
  "once_cell",
  "unicode-width 0.2.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -1787,7 +1787,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -1908,9 +1908,9 @@ dependencies = [
 
 [[package]]
 name = "endian-type"
-version = "0.2.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
+checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 
 [[package]]
 name = "env_filter"
@@ -1965,7 +1965,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -2031,9 +2031,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fancy-regex"
-version = "0.16.2"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "998b056554fbe42e03ae0e152895cd1a7e1002aec800fdc6635d20270260c46f"
+checksum = "bf04c5ec15464ace8355a7b440a33aece288993475556d461154d7a62ad9947c"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -2103,7 +2103,6 @@ checksum = "4a3d7db9596fecd151c5f638c0ee5d5bd487b6e0ea232e5dc96d5250f6f94b1d"
 dependencies = [
  "crc32fast",
  "libz-ng-sys",
- "libz-rs-sys",
  "miniz_oxide",
 ]
 
@@ -3342,15 +3341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libz-rs-sys"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "840db8cf39d9ec4dd794376f38acc40d0fc65eec2a8f484f7fd375b84602becd"
-dependencies = [
- "zlib-rs",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4572,9 +4562,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_resolver"
-version = "11.13.2"
+version = "11.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f1af25f894076eedc44509ad0cc33afb829aa06ec3f23e395f47bcbc1c6e964"
+checksum = "8ab3f270c313ac7f814ce73a64f4bdf36a183dcae4593b2f96c6e6afea8c99d0"
 dependencies = [
  "cfg-if",
  "indexmap 2.11.3",
@@ -4619,9 +4609,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_sourcemap"
-version = "6.0.1"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36801dbbd025f2fa133367494e38eef75a53d334ae6746ba0c889fc4e76fa3a3"
+checksum = "0bd56ed0ec53da593c43d9ea65ced157fe319e454888eb65b239a275e3696499"
 dependencies = [
  "base64-simd",
  "json-escape-simd",
@@ -5089,14 +5079,15 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "pnp"
-version = "0.12.5"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acd0b1e3a154e7c4610b9ab31491c32e9f47db2adc0c12047301f3bacc71597"
+checksum = "a10a726fb86dab6571b148c0f52cf619a4aabf0ac4fcf578bd4cd2178fb0e6d0"
 dependencies = [
  "byteorder",
  "concurrent_lru",
+ "dirs",
  "fancy-regex",
- "flate2",
+ "miniz_oxide",
  "pathdiff",
  "radix_trie",
  "rustc-hash",
@@ -5369,9 +5360,9 @@ checksum = "ce082a9940a7ace2ad4a8b7d0b1eac6aa378895f18be598230c5f2284ac05426"
 
 [[package]]
 name = "radix_trie"
-version = "0.3.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4431027dcd37fc2a73ef740b5f233aa805897935b8bce0195e41bbf9a3289a"
+checksum = "c069c179fcdc6a2fe24d8d18305cf085fdbd4f922c041943e203685d6a1c58fd"
 dependencies = [
  "endian-type",
  "nibble_vec",
@@ -5774,18 +5765,18 @@ dependencies = [
 
 [[package]]
 name = "rolldown-file-id"
-version = "0.2.4"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987e6977d7746be897071f69d1f8ec72b25a246c8130cf7985c1a536f6eaf1be"
+checksum = "4e8a353a557a02405575e020bf99e1be57e74fc8293c400d04c3cd550e5d5b41"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "rolldown-notify"
-version = "8.2.1"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "858a3e78503d89287b47d66fb042b4f04e34b237774506fbb48d7c3e5eb445cf"
+checksum = "97af9361dbd2e8380d54cebb6b005b09998883ee2eedbded4edf159f59357936"
 dependencies = [
  "bitflags 2.9.4",
  "fsevent-sys",
@@ -5796,14 +5787,14 @@ dependencies = [
  "mio 1.0.4",
  "rolldown-notify-types",
  "walkdir",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "rolldown-notify-debouncer-full"
-version = "0.6.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45e06775bbad4fa50fb0c07a1dfbb5ec3356131b6f0e19679910cb698aa54068"
+checksum = "a5fa96424871058b73046901eef2ef31bf3bf5e46880476e7a1debfc8f34aea6"
 dependencies = [
  "log",
  "rolldown-file-id",
@@ -5814,9 +5805,9 @@ dependencies = [
 
 [[package]]
 name = "rolldown-notify-types"
-version = "2.0.1"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "598d3e49d0f0fb6f5be6664efc3138634d7aa0c9fc5d1186a0a435dd76e6660f"
+checksum = "c35fd0bfc4c6e8d4f0f7f69508309e97d8db39638ec0093577c77748be2b7ae8"
 
 [[package]]
 name = "rolldown_common"
@@ -6237,7 +6228,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -6372,7 +6363,7 @@ version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891d81b926048e76efe18581bf793546b4c0eaf8448d72be8de2bbee5fd166e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -6495,7 +6486,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -8068,7 +8059,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -9211,7 +9202,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -9405,9 +9396,9 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.61.2"
+version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+checksum = "e201184e40b2ede64bc2ea34968b28e33622acdbbf37104f0e4a33f7abe657aa"
 dependencies = [
  "windows-link 0.2.1",
 ]
@@ -9825,12 +9816,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "zlib-rs"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f06ae92f42f5e5c42443fd094f245eb656abf56dd7cce9b8b263236565e00f2"
 
 [[package]]
 name = "zstd"

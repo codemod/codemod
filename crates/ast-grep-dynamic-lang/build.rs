@@ -19,8 +19,6 @@ fn main() {
         .unwrap_or_else(|_| "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com".to_string());
     println!("cargo:rustc-env=TREE_SITTER_BASE_URL={url}");
 
-    println!("pre_tree_sitter_register: {}", pre_tree_sitter_register);
-
     if pre_tree_sitter_register.is_empty() || pre_tree_sitter_register == "false" {
         let out_dir = env::var("OUT_DIR").unwrap();
         let dest_path = PathBuf::from(&out_dir).join("embedded_libs.rs");
@@ -148,7 +146,6 @@ pub fn get_embedded_libs() -> &'static HashMap<String, EmbeddedLib> {
     generated_code.push_str("}\n");
 
     // Write the generated code
-    println!("generated_code: {}", generated_code);
     fs::write(&dest_path, &generated_code).expect("Failed to write generated code");
 
     println!("cargo:rerun-if-env-changed=PRE_REGISTER_JSON_CONFIG");

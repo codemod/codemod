@@ -2501,6 +2501,7 @@ export default function transform(ast) {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            "test-step".to_string(),
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: None,
@@ -2513,8 +2514,10 @@ export default function transform(ast) {
             },
             None,
             None,
-            None,
-            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
         )
         .await;
 
