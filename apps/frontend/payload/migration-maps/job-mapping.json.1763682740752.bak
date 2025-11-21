@@ -1,0 +1,27 @@
+{
+  "0b55758b-cdbc-4e83-85fd-ff6124f01667": {
+    "payloadId": 1,
+    "title": "Sr. AI Engineer",
+    "sanityPathname": "/careers/sr-ai-engineer"
+  },
+  "3021249b-6238-45e3-8f12-f613fe55e348": {
+    "payloadId": 2,
+    "title": "Sr Software Engineer, DevOps & Backend",
+    "sanityPathname": "/careers/sr-software-engineer"
+  },
+  "4804f1dc-f4ca-4369-b2eb-1ce31c52b911": {
+    "payloadId": 3,
+    "title": "Founding Product Engineer",
+    "sanityPathname": "/careers/product-engineer"
+  },
+  "588188e6-8da2-4aa5-bf66-77cb50fec6e0": {
+    "payloadId": 4,
+    "title": "Founding Engineer",
+    "sanityPathname": "/careers/sr-founding-eng-oss"
+  },
+  "fc8fdbb5-46fd-417f-81eb-b2405050b384": {
+    "payloadId": 5,
+    "title": "Senior Software Engineer, Migrations (Customer Success)",
+    "sanityPathname": "/careers/sr-sw-engineer-migrations"
+  }
+}

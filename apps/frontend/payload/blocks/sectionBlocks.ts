@@ -2,6 +2,112 @@ import { Block } from "payload";
 import { imageWithAltField } from "../fields/shared/imageWithAlt";
 import { linkField } from "../fields/shared/link";
 
+const createFullWidthMediaSectionBlock = (dbPrefix: string): Block => ({
+  slug: "section-fw-media",
+  labels: {
+    singular: "Full Width Media",
+    plural: "Full Width Media",
+  },
+  fields: [
+    {
+      name: "title",
+      type: "text",
+      label: "Title",
+    },
+    {
+      name: "subtitle",
+      type: "textarea",
+      label: "Subtitle",
+    },
+    {
+      name: "mediaTabs",
+      type: "array",
+      dbName: `${dbPrefix}_tabs`,
+      label: "Media Tabs",
+      fields: [
+        {
+          name: "tabTitle",
+          type: "text",
+          dbName: `${dbPrefix}_tab_title`,
+          label: "Tab Title",
+          admin: {
+            description: "The title of the tab used to switch items",
+          },
+        },
+        {
+          name: "mediaItem",
+          type: "array",
+          dbName: `${dbPrefix}_tab_item`,
+          maxRows: 1,
+          minRows: 1,
+          label: "Media Item",
+          admin: {
+            description: "The media item to display in the tab. Max 1 item.",
+          },
+          fields: [
+            {
+              name: "type",
+              type: "select",
+              required: true,
+              dbName: `${dbPrefix}_tab_mt`,
+              options: [
+                { label: "Mux Video", value: "muxVideo" },
+                { label: "Image", value: "image" },
+              ],
+              label: "Media Type",
+            },
+            {
+              name: "muxVideo",
+              type: "group",
+              dbName: `${dbPrefix}_tab_mux`,
+              label: "Mux Video",
+              admin: {
+                condition: (data, siblingData) =>
+                  siblingData?.type === "muxVideo",
+              },
+              fields: [
+                {
+                  name: "hasControls",
+                  type: "checkbox",
+                  label: "Show video controls",
+                },
+                {
+                  name: "autoPlay",
+                  type: "checkbox",
+                  label: "Auto Play",
+                },
+                {
+                  name: "loop",
+                  type: "checkbox",
+                  label: "Loop",
+                },
+                {
+                  name: "video",
+                  type: "text",
+                  label: "Light Mode Video (Mux Playback ID)",
+                },
+                {
+                  name: "darkVideo",
+                  type: "text",
+                  label: "Dark Mode Video (Mux Playback ID)",
+                },
+              ],
+            },
+            {
+              ...imageWithAltField,
+              name: "image",
+              label: "Image",
+              admin: {
+                condition: (data, siblingData) => siblingData?.type === "image",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
 // Hero Section Block
 export const heroSectionBlock: Block = {
   slug: "section-hero",
@@ -234,9 +340,27 @@ export const featuresSectionBlock: Block = {
           },
         },
         {
-          ...linkField,
           name: "cta",
+          type: "group",
           label: "Call to action",
+          required: false, // CTA is optional
+          fields: [
+            {
+              name: "label",
+              type: "text",
+              required: false, // Make label optional since CTA is optional
+              label: "Label",
+            },
+            {
+              name: "href",
+              type: "text",
+              required: false, // Make href optional since CTA is optional
+              label: "URL",
+              admin: {
+                description: "e.g. https://example.com or /about-page",
+              },
+            },
+          ],
         },
       ],
     },
@@ -374,109 +498,32 @@ export const testimonialsSectionBlock: Block = {
   ],
 };
 
-// Full Width Media Section Block
-export const fullWidthMediaSectionBlock: Block = {
-  slug: "section-fw-media",
+// Paragraph Section Block
+export const paragraphSectionBlock: Block = {
+  slug: "section-paragraph",
   labels: {
-    singular: "Full Width Media",
-    plural: "Full Width Media",
+    singular: "Paragraph with Title",
+    plural: "Paragraph Sections",
   },
   fields: [
     {
       name: "title",
       type: "text",
+      required: true,
       label: "Title",
     },
     {
-      name: "subtitle",
-      type: "textarea",
-      label: "Subtitle",
-    },
-    {
-      name: "mediaTabs",
-      type: "array",
-      dbName: "tabs",
-      label: "Media Tabs",
-      fields: [
-        {
-          name: "tabTitle",
-          type: "text",
-          dbName: "title",
-          label: "Tab Title",
-          admin: {
-            description: "The title of the tab used to switch items",
-          },
-        },
-        {
-          name: "mediaItem",
-          type: "array",
-          dbName: "item",
-          maxRows: 1,
-          minRows: 1,
-          label: "Media Item",
-          admin: {
-            description: "The media item to display in the tab. Max 1 item.",
-          },
-          fields: [
-            {
-              name: "type",
-              type: "select",
-              required: true,
-              dbName: "mt",
-              options: [
-                { label: "Mux Video", value: "muxVideo" },
-                { label: "Image", value: "image" },
-              ],
-              label: "Media Type",
-            },
-            {
-              name: "muxVideo",
-              type: "group",
-              dbName: "mux",
-              label: "Mux Video",
-              admin: {
-                condition: (data, siblingData) =>
-                  siblingData?.type === "muxVideo",
-              },
-              fields: [
-                {
-                  name: "hasControls",
-                  type: "checkbox",
-                  label: "Show video controls",
-                },
-                {
-                  name: "autoPlay",
-                  type: "checkbox",
-                  label: "Auto Play",
-                },
-                {
-                  name: "loop",
-                  type: "checkbox",
-                  label: "Loop",
-                },
-                {
-                  name: "video",
-                  type: "text",
-                  label: "Light Mode Video (Mux Playback ID)",
-                },
-                {
-                  name: "darkVideo",
-                  type: "text",
-                  label: "Dark Mode Video (Mux Playback ID)",
-                },
-              ],
-            },
-            {
-              ...imageWithAltField,
-              name: "image",
-              label: "Image",
-              admin: {
-                condition: (data, siblingData) => siblingData?.type === "image",
-              },
-            },
-          ],
-        },
-      ],
+      name: "content",
+      type: "richText",
+      label: "Content",
     },
   ],
 };
+
+// Full Width Media Section Block
+export const fullWidthMediaSectionBlock =
+  createFullWidthMediaSectionBlock("pages");
+export const fullWidthMediaSectionBlockPricing =
+  createFullWidthMediaSectionBlock("pricing");
+export const fullWidthMediaSectionBlockHome =
+  createFullWidthMediaSectionBlock("home");

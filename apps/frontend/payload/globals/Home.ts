@@ -5,7 +5,7 @@ import {
   featuresSectionBlock,
   registrySectionBlock,
   testimonialsSectionBlock,
-  fullWidthMediaSectionBlock,
+  fullWidthMediaSectionBlockHome,
 } from "../blocks/sectionBlocks";
 
 export const Home: GlobalConfig = {
@@ -68,7 +68,7 @@ export const Home: GlobalConfig = {
         featuresSectionBlock,
         registrySectionBlock,
         testimonialsSectionBlock,
-        fullWidthMediaSectionBlock,
+        fullWidthMediaSectionBlockHome,
       ],
       admin: {
         description: "Dynamic sections for the home page",

@@ -47,7 +47,10 @@ export const Footer: GlobalConfig = {
           type: "text",
           label: "Icon",
           admin: {
-            description: "Icon name/identifier",
+            description: "Select an icon from the icon library",
+            components: {
+              Field: "@/payload/components/IconPicker#IconPicker",
+            },
           },
         },
       ],

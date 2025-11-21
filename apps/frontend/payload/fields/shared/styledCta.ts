@@ -43,7 +43,10 @@ export const styledCtaField: Field = {
       type: "text",
       label: "Icon",
       admin: {
-        description: "Icon name (if applicable)",
+        description: "Select an icon from the icon library",
+        components: {
+          Field: "@/payload/components/IconPicker#IconPicker",
+        },
       },
     },
   ],

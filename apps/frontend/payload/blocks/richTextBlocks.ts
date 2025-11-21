@@ -5,7 +5,6 @@ import {
   CodeBlock,
   EXPERIMENTAL_TableFeature,
 } from "@payloadcms/richtext-lexical";
-import { imageWithAltField } from "../fields/shared/imageWithAlt";
 
 // Note: CodeBlock is built-in from @payloadcms/richtext-lexical
 // We use CodeBlock() instead of a custom code snippet block
@@ -14,6 +13,7 @@ import { imageWithAltField } from "../fields/shared/imageWithAlt";
 // We only need the custom "Linked Image" block below
 
 // Linked Image Block
+// Using flat fields to avoid Payload UI state conflicts with multiple upload fields
 export const linkedImageBlock: Block = {
   slug: "linked-image",
   labels: {
@@ -22,42 +22,61 @@ export const linkedImageBlock: Block = {
   },
   fields: [
     {
-      ...imageWithAltField,
-      name: "image",
-      label: "Image",
-      required: true,
+      name: "lightImage",
+      type: "upload",
+      relationTo: "media",
+      label: "Light Mode Image",
+      admin: {
+        description:
+          "Image for light mode (optional if dark mode image is provided)",
+      },
     },
     {
-      name: "link",
-      type: "group",
-      label: "Link",
-      fields: [
-        {
-          name: "label",
-          type: "text",
-          label: "Link Label",
-          admin: {
-            description: "Optional label for the link",
-          },
-        },
-        {
-          name: "href",
-          type: "text",
-          required: true,
-          label: "URL",
-          admin: {
-            description: "e.g. https://example.com or /about-page",
-          },
-        },
-      ],
+      name: "darkImage",
+      type: "upload",
+      relationTo: "media",
+      label: "Dark Mode Image",
+      admin: {
+        description:
+          "Image for dark mode (optional if light mode image is provided)",
+      },
+    },
+    {
+      name: "alt",
+      type: "text",
+      label: "Alt Text",
+      validate: (value: string | null | undefined, { siblingData }: any) => {
+        const hasLight = !!siblingData?.lightImage;
+        const hasDark = !!siblingData?.darkImage;
+        if ((hasLight || hasDark) && (!value || value.trim() === "")) {
+          return "Alt text is required when an image is provided";
+        }
+        return true;
+      },
+    },
+    {
+      name: "linkLabel",
+      type: "text",
+      label: "Link Label",
+    },
+    {
+      name: "linkUrl",
+      type: "text",
+      label: "Link URL",
+      validate: (value: string | null | undefined, { siblingData }: any) => {
+        if (siblingData.linkLabel && !value) {
+          return "Link URL is required when Link Label is provided";
+        }
+        if (value && !value.match(/^(https?:\/\/|\/)/)) {
+          return "Link URL must start with http://, https://, or /";
+        }
+        return true;
+      },
     },
     {
       name: "caption",
       type: "text",
       label: "Caption",
-      admin: {
-        description: "Optional caption for the image",
-      },
     },
   ],
 };
@@ -172,9 +191,78 @@ export const twitterEmbedBlock: Block = {
   ],
 };
 
+// Admonition Block (callout/alert block)
+// Note: In Sanity, admonitions were inline annotations, but we convert them to blocks in Payload
+export const admonitionBlock: Block = {
+  slug: "admonition",
+  labels: {
+    singular: "Admonition",
+    plural: "Admonitions",
+  },
+  fields: [
+    {
+      name: "variant",
+      type: "select",
+      required: true,
+      label: "Variant",
+      defaultValue: "success",
+      options: [
+        { label: "Success", value: "success" },
+        { label: "Info", value: "info" },
+        { label: "Warning", value: "warning" },
+        { label: "Error", value: "error" },
+      ],
+    },
+    {
+      name: "title",
+      type: "text",
+      label: "Title",
+      defaultValue: "Tip",
+      admin: {
+        description: "Title shown at the top of the admonition",
+      },
+    },
+    {
+      name: "icon",
+      type: "text",
+      label: "Icon",
+      defaultValue: "standard",
+      admin: {
+        description: "Icon name",
+        components: {
+          Field: "@/payload/components/IconPicker#IconPicker",
+        },
+      },
+    },
+    {
+      name: "content",
+      type: "richText",
+      required: true,
+      label: "Content",
+      admin: {
+        description: "The content of the admonition",
+      },
+      editor: lexicalEditor({
+        features: ({ defaultFeatures }) => [
+          ...defaultFeatures,
+          EXPERIMENTAL_TableFeature(),
+          BlocksFeature({
+            blocks: [
+              CodeBlock(),
+              ...richTextBlocksWithoutCollapsibleOrAdmonition,
+            ],
+          }),
+        ],
+      }),
+    },
+  ],
+};
+
 // Quote Block (custom - different from built-in blockquote)
 // Note: Payload has a built-in blockquote feature, but this is a custom "Quote Block"
 // with image, author, etc. - similar to Sanity's quoteBlock
+// Using flat fields to avoid Payload UI state conflicts with multiple upload fields
+// Field order matches Sanity structure: image, quote, authorName, authorPosition, authorImage
 export const quoteBlock: Block = {
   slug: "quote-block",
   labels: {
@@ -183,11 +271,36 @@ export const quoteBlock: Block = {
   },
   fields: [
     {
-      ...imageWithAltField,
-      name: "image",
-      label: "Image",
+      name: "imageLight",
+      type: "upload",
+      relationTo: "media",
+      label: "Image (Light Mode)",
       admin: {
-        description: "Optional image for the quote",
+        description:
+          "Quote image for light mode (optional if dark mode image is provided)",
+      },
+    },
+    {
+      name: "imageDark",
+      type: "upload",
+      relationTo: "media",
+      label: "Image (Dark Mode)",
+      admin: {
+        description:
+          "Quote image for dark mode (optional if light mode image is provided)",
+      },
+    },
+    {
+      name: "imageAlt",
+      type: "text",
+      label: "Image Alt Text",
+      validate: (value: string | null | undefined, { siblingData }: any) => {
+        const hasLight = !!siblingData?.imageLight;
+        const hasDark = !!siblingData?.imageDark;
+        if ((hasLight || hasDark) && (!value || value.trim() === "")) {
+          return "Alt text is required when an image is provided";
+        }
+        return true;
       },
     },
     {
@@ -204,22 +317,44 @@ export const quoteBlock: Block = {
       name: "authorName",
       type: "text",
       required: true,
-      label: "Author Name",
+      label: "Author",
     },
     {
       name: "authorPosition",
       type: "text",
       label: "Author Position",
+    },
+    {
+      name: "authorImageLight",
+      type: "upload",
+      relationTo: "media",
+      label: "Author Image (Light Mode)",
       admin: {
-        description: "Optional position/title of the author",
+        description:
+          "Author image for light mode (optional if dark mode image is provided)",
       },
     },
     {
-      ...imageWithAltField,
-      name: "authorImage",
-      label: "Author Image",
+      name: "authorImageDark",
+      type: "upload",
+      relationTo: "media",
+      label: "Author Image (Dark Mode)",
       admin: {
-        description: "Optional author profile image",
+        description:
+          "Author image for dark mode (optional if light mode image is provided)",
+      },
+    },
+    {
+      name: "authorImageAlt",
+      type: "text",
+      label: "Author Image Alt Text",
+      validate: (value: string | null | undefined, { siblingData }: any) => {
+        const hasLight = !!siblingData?.authorImageLight;
+        const hasDark = !!siblingData?.authorImageDark;
+        if ((hasLight || hasDark) && (!value || value.trim() === "")) {
+          return "Alt text is required when an image is provided";
+        }
+        return true;
       },
     },
   ],
@@ -228,16 +363,22 @@ export const quoteBlock: Block = {
 // Note: Table functionality is provided by EXPERIMENTAL_TableFeature (built-in)
 // Removed custom tableBlock in favor of the experimental built-in feature
 
-// Blocks without collapsible (defined first for use in collapsible content)
+// Blocks without collapsible or admonition (for use in nested richText fields)
 // Note: CodeBlock is added separately in the editor config (it's a built-in feature, not a block)
 // Note: Built-in image support is available in Lexical, we only need linked-image
 // Note: Table functionality is provided by EXPERIMENTAL_TableFeature (built-in)
-const richTextBlocksWithoutCollapsible: Block[] = [
+const richTextBlocksWithoutCollapsibleOrAdmonition: Block[] = [
   linkedImageBlock, // Custom - only this image variant is needed
   muxVideoWithCaptionBlock, // Custom - no Payload plugin for Mux (Sanity used mux.video plugin)
   youtubeVideoBlock, // Custom - no built-in YouTube embed
   twitterEmbedBlock, // Custom - no built-in Twitter embed
   quoteBlock, // Custom - different from built-in blockquote
+];
+
+// All blocks including collapsible and admonition (for top-level richText fields)
+const richTextBlocksWithoutCollapsible: Block[] = [
+  ...richTextBlocksWithoutCollapsibleOrAdmonition,
+  admonitionBlock, // Custom - callout/alert blocks (converted from Sanity inline annotations)
 ];
 
 // Collapsible Block
@@ -273,7 +414,10 @@ export const collapsibleBlock: Block = {
           ...defaultFeatures,
           EXPERIMENTAL_TableFeature(), // Built-in experimental table feature
           BlocksFeature({
-            blocks: [CodeBlock(), ...richTextBlocksWithoutCollapsible],
+            blocks: [
+              CodeBlock(),
+              ...richTextBlocksWithoutCollapsibleOrAdmonition,
+            ],
           }),
         ],
       }),

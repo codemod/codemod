@@ -83,13 +83,14 @@ const config = {
   async headers() {
     return [
       {
-        source: "/:path*",
+        // Exclude Payload admin routes - they handle their own CSP
+        source: "/:path((?!admin|api/payload).)*",
         headers: [
           {
             key: "Content-Security-Policy",
             value:
               "default-src 'self'; " +
-              "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ 'unsafe-inline' 'unsafe-eval'; " +
+              "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://cdn.jsdelivr.net 'unsafe-inline' 'unsafe-eval'; " +
               "frame-src https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; " +
               "style-src 'self' 'unsafe-inline'; " +
               "img-src * data: blob:; " +

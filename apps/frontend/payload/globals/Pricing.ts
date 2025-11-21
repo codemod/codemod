@@ -5,7 +5,8 @@ import {
   featuresSectionBlock,
   registrySectionBlock,
   testimonialsSectionBlock,
-  fullWidthMediaSectionBlock,
+  fullWidthMediaSectionBlockPricing,
+  paragraphSectionBlock,
 } from "../blocks/sectionBlocks";
 import { styledCtaField } from "../fields/shared/styledCta";
 
@@ -67,7 +68,10 @@ export const Pricing: GlobalConfig = {
           type: "text",
           label: "Icon",
           admin: {
-            description: "Icon name/identifier",
+            description: "Select an icon from the icon library",
+            components: {
+              Field: "@/payload/components/IconPicker#IconPicker",
+            },
           },
         },
         {
@@ -118,9 +122,26 @@ export const Pricing: GlobalConfig = {
           ],
         },
         {
-          ...styledCtaField,
           name: "cta",
+          type: "group",
           label: "Call to action",
+          required: false,
+          fields: [
+            {
+              name: "label",
+              type: "text",
+              label: "Button label",
+            },
+            {
+              name: "link",
+              type: "text",
+              required: true,
+              label: "Link",
+              admin: {
+                description: "URL for the CTA button",
+              },
+            },
+          ],
         },
       ],
     },
@@ -132,7 +153,8 @@ export const Pricing: GlobalConfig = {
         featuresSectionBlock,
         registrySectionBlock,
         testimonialsSectionBlock,
-        fullWidthMediaSectionBlock,
+        fullWidthMediaSectionBlockPricing,
+        paragraphSectionBlock,
       ],
     },
     {

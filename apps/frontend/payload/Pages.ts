@@ -6,6 +6,7 @@ import {
   registrySectionBlock,
   testimonialsSectionBlock,
   fullWidthMediaSectionBlock,
+  paragraphSectionBlock,
 } from "./blocks/sectionBlocks";
 import { formatSlug } from "./utils/formatSlug";
 
@@ -121,6 +122,7 @@ export const Pages: CollectionConfig = {
         registrySectionBlock,
         testimonialsSectionBlock,
         fullWidthMediaSectionBlock,
+        paragraphSectionBlock,
       ],
       admin: {
         condition: (data) => data?.pageType === "modular",

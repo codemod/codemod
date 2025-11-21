@@ -1,6 +1,5 @@
 import { GlobalConfig } from "payload";
 import { publishStatusField } from "../fields/shared/publishStatus";
-import { heroSectionBlock } from "../blocks/sectionBlocks";
 import { imageWithAltField } from "../fields/shared/imageWithAlt";
 
 export const About: GlobalConfig = {
@@ -15,6 +14,7 @@ export const About: GlobalConfig = {
     drafts: true,
   },
   fields: [
+    // Page metadata (from definePage helper)
     {
       name: "pathname",
       type: "text",
@@ -29,30 +29,111 @@ export const About: GlobalConfig = {
       type: "text",
       defaultValue: "About",
       admin: {
-        description: "Internal title for admin use only",
+        description:
+          "This title is only used internally in Payload, it won't be displayed on the website.",
       },
     },
+    publishStatusField,
+    // SEO handled by @payloadcms/plugin-seo (adds 'meta' field automatically)
+
+    // Hero section (section.hero in Sanity - single object)
     {
       name: "hero",
-      type: "blocks",
+      type: "group",
       label: "Hero Section",
-      blocks: [heroSectionBlock],
-      admin: {
-        description: "Hero section content",
-      },
+      fields: [
+        {
+          name: "title",
+          type: "text",
+          required: true,
+          maxLength: 80,
+          label: "Title",
+          admin: {
+            description: "Max 80 chars",
+          },
+        },
+        {
+          name: "subtitle",
+          type: "textarea",
+          maxLength: 250,
+          label: "Subtitle",
+          admin: {
+            description: "Max 250 chars",
+          },
+        },
+        {
+          name: "logoCarousel",
+          type: "group",
+          label: "Logo Carousel",
+          fields: [
+            {
+              name: "logos",
+              type: "array",
+              label: "Logos",
+              fields: [
+                {
+                  name: "lightModeImage",
+                  type: "upload",
+                  relationTo: "media",
+                  required: true,
+                  label: "Light Mode Image",
+                  admin: {
+                    description: "Please use a dark logo",
+                  },
+                },
+                {
+                  name: "darkModeImage",
+                  type: "upload",
+                  relationTo: "media",
+                  required: true,
+                  label: "Dark Mode Image",
+                  admin: {
+                    description: "Please use a light logo",
+                  },
+                },
+                {
+                  name: "alt",
+                  type: "text",
+                  required: true,
+                  label: "Alt Text",
+                },
+                {
+                  name: "link",
+                  type: "text",
+                  required: true,
+                  label: "Link",
+                  admin: {
+                    description: "e.g. https://example.com or /about-page",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
     },
+
+    // Paragraph section
     {
       name: "paragraphTitle",
       type: "text",
       required: true,
       label: "Title",
+      admin: {
+        description: "Title for the paragraph section",
+      },
     },
     {
       name: "paragraphContent",
       type: "richText",
       required: true,
       label: "Content",
+      admin: {
+        description: "Rich text content for the paragraph section",
+      },
     },
+
+    // Team section
     {
       name: "teamTitle",
       type: "text",
@@ -69,6 +150,9 @@ export const About: GlobalConfig = {
           type: "upload",
           relationTo: "media",
           label: "Image",
+          admin: {
+            description: "Team member photo",
+          },
         },
         {
           name: "name",
@@ -86,27 +170,40 @@ export const About: GlobalConfig = {
           name: "linkedin",
           type: "text",
           label: "LinkedIn Profile URL",
+          admin: {
+            description: "Full URL to LinkedIn profile",
+          },
         },
         {
           name: "twitter",
           type: "text",
           label: "Twitter Profile URL",
+          admin: {
+            description: "Full URL to Twitter profile",
+          },
         },
         {
           name: "bio",
           type: "richText",
           required: true,
           label: "Bio",
+          admin: {
+            description: "Team member biography",
+          },
         },
         {
           name: "previousCompany",
           type: "text",
           label: "Previous Company",
+          admin: {
+            description: "Name of previous company",
+          },
         },
         {
           ...imageWithAltField,
           name: "previousCompanyLogo",
           label: "Previous Company Logo",
+          required: false,
           admin: {
             description:
               "Please, upload logos with transparent background (svg preferred) and in their horizontal variation. Also try and trim vertical margins as much as possible.",
@@ -114,12 +211,85 @@ export const About: GlobalConfig = {
         },
       ],
     },
+
+    // Companies section - simple structure with title, subtitle, and logo carousel
     {
       name: "companies",
-      type: "blocks",
+      type: "group",
       label: "Companies Section",
-      blocks: [heroSectionBlock],
+      fields: [
+        {
+          name: "title",
+          type: "text",
+          required: true,
+          maxLength: 80,
+          label: "Title",
+          admin: {
+            description: "Max 80 chars",
+          },
+        },
+        {
+          name: "subtitle",
+          type: "textarea",
+          maxLength: 250,
+          label: "Subtitle",
+          admin: {
+            description: "Max 250 chars",
+          },
+        },
+        {
+          name: "logoCarousel",
+          type: "group",
+          label: "Logo Carousel",
+          fields: [
+            {
+              name: "logos",
+              type: "array",
+              label: "Logos",
+              fields: [
+                {
+                  name: "lightModeImage",
+                  type: "upload",
+                  relationTo: "media",
+                  required: true,
+                  label: "Light Mode Image",
+                  admin: {
+                    description: "Please use a dark logo",
+                  },
+                },
+                {
+                  name: "darkModeImage",
+                  type: "upload",
+                  relationTo: "media",
+                  required: true,
+                  label: "Dark Mode Image",
+                  admin: {
+                    description: "Please use a light logo",
+                  },
+                },
+                {
+                  name: "alt",
+                  type: "text",
+                  required: true,
+                  label: "Alt Text",
+                },
+                {
+                  name: "link",
+                  type: "text",
+                  required: true,
+                  label: "Link",
+                  admin: {
+                    description: "e.g. https://example.com or /about-page",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
     },
+
+    // Investors section
     {
       name: "investorsTitle",
       type: "text",
@@ -131,6 +301,9 @@ export const About: GlobalConfig = {
       type: "richText",
       required: true,
       label: "Investors Section Subtitle",
+      admin: {
+        description: "Rich text subtitle for the investors section",
+      },
     },
     {
       name: "investors",
@@ -142,6 +315,9 @@ export const About: GlobalConfig = {
           type: "upload",
           relationTo: "media",
           label: "Image",
+          admin: {
+            description: "Investor photo",
+          },
         },
         {
           name: "name",
@@ -159,9 +335,15 @@ export const About: GlobalConfig = {
           ...imageWithAltField,
           name: "companyLogo",
           label: "Company Logo",
+          required: false,
+          admin: {
+            description: "Company logo with light and dark mode support",
+          },
         },
       ],
     },
+
+    // Page CTA (optional)
     {
       name: "pageCta",
       type: "relationship",
@@ -172,8 +354,6 @@ export const About: GlobalConfig = {
           "Call to action for a page. This is placed at the bottom of the page before the footer.",
       },
     },
-    publishStatusField,
-    // SEO handled by @payloadcms/plugin-seo (adds 'meta' field automatically)
   ],
 };
 
