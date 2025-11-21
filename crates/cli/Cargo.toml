@@ -64,11 +64,11 @@ open = "5.0"
 # Testing framework dependencies
 libtest-mimic = "0.8"
 similar = "2.0"
-ast-grep-language.workspace = true
 tabled = "0.20.0"
 posthog-rs = "0.3.7"
 async-trait.workspace = true
 indicatif = "0.18.0"
+codemod-ast-grep-dynamic-lang = { workspace = true }
 
 [features]
 default = []

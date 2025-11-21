@@ -4,12 +4,13 @@ use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
+#[cfg(feature = "native")]
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_ast_grep_dynamic_lang::DynamicLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
@@ -32,10 +33,10 @@ pub enum ExecutionResult {
 pub struct JssgExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    pub language: SupportLang,
+    pub language: DynamicLang,
     pub file_path: &'a Path,
     pub content: &'a str,
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<DynamicLang>>>>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
@@ -69,8 +70,19 @@ where
         },
     })?;
 
-    // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
+
+    if let Some(selector_config) = &options.selector_config {
+        let matches: Vec<_> = ast_grep
+            .root()
+            .dfs()
+            .filter_map(move |node| selector_config.matcher.match_node(node))
+            .collect();
+
+        if matches.is_empty() {
+            return Ok(ExecutionResult::Skipped);
+        }
+    }
 
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
@@ -191,7 +203,7 @@ where
                 None
             };
 
-            let language_str = options.language.to_string();
+            let language_str = options.language.name();
 
             let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -208,7 +220,7 @@ where
                 },
             })?;
 
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
+            run_options.set("language", language_str).map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: e.to_string(),
                 },
@@ -391,9 +403,11 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
-    use ast_grep_language::SupportLang;
+    use codemod_ast_grep_dynamic_lang::load_tree_sitter::load_tree_sitter;
+    use codemod_ast_grep_dynamic_lang::supported_langs::SupportedLanguage;
     use std::fs;
     use std::path::Path;
+    use std::str::FromStr;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -449,19 +463,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Modified(new_content)) => {
@@ -490,19 +505,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -532,19 +548,20 @@ function example() {
         "#
         .trim();
 
-        let options = JssgExecutionOptions {
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
+        let result = execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
+        })
+        .await;
 
         match result {
             Ok(ExecutionResult::Unmodified) => {
@@ -574,10 +591,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -619,10 +638,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,
@@ -658,10 +679,12 @@ function example() {
         "#
         .trim();
 
+        let _ = load_tree_sitter(&[SupportedLanguage::Javascript], None).await;
+
         let options = JssgExecutionOptions {
             script_path: nonexistent_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: DynamicLang::from_str("javascript").unwrap(),
             file_path,
             content,
             selector_config: None,

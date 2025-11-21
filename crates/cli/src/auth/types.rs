@@ -25,6 +25,7 @@ pub struct OrganizationMembership {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct OidcResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,

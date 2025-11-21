@@ -1,25 +1,24 @@
+use super::config::{ResolvedTestConfig, TestConfig};
+use crate::engine::create_download_progress_callback;
+use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use anyhow::Result;
 use clap::Args;
+use codemod_ast_grep_dynamic_lang::supported_langs::{
+    get_extensions_for_language, SupportedLanguage,
+};
+use codemod_ast_grep_dynamic_lang::DynamicLang;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::{
+    sandbox::{engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
+    utils::project_discovery::find_tsconfig,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
-
-use ast_grep_language::SupportLang;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::{
-    sandbox::{
-        engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
-        resolvers::OxcResolver,
-    },
-    utils::project_discovery::find_tsconfig,
-};
 use testing_utils::{TestOptions, TestRunner, TestSource, TransformationResult};
-
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-
-use super::config::{ResolvedTestConfig, TestConfig};
 
 #[derive(Args, Debug, Clone)]
 pub struct Command {
@@ -116,8 +115,6 @@ pub async fn handler(args: &Command) -> Result<()> {
         )
     })?;
 
-    let default_language_enum: SupportLang = default_language_str.parse()?;
-
     let options = TestOptions {
         filter: global_config.filter,
         update_snapshots: global_config.update_snapshots,
@@ -131,6 +128,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         ignore_whitespace: global_config.ignore_whitespace,
         context_lines: global_config.context_lines,
         expect_errors: global_config.expect_errors,
+        language: args.language.as_deref().and_then(|l| l.parse().ok()),
+        download_progress_callback: Some(create_download_progress_callback()),
     };
 
     let script_base_dir = codemod_path
@@ -181,12 +180,12 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .language
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
-                let language_enum: SupportLang = language_str.parse()?;
 
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
                     resolver,
-                    language: language_enum,
+                    language: DynamicLang::from_str(language_str)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse language: {e}"))?,
                     file_path: &input_path,
                     content: &input_code,
                     selector_config: None,
@@ -217,12 +216,14 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let test_source = TestSource::Directory(test_directory);
 
-    let extensions = get_extensions_for_language(default_language_enum);
+    let extensions =
+        get_extensions_for_language(SupportedLanguage::from_str(default_language_str).unwrap());
 
-    let mut runner = TestRunner::new(options, test_source);
+    let mut runner = TestRunner::new(options, test_source).await;
     let summary = runner
         .run_tests(&extensions, execution_fn, Some(capabilities))
-        .await?;
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to run tests: {e}"))?;
 
     if !summary.is_success() {
         std::process::exit(1);

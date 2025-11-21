@@ -1,13 +1,16 @@
-use crate::engine::create_progress_callback;
+use crate::engine::{create_download_progress_callback, create_progress_callback};
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
+use butterflow_core::execution::{
+    CodemodExecutionConfig, GlobsCodemodExecutionConfig, LanguageCodemodExecutionConfig,
+    PreRunCallback, ProgressCallbackCodemodExecutionConfig,
+};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
-use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
@@ -23,7 +26,6 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to the JavaScript file to execute
@@ -121,18 +123,29 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         })),
     };
 
-    let config = CodemodExecutionConfig {
-        pre_run_callback: Some(pre_run_callback),
-        progress_callback: Arc::new(Some(create_progress_callback())),
-        target_path: Some(target_directory.to_path_buf()),
-        base_path: None,
-        include_globs: None,
-        exclude_globs: None,
-        dry_run: args.dry_run,
-        languages: Some(vec![args.language.clone()]),
-        threads: args.max_threads,
-        capabilities: Some(capabilities),
-    };
+    let config = CodemodExecutionConfig::new(
+        Some(pre_run_callback),
+        ProgressCallbackCodemodExecutionConfig {
+            progress_callback: Arc::new(Some(create_progress_callback())),
+            download_progress_callback: Some(create_download_progress_callback()),
+        },
+        GlobsCodemodExecutionConfig {
+            target_path: Some(target_directory.to_path_buf()),
+            base_path: Some(script_base_dir.to_path_buf()),
+            include_globs: None,
+            exclude_globs: None,
+        },
+        args.dry_run,
+        LanguageCodemodExecutionConfig {
+            languages: Some(vec![args
+                .language
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse language: {e}"))?]),
+            capabilities: Some(capabilities),
+        },
+        args.max_threads,
+    )
+    .await;
 
     let started = Instant::now();
 
