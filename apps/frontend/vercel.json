@@ -1,0 +1,7 @@
+{
+  "buildCommand": "cd ../.. && npx pnpm@latest build --filter @codemod-com/frontend",
+  "devCommand": "cd ../.. && pnpm dev --filter=@codemod-com/frontend",
+  "installCommand": "npx pnpm@latest install",
+  "framework": "nextjs",
+  "rootDirectory": "apps/frontend"
+}

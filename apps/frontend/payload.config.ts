@@ -34,6 +34,87 @@ import NotFound from "./payload/globals/NotFound";
 const filename = fileURLToPath(import.meta.url);
 const dirname = path.dirname(filename);
 
+// Conditionally load storage adapter based on environment variables
+const getStorageAdapter = () => {
+  // Vercel Blob (recommended for Vercel deployments)
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      // Dynamic import to avoid requiring the package in local dev
+      const { vercelBlobStorage } = require("@payloadcms/storage-vercel-blob");
+      return vercelBlobStorage({
+        collections: {
+          media: {
+            token: process.env.BLOB_READ_WRITE_TOKEN,
+          },
+        },
+      });
+    } catch (error) {
+      console.warn(
+        "⚠️  @payloadcms/storage-vercel-blob not installed. Install with: pnpm add @payloadcms/storage-vercel-blob",
+      );
+      return null;
+    }
+  }
+
+  // AWS S3
+  if (process.env.S3_BUCKET && process.env.S3_ACCESS_KEY_ID) {
+    try {
+      const { s3Storage } = require("@payloadcms/storage-s3");
+      return s3Storage({
+        collections: {
+          media: {
+            bucket: process.env.S3_BUCKET,
+            prefix: "media",
+          },
+        },
+        config: {
+          credentials: {
+            accessKeyId: process.env.S3_ACCESS_KEY_ID,
+            secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+          },
+          region: process.env.S3_REGION || "us-east-1",
+          endpoint: process.env.S3_ENDPOINT,
+        },
+      });
+    } catch (error) {
+      console.warn(
+        "⚠️  @payloadcms/storage-s3 not installed. Install with: pnpm add @payloadcms/storage-s3",
+      );
+      return null;
+    }
+  }
+
+  // Cloudflare R2
+  if (process.env.R2_BUCKET && process.env.R2_ACCOUNT_ID) {
+    try {
+      const { r2Storage } = require("@payloadcms/storage-r2");
+      return r2Storage({
+        collections: {
+          media: {
+            bucket: process.env.R2_BUCKET,
+            prefix: "media",
+          },
+        },
+        config: {
+          accountId: process.env.R2_ACCOUNT_ID,
+          accessKeyId: process.env.R2_ACCESS_KEY_ID,
+          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+        },
+      });
+    } catch (error) {
+      console.warn(
+        "⚠️  @payloadcms/storage-r2 not installed. Install with: pnpm add @payloadcms/storage-r2",
+      );
+      return null;
+    }
+  }
+
+  // No storage adapter configured - will use local file system (fine for local dev)
+  return null;
+};
+
+const storageAdapter = getStorageAdapter();
+
 export default buildConfig({
   admin: {
     user: Users.slug,
@@ -73,7 +154,9 @@ export default buildConfig({
   },
   db: postgresAdapter({
     pool: {
-      connectionString: process.env.DATABASE_URI || "",
+      // Support both DATABASE_URL (Neon/Vercel standard) and DATABASE_URI (current)
+      connectionString:
+        process.env.DATABASE_URL || process.env.DATABASE_URI || "",
     },
   }),
   sharp,
@@ -91,5 +174,7 @@ export default buildConfig({
       ],
       uploadsCollection: "media",
     }),
+    // Add storage adapter if configured
+    ...(storageAdapter ? [storageAdapter] : []),
   ],
 });
