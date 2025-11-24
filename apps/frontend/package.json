@@ -171,7 +171,9 @@
     "vaul": "catalog:",
     "web-vitals": "catalog:",
     "zod": "catalog:",
-    "zustand": "catalog:"
+    "zustand": "catalog:",
+    "autoprefixer": "catalog:",
+    "postcss": "catalog:"
   },
   "devDependencies": {
     "@aceccarello/portable-text-to-lexical": "^0.1.0",
@@ -196,7 +198,6 @@
     "@types/semver": "^7.5.8",
     "@types/testing-library__jest-dom": "catalog:",
     "assert": "catalog:",
-    "autoprefixer": "catalog:",
     "csstype": "catalog:",
     "eslint": "catalog:",
     "eslint-config-next": "catalog:",
@@ -206,7 +207,6 @@
     "miragejs": "catalog:",
     "monaco-editor-webpack-plugin": "catalog:",
     "null-loader": "catalog:",
-    "postcss": "catalog:",
     "prettier": "3.2.5",
     "prettier-plugin-packagejson": "catalog:",
     "prettier-plugin-tailwindcss": "catalog:",

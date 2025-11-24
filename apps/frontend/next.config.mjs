@@ -41,38 +41,44 @@ const config = {
     );
 
     // Ensure webpack resolves TypeScript path aliases correctly
-    // Next.js reads tsconfig.json automatically, but we ensure aliases match
+    // Next.js automatically reads tsconfig.json paths, but we add explicit aliases
+    // to ensure they work correctly in webpack
     const existingAlias = config.resolve.alias || {};
+    const baseDir = __dirname;
+
+    // Merge with existing aliases (Next.js may have already set some from tsconfig.json)
     config.resolve.alias = {
       ...existingAlias,
-      // Base path aliases - Next.js should auto-read from tsconfig, but explicit ensures resolution
-      "@": path.resolve(__dirname, "."),
-      "@payload-config": path.resolve(__dirname, "./payload.config.ts"),
-      // Studio paths - these need to match tsconfig.json exactly
+      // Base path aliases
+      "@": baseDir,
+      "@payload-config": path.resolve(baseDir, "./payload.config.ts"),
+      // Studio paths - these match tsconfig.json paths
+      // For @studio/main/index, webpack resolves @studio/main to the directory,
+      // then looks for index.tsx/index.ts in that directory
       "@studio": path.resolve(
-        __dirname,
+        baseDir,
         "./app/(website)/studio-jscodeshift/src",
       ),
       "@studio/main": path.resolve(
-        __dirname,
+        baseDir,
         "./app/(website)/studio-jscodeshift/main",
       ),
       "@features": path.resolve(
-        __dirname,
+        baseDir,
         "./app/(website)/studio-jscodeshift/features",
       ),
       "@chatbot": path.resolve(
-        __dirname,
+        baseDir,
         "./app/(website)/studio-jscodeshift/features/modGPT",
       ),
       "@gr-run": path.resolve(
-        __dirname,
+        baseDir,
         "./app/(website)/studio-jscodeshift/features/GHRun",
       ),
-      "@utils": path.resolve(__dirname, "./utils"),
-      "@context": path.resolve(__dirname, "./app/context"),
-      "@auth": path.resolve(__dirname, "./app/auth"),
-      "@mocks": path.resolve(__dirname, "./mocks"),
+      "@utils": path.resolve(baseDir, "./utils"),
+      "@context": path.resolve(baseDir, "./app/context"),
+      "@auth": path.resolve(baseDir, "./app/auth"),
+      "@mocks": path.resolve(baseDir, "./mocks"),
     };
 
     // Add txt loader rule
