@@ -1,5 +1,17 @@
-import MonacoEditorPlugin from "monaco-editor-webpack-plugin";
+import { createRequire } from "module";
 import { withPayload } from "@payloadcms/next/withPayload";
+
+// Conditionally import MonacoEditorPlugin (only available in dev)
+// This is needed because it's a devDependency but Next.js config runs during build
+let MonacoEditorPlugin = null;
+try {
+  const require = createRequire(import.meta.url);
+  MonacoEditorPlugin = require("monaco-editor-webpack-plugin");
+} catch (e) {
+  // Monaco editor plugin not available in production builds
+  // This is fine - it's only needed for development
+  MonacoEditorPlugin = null;
+}
 
 /** @type {import('next').NextConfig} */
 const config = {
@@ -7,7 +19,7 @@ const config = {
     styledComponents: true,
   },
   webpack: (config, { isServer, webpack }) => {
-    if (!isServer) {
+    if (!isServer && MonacoEditorPlugin) {
       config.plugins.push(
         new MonacoEditorPlugin({
           languages: ["typescript", "html", "css", "json"],
