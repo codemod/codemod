@@ -49,7 +49,7 @@
     "test:unit": "vitest run --exclude '(apps/backend/**/*.*|submodules/**/*.*|crates/**/*.*)'",
     "test:backend": "pnpm --filter @codemod-com/backend test",
     "coverage": "pnpm test:unit --coverage",
-    "prepare": "husky install",
+    "prepare": "node -e \"try { require.resolve('husky'); require('child_process').execSync('husky install', {stdio: 'ignore'}); } catch(e) {}\"",
     "release": "pnpm changeset publish --tag legacy",
     "db:up": "docker-compose up -d",
     "db:generate": "turbo run db:generate",
