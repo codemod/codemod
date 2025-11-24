@@ -24,6 +24,7 @@ export const env = createEnv({
     IS_PREVIEW: z.string().optional(),
     PAYLOAD_SECRET: z.string().optional(),
     DATABASE_URI: z.string().optional(),
+    DATABASE_URL: z.string().optional(), // Neon/Vercel standard
   },
   client: {
     NEXT_PUBLIC_API_URL: z.string(),
@@ -75,5 +76,6 @@ export const env = createEnv({
     IS_PREVIEW: process.env.IS_PREVIEW,
     PAYLOAD_SECRET: process.env.PAYLOAD_SECRET,
     DATABASE_URI: process.env.DATABASE_URI,
+    DATABASE_URL: process.env.DATABASE_URL, // Neon/Vercel standard
   },
 });
