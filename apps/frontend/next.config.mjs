@@ -1,5 +1,10 @@
 import { createRequire } from "module";
+import path from "path";
+import { fileURLToPath } from "url";
 import { withPayload } from "@payloadcms/next/withPayload";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Conditionally import MonacoEditorPlugin (only available in dev)
 // This is needed because it's a devDependency but Next.js config runs during build
@@ -35,30 +40,58 @@ const config = {
       }),
     );
 
-    return {
-      ...config,
-      module: {
-        ...config.module,
-        rules: [
-          ...config.module.rules,
-          {
-            test: /\.txt$/i,
-            use: "raw-loader",
-          },
-        ],
-      },
-      resolve: {
-        ...config.resolve,
-        fallback: {
-          ...config.resolve.fallback,
-          fs: false,
-          crypto: false,
-          buffer: false,
-          stream: false,
-          child_process: false,
-        },
-      },
+    // Ensure webpack resolves TypeScript path aliases correctly
+    // Next.js reads tsconfig.json automatically, but we ensure aliases match
+    const existingAlias = config.resolve.alias || {};
+    config.resolve.alias = {
+      ...existingAlias,
+      // Base path aliases - Next.js should auto-read from tsconfig, but explicit ensures resolution
+      "@": path.resolve(__dirname, "."),
+      "@payload-config": path.resolve(__dirname, "./payload.config.ts"),
+      // Studio paths - these need to match tsconfig.json exactly
+      "@studio": path.resolve(
+        __dirname,
+        "./app/(website)/studio-jscodeshift/src",
+      ),
+      "@studio/main": path.resolve(
+        __dirname,
+        "./app/(website)/studio-jscodeshift/main",
+      ),
+      "@features": path.resolve(
+        __dirname,
+        "./app/(website)/studio-jscodeshift/features",
+      ),
+      "@chatbot": path.resolve(
+        __dirname,
+        "./app/(website)/studio-jscodeshift/features/modGPT",
+      ),
+      "@gr-run": path.resolve(
+        __dirname,
+        "./app/(website)/studio-jscodeshift/features/GHRun",
+      ),
+      "@utils": path.resolve(__dirname, "./utils"),
+      "@context": path.resolve(__dirname, "./app/context"),
+      "@auth": path.resolve(__dirname, "./app/auth"),
+      "@mocks": path.resolve(__dirname, "./mocks"),
     };
+
+    // Add txt loader rule
+    config.module.rules.push({
+      test: /\.txt$/i,
+      use: "raw-loader",
+    });
+
+    // Update resolve fallbacks
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      crypto: false,
+      buffer: false,
+      stream: false,
+      child_process: false,
+    };
+
+    return config;
   },
   images: {
     remotePatterns: [{ hostname: "cdn.sanity.io" }],
