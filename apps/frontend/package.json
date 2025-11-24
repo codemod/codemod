@@ -173,7 +173,9 @@
     "zod": "catalog:",
     "zustand": "catalog:",
     "autoprefixer": "catalog:",
-    "postcss": "catalog:"
+    "postcss": "catalog:",
+    "tailwindcss": "catalog:",
+    "raw-loader": "catalog:"
   },
   "devDependencies": {
     "@aceccarello/portable-text-to-lexical": "^0.1.0",
@@ -210,8 +212,6 @@
     "prettier": "3.2.5",
     "prettier-plugin-packagejson": "catalog:",
     "prettier-plugin-tailwindcss": "catalog:",
-    "raw-loader": "catalog:",
-    "tailwindcss": "catalog:",
     "tailwindcss-animate": "catalog:"
   },
   "peerDependencies": {

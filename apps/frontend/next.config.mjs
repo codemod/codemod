@@ -42,44 +42,64 @@ const config = {
 
     // Ensure webpack resolves TypeScript path aliases correctly
     // Next.js automatically reads tsconfig.json paths, but we add explicit aliases
-    // to ensure they work correctly in webpack
+    // to ensure they work correctly in both local and Vercel environments
     const existingAlias = config.resolve.alias || {};
     const baseDir = __dirname;
 
+    // Resolve paths using absolute paths for reliability across environments
+    // This ensures paths work correctly whether running locally or on Vercel
+    const resolvePath = (relativePath) => {
+      const resolved = path.resolve(baseDir, relativePath);
+      // Validate path exists (only in development for better error messages)
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          require("fs").accessSync(resolved, require("fs").constants.F_OK);
+        } catch (e) {
+          console.warn(
+            `[next.config.mjs] Warning: Alias path does not exist: ${resolved}`,
+          );
+        }
+      }
+      return resolved;
+    };
+
     // Merge with existing aliases (Next.js may have already set some from tsconfig.json)
+    // We use absolute paths to ensure consistency across different working directories
     config.resolve.alias = {
       ...existingAlias,
       // Base path aliases
       "@": baseDir,
-      "@payload-config": path.resolve(baseDir, "./payload.config.ts"),
-      // Studio paths - these match tsconfig.json paths
+      "@payload-config": resolvePath("./payload.config.ts"),
+      // Studio paths - these match tsconfig.json paths exactly
       // For @studio/main/index, webpack resolves @studio/main to the directory,
       // then looks for index.tsx/index.ts in that directory
-      "@studio": path.resolve(
-        baseDir,
-        "./app/(website)/studio-jscodeshift/src",
-      ),
-      "@studio/main": path.resolve(
-        baseDir,
-        "./app/(website)/studio-jscodeshift/main",
-      ),
-      "@features": path.resolve(
-        baseDir,
-        "./app/(website)/studio-jscodeshift/features",
-      ),
-      "@chatbot": path.resolve(
-        baseDir,
+      "@studio": resolvePath("./app/(website)/studio-jscodeshift/src"),
+      "@studio/main": resolvePath("./app/(website)/studio-jscodeshift/main"),
+      "@features": resolvePath("./app/(website)/studio-jscodeshift/features"),
+      "@chatbot": resolvePath(
         "./app/(website)/studio-jscodeshift/features/modGPT",
       ),
-      "@gr-run": path.resolve(
-        baseDir,
+      "@gr-run": resolvePath(
         "./app/(website)/studio-jscodeshift/features/GHRun",
       ),
-      "@utils": path.resolve(baseDir, "./utils"),
-      "@context": path.resolve(baseDir, "./app/context"),
-      "@auth": path.resolve(baseDir, "./app/auth"),
-      "@mocks": path.resolve(baseDir, "./mocks"),
+      "@utils": resolvePath("./utils"),
+      "@context": resolvePath("./app/context"),
+      "@auth": resolvePath("./app/auth"),
+      "@mocks": resolvePath("./mocks"),
     };
+
+    // Ensure proper module resolution for TypeScript/TSX files
+    // This is important for resolving imports like @studio/main/index
+    if (!config.resolve.extensions) {
+      config.resolve.extensions = [];
+    }
+    // Ensure .tsx and .ts are in the extensions list (Next.js usually adds these, but be explicit)
+    const requiredExtensions = [".tsx", ".ts", ".jsx", ".js", ".json"];
+    requiredExtensions.forEach((ext) => {
+      if (!config.resolve.extensions.includes(ext)) {
+        config.resolve.extensions.push(ext);
+      }
+    });
 
     // Add txt loader rule
     config.module.rules.push({
