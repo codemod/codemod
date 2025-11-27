@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
+use language_core::SemanticProvider;
+use language_javascript::OxcSemanticProvider;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -81,6 +83,10 @@ pub struct Command {
     #[arg(long)]
     pub expect_errors: Option<String>,
 
+    /// Enable semantic analysis for symbol indexing (getDefinition, findReferences)
+    #[arg(long)]
+    pub semantic: bool,
+
     /// Allow fs access
     #[arg(long)]
     pub allow_fs: bool,
@@ -157,6 +163,13 @@ pub async fn handler(args: &Command) -> Result<()> {
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
 
+    // Create semantic provider if --semantic flag is set
+    let semantic_provider: Option<Arc<dyn SemanticProvider>> = if args.semantic {
+        Some(Arc::new(OxcSemanticProvider::lightweight()))
+    } else {
+        None
+    };
+
     let execution_fn = Box::new(
         move |input_code: &str,
               input_path: &Path,
@@ -168,6 +181,7 @@ pub async fn handler(args: &Command) -> Result<()> {
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
+            let semantic_provider = semantic_provider.clone();
 
             Box::pin(async move {
                 let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
@@ -193,6 +207,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                     params: test_config.params,
                     matrix_values: None,
                     capabilities,
+                    semantic_provider,
                 };
                 let execution_output = execute_codemod_with_quickjs(options).await?;
 

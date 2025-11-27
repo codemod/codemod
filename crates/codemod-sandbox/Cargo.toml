@@ -16,7 +16,7 @@ tokio = { version = "1.0", features = [
 ], optional = true }
 bytes = "1.0"
 oxc_resolver = "11.13.1"
-oxc = { version = "0.97.0", features = ["transformer", "codegen", "semantic"] }
+oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
@@ -28,6 +28,8 @@ ast-grep-language = { workspace = true, default-features = true, optional = true
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
 codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
+language-core = { workspace = true, optional = true }
+language-javascript = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -58,6 +60,8 @@ native = [
   "tokio",
   "serde_yaml",
   "codemod-llrt-capabilities",
+  "language-core",
+  "language-javascript",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

@@ -7,6 +7,9 @@ use ast_grep_core::{AstGrep, Node, NodeMatch};
 #[cfg(not(feature = "wasm"))]
 use ast_grep_language::SupportLang;
 
+#[cfg(feature = "native")]
+use language_core::SemanticProvider;
+
 use rquickjs::{class, class::Trace, methods, Ctx, Exception, IntoJs, JsLifetime, Result, Value};
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -14,7 +17,10 @@ use std::sync::Arc;
 
 use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
-use crate::ast_grep::utils::{convert_matcher, JsMatcherRjs};
+use crate::ast_grep::utils::convert_matcher;
+
+#[cfg(not(feature = "wasm"))]
+use ast_grep_language::SupportLang as Lang;
 
 #[cfg(not(feature = "wasm"))]
 type TSDoc = TSStrDoc<SupportLang>;
@@ -24,9 +30,12 @@ type TSDoc = WasmDoc;
 pub(crate) struct SgRootInner {
     grep: AstGrep<TSDoc>,
     filename: Option<String>,
+    /// Optional semantic provider for symbol indexing (native only)
+    #[cfg(feature = "native")]
+    pub(crate) semantic_provider: Option<Arc<dyn SemanticProvider>>,
 }
 
-#[derive(Trace)]
+#[derive(Trace, Clone)]
 #[class(rename_all = "camelCase")]
 pub struct SgRootRjs<'js> {
     #[qjs(skip_trace)]
@@ -66,8 +75,7 @@ impl<'js> SgRootRjs<'js> {
     }
 
     pub fn source(&self) -> Result<String> {
-        let str_slice: &str = "asd";
-        Ok(str_slice.to_string())
+        Ok(self.inner.grep.source().to_string())
     }
 }
 
@@ -106,7 +114,12 @@ impl<'js> SgRootRjs<'js> {
                 .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
             let grep = AstGrep::new(src, lang);
             Ok(SgRootRjs {
-                inner: Arc::new(SgRootInner { grep, filename }),
+                inner: Arc::new(SgRootInner {
+                    grep,
+                    filename,
+                    #[cfg(feature = "native")]
+                    semantic_provider: None,
+                }),
                 _phantom: PhantomData,
             })
         }
@@ -117,7 +130,29 @@ impl<'js> SgRootRjs<'js> {
         filename: Option<String>,
     ) -> std::result::Result<Self, String> {
         Ok(SgRootRjs {
-            inner: Arc::new(SgRootInner { grep, filename }),
+            inner: Arc::new(SgRootInner {
+                grep,
+                filename,
+                #[cfg(feature = "native")]
+                semantic_provider: None,
+            }),
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Create a new SgRootRjs with a semantic provider for symbol indexing.
+    #[cfg(feature = "native")]
+    pub fn try_new_with_semantic(
+        grep: AstGrep<TSDoc>,
+        filename: Option<String>,
+        semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    ) -> std::result::Result<Self, String> {
+        Ok(SgRootRjs {
+            inner: Arc::new(SgRootInner {
+                grep,
+                filename,
+                semantic_provider,
+            }),
             _phantom: PhantomData,
         })
     }
@@ -136,6 +171,44 @@ pub struct SgNodeRjs<'js> {
 
 unsafe impl<'js> JsLifetime<'js> for SgNodeRjs<'js> {
     type Changed<'to> = SgNodeRjs<'to>;
+}
+
+/// Helper to find the tightest node containing a byte range.
+#[cfg(feature = "native")]
+fn find_node_at_range<'a>(root: &'a Node<'a, TSDoc>, start: usize, end: usize) -> Option<Node<'a, TSDoc>> {
+    let mut current = root.clone();
+    
+    // Traverse down to find the tightest node containing the range
+    loop {
+        let mut found_child = None;
+        for child in current.children() {
+            let child_range = child.range();
+            if child_range.start <= start && child_range.end >= end {
+                // This child contains our range, go deeper
+                found_child = Some(child);
+                break;
+            }
+        }
+        
+        match found_child {
+            Some(child) => {
+                // Check if this child exactly matches or is tighter
+                let child_range = child.range();
+                if child_range.start == start && child_range.end == end {
+                    return Some(child);
+                }
+                current = child;
+            }
+            None => {
+                // No child contains the range, current is the tightest
+                let current_range = current.range();
+                if current_range.start <= start && current_range.end >= end {
+                    return Some(current);
+                }
+                return None;
+            }
+        }
+    }
 }
 
 #[methods]
@@ -364,112 +437,41 @@ impl<'js> SgNodeRjs<'js> {
             .collect())
     }
 
-    pub fn find(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        let lang = *self.inner_node.lang();
-        let matcher = convert_matcher(value, lang, &ctx)?;
-
-        let create_sg_node = |node: NodeMatch<TSDoc>, ctx: &Ctx<'js>| -> Result<Value<'js>> {
-            let static_node_match: NodeMatch<'static, TSDoc> = unsafe { std::mem::transmute(node) };
-            let sg_node = SgNodeRjs {
-                root: self.root.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
-            };
-            sg_node.into_js(ctx)
-        };
-
-        match matcher {
-            JsMatcherRjs::Pattern(pattern) => match self.inner_node.find(pattern) {
-                Some(node) => create_sg_node(node, &ctx),
-                None => Ok(Value::new_null(ctx)),
-            },
-            JsMatcherRjs::Kind(kind_matcher) => match self.inner_node.find(kind_matcher) {
-                Some(node) => create_sg_node(node, &ctx),
-                None => Ok(Value::new_null(ctx)),
-            },
-            JsMatcherRjs::Config(config) => match self.inner_node.find(config) {
-                Some(node) => create_sg_node(node, &ctx),
-                None => Ok(Value::new_null(ctx)),
-            },
-        }
+    pub fn matches(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self.inner_node.matches(&matcher))
     }
 
-    #[qjs(rename = "findAll")]
-    pub fn find_all(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<Vec<SgNodeRjs<'js>>> {
-        let lang = *self.inner_node.lang();
-        let matcher = convert_matcher(value, lang, &ctx)?;
-
-        let create_sg_node = |node: NodeMatch<TSDoc>| -> SgNodeRjs<'js> {
-            let static_node_match: NodeMatch<'static, TSDoc> = unsafe { std::mem::transmute(node) };
-            SgNodeRjs {
-                root: self.root.clone(),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
-            }
-        };
-
-        match matcher {
-            JsMatcherRjs::Pattern(pattern) => Ok(self
-                .inner_node
-                .find_all(pattern)
-                .map(create_sg_node)
-                .collect()),
-            JsMatcherRjs::Kind(kind_matcher) => Ok(self
-                .inner_node
-                .find_all(kind_matcher)
-                .map(create_sg_node)
-                .collect()),
-            JsMatcherRjs::Config(config) => Ok(self
-                .inner_node
-                .find_all(config)
-                .map(create_sg_node)
-                .collect()),
-        }
+    pub fn inside(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self.inner_node.inside(&matcher))
     }
 
-    pub fn matches(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = *self.inner_node.lang();
-        let matcher = convert_matcher(value, lang, &ctx)?;
-
-        match matcher {
-            JsMatcherRjs::Pattern(pattern) => Ok(self.inner_node.matches(pattern)),
-            JsMatcherRjs::Kind(kind_matcher) => Ok(self.inner_node.matches(kind_matcher)),
-            JsMatcherRjs::Config(config) => Ok(self.inner_node.matches(config)),
-        }
+    pub fn has(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self.inner_node.has(&matcher))
     }
 
-    pub fn inside(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = *self.inner_node.lang();
-        let matcher = convert_matcher(value, lang, &ctx)?;
-
-        match matcher {
-            JsMatcherRjs::Pattern(pattern) => Ok(self.inner_node.inside(pattern)),
-            JsMatcherRjs::Kind(kind_matcher) => Ok(self.inner_node.inside(kind_matcher)),
-            JsMatcherRjs::Config(config) => Ok(self.inner_node.inside(config)),
-        }
+    pub fn precedes(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self.inner_node.precedes(&matcher))
     }
 
-    pub fn has(&self, value: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = *self.inner_node.lang();
-        let matcher = convert_matcher(value, lang, &ctx)?;
-
-        match matcher {
-            JsMatcherRjs::Pattern(pattern) => Ok(self.inner_node.has(pattern)),
-            JsMatcherRjs::Kind(kind_matcher) => Ok(self.inner_node.has(kind_matcher)),
-            JsMatcherRjs::Config(config) => Ok(self.inner_node.has(config)),
-        }
+    pub fn follows(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self.inner_node.follows(&matcher))
     }
 
     #[qjs(rename = "getMatch")]
-    pub fn get_match(&self, m: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self
-            .inner_node
-            .get_env()
-            .get_match(&m)
-            .cloned()
-            .map(NodeMatch::from)
-        {
-            Some(node_match) => {
+    pub fn get_match(&self, meta_var: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.get_env().get_match(&meta_var) {
+            Some(node) => {
+                let node_match: NodeMatch<_> = node.clone().into();
                 let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 let sg_node = SgNodeRjs {
@@ -484,14 +486,12 @@ impl<'js> SgNodeRjs<'js> {
     }
 
     #[qjs(rename = "getMultipleMatches")]
-    pub fn get_multiple_matches(&self, m: String) -> Result<Vec<SgNodeRjs<'js>>> {
-        let nodes = self
-            .inner_node
-            .get_env()
-            .get_multiple_matches(&m)
+    pub fn get_multiple_matches(&self, meta_var: String) -> Result<Vec<SgNodeRjs<'js>>> {
+        let matches = self.inner_node.get_env().get_multiple_matches(&meta_var);
+        Ok(matches
             .into_iter()
             .map(|node| {
-                let node_match = NodeMatch::from(node);
+                let node_match: NodeMatch<_> = node.into();
                 let static_node_match: NodeMatch<'static, TSDoc> =
                     unsafe { std::mem::transmute(node_match) };
                 SgNodeRjs {
@@ -500,9 +500,52 @@ impl<'js> SgNodeRjs<'js> {
                     _phantom: PhantomData,
                 }
             })
-            .collect();
+            .collect())
+    }
 
-        Ok(nodes)
+    #[qjs(rename = "getTransformed")]
+    pub fn get_transformed(&self, meta_var: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.inner_node.get_env().get_transformed(&meta_var) {
+            Some(s) => s.into_js(&ctx),
+            None => Ok(Value::new_null(ctx)),
+        }
+    }
+
+    pub fn find(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        match self.inner_node.find(&matcher) {
+            Some(node_match) => {
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                let sg_node = SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                };
+                sg_node.into_js(&ctx)
+            }
+            None => Ok(Value::new_null(ctx)),
+        }
+    }
+
+    #[qjs(rename = "findAll")]
+    pub fn find_all(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Vec<SgNodeRjs<'js>>> {
+        let lang = get_language(&self.root.grep);
+        let matcher = convert_matcher(matcher, lang, &ctx)?;
+        Ok(self
+            .inner_node
+            .find_all(&matcher)
+            .map(|node_match| {
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                SgNodeRjs {
+                    root: self.root.clone(),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                }
+            })
+            .collect())
     }
 
     pub fn replace(&self, text: String) -> Result<JsEdit> {
@@ -548,4 +591,266 @@ impl<'js> SgNodeRjs<'js> {
             _phantom: PhantomData,
         })
     }
+
+    /// Get the definition of the symbol at this node's position.
+    ///
+    /// Returns an object with:
+    /// - `node`: The SgNode at the definition location
+    /// - `root`: The SgRoot for the file containing the definition
+    ///
+    /// Returns null if:
+    /// - No semantic provider is configured
+    /// - No symbol is found at this position
+    /// - The definition cannot be resolved (e.g., external symbol)
+    #[cfg(feature = "native")]
+    #[qjs(rename = "getDefinition")]
+    pub fn get_definition(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        let provider = match &self.root.semantic_provider {
+            Some(p) => p,
+            None => return Ok(Value::new_null(ctx)),
+        };
+
+        let file_path = match &self.root.filename {
+            Some(f) => std::path::PathBuf::from(f),
+            None => return Ok(Value::new_null(ctx)),
+        };
+
+        let byte_range = self.inner_node.range();
+        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+
+        match provider.get_definition(&file_path, range) {
+            Ok(Some(def_result)) => {
+                let is_same_file = def_result.location.file_path == file_path;
+                let loc = &def_result.location;
+
+                if is_same_file {
+                    // Definition is in the same file, use existing root
+                    let root_node = self.root.grep.root();
+                    if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                        let node_match: NodeMatch<_> = node.into();
+                        let static_node_match: NodeMatch<'static, TSDoc> =
+                            unsafe { std::mem::transmute(node_match) };
+                        
+                        let result_obj = rquickjs::Object::new(ctx.clone())?;
+                        
+                        let sg_node = SgNodeRjs {
+                            root: Arc::clone(&self.root),
+                            inner_node: static_node_match,
+                            _phantom: PhantomData,
+                        };
+                        result_obj.set("node", sg_node)?;
+                        
+                        let sg_root = SgRootRjs {
+                            inner: Arc::clone(&self.root),
+                            _phantom: PhantomData,
+                        };
+                        result_obj.set("root", sg_root)?;
+                        
+                        return result_obj.into_js(&ctx);
+                    }
+                } else {
+                    // Definition is in a different file, create new root
+                    let lang_str = detect_language_from_path(&def_result.location.file_path);
+                    
+                    if let Ok(new_root) = SgRootRjs::try_new(
+                        lang_str,
+                        def_result.content.clone(),
+                        Some(def_result.location.file_path.to_string_lossy().to_string()),
+                    ) {
+                        let root_node = new_root.inner.grep.root();
+                        if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                            let node_match: NodeMatch<_> = node.into();
+                            let static_node_match: NodeMatch<'static, TSDoc> =
+                                unsafe { std::mem::transmute(node_match) };
+                            
+                            let result_obj = rquickjs::Object::new(ctx.clone())?;
+                            
+                            let sg_node = SgNodeRjs {
+                                root: Arc::clone(&new_root.inner),
+                                inner_node: static_node_match,
+                                _phantom: PhantomData,
+                            };
+                            result_obj.set("node", sg_node)?;
+                            result_obj.set("root", new_root)?;
+                            
+                            return result_obj.into_js(&ctx);
+                        }
+                    }
+                }
+                
+                Ok(Value::new_null(ctx))
+            }
+            Ok(None) => Ok(Value::new_null(ctx)),
+            Err(e) => Err(Exception::throw_message(
+                &ctx,
+                &format!("Failed to get definition: {}", e),
+            )),
+        }
+    }
+
+    /// Find all references to the symbol at this node's position.
+    ///
+    /// Returns an array of objects, one per file, each containing:
+    /// - `root`: The SgRoot for the file
+    /// - `nodes`: Array of SgNode objects for each reference in that file
+    ///
+    /// Returns an empty array if:
+    /// - No semantic provider is configured
+    /// - No symbol is found at this position
+    ///
+    /// In lightweight mode, this only searches files that have been processed.
+    /// In accurate mode, this searches the entire workspace.
+    #[cfg(feature = "native")]
+    #[qjs(rename = "findReferences")]
+    pub fn find_references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        let provider = match &self.root.semantic_provider {
+            Some(p) => p,
+            None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
+        };
+
+        let file_path = match &self.root.filename {
+            Some(f) => std::path::PathBuf::from(f),
+            None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
+        };
+
+        let byte_range = self.inner_node.range();
+        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+
+        match provider.find_references(&file_path, range) {
+            Ok(refs_result) => {
+                let result_array = rquickjs::Array::new(ctx.clone())?;
+                
+                for (idx, file_refs) in refs_result.files.iter().enumerate() {
+                    let is_same_file = file_refs.file_path == file_path;
+                    
+                    let file_obj = rquickjs::Object::new(ctx.clone())?;
+                    
+                    if is_same_file {
+                        // Use existing root for same file
+                        let sg_root = SgRootRjs {
+                            inner: Arc::clone(&self.root),
+                            _phantom: PhantomData,
+                        };
+                        file_obj.set("root", sg_root)?;
+                        
+                        // Find nodes for each location
+                        let nodes_array = rquickjs::Array::new(ctx.clone())?;
+                        let root_node = self.root.grep.root();
+                        
+                        for (node_idx, loc) in file_refs.locations.iter().enumerate() {
+                            if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                                let node_match: NodeMatch<_> = node.into();
+                                let static_node_match: NodeMatch<'static, TSDoc> =
+                                    unsafe { std::mem::transmute(node_match) };
+                                
+                                let sg_node = SgNodeRjs {
+                                    root: Arc::clone(&self.root),
+                                    inner_node: static_node_match,
+                                    _phantom: PhantomData,
+                                };
+                                nodes_array.set(node_idx, sg_node)?;
+                            }
+                        }
+                        file_obj.set("nodes", nodes_array)?;
+                    } else {
+                        // Create new root for different file
+                        let lang_str = detect_language_from_path(&file_refs.file_path);
+                        
+                        if let Ok(new_root) = SgRootRjs::try_new(
+                            lang_str,
+                            file_refs.content.clone(),
+                            Some(file_refs.file_path.to_string_lossy().to_string()),
+                        ) {
+                            file_obj.set("root", new_root.clone())?;
+                            
+                            // Find nodes for each location
+                            let nodes_array = rquickjs::Array::new(ctx.clone())?;
+                            let root_node = new_root.inner.grep.root();
+                            
+                            for (node_idx, loc) in file_refs.locations.iter().enumerate() {
+                                if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                                    let node_match: NodeMatch<_> = node.into();
+                                    let static_node_match: NodeMatch<'static, TSDoc> =
+                                        unsafe { std::mem::transmute(node_match) };
+                                    
+                                    let sg_node = SgNodeRjs {
+                                        root: Arc::clone(&new_root.inner),
+                                        inner_node: static_node_match,
+                                        _phantom: PhantomData,
+                                    };
+                                    nodes_array.set(node_idx, sg_node)?;
+                                }
+                            }
+                            file_obj.set("nodes", nodes_array)?;
+                        } else {
+                            // Skip files we can't parse
+                            continue;
+                        }
+                    }
+                    
+                    result_array.set(idx, file_obj)?;
+                }
+                
+                result_array.into_js(&ctx)
+            }
+            Err(e) => Err(Exception::throw_message(
+                &ctx,
+                &format!("Failed to find references: {}", e),
+            )),
+        }
+    }
+
+    /// Get type information for the symbol at this node's position.
+    ///
+    /// Returns null if:
+    /// - No semantic provider is configured
+    /// - Type information is not available
+    #[cfg(feature = "native")]
+    #[qjs(rename = "getType")]
+    pub fn get_type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        let provider = match &self.root.semantic_provider {
+            Some(p) => p,
+            None => return Ok(Value::new_null(ctx)),
+        };
+
+        let file_path = match &self.root.filename {
+            Some(f) => std::path::PathBuf::from(f),
+            None => return Ok(Value::new_null(ctx)),
+        };
+
+        let byte_range = self.inner_node.range();
+        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+
+        match provider.get_type(&file_path, range) {
+            Ok(Some(type_str)) => type_str.into_js(&ctx),
+            Ok(None) => Ok(Value::new_null(ctx)),
+            Err(e) => Err(Exception::throw_message(
+                &ctx,
+                &format!("Failed to get type: {}", e),
+            )),
+        }
+    }
+}
+
+/// Detect language from file path extension.
+#[cfg(feature = "native")]
+fn detect_language_from_path(path: &std::path::Path) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ts") => "typescript".to_string(),
+        Some("tsx") => "tsx".to_string(),
+        Some("js") | Some("mjs") | Some("cjs") => "javascript".to_string(),
+        Some("jsx") => "jsx".to_string(),
+        _ => "typescript".to_string(), // Default to typescript
+    }
+}
+
+/// Get the language from an AstGrep instance.
+#[cfg(not(feature = "wasm"))]
+fn get_language(grep: &AstGrep<TSDoc>) -> Lang {
+    grep.lang().clone()
+}
+
+#[cfg(feature = "wasm")]
+fn get_language(grep: &AstGrep<TSDoc>) -> crate::ast_grep::wasm_lang::WasmLang {
+    grep.lang().clone()
 }

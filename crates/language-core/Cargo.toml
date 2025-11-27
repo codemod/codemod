@@ -1,0 +1,13 @@
+[package]
+name = "language-core"
+version.workspace = true
+edition = "2021"
+description = "Core traits and types for semantic analysis providers"
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+

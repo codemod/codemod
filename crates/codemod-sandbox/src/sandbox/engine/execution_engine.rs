@@ -12,6 +12,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{IntoJs, Object};
@@ -39,6 +40,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
+    pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -161,7 +164,11 @@ where
                 })?;
 
             let parsed_content =
-                SgRootRjs::try_new_from_ast_grep(ast_grep, Some(options.file_path.to_string_lossy().to_string())).map_err(|e| ExecutionError::Runtime {
+                SgRootRjs::try_new_with_semantic(
+                    ast_grep,
+                    Some(options.file_path.to_string_lossy().to_string()),
+                    options.semantic_provider.clone(),
+                ).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
                     },
@@ -459,6 +466,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -500,6 +508,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -542,6 +551,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -584,6 +594,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -629,6 +640,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -668,6 +680,7 @@ function example() {
             params: None,
             matrix_values: None,
             capabilities: None,
+            semantic_provider: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
