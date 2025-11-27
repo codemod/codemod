@@ -235,6 +235,55 @@
         }
       ]
     },
+    "SemanticAnalysisConfig": {
+      "description": "Configuration for semantic analysis in JS AST grep.",
+      "anyOf": [
+        {
+          "description": "Simple mode: \"file\" or \"workspace\"",
+          "$ref": "#/$defs/SemanticAnalysisMode"
+        },
+        {
+          "description": "Detailed configuration with custom root path",
+          "$ref": "#/$defs/SemanticAnalysisDetailed"
+        }
+      ]
+    },
+    "SemanticAnalysisDetailed": {
+      "description": "Detailed semantic analysis configuration.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Analysis mode",
+          "$ref": "#/$defs/SemanticAnalysisMode"
+        },
+        "root": {
+          "description": "Custom workspace root path (only used when mode is \"workspace\")",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "SemanticAnalysisMode": {
+      "description": "Simple semantic analysis mode.",
+      "oneOf": [
+        {
+          "description": "Single-file analysis, no cross-file resolution",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "Workspace-wide analysis with cross-file support",
+          "type": "string",
+          "const": "workspace"
+        }
+      ]
+    },
     "SimpleSchema": {
       "description": "Simple schema system for workflow state and params validation\nRoot is always an object with properties",
       "type": "object",
@@ -1057,6 +1106,18 @@
           "format": "uint",
           "default": null,
           "minimum": 0
+        },
+        "semantic_analysis": {
+          "description": "Semantic analysis configuration for symbol indexing (definition, references, typeInfo).\nCan be:\n- `\"file\"` - single-file analysis (default if semantic is enabled)\n- `\"workspace\"` - workspace-wide analysis using base_path as root\n- `{\"mode\": \"workspace\", \"root\": \"/path/to/workspace\"}` - workspace-wide with custom root",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SemanticAnalysisConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

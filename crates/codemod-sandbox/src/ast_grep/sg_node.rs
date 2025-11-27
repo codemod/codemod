@@ -869,7 +869,7 @@ fn detect_language_from_path(path: &std::path::Path) -> String {
 /// Get the language from an AstGrep instance.
 #[cfg(not(feature = "wasm"))]
 fn get_language(grep: &AstGrep<TSDoc>) -> Lang {
-    grep.lang().clone()
+    *grep.lang()
 }
 
 #[cfg(feature = "wasm")]

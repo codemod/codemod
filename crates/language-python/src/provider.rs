@@ -120,10 +120,12 @@ impl SemanticProvider for RuffSemanticProvider {
 
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         match self {
-            Self::FileScope(analyzer) => analyzer.process_file(file_path, content).map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => {
-                analyzer.process_file(file_path, content).map_err(Into::into)
-            }
+            Self::FileScope(analyzer) => analyzer
+                .process_file(file_path, content)
+                .map_err(Into::into),
+            Self::WorkspaceScope(analyzer) => analyzer
+                .process_file(file_path, content)
+                .map_err(Into::into),
         }
     }
 
@@ -235,4 +237,3 @@ mod tests {
         assert_eq!(provider.cached_file_count(), 0);
     }
 }
-

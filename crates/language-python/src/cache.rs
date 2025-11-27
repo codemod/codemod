@@ -74,16 +74,16 @@ impl PythonFileSymbols {
 
     /// Find a symbol at the given byte range.
     pub fn find_symbol_at(&self, range: ByteRange) -> Option<&PythonSymbol> {
-        self.symbols.iter().find(|s| {
-            s.range.start <= range.start && s.range.end >= range.end
-        })
+        self.symbols
+            .iter()
+            .find(|s| s.range.start <= range.start && s.range.end >= range.end)
     }
 
     /// Find a reference at the given byte range.
     pub fn find_reference_at(&self, range: ByteRange) -> Option<&PythonReference> {
-        self.references.iter().find(|r| {
-            r.range.start <= range.start && r.range.end >= range.end
-        })
+        self.references
+            .iter()
+            .find(|r| r.range.start <= range.start && r.range.end >= range.end)
     }
 
     /// Find all references to a specific binding.
@@ -229,4 +229,3 @@ mod tests {
         assert_eq!(refs.len(), 1);
     }
 }
-

@@ -17,7 +17,10 @@ pub enum JsSemanticError {
 
     /// Module resolution failed
     #[error("Failed to resolve module '{specifier}' from '{from_path}'")]
-    ModuleResolution { specifier: String, from_path: PathBuf },
+    ModuleResolution {
+        specifier: String,
+        from_path: PathBuf,
+    },
 
     /// File not in cache
     #[error("File '{path}' not in symbol cache")]
@@ -55,4 +58,3 @@ impl From<JsSemanticError> for SemanticError {
         }
     }
 }
-

@@ -16,10 +16,7 @@ use oxc::span::{SourceType, Span};
 use std::path::Path;
 
 /// Parse a JavaScript/TypeScript file and extract semantic information.
-pub fn parse_and_analyze(
-    file_path: &Path,
-    content: &str,
-) -> Result<FileSymbols, JsSemanticError> {
+pub fn parse_and_analyze(file_path: &Path, content: &str) -> Result<FileSymbols, JsSemanticError> {
     let allocator = Allocator::default();
 
     // Determine source type from file extension
@@ -29,11 +26,8 @@ pub fn parse_and_analyze(
     let parser_return = Parser::new(&allocator, content, source_type).parse();
 
     if !parser_return.errors.is_empty() {
-        let error_messages: Vec<String> = parser_return
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect();
+        let error_messages: Vec<String> =
+            parser_return.errors.iter().map(|e| e.to_string()).collect();
         return Err(JsSemanticError::ParseError {
             path: file_path.to_path_buf(),
             message: error_messages.join("; "),
@@ -359,10 +353,7 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
 }
 
 /// Find the symbol at a given byte range using the semantic model.
-pub fn find_symbol_at_range(
-    file_symbols: &FileSymbols,
-    range: ByteRange,
-) -> Option<&Symbol> {
+pub fn find_symbol_at_range(file_symbols: &FileSymbols, range: ByteRange) -> Option<&Symbol> {
     // First try to find an exact match or containing symbol
     file_symbols.find_symbol_at(range)
 }
@@ -476,11 +467,11 @@ console.log(x, y);
         assert!(result.is_ok());
 
         let symbols = result.unwrap();
-        
+
         // Should have references to x
         let x_symbol = symbols.symbols.iter().find(|s| s.name == "x");
         assert!(x_symbol.is_some());
-        
+
         let x_refs = symbols.find_references_to(x_symbol.unwrap().symbol_id);
         assert!(!x_refs.is_empty());
     }
@@ -495,7 +486,7 @@ function broken( {
 
         let result = parse_and_analyze(Path::new("test.ts"), content);
         assert!(result.is_err());
-        
+
         match result {
             Err(JsSemanticError::ParseError { path, message }) => {
                 assert_eq!(path, PathBuf::from("test.ts"));
