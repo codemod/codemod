@@ -128,3 +128,39 @@ pub struct AstGrepMatch {
     pub match_text: String,
     pub rule_id: String,
 }
+
+/// JavaScript-exposed symbol location for semantic analysis results.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JsSymbolLocation {
+    pub file_path: String,
+    pub start: u32,
+    pub end: u32,
+    pub kind: String,
+    pub name: String,
+}
+
+impl<'js> IntoJs<'js> for JsSymbolLocation {
+    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
+        let obj = Object::new(ctx.clone())?;
+        obj.set("filePath", self.file_path)?;
+        obj.set("start", self.start)?;
+        obj.set("end", self.end)?;
+        obj.set("kind", self.kind)?;
+        obj.set("name", self.name)?;
+        obj.into_js(ctx)
+    }
+}
+
+#[cfg(feature = "native")]
+impl From<language_core::SymbolLocation> for JsSymbolLocation {
+    fn from(loc: language_core::SymbolLocation) -> Self {
+        Self {
+            file_path: loc.file_path.to_string_lossy().to_string(),
+            start: loc.range.start,
+            end: loc.range.end,
+            kind: loc.kind.as_str().to_string(),
+            name: loc.name,
+        }
+    }
+}

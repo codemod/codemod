@@ -1775,6 +1775,7 @@ impl Engine {
                         params: params.clone(),
                         matrix_values: matrix_input.clone(),
                         capabilities: config.capabilities.clone(),
+                        semantic_provider: None,
                     })
                     .await
                 });

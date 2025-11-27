@@ -2,10 +2,15 @@ use crate::ast_grep::types::AstGrepError;
 #[cfg(feature = "wasm")]
 use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
 use ast_grep_config::{DeserializeEnv, RuleCore, SerializableRuleCore};
-use ast_grep_core::{matcher::KindMatcher, Pattern};
+use ast_grep_core::{
+    matcher::{KindMatcher, Matcher},
+    meta_var::MetaVarEnv,
+    Doc, Node, Pattern,
+};
 #[cfg(not(feature = "wasm"))]
 use ast_grep_language::SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
+use std::borrow::Cow;
 
 use super::serde::JsValue;
 
@@ -14,6 +19,20 @@ pub enum JsMatcherRjs {
     Pattern(Pattern),
     Kind(KindMatcher),
     Config(RuleCore),
+}
+
+impl Matcher for JsMatcherRjs {
+    fn match_node_with_env<'tree, D: Doc>(
+        &self,
+        node: Node<'tree, D>,
+        env: &mut Cow<'_, MetaVarEnv<'tree, D>>,
+    ) -> Option<Node<'tree, D>> {
+        match self {
+            JsMatcherRjs::Pattern(p) => p.match_node_with_env(node, env),
+            JsMatcherRjs::Kind(k) => k.match_node_with_env(node, env),
+            JsMatcherRjs::Config(c) => c.match_node_with_env(node, env),
+        }
+    }
 }
 
 // Convert a JavaScript value to an appropriate ast-grep matcher

@@ -1,0 +1,24 @@
+[package]
+name = "language-javascript"
+version.workspace = true
+edition = "2021"
+description = "JavaScript/TypeScript semantic analysis provider using oxc"
+
+[dependencies]
+language-core = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+# OXC dependencies for semantic analysis
+oxc = { version = "0.99.0", features = ["semantic"] }
+oxc_resolver = "11.13.1"
+ignore = { workspace = true }
+
+# Concurrency
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+

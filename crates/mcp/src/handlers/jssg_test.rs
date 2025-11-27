@@ -221,6 +221,7 @@ impl JssgTestHandler {
                         params: None,
                         matrix_values: None,
                         capabilities: capabilities.clone(),
+                        semantic_provider: None,
                     };
                     let execution_output = execute_codemod_with_quickjs(options).await?;
 

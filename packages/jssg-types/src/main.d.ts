@@ -48,6 +48,53 @@ export declare class SgNode<
   prevAll(): Array<SgNode<M>>;
   replace(text: string): Edit;
   commitEdits(edits: Array<Edit>): string;
+
+  // Semantic analysis methods (requires semantic provider)
+  
+  /**
+   * Get the definition for the symbol at this node's position.
+   * 
+   * Returns an object containing:
+   * - `node`: The SgNode at the definition location
+   * - `root`: The SgRoot for the file containing the definition
+   * 
+   * Returns null if:
+   * - No semantic provider is configured
+   * - No symbol is found at this position
+   * - The definition cannot be resolved (e.g., external symbol)
+   * 
+   * @returns An object with the definition node and its root, or null
+   */
+  getDefinition(): DefinitionResult<M> | null;
+
+  /**
+   * Find all references to the symbol at this node's position.
+   * 
+   * Returns an array of objects, one per file, each containing:
+   * - `root`: The SgRoot for the file
+   * - `nodes`: Array of SgNode objects for each reference in that file
+   * 
+   * Returns an empty array if:
+   * - No semantic provider is configured  
+   * - No symbol is found at this position
+   * 
+   * In lightweight mode, this only searches files that have been processed.
+   * In accurate mode, this searches the entire workspace.
+   * 
+   * @returns An array of file references, each with a root and nodes
+   */
+  findReferences(): Array<FileReferences<M>>;
+
+  /**
+   * Get type information for the symbol at this node's position.
+   * 
+   * Returns null if:
+   * - No semantic provider is configured
+   * - Type information is not available
+   * 
+   * @returns A string representation of the type, or null
+   */
+  getType(): string | null;
 }
 /** Represents the parsed tree of code. */
 export declare class SgRoot<M extends TypesMap = TypesMap> {
@@ -305,6 +352,26 @@ export interface Range {
   start: Position;
   /** ending position of the range */
   end: Position;
+}
+
+/**
+ * Result of getDefinition() - contains the definition node and its root.
+ */
+export interface DefinitionResult<M extends TypesMap = TypesMap> {
+  /** The SgNode at the definition location */
+  node: SgNode<M>;
+  /** The SgRoot for the file containing the definition */
+  root: SgRoot<M>;
+}
+
+/**
+ * References in a single file - contains the root and all reference nodes.
+ */
+export interface FileReferences<M extends TypesMap = TypesMap> {
+  /** The SgRoot for the file */
+  root: SgRoot<M>;
+  /** Array of SgNode objects for each reference in this file */
+  nodes: Array<SgNode<M>>;
 }
 
 /**
