@@ -143,7 +143,7 @@ pub struct UseJSAstGrep {
     #[ts(optional, as = "Option<Vec<String>>")]
     pub capabilities: Option<Vec<String>>,
 
-    /// Semantic analysis configuration for symbol indexing (getDefinition, findReferences).
+    /// Semantic analysis configuration for symbol indexing (definition, references, typeInfo).
     /// Can be:
     /// - `"file"` - single-file analysis (default if semantic is enabled)
     /// - `"workspace"` - workspace-wide analysis using base_path as root
