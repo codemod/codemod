@@ -123,6 +123,15 @@ if (node.is("function_declaration")) {
 <ParamField path="replace(text)" type="Edit">Create a replacement edit for this node.</ParamField>
 <ParamField path="commitEdits(edits)" type="string">Apply array of edits and return new code.</ParamField>
 
+### Semantic Analysis Methods
+
+<Info>
+Semantic analysis is only supported for **JavaScript/TypeScript** (using oxc) and **Python** (using ruff). For other languages, these methods return null or empty arrays. See [Semantic Analysis](/jssg/semantic-analysis) for details.
+</Info>
+
+<ParamField path="definition()" type="DefinitionResult | null">Get the definition for the symbol at this node's position. Returns an object with `node` (the definition SgNode) and `root` (the SgRoot for the file containing the definition), or null if not found.</ParamField>
+<ParamField path="references()" type="Array<FileReferences>">Find all references to the symbol at this node's position. Returns an array of objects, each with `root` (SgRoot for the file) and `nodes` (array of reference SgNodes).</ParamField>
+
 ## Pattern Matching
 
 jssg uses ast-grep patterns to find code structures. Patterns are more powerful than regex because they understand code syntax.
