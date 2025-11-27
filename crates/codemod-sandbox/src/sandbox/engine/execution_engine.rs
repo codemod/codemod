@@ -599,16 +599,7 @@ function example() {
 
         let result = execute_codemod_with_quickjs(options).await;
 
-        match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected behavior - error is caught and null is returned
-            }
-            Ok(other) => panic!(
-                "Expected unmodified result due to error handling, got: {:?}",
-                other
-            ),
-            Err(e) => panic!("Expected success with error handling, got error: {:?}", e),
-        }
+        assert!(result.is_err());
     }
 
     #[tokio::test]

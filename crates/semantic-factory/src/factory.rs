@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use language_core::SemanticProvider;
 use language_javascript::OxcSemanticProvider;
+use language_python::RuffSemanticProvider;
 
 use crate::config::{SemanticConfig, SemanticScope};
 
@@ -38,11 +39,21 @@ impl SemanticFactory {
     /// ```
     pub fn create(language: &str, config: SemanticConfig) -> Option<Arc<dyn SemanticProvider>> {
         match language.to_lowercase().as_str() {
+            // JavaScript/TypeScript family
             "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" => {
                 Some(Arc::new(match config.scope {
                     SemanticScope::FileScope => OxcSemanticProvider::file_scope(),
                     SemanticScope::WorkspaceScope { root } => {
                         OxcSemanticProvider::workspace_scope(root)
+                    }
+                }))
+            }
+            // Python
+            "python" | "py" => {
+                Some(Arc::new(match config.scope {
+                    SemanticScope::FileScope => RuffSemanticProvider::file_scope(),
+                    SemanticScope::WorkspaceScope { root } => {
+                        RuffSemanticProvider::workspace_scope(root)
                     }
                 }))
             }
@@ -60,7 +71,7 @@ impl SemanticFactory {
     pub fn supports_language(language: &str) -> bool {
         matches!(
             language.to_lowercase().as_str(),
-            "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs"
+            "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "python" | "py"
         )
     }
 }
@@ -113,6 +124,8 @@ mod tests {
         assert!(SemanticFactory::supports_language("typescript"));
         assert!(SemanticFactory::supports_language("jsx"));
         assert!(SemanticFactory::supports_language("tsx"));
+        assert!(SemanticFactory::supports_language("python"));
+        assert!(SemanticFactory::supports_language("py"));
         assert!(!SemanticFactory::supports_language("css"));
         assert!(!SemanticFactory::supports_language("html"));
         assert!(!SemanticFactory::supports_language("unknown"));
@@ -122,5 +135,24 @@ mod tests {
     fn test_case_insensitive() {
         assert!(SemanticFactory::create("JavaScript", SemanticConfig::file_scope()).is_some());
         assert!(SemanticFactory::create("TYPESCRIPT", SemanticConfig::file_scope()).is_some());
+        assert!(SemanticFactory::create("Python", SemanticConfig::file_scope()).is_some());
+        assert!(SemanticFactory::create("PYTHON", SemanticConfig::file_scope()).is_some());
+    }
+
+    #[test]
+    fn test_create_file_scope_python() {
+        let provider = SemanticFactory::create("python", SemanticConfig::file_scope());
+        assert!(provider.is_some());
+        let provider = provider.unwrap();
+        assert_eq!(provider.mode(), ProviderMode::FileScope);
+    }
+
+    #[test]
+    fn test_create_workspace_scope_python() {
+        let config = SemanticConfig::workspace_scope(std::path::PathBuf::from("/tmp"));
+        let provider = SemanticFactory::create("python", config);
+        assert!(provider.is_some());
+        let provider = provider.unwrap();
+        assert_eq!(provider.mode(), ProviderMode::WorkspaceScope);
     }
 }

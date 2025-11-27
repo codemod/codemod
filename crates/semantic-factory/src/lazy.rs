@@ -77,6 +77,7 @@ impl LazySemanticProvider {
             Some("ts" | "mts" | "cts") => "typescript",
             Some("jsx") => "jsx",
             Some("tsx") => "tsx",
+            Some("py" | "pyi") => "python",
             Some("css") => "css",
             Some("html" | "htm") => "html",
             Some("json") => "json",
@@ -217,6 +218,14 @@ mod tests {
             "tsx"
         );
         assert_eq!(
+            LazySemanticProvider::detect_language(Path::new("test.py")),
+            "python"
+        );
+        assert_eq!(
+            LazySemanticProvider::detect_language(Path::new("test.pyi")),
+            "python"
+        );
+        assert_eq!(
             LazySemanticProvider::detect_language(Path::new("test.css")),
             "css"
         );
@@ -241,6 +250,25 @@ mod tests {
         let provider = LazySemanticProvider::file_scope();
         assert!(provider.supports_language("javascript"));
         assert!(provider.supports_language("typescript"));
+        assert!(provider.supports_language("python"));
         assert!(!provider.supports_language("css"));
+    }
+
+    #[test]
+    fn test_lazy_provider_initializes_for_python() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.py");
+        fs::write(&file_path, "x = 1").unwrap();
+
+        let provider = LazySemanticProvider::file_scope();
+
+        // Not initialized yet
+        assert!(provider.inner.get().is_none());
+
+        // Trigger initialization with Python file
+        let _ = provider.get_definition(&file_path, ByteRange::new(0, 1));
+
+        // Now initialized
+        assert!(provider.inner.get().is_some());
     }
 }

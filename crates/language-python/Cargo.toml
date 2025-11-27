@@ -1,0 +1,26 @@
+[package]
+name = "language-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Python semantic analysis provider using Ruff"
+
+[dependencies]
+language-core.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+# Ruff Python semantic analysis
+ruff_python_semantic.workspace = true
+ruff_python_parser.workspace = true
+ruff_python_ast.workspace = true
+ruff_text_size.workspace = true
+ruff_source_file.workspace = true
+
+# Concurrency
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile.workspace = true
+

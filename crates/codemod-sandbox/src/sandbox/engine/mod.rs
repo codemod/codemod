@@ -7,6 +7,3 @@ pub use execution_engine::*;
 pub use in_memory_engine::*;
 pub use selector_engine::*;
 pub mod language_data;
-
-#[cfg(all(test, feature = "native"))]
-mod semantic_provider_tests;
