@@ -1,0 +1,401 @@
+---
+title: "Semantic Analysis"
+description: "Find symbol definitions and references across your codebase using semantic analysis in jssg codemods"
+---
+
+Semantic analysis enables your codemods to understand symbol relationships in code—finding where variables are defined, tracking all references to a function, or discovering cross-file dependencies. This goes beyond pattern matching to provide IDE-like intelligence for your transformations.
+
+## Supported Languages
+
+<Info>
+Semantic analysis is currently supported for **JavaScript/TypeScript** and **Python** only. For other languages, the semantic methods return no-op results (null for definitions, empty arrays for references).
+</Info>
+
+| Language | Provider | Features |
+|----------|----------|----------|
+| JavaScript/TypeScript | [oxc](https://oxc.rs/) | Definitions, references, cross-file resolution |
+| Python | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution |
+| Other languages | — | Returns null/empty (no-op) |
+
+## Analysis Modes
+
+Semantic analysis operates in two modes, each with different performance and accuracy trade-offs:
+
+### File Scope (Default)
+
+Single-file analysis that processes symbols within the current file only. This mode is fast and requires no additional configuration.
+
+**Best for:**
+- Quick analysis of local variables
+- Single-file transformations
+- Dry runs and exploratory analysis
+
+**Limitations:**
+- Cannot resolve cross-file imports
+- Cannot find references in other files
+
+### Workspace Scope
+
+Workspace-wide analysis that resolves cross-file imports and finds references across your entire project. This mode requires specifying a workspace root.
+
+**Best for:**
+- Renaming symbols across files
+- Finding all usages of exported functions
+- Dependency analysis and migration codemods
+
+**Requirements:**
+- Workspace root path must be specified
+- Files must be processed (indexed) before cross-file queries work
+
+## API Reference
+
+### `node.definition()`
+
+Get the definition location for the symbol at this node's position.
+
+<ParamField path="definition()" type="DefinitionResult | null">
+Returns an object containing the definition node and its root, or null if not found.
+</ParamField>
+
+```ts
+interface DefinitionResult<M> {
+  /** The AST node at the definition location */
+  node: SgNode<M>;
+  /** The SgRoot for the file containing the definition */
+  root: SgRoot<M>;
+}
+```
+
+**Returns null when:**
+- No semantic provider is configured
+- No symbol is found at this position
+- The definition cannot be resolved (e.g., external library)
+
+### `node.references()`
+
+Find all references to the symbol at this node's position.
+
+<ParamField path="references()" type="Array<FileReferences>">
+Returns an array of file references, grouped by file.
+</ParamField>
+
+```ts
+interface FileReferences<M> {
+  /** The SgRoot for the file containing references */
+  root: SgRoot<M>;
+  /** Array of SgNode objects for each reference in this file */
+  nodes: Array<SgNode<M>>;
+}
+```
+
+**Returns empty array when:**
+- No semantic provider is configured
+- No symbol is found at this position
+
+<Note>
+In file scope mode, `references()` only searches the current file. In workspace scope mode, it searches all indexed files in the workspace.
+</Note>
+
+## Using Semantic Analysis
+
+### Via CLI Commands
+
+#### `jssg run`
+
+Enable workspace-wide semantic analysis with the `--semantic-workspace` flag:
+
+```bash
+# File scope (default) - no flag needed
+npx codemod jssg run ./scripts/codemod.ts --language tsx
+
+# Workspace scope - specify workspace root
+npx codemod jssg run ./scripts/codemod.ts --language tsx \
+  --semantic-workspace /path/to/project
+```
+
+<ParamField path="--semantic-workspace" type="PATH">
+Enable workspace-wide semantic analysis using the provided path as the workspace root. When not specified, semantic analysis defaults to file scope mode.
+</ParamField>
+
+#### `jssg test`
+
+Enable workspace-wide semantic analysis for tests:
+
+```bash
+# File scope (default)
+npx codemod jssg test ./scripts/codemod.ts --language tsx
+
+# Workspace scope
+npx codemod jssg test ./scripts/codemod.ts --language tsx \
+  --semantic-workspace /path/to/project
+```
+
+### Via Workflow Configuration
+
+Configure semantic analysis in your `workflow.yaml` using the `js-ast-grep` step type:
+
+<CodeGroup>
+```yaml File Scope
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis: file # default
+```
+
+```yaml Workspace Scope
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis: workspace
+```
+
+```yaml Workspace with Custom Root
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis:
+        mode: workspace
+        root: ./path/to/workspace
+```
+</CodeGroup>
+
+<ParamField path="semantic_analysis" type="string | object">
+Configure semantic analysis mode. Can be:
+- `"file"` — Single-file analysis (default when enabled)
+- `"workspace"` — Workspace-wide analysis using the workflow's base path
+- `{ mode: "workspace", root: "./path" }` — Workspace-wide with custom root
+</ParamField>
+
+## Examples
+
+### Finding a Variable's Definition
+
+```ts
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root) => {
+  const rootNode = root.root();
+  
+  // Find a variable reference
+  const varRef = rootNode.find({ rule: { pattern: "myVariable" } });
+  if (!varRef) return null;
+  
+  // Get its definition
+  const def = varRef.definition();
+  
+  if (def) {
+    console.log("Definition found in:", def.root.filename());
+    console.log("Definition text:", def.node.text());
+  } else {
+    console.log("Definition not found");
+  }
+  
+  return null;
+};
+
+export default transform;
+```
+
+### Cross-File Reference Analysis
+
+```ts
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root) => {
+  const rootNode = root.root();
+  
+  // Find an exported function
+  const exportedFunc = rootNode.find({ 
+    rule: { pattern: "export function $NAME($$$) { $$$ }" } 
+  });
+  if (!exportedFunc) return null;
+  
+  const funcName = exportedFunc.field("name");
+  if (!funcName) return null;
+  
+  // Find all references across the workspace
+  const refs = funcName.references();
+  
+  // Log usage statistics
+  let totalRefs = 0;
+  const fileUsage: Record<string, number> = {};
+  
+  for (const fileRef of refs) {
+    const filename = fileRef.root.filename();
+    const count = fileRef.nodes.length;
+    fileUsage[filename] = count;
+    totalRefs += count;
+  }
+  
+  console.log(`Function "${funcName.text()}" is referenced ${totalRefs} times:`);
+  for (const [file, count] of Object.entries(fileUsage)) {
+    console.log(`  ${file}: ${count} references`);
+  }
+  
+  return null; // Analysis only, no changes
+};
+
+export default transform;
+```
+
+### Python Example: Finding Class References
+
+```ts
+import type { Transform } from "codemod:ast-grep";
+import type Python from "codemod:ast-grep/langs/python";
+
+const transform: Transform<Python> = (root) => {
+  const rootNode = root.root();
+  
+  // Find a class definition
+  const classDef = rootNode.find({ 
+    rule: { pattern: "class MyClass: $$$BODY" } 
+  });
+  if (!classDef) return null;
+  
+  // Get the class name node
+  const classNameNodes = rootNode.findAll({ rule: { pattern: "MyClass" } });
+  if (classNameNodes.length === 0) return null;
+  
+  const className = classNameNodes[0];
+  
+  // Find all references to this class
+  const refs = className.references();
+  
+  for (const fileRef of refs) {
+    console.log(`References in ${fileRef.root.filename()}:`);
+    for (const node of fileRef.nodes) {
+      console.log(`  - ${node.text()} at line ${node.range().start.line}`);
+    }
+  }
+  
+  return null;
+};
+
+export default transform;
+```
+
+## Best Practices
+
+<AccordionGroup>
+<Accordion title="Use file scope for single-file transformations">
+File scope analysis is faster and doesn't require workspace configuration. Use it when your codemod only needs to understand symbols within a single file.
+
+```bash
+# Fast, single-file analysis
+npx codemod jssg run ./codemod.ts --language tsx
+```
+</Accordion>
+
+<Accordion title="Pre-index files for cross-file queries">
+In workspace scope mode, files are indexed as they're processed. For accurate cross-file reference finding, ensure all relevant files have been processed before querying.
+
+```ts
+// The semantic provider indexes files automatically during codemod execution
+// Cross-file references become available after files are processed
+const refs = node.references();
+```
+</Accordion>
+
+<Accordion title="Handle null/empty results gracefully">
+Semantic analysis may return null or empty results for various reasons. Always check return values:
+
+```ts
+const def = node.definition();
+if (!def) {
+  // Definition not found - could be external, unresolved, or no provider
+  return null;
+}
+
+const refs = node.references();
+if (refs.length === 0) {
+  // No references found
+  return null;
+}
+```
+</Accordion>
+
+<Accordion title="Check file ownership before editing">
+When processing references across files, verify you're editing the correct file:
+
+```ts
+for (const fileRef of refs) {
+  // Only edit the current file
+  if (fileRef.root.filename() === root.filename()) {
+    for (const node of fileRef.nodes) {
+      edits.push(node.replace("newText"));
+    }
+  }
+}
+```
+</Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+<Accordion title="Semantic methods return null/empty">
+**Possible causes:**
+- No semantic provider is configured (add `--semantic-workspace` or `semantic_analysis` config)
+- The language isn't supported (only JavaScript/TypeScript and Python)
+- The symbol couldn't be resolved (external library, syntax error)
+
+**Debug steps:**
+```ts
+const def = node.definition();
+console.log("Definition:", def);
+console.log("Node text:", node.text());
+console.log("Node kind:", node.kind());
+```
+</Accordion>
+
+<Accordion title="Cross-file references not found">
+**Possible causes:**
+- Using file scope mode instead of workspace scope
+- The target file hasn't been indexed yet
+- Import resolution failed
+
+**Solution:**
+Ensure you're using workspace scope mode:
+```bash
+npx codemod jssg run ./codemod.ts --language tsx \
+  --semantic-workspace /path/to/project
+```
+</Accordion>
+
+<Accordion title="Performance issues with large workspaces">
+**Tips:**
+- Start with file scope for initial development
+- Use workspace scope only when cross-file analysis is needed
+- Consider running codemods on subsets of your codebase
+</Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+<Card title="API Reference" icon="book" href="/jssg/reference">
+Complete API documentation for SgNode and SgRoot methods.
+</Card>
+
+<Card title="Advanced Patterns" icon="code" href="/jssg/advanced">
+Learn advanced transformation techniques and best practices.
+</Card>
+
+<Card title="Testing" icon="flask" href="/jssg/testing">
+Test your codemods with fixtures and the test runner.
+</Card>
+
+<Card title="Security" icon="shield-check" href="/jssg/security">
+Understand jssg's security model and capabilities.
+</Card>
+</CardGroup>
+
