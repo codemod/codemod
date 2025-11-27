@@ -65,7 +65,7 @@ export declare class SgNode<
    * 
    * @returns An object with the definition node and its root, or null
    */
-  getDefinition(): DefinitionResult<M> | null;
+  definition(): DefinitionResult<M> | null;
 
   /**
    * Find all references to the symbol at this node's position.
@@ -78,23 +78,12 @@ export declare class SgNode<
    * - No semantic provider is configured  
    * - No symbol is found at this position
    * 
-   * In lightweight mode, this only searches files that have been processed.
-   * In accurate mode, this searches the entire workspace.
+   * In file scope mode, it only searches files that have been processed.
+   * In workspace scope mode, it searches the entire workspace.
    * 
    * @returns An array of file references, each with a root and nodes
    */
-  findReferences(): Array<FileReferences<M>>;
-
-  /**
-   * Get type information for the symbol at this node's position.
-   * 
-   * Returns null if:
-   * - No semantic provider is configured
-   * - Type information is not available
-   * 
-   * @returns A string representation of the type, or null
-   */
-  getType(): string | null;
+  references(): Array<FileReferences<M>>;
 }
 /** Represents the parsed tree of code. */
 export declare class SgRoot<M extends TypesMap = TypesMap> {

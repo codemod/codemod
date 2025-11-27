@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// Test that getDefinition() returns null when no semantic provider is configured
+/// Test that definition() returns null when no semantic provider is configured
 #[tokio::test]
 async fn test_get_definition_without_provider() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -23,7 +23,7 @@ export default function transform(root) {
     throw new Error("Expected to find 'x' node");
   }
   
-  const definition = node.getDefinition();
+  const definition = node.definition();
   
   // Should return null when no provider is configured
   if (definition !== null) {
@@ -58,7 +58,7 @@ export default function transform(root) {
     assert!(result.is_ok(), "Execution should succeed: {:?}", result);
 }
 
-/// Test that findReferences() returns empty array when no semantic provider is configured
+/// Test that references() returns empty array when no semantic provider is configured
 #[tokio::test]
 async fn test_find_references_without_provider() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -71,7 +71,7 @@ export default function transform(root) {
     throw new Error("Expected to find 'x' node");
   }
   
-  const references = node.findReferences();
+  const references = node.references();
   
   // Should return empty array when no provider is configured
   if (!Array.isArray(references)) {
@@ -112,7 +112,7 @@ export default function transform(root) {
 
 /// Test that getType() returns null when no semantic provider is configured
 #[tokio::test]
-async fn test_get_type_without_provider() {
+async fn test_type_info_without_provider() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let codemod_path = temp_dir.path().join("test_codemod.js");
 
@@ -123,7 +123,7 @@ export default function transform(root) {
     throw new Error("Expected to find 'x' node");
   }
   
-  const typeInfo = node.getType();
+  const typeInfo = node.typeInfo();
   
   // Should return null when no provider is configured
   if (typeInfo !== null) {

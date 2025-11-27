@@ -11,7 +11,7 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// Test getDefinition() with file-scope provider returns SgNode and SgRoot
+/// Test definition() with file-scope provider returns SgNode and SgRoot
 #[tokio::test]
 async fn test_get_definition_file_scope() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -32,7 +32,7 @@ export default function transform(root) {
   // Get the second 'x' (the reference, not the declaration)
   const refNode = nodes[1];
   
-  const definition = refNode.getDefinition();
+  const definition = refNode.definition();
   
   // Definition may or may not be found depending on semantic provider state
   if (definition === null) {
@@ -75,7 +75,7 @@ export default function transform(root) {
     assert!(result.is_ok(), "Execution should succeed: {:?}", result);
 }
 
-/// Test findReferences() with file-scope provider returns grouped results
+/// Test references() with file-scope provider returns grouped results
 #[tokio::test]
 async fn test_find_references_file_scope() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -94,7 +94,7 @@ export default function transform(root) {
     throw new Error("Expected to find 'const x = 1'");
   }
   
-  const references = node.findReferences();
+  const references = node.references();
   
   // Should return array of file references
   if (!Array.isArray(references)) {
@@ -195,7 +195,7 @@ export default function transform(root) {
     // Use the first one (the function name in declaration)
     const funcNameNode = greetNodes[0];
     
-    const references = funcNameNode.findReferences();
+    const references = funcNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");
@@ -296,7 +296,7 @@ export default function transform(root) {
     return null;
   }
   
-  const definition = callAdd.getDefinition();
+  const definition = callAdd.definition();
   
   // Definition may or may not be found depending on cross-file resolution
   if (definition === null) {
@@ -375,7 +375,7 @@ export default function transform(root) {
   
   const funcNameNode = addNodes[0];
   
-  const references = funcNameNode.findReferences();
+  const references = funcNameNode.references();
   
   // Should return array of file references
   if (!Array.isArray(references)) {
@@ -464,7 +464,7 @@ export default function transform(root) {
     
     const funcNameNode = formatDateNodes[0];
     
-    const references = funcNameNode.findReferences();
+    const references = funcNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");

@@ -37,7 +37,7 @@ export default function transform(root) {
     }
     
     // Find references from the declaration node itself
-    const references = varDecl.findReferences();
+    const references = varDecl.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array, got: " + typeof references);
@@ -121,7 +121,7 @@ export default function transform(root) {
         throw new Error("Expected to find 'const oldName' declaration");
     }
     
-    const references = varDecl.findReferences();
+    const references = varDecl.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");

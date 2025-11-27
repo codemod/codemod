@@ -607,8 +607,8 @@ impl<'js> SgNodeRjs<'js> {
     /// - No symbol is found at this position
     /// - The definition cannot be resolved (e.g., external symbol)
     #[cfg(feature = "native")]
-    #[qjs(rename = "getDefinition")]
-    pub fn get_definition(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+    #[qjs(rename = "definition")]
+    pub fn definition(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let provider = match &self.root.semantic_provider {
             Some(p) => p,
             None => return Ok(Value::new_null(ctx)),
@@ -713,8 +713,8 @@ impl<'js> SgNodeRjs<'js> {
     /// In lightweight mode, this only searches files that have been processed.
     /// In accurate mode, this searches the entire workspace.
     #[cfg(feature = "native")]
-    #[qjs(rename = "findReferences")]
-    pub fn find_references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+    #[qjs(rename = "references")]
+    pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let provider = match &self.root.semantic_provider {
             Some(p) => p,
             None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
@@ -822,12 +822,14 @@ impl<'js> SgNodeRjs<'js> {
 
     /// Get type information for the symbol at this node's position.
     ///
+    /// TODO: Currently, this is not implemented by any of the semantic providers. So it's not publicly available.
+    ///
     /// Returns null if:
     /// - No semantic provider is configured
     /// - Type information is not available
     #[cfg(feature = "native")]
-    #[qjs(rename = "getType")]
-    pub fn get_type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+    #[qjs(rename = "typeInfo")]
+    pub fn type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let provider = match &self.root.semantic_provider {
             Some(p) => p,
             None => return Ok(Value::new_null(ctx)),

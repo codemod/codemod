@@ -39,7 +39,7 @@ export default function transform(root) {
         throw new Error("Expected to find 'counter = 0'");
     }
     
-    const references = assignment.findReferences();
+    const references = assignment.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array, got: " + typeof references);
@@ -135,7 +135,7 @@ export default function transform(root) {
     // Use the first one (the function name in definition)
     const funcNameNode = greetNodes[0];
     
-    const references = funcNameNode.findReferences();
+    const references = funcNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");
@@ -230,7 +230,7 @@ export default function transform(root) {
     // Use the first one (the class name in definition)
     const classNameNode = counterNodes[0];
     
-    const references = classNameNode.findReferences();
+    const references = classNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");
@@ -327,7 +327,7 @@ export default function transform(root) {
         throw new Error("Expected to find add() call");
     }
     
-    const definition = callNode.getDefinition();
+    const definition = callNode.definition();
     
     // Definition may or may not be found depending on cross-file resolution
     if (definition === null) {
@@ -408,7 +408,7 @@ export default function transform(root) {
     // Use the first one (the function name in definition)
     const funcNameNode = calcNodes[0];
     
-    const references = funcNameNode.findReferences();
+    const references = funcNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");
@@ -522,7 +522,7 @@ export default function transform(root) {
     // Use the first one (the class name in definition)
     const classNameNode = userNodes[0];
     
-    const references = classNameNode.findReferences();
+    const references = classNameNode.references();
     
     if (!Array.isArray(references)) {
         throw new Error("Expected references to be an array");
