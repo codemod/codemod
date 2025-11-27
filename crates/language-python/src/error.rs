@@ -20,11 +20,7 @@ pub enum PySemanticError {
 
     /// Symbol not found at the given position.
     #[error("No symbol found at position {start}..{end} in {path}")]
-    SymbolNotFound {
-        path: PathBuf,
-        start: u32,
-        end: u32,
-    },
+    SymbolNotFound { path: PathBuf, start: u32, end: u32 },
 
     /// Module resolution failed.
     #[error("Failed to resolve module '{module}' from {path}")]
@@ -41,13 +37,17 @@ impl From<PySemanticError> for language_core::SemanticError {
             PySemanticError::ParseError { path, message } => {
                 language_core::SemanticError::ParseError { path, message }
             }
-            PySemanticError::FileNotCached { path } => {
-                language_core::SemanticError::Internal(format!("File not cached: {}", path.display()))
-            }
+            PySemanticError::FileNotCached { path } => language_core::SemanticError::Internal(
+                format!("File not cached: {}", path.display()),
+            ),
             PySemanticError::FileRead { path, message } => {
                 language_core::SemanticError::FileRead { path, message }
             }
-            PySemanticError::SymbolNotFound { path, start, end: _ } => {
+            PySemanticError::SymbolNotFound {
+                path,
+                start,
+                end: _,
+            } => {
                 // Convert byte positions to approximate line/column
                 // For now, use start as line and 0 as column
                 language_core::SemanticError::SymbolNotFound {

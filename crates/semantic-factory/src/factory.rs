@@ -49,14 +49,12 @@ impl SemanticFactory {
                 }))
             }
             // Python
-            "python" | "py" => {
-                Some(Arc::new(match config.scope {
-                    SemanticScope::FileScope => RuffSemanticProvider::file_scope(),
-                    SemanticScope::WorkspaceScope { root } => {
-                        RuffSemanticProvider::workspace_scope(root)
-                    }
-                }))
-            }
+            "python" | "py" => Some(Arc::new(match config.scope {
+                SemanticScope::FileScope => RuffSemanticProvider::file_scope(),
+                SemanticScope::WorkspaceScope { root } => {
+                    RuffSemanticProvider::workspace_scope(root)
+                }
+            })),
             // Languages without semantic support
             "css" | "html" | "json" | "yaml" | "markdown" | "md" => None,
             // Unknown languages - no semantic support
@@ -71,7 +69,16 @@ impl SemanticFactory {
     pub fn supports_language(language: &str) -> bool {
         matches!(
             language.to_lowercase().as_str(),
-            "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "python" | "py"
+            "javascript"
+                | "typescript"
+                | "js"
+                | "ts"
+                | "jsx"
+                | "tsx"
+                | "mjs"
+                | "cjs"
+                | "python"
+                | "py"
         )
     }
 }

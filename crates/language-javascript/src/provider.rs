@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 ///   only finds references within the same file.
 /// - **WorkspaceScope**: Workspace-wide lazy indexing. Full cross-file support but
 ///   higher resource usage.
+#[allow(clippy::large_enum_variant)]
 pub enum OxcSemanticProvider {
     /// FileScope mode analyzer (single-file analysis)
     FileScope(LightweightAnalyzer),

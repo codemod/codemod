@@ -10,6 +10,5 @@ export function executeCodemod(sgRoot, options) {{
     }} catch (e) {{
         console.error(e);
         throw e;
-        return null;
     }}
 }}

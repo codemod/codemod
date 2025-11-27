@@ -45,4 +45,3 @@ pub use provider::RuffSemanticProvider;
 
 // Re-export core types for convenience
 pub use language_core::{ByteRange, ProviderMode, SemanticProvider, SymbolKind, SymbolLocation};
-

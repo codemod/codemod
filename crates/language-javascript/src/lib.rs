@@ -48,4 +48,3 @@ pub use provider::OxcSemanticProvider;
 
 // Re-export core types for convenience
 pub use language_core::{ByteRange, ProviderMode, SemanticProvider, SymbolKind, SymbolLocation};
-
