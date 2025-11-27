@@ -30,6 +30,7 @@ serde_yaml = { workspace = true, optional = true }
 codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
 language-core = { workspace = true, optional = true }
 language-javascript = { workspace = true, optional = true }
+language-python = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -62,6 +63,7 @@ native = [
   "codemod-llrt-capabilities",
   "language-core",
   "language-javascript",
+  "language-python",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

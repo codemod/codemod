@@ -175,10 +175,14 @@ unsafe impl<'js> JsLifetime<'js> for SgNodeRjs<'js> {
 
 /// Helper to find the tightest node containing a byte range.
 #[cfg(feature = "native")]
-fn find_node_at_range<'a>(root: &'a Node<'a, TSDoc>, start: usize, end: usize) -> Option<Node<'a, TSDoc>> {
+fn find_node_at_range<'a>(
+    root: &'a Node<'a, TSDoc>,
+    start: usize,
+    end: usize,
+) -> Option<Node<'a, TSDoc>> {
     let mut current = root.clone();
-    
-    // Traverse down to find the tightest node containing the range
+
+    // traverse down to find the tightest node containing the range
     loop {
         let mut found_child = None;
         for child in current.children() {
@@ -189,10 +193,10 @@ fn find_node_at_range<'a>(root: &'a Node<'a, TSDoc>, start: usize, end: usize) -
                 break;
             }
         }
-        
+
         match found_child {
             Some(child) => {
-                // Check if this child exactly matches or is tighter
+                // check if this child exactly matches or is tighter
                 let child_range = child.range();
                 if child_range.start == start && child_range.end == end {
                     return Some(child);
@@ -200,7 +204,7 @@ fn find_node_at_range<'a>(root: &'a Node<'a, TSDoc>, start: usize, end: usize) -
                 current = child;
             }
             None => {
-                // No child contains the range, current is the tightest
+                // no child contains the range, current is the tightest
                 let current_range = current.range();
                 if current_range.start <= start && current_range.end >= end {
                     return Some(current);
@@ -626,45 +630,53 @@ impl<'js> SgNodeRjs<'js> {
                 if is_same_file {
                     // Definition is in the same file, use existing root
                     let root_node = self.root.grep.root();
-                    if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                    if let Some(node) = find_node_at_range(
+                        &root_node,
+                        loc.range.start as usize,
+                        loc.range.end as usize,
+                    ) {
                         let node_match: NodeMatch<_> = node.into();
                         let static_node_match: NodeMatch<'static, TSDoc> =
                             unsafe { std::mem::transmute(node_match) };
-                        
+
                         let result_obj = rquickjs::Object::new(ctx.clone())?;
-                        
+
                         let sg_node = SgNodeRjs {
                             root: Arc::clone(&self.root),
                             inner_node: static_node_match,
                             _phantom: PhantomData,
                         };
                         result_obj.set("node", sg_node)?;
-                        
+
                         let sg_root = SgRootRjs {
                             inner: Arc::clone(&self.root),
                             _phantom: PhantomData,
                         };
                         result_obj.set("root", sg_root)?;
-                        
+
                         return result_obj.into_js(&ctx);
                     }
                 } else {
                     // Definition is in a different file, create new root
                     let lang_str = detect_language_from_path(&def_result.location.file_path);
-                    
+
                     if let Ok(new_root) = SgRootRjs::try_new(
                         lang_str,
                         def_result.content.clone(),
                         Some(def_result.location.file_path.to_string_lossy().to_string()),
                     ) {
                         let root_node = new_root.inner.grep.root();
-                        if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                        if let Some(node) = find_node_at_range(
+                            &root_node,
+                            loc.range.start as usize,
+                            loc.range.end as usize,
+                        ) {
                             let node_match: NodeMatch<_> = node.into();
                             let static_node_match: NodeMatch<'static, TSDoc> =
                                 unsafe { std::mem::transmute(node_match) };
-                            
+
                             let result_obj = rquickjs::Object::new(ctx.clone())?;
-                            
+
                             let sg_node = SgNodeRjs {
                                 root: Arc::clone(&new_root.inner),
                                 inner_node: static_node_match,
@@ -672,12 +684,12 @@ impl<'js> SgNodeRjs<'js> {
                             };
                             result_obj.set("node", sg_node)?;
                             result_obj.set("root", new_root)?;
-                            
+
                             return result_obj.into_js(&ctx);
                         }
                     }
                 }
-                
+
                 Ok(Value::new_null(ctx))
             }
             Ok(None) => Ok(Value::new_null(ctx)),
@@ -719,12 +731,12 @@ impl<'js> SgNodeRjs<'js> {
         match provider.find_references(&file_path, range) {
             Ok(refs_result) => {
                 let result_array = rquickjs::Array::new(ctx.clone())?;
-                
+
                 for (idx, file_refs) in refs_result.files.iter().enumerate() {
                     let is_same_file = file_refs.file_path == file_path;
-                    
+
                     let file_obj = rquickjs::Object::new(ctx.clone())?;
-                    
+
                     if is_same_file {
                         // Use existing root for same file
                         let sg_root = SgRootRjs {
@@ -732,17 +744,21 @@ impl<'js> SgNodeRjs<'js> {
                             _phantom: PhantomData,
                         };
                         file_obj.set("root", sg_root)?;
-                        
+
                         // Find nodes for each location
                         let nodes_array = rquickjs::Array::new(ctx.clone())?;
                         let root_node = self.root.grep.root();
-                        
+
                         for (node_idx, loc) in file_refs.locations.iter().enumerate() {
-                            if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                            if let Some(node) = find_node_at_range(
+                                &root_node,
+                                loc.range.start as usize,
+                                loc.range.end as usize,
+                            ) {
                                 let node_match: NodeMatch<_> = node.into();
                                 let static_node_match: NodeMatch<'static, TSDoc> =
                                     unsafe { std::mem::transmute(node_match) };
-                                
+
                                 let sg_node = SgNodeRjs {
                                     root: Arc::clone(&self.root),
                                     inner_node: static_node_match,
@@ -755,24 +771,28 @@ impl<'js> SgNodeRjs<'js> {
                     } else {
                         // Create new root for different file
                         let lang_str = detect_language_from_path(&file_refs.file_path);
-                        
+
                         if let Ok(new_root) = SgRootRjs::try_new(
                             lang_str,
                             file_refs.content.clone(),
                             Some(file_refs.file_path.to_string_lossy().to_string()),
                         ) {
                             file_obj.set("root", new_root.clone())?;
-                            
+
                             // Find nodes for each location
                             let nodes_array = rquickjs::Array::new(ctx.clone())?;
                             let root_node = new_root.inner.grep.root();
-                            
+
                             for (node_idx, loc) in file_refs.locations.iter().enumerate() {
-                                if let Some(node) = find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize) {
+                                if let Some(node) = find_node_at_range(
+                                    &root_node,
+                                    loc.range.start as usize,
+                                    loc.range.end as usize,
+                                ) {
                                     let node_match: NodeMatch<_> = node.into();
                                     let static_node_match: NodeMatch<'static, TSDoc> =
                                         unsafe { std::mem::transmute(node_match) };
-                                    
+
                                     let sg_node = SgNodeRjs {
                                         root: Arc::clone(&new_root.inner),
                                         inner_node: static_node_match,
@@ -787,10 +807,10 @@ impl<'js> SgNodeRjs<'js> {
                             continue;
                         }
                     }
-                    
+
                     result_array.set(idx, file_obj)?;
                 }
-                
+
                 result_array.into_js(&ctx)
             }
             Err(e) => Err(Exception::throw_message(

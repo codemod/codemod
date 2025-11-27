@@ -9,6 +9,7 @@ export function executeCodemod(sgRoot, options) {{
         return transform(sgRoot, options);
     }} catch (e) {{
         console.error(e);
+        throw e;
         return null;
     }}
 }}

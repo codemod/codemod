@@ -14,6 +14,7 @@ members = [
     "crates/llrt-capabilities",
     "crates/language-core",
     "crates/language-javascript",
+    "crates/language-python",
     "crates/semantic-factory",
 ]
 resolver = "2"
@@ -47,7 +48,15 @@ rmcp = { version = "0.8", features = ["server"] }
 codemod-llrt-capabilities = { path = "crates/llrt-capabilities" }
 language-core = { path = "crates/language-core" }
 language-javascript = { path = "crates/language-javascript" }
+language-python = { path = "crates/language-python" }
 semantic-factory = { path = "crates/semantic-factory" }
+
+# Ruff Python semantic analysis (pinned to stable release)
+ruff_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.8.0" }
+ruff_python_parser = { git = "https://github.com/astral-sh/ruff.git", tag = "0.8.0" }
+ruff_python_ast = { git = "https://github.com/astral-sh/ruff.git", tag = "0.8.0" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff.git", tag = "0.8.0" }
+ruff_source_file = { git = "https://github.com/astral-sh/ruff.git", tag = "0.8.0" }
 
 anyhow = "1.0"
 ast-grep-core = "0.39.7"
