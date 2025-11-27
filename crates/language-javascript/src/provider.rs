@@ -10,51 +10,52 @@ use std::path::{Path, PathBuf};
 /// Semantic analysis provider for JavaScript and TypeScript using OXC.
 ///
 /// This provider supports two modes:
-/// - **Lightweight**: Incremental per-file analysis with caching. Fast startup,
-///   but may miss cross-file references if files haven't been processed.
-/// - **Accurate**: Workspace-wide lazy indexing. More complete results but
+/// - **FileScope**: Single-file analysis with no cross-file resolution. Fast startup,
+///   only finds references within the same file.
+/// - **WorkspaceScope**: Workspace-wide lazy indexing. Full cross-file support but
 ///   higher resource usage.
 pub enum OxcSemanticProvider {
-    /// Lightweight mode analyzer
-    Lightweight(LightweightAnalyzer),
-    /// Accurate mode analyzer
-    Accurate(AccurateAnalyzer),
+    /// FileScope mode analyzer (single-file analysis)
+    FileScope(LightweightAnalyzer),
+    /// WorkspaceScope mode analyzer (workspace-wide analysis)
+    WorkspaceScope(AccurateAnalyzer),
 }
 
 impl OxcSemanticProvider {
-    /// Create a lightweight provider for incremental per-file analysis.
+    /// Create a file-scope provider for single-file analysis.
     ///
     /// This mode is best for:
     /// - Quick dry runs
     /// - High-level analysis
     /// - Single-file transformations
-    pub fn lightweight() -> Self {
-        Self::Lightweight(LightweightAnalyzer::new())
+    /// - When cross-file references are not needed
+    pub fn file_scope() -> Self {
+        Self::FileScope(LightweightAnalyzer::new())
     }
 
-    /// Create an accurate provider for workspace-wide analysis.
+    /// Create a workspace-scope provider for workspace-wide analysis.
     ///
     /// This mode is best for:
     /// - Full codemod runs requiring cross-file references
     /// - Precise symbol resolution
-    /// - When you need to find all usages of a symbol
-    pub fn accurate(workspace_root: PathBuf) -> Self {
-        Self::Accurate(AccurateAnalyzer::new(workspace_root))
+    /// - When you need to find all usages of a symbol across the workspace
+    pub fn workspace_scope(workspace_root: PathBuf) -> Self {
+        Self::WorkspaceScope(AccurateAnalyzer::new(workspace_root))
     }
 
     /// Clear all cached data.
     pub fn clear_cache(&self) {
         match self {
-            Self::Lightweight(analyzer) => analyzer.clear_cache(),
-            Self::Accurate(analyzer) => analyzer.clear(),
+            Self::FileScope(analyzer) => analyzer.clear_cache(),
+            Self::WorkspaceScope(analyzer) => analyzer.clear(),
         }
     }
 
     /// Get the number of cached files.
     pub fn cached_file_count(&self) -> usize {
         match self {
-            Self::Lightweight(analyzer) => analyzer.cache().len(),
-            Self::Accurate(analyzer) => analyzer.cache().len(),
+            Self::FileScope(analyzer) => analyzer.cache().len(),
+            Self::WorkspaceScope(analyzer) => analyzer.cache().len(),
         }
     }
 }
@@ -62,8 +63,8 @@ impl OxcSemanticProvider {
 impl std::fmt::Debug for OxcSemanticProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Lightweight(_) => write!(f, "OxcSemanticProvider::Lightweight"),
-            Self::Accurate(_) => write!(f, "OxcSemanticProvider::Accurate"),
+            Self::FileScope(_) => write!(f, "OxcSemanticProvider::FileScope"),
+            Self::WorkspaceScope(_) => write!(f, "OxcSemanticProvider::WorkspaceScope"),
         }
     }
 }
@@ -83,8 +84,8 @@ impl SemanticProvider for OxcSemanticProvider {
         })?;
 
         match self {
-            Self::Lightweight(analyzer) => analyzer.get_definition(file_path, &content, range),
-            Self::Accurate(analyzer) => analyzer.get_definition(file_path, &content, range),
+            Self::FileScope(analyzer) => analyzer.get_definition(file_path, &content, range),
+            Self::WorkspaceScope(analyzer) => analyzer.get_definition(file_path, &content, range),
         }
     }
 
@@ -101,8 +102,8 @@ impl SemanticProvider for OxcSemanticProvider {
         })?;
 
         match self {
-            Self::Lightweight(analyzer) => analyzer.find_references(file_path, &content, range),
-            Self::Accurate(analyzer) => analyzer.find_references(file_path, &content, range),
+            Self::FileScope(analyzer) => analyzer.find_references(file_path, &content, range),
+            Self::WorkspaceScope(analyzer) => analyzer.find_references(file_path, &content, range),
         }
     }
 
@@ -115,8 +116,8 @@ impl SemanticProvider for OxcSemanticProvider {
 
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         match self {
-            Self::Lightweight(analyzer) => analyzer.process_file(file_path, content),
-            Self::Accurate(analyzer) => analyzer.process_file(file_path, content),
+            Self::FileScope(analyzer) => analyzer.process_file(file_path, content),
+            Self::WorkspaceScope(analyzer) => analyzer.process_file(file_path, content),
         }
     }
 
@@ -129,8 +130,8 @@ impl SemanticProvider for OxcSemanticProvider {
 
     fn mode(&self) -> ProviderMode {
         match self {
-            Self::Lightweight(_) => ProviderMode::Lightweight,
-            Self::Accurate(_) => ProviderMode::Accurate,
+            Self::FileScope(_) => ProviderMode::FileScope,
+            Self::WorkspaceScope(_) => ProviderMode::WorkspaceScope,
         }
     }
 }
@@ -145,8 +146,8 @@ impl OxcSemanticProvider {
         range: ByteRange,
     ) -> SemanticResult<Option<DefinitionResult>> {
         match self {
-            Self::Lightweight(analyzer) => analyzer.get_definition(file_path, content, range),
-            Self::Accurate(analyzer) => analyzer.get_definition(file_path, content, range),
+            Self::FileScope(analyzer) => analyzer.get_definition(file_path, content, range),
+            Self::WorkspaceScope(analyzer) => analyzer.get_definition(file_path, content, range),
         }
     }
 
@@ -158,8 +159,8 @@ impl OxcSemanticProvider {
         range: ByteRange,
     ) -> SemanticResult<ReferencesResult> {
         match self {
-            Self::Lightweight(analyzer) => analyzer.find_references(file_path, content, range),
-            Self::Accurate(analyzer) => analyzer.find_references(file_path, content, range),
+            Self::FileScope(analyzer) => analyzer.find_references(file_path, content, range),
+            Self::WorkspaceScope(analyzer) => analyzer.find_references(file_path, content, range),
         }
     }
 }
@@ -171,8 +172,8 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_lightweight_provider_supports_language() {
-        let provider = OxcSemanticProvider::lightweight();
+    fn test_file_scope_provider_supports_language() {
+        let provider = OxcSemanticProvider::file_scope();
         assert!(provider.supports_language("javascript"));
         assert!(provider.supports_language("JavaScript"));
         assert!(provider.supports_language("typescript"));
@@ -186,21 +187,21 @@ mod tests {
     }
 
     #[test]
-    fn test_lightweight_provider_mode() {
-        let provider = OxcSemanticProvider::lightweight();
-        assert_eq!(provider.mode(), ProviderMode::Lightweight);
+    fn test_file_scope_provider_mode() {
+        let provider = OxcSemanticProvider::file_scope();
+        assert_eq!(provider.mode(), ProviderMode::FileScope);
     }
 
     #[test]
-    fn test_accurate_provider_mode() {
+    fn test_workspace_scope_provider_mode() {
         let dir = TempDir::new().unwrap();
-        let provider = OxcSemanticProvider::accurate(dir.path().to_path_buf());
-        assert_eq!(provider.mode(), ProviderMode::Accurate);
+        let provider = OxcSemanticProvider::workspace_scope(dir.path().to_path_buf());
+        assert_eq!(provider.mode(), ProviderMode::WorkspaceScope);
     }
 
     #[test]
     fn test_provider_notify_file_processed() {
-        let provider = OxcSemanticProvider::lightweight();
+        let provider = OxcSemanticProvider::file_scope();
 
         let content = "const x = 1;";
         let dir = TempDir::new().unwrap();
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_provider_clear_cache() {
-        let provider = OxcSemanticProvider::lightweight();
+        let provider = OxcSemanticProvider::file_scope();
 
         let content = "const x = 1;";
         let dir = TempDir::new().unwrap();
@@ -230,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_provider_get_definition() {
-        let provider = OxcSemanticProvider::lightweight();
+        let provider = OxcSemanticProvider::file_scope();
 
         let content = r#"const x = 1;
 const y = x + 2;"#;
@@ -254,7 +255,7 @@ const y = x + 2;"#;
 
     #[test]
     fn test_provider_find_references() {
-        let provider = OxcSemanticProvider::lightweight();
+        let provider = OxcSemanticProvider::file_scope();
 
         let content = r#"const x = 1;
 const y = x + 2;
@@ -282,7 +283,7 @@ console.log(x);"#;
 
     #[test]
     fn test_provider_get_type_returns_none() {
-        let provider = OxcSemanticProvider::lightweight();
+        let provider = OxcSemanticProvider::file_scope();
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("test.ts");
         fs::write(&file_path, "const x = 1;").unwrap();

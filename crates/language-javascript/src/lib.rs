@@ -8,7 +8,7 @@
 //! - Symbol definition lookup (go-to-definition)
 //! - Reference finding (find-all-references)
 //! - Type information extraction
-//! - Two analysis modes: Lightweight (incremental) and Accurate (workspace-wide)
+//! - Two analysis modes: FileScope (single-file) and WorkspaceScope (workspace-wide)
 //!
 //! # Example
 //!
@@ -17,11 +17,11 @@
 //! use language_core::{SemanticProvider, ByteRange, ProviderMode};
 //! use std::path::Path;
 //!
-//! // Create a lightweight provider for incremental analysis
-//! let provider = OxcSemanticProvider::lightweight();
+//! // Create a file-scope provider for single-file analysis
+//! let provider = OxcSemanticProvider::file_scope();
 //!
-//! // Or create an accurate provider for workspace-wide analysis
-//! // let provider = OxcSemanticProvider::accurate(workspace_root);
+//! // Or create a workspace-scope provider for workspace-wide analysis
+//! // let provider = OxcSemanticProvider::workspace_scope(workspace_root);
 //!
 //! // Notify the provider about processed files to build the symbol cache
 //! provider.notify_file_processed(

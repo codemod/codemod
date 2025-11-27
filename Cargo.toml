@@ -14,6 +14,7 @@ members = [
     "crates/llrt-capabilities",
     "crates/language-core",
     "crates/language-javascript",
+    "crates/semantic-factory",
 ]
 resolver = "2"
 
@@ -46,6 +47,7 @@ rmcp = { version = "0.8", features = ["server"] }
 codemod-llrt-capabilities = { path = "crates/llrt-capabilities" }
 language-core = { path = "crates/language-core" }
 language-javascript = { path = "crates/language-javascript" }
+semantic-factory = { path = "crates/semantic-factory" }
 
 anyhow = "1.0"
 ast-grep-core = "0.39.7"

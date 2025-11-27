@@ -21,7 +21,7 @@ codemod-mcp = { workspace = true }
 testing-utils = { workspace = true }
 codemod-llrt-capabilities = { workspace = true }
 language-core = { workspace = true }
-language-javascript = { workspace = true }
+semantic-factory = { workspace = true }
 tokio = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -30,7 +30,10 @@ use uuid::Uuid;
 use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::step::{
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseCodemod,
+    UseJSAstGrep,
+};
 use butterflow_models::{
     evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
     Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
@@ -50,6 +53,8 @@ use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
 };
+use language_core::SemanticProvider;
+use semantic_factory::LazySemanticProvider;
 
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
@@ -1736,6 +1741,36 @@ impl Engine {
         .await
         .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
 
+        let semantic_provider: Option<Arc<dyn SemanticProvider>> =
+            match &js_ast_grep.semantic_analysis {
+                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)) => {
+                    Some(Arc::new(LazySemanticProvider::file_scope()))
+                }
+                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => {
+                    // use base_path as workspace root by default
+                    Some(Arc::new(LazySemanticProvider::workspace_scope(
+                        base_path.clone(),
+                    )))
+                }
+                Some(SemanticAnalysisConfig::Detailed(detailed)) => {
+                    match detailed.mode {
+                        SemanticAnalysisMode::File => {
+                            Some(Arc::new(LazySemanticProvider::file_scope()))
+                        }
+                        SemanticAnalysisMode::Workspace => {
+                            // use custom root if provided, otherwise use base_path
+                            let root = detailed
+                                .root
+                                .as_ref()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| base_path.clone());
+                            Some(Arc::new(LazySemanticProvider::workspace_scope(root)))
+                        }
+                    }
+                }
+                None => None,
+            };
+
         // Capture variables for use in parallel threads
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();
@@ -1775,7 +1810,7 @@ impl Engine {
                         params: params.clone(),
                         matrix_values: matrix_input.clone(),
                         capabilities: config.capabilities.clone(),
-                        semantic_provider: None,
+                        semantic_provider: semantic_provider.clone(),
                     })
                     .await
                 });

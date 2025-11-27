@@ -1,6 +1,6 @@
 //! Symbol cache for incremental indexing.
 
-use language_core::{ByteRange, SymbolKind, SymbolLocation};
+use language_core::{ByteRange, SymbolKind};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -188,38 +188,6 @@ impl SymbolCache {
     /// Get all cached file paths.
     pub fn files(&self) -> Vec<PathBuf> {
         self.files.read().keys().cloned().collect()
-    }
-
-    /// Find all references to a symbol across all cached files.
-    pub fn find_all_references(&self, file_path: &Path, symbol_id: u32) -> Vec<SymbolLocation> {
-        let files = self.files.read();
-        let mut results = Vec::new();
-
-        // First, find references in the same file
-        if let Some(entry) = files.get(file_path) {
-            for reference in entry.symbols.find_references_to(symbol_id) {
-                if let Some(symbol) = entry.symbols.find_symbol_by_id(symbol_id) {
-                    results.push(SymbolLocation::new(
-                        file_path.to_path_buf(),
-                        reference.range,
-                        symbol.kind,
-                        symbol.name.clone(),
-                    ));
-                }
-            }
-        }
-
-        // Then search other files (for cross-file references in accurate mode)
-        // This is simplified - real implementation would need to resolve imports
-        for (path, _entry) in files.iter() {
-            if path == file_path {
-                continue;
-            }
-            // Look for references that might match by name
-            // (Full implementation would track cross-file symbol resolution)
-        }
-
-        results
     }
 }
 

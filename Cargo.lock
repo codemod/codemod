@@ -606,11 +606,13 @@ dependencies = [
  "flate2",
  "futures-util",
  "ignore",
+ "language-core",
  "log",
  "rand 0.9.2",
  "rayon",
  "regex",
  "reqwest 0.12.23",
+ "semantic-factory",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -890,7 +892,6 @@ dependencies = [
  "indicatif",
  "inquire",
  "language-core",
- "language-javascript",
  "libtest-mimic",
  "log",
  "num_cpus",
@@ -904,6 +905,7 @@ dependencies = [
  "rmcp",
  "rolldown",
  "rustls 0.21.12",
+ "semantic-factory",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6434,6 +6436,17 @@ name = "self_cell"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16c2f82143577edb4921b71ede051dac62ca3c16084e918bf7b40c96ae10eb33"
+
+[[package]]
+name = "semantic-factory"
+version = "1.2.1"
+dependencies = [
+ "language-core",
+ "language-javascript",
+ "log",
+ "tempfile",
+ "thiserror 2.0.16",
+]
 
 [[package]]
 name = "semver"

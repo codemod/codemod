@@ -10,7 +10,9 @@ use butterflow_core::{
     WorkflowStatus,
 };
 use butterflow_models::node::NodeType;
-use butterflow_models::step::{StepAction, UseAstGrep, UseJSAstGrep};
+use butterflow_models::step::{
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAstGrep, UseJSAstGrep,
+};
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
 
@@ -2007,6 +2009,7 @@ function helper() {
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2093,6 +2096,7 @@ interface ApiResponse {
                 dry_run: Some(false),
                 language: Some("typescript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2157,6 +2161,7 @@ var count = 0;
                 dry_run: Some(true), // Enable dry run
                 language: Some("javascript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2201,6 +2206,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 dry_run: Some(false),
                 language: None,
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2273,6 +2279,7 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2303,6 +2310,7 @@ build/
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2363,6 +2371,7 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("javascript".to_string()),
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2418,6 +2427,7 @@ export default function transform(ast) {
                 dry_run: Some(false),
                 language: Some("invalid-language".to_string()), // Invalid language
                 capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
             },
             None,
             None,
@@ -2470,6 +2480,9 @@ fn create_js_ast_grep_workflow() -> Workflow {
                     dry_run: Some(false),
                     language: Some("javascript".to_string()),
                     capabilities: None,
+                    semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                        SemanticAnalysisMode::File,
+                    )),
                 }),
                 env: None,
                 condition: None,

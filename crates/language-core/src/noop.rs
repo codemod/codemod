@@ -73,7 +73,7 @@ impl SemanticProvider for NoopSemanticProvider {
     }
 
     fn mode(&self) -> ProviderMode {
-        ProviderMode::Lightweight
+        ProviderMode::FileScope
     }
 }
 
@@ -120,10 +120,8 @@ mod tests {
 
     #[test]
     fn test_noop_custom_languages() {
-        let provider = NoopSemanticProvider::with_languages(vec![
-            "custom".to_string(),
-            "lang".to_string(),
-        ]);
+        let provider =
+            NoopSemanticProvider::with_languages(vec!["custom".to_string(), "lang".to_string()]);
         assert!(provider.supports_language("custom"));
         assert!(provider.supports_language("lang"));
         assert!(!provider.supports_language("css"));
@@ -139,6 +137,6 @@ mod tests {
     #[test]
     fn test_noop_mode() {
         let provider = NoopSemanticProvider::new();
-        assert_eq!(provider.mode(), ProviderMode::Lightweight);
+        assert_eq!(provider.mode(), ProviderMode::FileScope);
     }
 }

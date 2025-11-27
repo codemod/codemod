@@ -49,4 +49,3 @@ pub enum SemanticError {
 
 /// Result type for semantic operations.
 pub type SemanticResult<T> = Result<T, SemanticError>;
-
