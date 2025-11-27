@@ -142,6 +142,46 @@ pub struct UseJSAstGrep {
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<String>>")]
     pub capabilities: Option<Vec<String>>,
+
+    /// Semantic analysis configuration for symbol indexing (getDefinition, findReferences).
+    /// Can be:
+    /// - `"file"` - single-file analysis (default if semantic is enabled)
+    /// - `"workspace"` - workspace-wide analysis using base_path as root
+    /// - `{"mode": "workspace", "root": "/path/to/workspace"}` - workspace-wide with custom root
+    #[serde(default)]
+    #[ts(optional, as = "Option<SemanticAnalysisConfig>")]
+    pub semantic_analysis: Option<SemanticAnalysisConfig>,
+}
+
+/// Configuration for semantic analysis in JS AST grep.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum SemanticAnalysisConfig {
+    /// Simple mode: "file" or "workspace"
+    Mode(SemanticAnalysisMode),
+    /// Detailed configuration with custom root path
+    Detailed(SemanticAnalysisDetailed),
+}
+
+/// Simple semantic analysis mode.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum SemanticAnalysisMode {
+    /// Single-file analysis, no cross-file resolution
+    File,
+    /// Workspace-wide analysis with cross-file support
+    Workspace,
+}
+
+/// Detailed semantic analysis configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SemanticAnalysisDetailed {
+    /// Analysis mode
+    pub mode: SemanticAnalysisMode,
+    /// Custom workspace root path (only used when mode is "workspace")
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]

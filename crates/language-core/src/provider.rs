@@ -6,20 +6,20 @@ use std::path::Path;
 /// Provider mode determines the analysis strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderMode {
-    /// Lightweight mode: Per-file analysis with incremental caching.
+    /// FileScope mode: Single-file analysis with no cross-file resolution.
     /// - Fast startup, no upfront indexing
     /// - Caches symbols as files are processed
-    /// - Cross-file references resolved on-demand
-    /// - May miss some references if files haven't been processed
+    /// - Only finds references within the same file
+    /// - Best for quick dry runs or high-level analysis
     #[default]
-    Lightweight,
+    FileScope,
 
-    /// Accurate mode: Workspace-wide lazy indexing.
+    /// WorkspaceScope mode: Workspace-wide analysis with full cross-file support.
     /// - Full workspace analysis when semantic queries are made
     /// - Indexes files lazily on first query
-    /// - More accurate cross-file references
+    /// - Accurate cross-file references
     /// - Higher memory usage, slower initial queries
-    Accurate,
+    WorkspaceScope,
 }
 
 /// Core trait for semantic analysis providers.
@@ -28,10 +28,7 @@ pub enum ProviderMode {
 /// capabilities. The provider can operate in different modes depending
 /// on the accuracy/performance tradeoff desired.
 ///
-/// # Thread Safety
-///
-/// Implementations must be `Send + Sync` to allow concurrent access
-/// from multiple threads during codemod execution.
+/// # Thread Safe
 pub trait SemanticProvider: Send + Sync {
     /// Get the definition for a symbol at the given byte range.
     ///

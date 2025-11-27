@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
 use language_core::SemanticProvider;
-use language_javascript::OxcSemanticProvider;
+use semantic_factory::LazySemanticProvider;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -83,9 +83,10 @@ pub struct Command {
     #[arg(long)]
     pub expect_errors: Option<String>,
 
-    /// Enable semantic analysis for symbol indexing (getDefinition, findReferences)
+    /// Enable workspace-wide semantic analysis for cross-file references.
+    /// Uses the provided path as workspace root.
     #[arg(long)]
-    pub semantic: bool,
+    pub semantic_workspace: Option<PathBuf>,
 
     /// Allow fs access
     #[arg(long)]
@@ -162,14 +163,14 @@ pub async fn handler(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
-
-    // Create semantic provider if --semantic flag is set
-    let semantic_provider: Option<Arc<dyn SemanticProvider>> = if args.semantic {
-        Some(Arc::new(OxcSemanticProvider::lightweight()))
-    } else {
-        None
-    };
-
+    let semantic_provider: Option<Arc<dyn SemanticProvider>> =
+        if let Some(workspace_root) = &args.semantic_workspace {
+            Some(Arc::new(LazySemanticProvider::workspace_scope(
+                workspace_root.clone(),
+            )))
+        } else {
+            Some(Arc::new(LazySemanticProvider::file_scope()))
+        };
     let execution_fn = Box::new(
         move |input_code: &str,
               input_path: &Path,

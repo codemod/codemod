@@ -15,4 +15,3 @@ pub use types::{
     ByteRange, DefinitionResult, FileReferences, Position, ReferencesResult, SymbolKind,
     SymbolLocation,
 };
-

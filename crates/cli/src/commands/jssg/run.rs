@@ -16,7 +16,9 @@ use codemod_sandbox::sandbox::{
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_telemetry::send_event::BaseEvent;
+use language_core::SemanticProvider;
 use log::{debug, error, warn};
+use semantic_factory::LazySemanticProvider;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -68,6 +70,11 @@ pub struct Command {
     /// Allow child process access
     #[arg(long)]
     pub allow_child_process: bool,
+
+    /// Enable workspace-wide semantic analysis for cross-file references.
+    /// Uses the provided path as workspace root.
+    #[arg(long)]
+    pub semantic_workspace: Option<PathBuf>,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -158,6 +165,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
             };
 
+            let semantic_provider: Option<Arc<dyn SemanticProvider>> =
+                if let Some(workspace_root) = &args.semantic_workspace {
+                    Some(Arc::new(LazySemanticProvider::workspace_scope(
+                        workspace_root.clone(),
+                    )))
+                } else {
+                    Some(Arc::new(LazySemanticProvider::file_scope()))
+                };
+
             let options = JssgExecutionOptions {
                 script_path: js_file_path,
                 resolver: resolver.clone(),
@@ -172,7 +188,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 params: Some(params.clone()),
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
-                semantic_provider: None,
+                semantic_provider,
             };
 
             // Execute the codemod on this file

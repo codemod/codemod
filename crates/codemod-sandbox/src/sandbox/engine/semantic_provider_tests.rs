@@ -205,7 +205,7 @@ export default function transform(root) {
 
     let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
 
-    let provider = OxcSemanticProvider::lightweight();
+    let provider = OxcSemanticProvider::file_scope();
 
     let options = JssgExecutionOptions {
         script_path: &codemod_path,
@@ -281,7 +281,7 @@ export default function transform(root) {
 
     let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
 
-    let provider = OxcSemanticProvider::lightweight();
+    let provider = OxcSemanticProvider::file_scope();
 
     let options = JssgExecutionOptions {
         script_path: &codemod_path,
@@ -367,7 +367,7 @@ export default function transform(root) {
 
     let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
 
-    let provider = OxcSemanticProvider::accurate(temp_dir.path().to_path_buf());
+    let provider = OxcSemanticProvider::workspace_scope(temp_dir.path().to_path_buf());
 
     let options = JssgExecutionOptions {
         script_path: &codemod_path,
@@ -461,7 +461,7 @@ export default function transform(root) {
 
     let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
 
-    let provider = OxcSemanticProvider::accurate(temp_dir.path().to_path_buf());
+    let provider = OxcSemanticProvider::workspace_scope(temp_dir.path().to_path_buf());
 
     let options = JssgExecutionOptions {
         script_path: &codemod_path,

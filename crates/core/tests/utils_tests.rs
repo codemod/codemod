@@ -5,6 +5,8 @@ use std::path::Path;
 
 use butterflow_core::utils;
 use butterflow_core::NodeType;
+use butterflow_models::step::SemanticAnalysisConfig;
+use butterflow_models::step::SemanticAnalysisMode;
 use butterflow_models::step::StepAction;
 use butterflow_models::step::UseAstGrep;
 use butterflow_models::step::UseJSAstGrep;
@@ -903,6 +905,9 @@ fix:
                         dry_run: Some(true),
                         language: Some("typescript".to_string()),
                         capabilities: None,
+                        semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                            SemanticAnalysisMode::File,
+                        )),
                     }),
                     env: None,
                     condition: None,
