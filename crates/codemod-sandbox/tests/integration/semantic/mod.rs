@@ -6,6 +6,9 @@
 //! - `python_tests`: Python semantic analysis
 //! - `common_tests`: Tests that apply to all languages (e.g., no provider configured)
 
+#[macro_use]
+pub mod fixtures;
+
 mod common_tests;
 mod javascript_tests;
 mod python_tests;

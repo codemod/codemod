@@ -3,7 +3,8 @@
 use crate::accurate::AccurateAnalyzer;
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
-    ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
 
@@ -75,6 +76,7 @@ impl SemanticProvider for OxcSemanticProvider {
         &self,
         file_path: &Path,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // We need the file content for analysis
         let content = std::fs::read_to_string(file_path).map_err(|e| {
@@ -85,8 +87,12 @@ impl SemanticProvider for OxcSemanticProvider {
         })?;
 
         match self {
-            Self::FileScope(analyzer) => analyzer.get_definition(file_path, &content, range),
-            Self::WorkspaceScope(analyzer) => analyzer.get_definition(file_path, &content, range),
+            Self::FileScope(analyzer) => {
+                analyzer.get_definition(file_path, &content, range, options)
+            }
+            Self::WorkspaceScope(analyzer) => {
+                analyzer.get_definition(file_path, &content, range, options)
+            }
         }
     }
 
@@ -145,10 +151,15 @@ impl OxcSemanticProvider {
         file_path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         match self {
-            Self::FileScope(analyzer) => analyzer.get_definition(file_path, content, range),
-            Self::WorkspaceScope(analyzer) => analyzer.get_definition(file_path, content, range),
+            Self::FileScope(analyzer) => {
+                analyzer.get_definition(file_path, content, range, options)
+            }
+            Self::WorkspaceScope(analyzer) => {
+                analyzer.get_definition(file_path, content, range, options)
+            }
         }
     }
 
@@ -232,6 +243,8 @@ mod tests {
 
     #[test]
     fn test_provider_get_definition() {
+        use language_core::DefinitionOptions;
+
         let provider = OxcSemanticProvider::file_scope();
 
         let content = r#"const x = 1;
@@ -244,8 +257,12 @@ const y = x + 2;"#;
         provider.notify_file_processed(&file_path, content).unwrap();
 
         // Get definition at the position of 'x' in 'const x'
-        let result =
-            provider.get_definition_with_content(&file_path, content, ByteRange::new(6, 7));
+        let result = provider.get_definition_with_content(
+            &file_path,
+            content,
+            ByteRange::new(6, 7),
+            DefinitionOptions::default(),
+        );
 
         assert!(result.is_ok());
         let definition = result.unwrap();

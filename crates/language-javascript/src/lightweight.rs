@@ -4,7 +4,8 @@ use crate::cache::SymbolCache;
 use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use language_core::{
-    ByteRange, DefinitionResult, FileReferences, ReferencesResult, SemanticResult, SymbolLocation,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ReferencesResult, SemanticResult, SymbolLocation,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,13 +37,15 @@ impl LightweightAnalyzer {
     ///
     /// In lightweight mode, this will:
     /// 1. Look for the symbol in the current file
-    /// 2. If it's an import, try to resolve from cached files
-    /// 3. Return None if the definition is not in the cache
+    /// 2. If it's an import, try to resolve from cached files (if `resolve_external` is true)
+    /// 3. Return the import statement if the module couldn't be resolved
+    /// 4. Return None if the definition is not in the cache
     pub fn get_definition(
         &self,
         file_path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // Ensure file is in cache
         if !self.cache.contains(file_path) {
@@ -73,18 +76,48 @@ impl LightweightAnalyzer {
                         symbol.name.clone(),
                     ),
                     content.to_string(),
+                    DefinitionKind::Local,
                 )));
             }
         }
 
         // Check if this is an import reference
         if let Some(import) = file_symbols.find_import_at(range) {
+            // If resolve_external is false, return the import statement directly
+            if !options.resolve_external {
+                return Ok(Some(DefinitionResult::new(
+                    SymbolLocation::new(
+                        file_path.to_path_buf(),
+                        import.range,
+                        language_core::SymbolKind::Import,
+                        import.local_name.clone(),
+                    ),
+                    content.to_string(),
+                    DefinitionKind::Import,
+                )));
+            }
+
             // Try to resolve the import from cached files
-            return self.resolve_import_definition(
+            match self.resolve_import_definition(
                 &import.module_specifier,
                 file_path,
                 &import.local_name,
-            );
+            )? {
+                Some(def) => return Ok(Some(def)),
+                None => {
+                    // Module couldn't be resolved, return the import statement
+                    return Ok(Some(DefinitionResult::new(
+                        SymbolLocation::new(
+                            file_path.to_path_buf(),
+                            import.range,
+                            language_core::SymbolKind::Import,
+                            import.local_name.clone(),
+                        ),
+                        content.to_string(),
+                        DefinitionKind::Import,
+                    )));
+                }
+            }
         }
 
         // Check if this is a direct symbol definition
@@ -97,6 +130,7 @@ impl LightweightAnalyzer {
                     symbol.name.clone(),
                 ),
                 content.to_string(),
+                DefinitionKind::Local,
             )));
         }
 
@@ -196,6 +230,7 @@ impl LightweightAnalyzer {
     }
 
     /// Try to resolve an import to its definition.
+    /// Returns `DefinitionKind::External` for successfully resolved cross-file definitions.
     fn resolve_import_definition(
         &self,
         module_specifier: &str,
@@ -238,6 +273,7 @@ impl LightweightAnalyzer {
                                         symbol.name.clone(),
                                     ),
                                     file_content,
+                                    DefinitionKind::External,
                                 )));
                             }
                         }
@@ -250,6 +286,7 @@ impl LightweightAnalyzer {
                                 export.name.clone(),
                             ),
                             file_content,
+                            DefinitionKind::External,
                         )));
                     }
 
@@ -264,6 +301,7 @@ impl LightweightAnalyzer {
                                     "default".to_string(),
                                 ),
                                 file_content,
+                                DefinitionKind::External,
                             )));
                         }
                     }
@@ -322,6 +360,7 @@ const y = x + 2;"#;
             Path::new("test.ts"),
             content,
             ByteRange::new(6, 7), // "x" in "const x"
+            DefinitionOptions::default(),
         );
 
         assert!(result.is_ok());
@@ -330,6 +369,7 @@ const y = x + 2;"#;
         let def = definition.unwrap();
         assert_eq!(def.location.name, "x");
         assert!(!def.content.is_empty());
+        assert_eq!(def.kind, DefinitionKind::Local);
     }
 
     #[test]

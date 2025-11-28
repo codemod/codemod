@@ -187,6 +187,34 @@ impl CodemodExecutionConfig {
         Ok(count)
     }
 
+    /// Collect all files that will be processed into a Vec
+    /// This is useful for pre-processing files (e.g., semantic analysis indexing)
+    pub fn collect_files(&self) -> Vec<PathBuf> {
+        let search_base = match self.get_search_base() {
+            Ok(base) => base,
+            Err(_) => return Vec::new(),
+        };
+
+        let globs = match self.build_globs(&search_base) {
+            Ok(globs) => globs,
+            Err(_) => return Vec::new(),
+        };
+
+        let walker = self
+            .create_walk_builder(&search_base, globs)
+            .threads(1)
+            .build();
+
+        let mut files = Vec::new();
+        for dir_entry in walker.flatten() {
+            if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
+                files.push(dir_entry.path().to_path_buf());
+            }
+        }
+
+        files
+    }
+
     /// Create a configured WalkBuilder with all the standard settings
     fn create_walk_builder(&self, base_path: &Path, overrides: Option<Override>) -> WalkBuilder {
         let mut builder = WalkBuilder::new(base_path);

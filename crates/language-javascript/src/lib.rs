@@ -14,7 +14,7 @@
 //!
 //! ```no_run
 //! use language_javascript::OxcSemanticProvider;
-//! use language_core::{SemanticProvider, ByteRange, ProviderMode};
+//! use language_core::{SemanticProvider, ByteRange, ProviderMode, DefinitionOptions};
 //! use std::path::Path;
 //!
 //! // Create a file-scope provider for single-file analysis
@@ -32,7 +32,8 @@
 //! // Query for definitions, references, etc.
 //! let definition = provider.get_definition(
 //!     Path::new("src/main.ts"),
-//!     ByteRange::new(10, 13) // byte range of "add" reference
+//!     ByteRange::new(10, 13), // byte range of "add" reference
+//!     DefinitionOptions::default()
 //! ).unwrap();
 //! ```
 

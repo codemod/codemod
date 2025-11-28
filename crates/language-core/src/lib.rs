@@ -12,6 +12,6 @@ pub use error::{SemanticError, SemanticResult};
 pub use noop::NoopSemanticProvider;
 pub use provider::{ProviderMode, SemanticProvider};
 pub use types::{
-    ByteRange, DefinitionResult, FileReferences, Position, ReferencesResult, SymbolKind,
-    SymbolLocation,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences, Position,
+    ReferencesResult, SymbolKind, SymbolLocation,
 };

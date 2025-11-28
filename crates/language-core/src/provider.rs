@@ -1,6 +1,6 @@
 //! Core trait for semantic analysis providers.
 
-use crate::{ByteRange, DefinitionResult, ReferencesResult, SemanticResult};
+use crate::{ByteRange, DefinitionOptions, DefinitionResult, ReferencesResult, SemanticResult};
 use std::path::Path;
 
 /// Provider mode determines the analysis strategy.
@@ -39,16 +39,25 @@ pub trait SemanticProvider: Send + Sync {
     ///
     /// * `file_path` - Path to the file containing the symbol reference
     /// * `range` - Byte range of the symbol in the source file
+    /// * `options` - Options controlling definition resolution behavior
     ///
     /// # Returns
     ///
-    /// * `Ok(Some(result))` - The definition was found, includes file content
+    /// * `Ok(Some(result))` - The definition was found, includes file content and kind
     /// * `Ok(None)` - No definition found (e.g., external/built-in symbol)
     /// * `Err(e)` - An error occurred during lookup
+    ///
+    /// # Definition Kinds
+    ///
+    /// The returned `DefinitionResult` includes a `kind` field:
+    /// - `Local`: Definition is in the same file
+    /// - `Import`: Definition traced to an import statement (module couldn't be resolved)
+    /// - `External`: Definition resolved to a different file in the workspace
     fn get_definition(
         &self,
         file_path: &Path,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>>;
 
     /// Find all references to a symbol at the given byte range.
