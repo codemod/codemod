@@ -477,10 +477,22 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
 }
 
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let codemod_command = if let Some(package_manager) = &config.package_manager {
+        match package_manager.as_str() {
+            "npm" => "npx codemod@latest",
+            "yarn" => "yarn dlx codemod@latest",
+            "pnpm" => "pnpm dlx codemod@latest",
+            "bun" => "bunx codemod@latest",
+            _ => "npx codemod@latest",
+        }
+    } else {
+        "npx codemod@latest"
+    };
     // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
-        .replace("{description}", &config.description);
+        .replace("{description}", &config.description)
+        .replace("{codemod_command}", codemod_command);
 
     fs::write(project_path.join("package.json"), package_json)?;
 
@@ -705,7 +717,7 @@ fn run_post_init_commands(
             } else {
                 Select::new(
                     "Which package manager would you like to use?",
-                    vec!["npm", "yarn", "pnpm"],
+                    vec!["npm", "yarn", "pnpm", "bun"],
                 )
                 .prompt()?
                 .to_string()
