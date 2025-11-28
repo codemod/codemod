@@ -1,7 +1,7 @@
 {
   "name": "@codemod.com/jssg-types",
   "author": "Codemod, Inc.",
-  "version": "1.0.9",
+  "version": "1.3.0",
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
   "type": "module",
   "exports": {
@@ -28,8 +28,7 @@
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
-    "prepublishOnly": "cp -R ../../submodules/llrt/types ./src/"
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false"
   },
   "keywords": [
     "ast-grep",
