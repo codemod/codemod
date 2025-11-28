@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-core"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-models"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "chrono",
  "codemod-llrt-capabilities",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-runners"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-scheduler"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "butterflow-models",
  "chrono",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-state"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "codemod"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "ast-grep-config",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-ai"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "coro-core",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-llrt-capabilities"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "llrt_modules",
  "serde",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-mcp"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-sandbox"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-telemetry"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "language-core"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "language-javascript"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "ignore",
  "language-core",
@@ -3342,7 +3342,7 @@ dependencies = [
 
 [[package]]
 name = "language-python"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "language-core",
  "log",
@@ -7053,7 +7053,7 @@ checksum = "16c2f82143577edb4921b71ede051dac62ca3c16084e918bf7b40c96ae10eb33"
 
 [[package]]
 name = "semantic-factory"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "language-core",
  "language-javascript",
@@ -8611,7 +8611,7 @@ dependencies = [
 
 [[package]]
 name = "testing-utils"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "codemod-llrt-capabilities",
@@ -10412,7 +10412,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "butterflow-models",
