@@ -146,7 +146,36 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
+    // Create semantic provider once, shared across all files
+    let semantic_provider: Option<Arc<dyn SemanticProvider>> =
+        if let Some(workspace_root) = &args.semantic_workspace {
+            Some(Arc::new(LazySemanticProvider::workspace_scope(
+                workspace_root.clone(),
+            )))
+        } else {
+            Some(Arc::new(LazySemanticProvider::file_scope()))
+        };
+
+    // For workspace scope semantic analysis, pre-index all target files
+    if let Some(ref provider) = semantic_provider {
+        if provider.mode() == language_core::ProviderMode::WorkspaceScope {
+            let target_files: Vec<PathBuf> = config.collect_files();
+            for file_path in &target_files {
+                if file_path.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(file_path) {
+                        let _ = provider.notify_file_processed(file_path, &content);
+                    }
+                }
+            }
+        }
+    }
+
     let capabilities_for_closure = config.capabilities.clone();
+    let language: ast_grep_language::SupportLang = args
+        .language
+        .clone()
+        .parse()
+        .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
@@ -165,30 +194,17 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
             };
 
-            let semantic_provider: Option<Arc<dyn SemanticProvider>> =
-                if let Some(workspace_root) = &args.semantic_workspace {
-                    Some(Arc::new(LazySemanticProvider::workspace_scope(
-                        workspace_root.clone(),
-                    )))
-                } else {
-                    Some(Arc::new(LazySemanticProvider::file_scope()))
-                };
-
             let options = JssgExecutionOptions {
                 script_path: js_file_path,
                 resolver: resolver.clone(),
-                language: args
-                    .language
-                    .clone()
-                    .parse()
-                    .unwrap_or_else(|_| panic!("Invalid language: {}", args.language)),
+                language,
                 file_path,
                 content: &content,
                 selector_config: None,
                 params: Some(params.clone()),
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
-                semantic_provider,
+                semantic_provider: semantic_provider.clone(),
             };
 
             // Execute the codemod on this file
@@ -205,6 +221,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                 );
                             } else {
                                 debug!("Modified file: {}", file_path.display());
+                                // Notify semantic provider of the change
+                                if let Some(ref provider) = semantic_provider {
+                                    let _ = provider.notify_file_processed(file_path, new_content);
+                                }
                             }
                         } else if config.dry_run {
                             debug!("Would modify file (dry run): {}", file_path.display());

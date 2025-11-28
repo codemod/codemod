@@ -1869,6 +1869,10 @@ impl Engine {
                                             .fetch_add(1, Ordering::Relaxed);
                                     } else {
                                         debug!("Modified file: {}", file_path.display());
+                                        if let Some(ref provider) = semantic_provider {
+                                            let _ = provider
+                                                .notify_file_processed(file_path, new_content);
+                                        }
                                         self.execution_stats
                                             .files_modified
                                             .fetch_add(1, Ordering::Relaxed);

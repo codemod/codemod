@@ -100,6 +100,43 @@ export declare class SgRoot<M extends TypesMap = TypesMap> {
    * Returns `"anonymous"` if the instance is created by `lang.parse(source)`.
    */
   filename(): string;
+  /**
+   * Returns the source code of the file.
+   */
+  source(): string;
+  /**
+   * Write content to this file.
+   * 
+   * This method is only valid for files obtained via `definition()` or `references()`.
+   * It cannot be called on the current file being processed - for that, return the
+   * modified content from the `transform()` function instead.
+   * 
+   * After writing, the semantic provider's cache is automatically updated with the new content.
+   * 
+   * @param content - The new content to write to the file
+   * @throws Error if called on the current file being processed
+   * @throws Error if the file has no path
+   * @throws Error if the write operation fails
+   * 
+   * @example
+   * ```ts
+   * export default function transform(root) {
+   *   const node = root.root().find({ rule: { pattern: "myVar" } });
+   *   const def = node.definition();
+   *   
+   *   if (def && def.root.filename() !== root.filename()) {
+   *     // Edit the other file
+   *     const edits = [def.node.replace("newVar")];
+   *     const newContent = def.root.root().commitEdits(edits);
+   *     def.root.write(newContent);
+   *   }
+   *   
+   *   // Return changes for the current file
+   *   return root.root().commitEdits([...]);
+   * }
+   * ```
+   */
+  write(content: string): void;
 }
 
 interface NodeMethod<M extends TypesMap, Args extends unknown[] = []> {
