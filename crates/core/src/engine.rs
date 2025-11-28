@@ -1771,6 +1771,28 @@ impl Engine {
                 None => None,
             };
 
+        // For workspace scope semantic analysis, pre-index all target files
+        // This ensures cross-file references work correctly
+        if let Some(ref provider) = semantic_provider {
+            if provider.mode() == language_core::ProviderMode::WorkspaceScope {
+                let target_files: Vec<PathBuf> = config.collect_files();
+
+                for file_path in &target_files {
+                    if file_path.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(file_path) {
+                            if let Err(e) = provider.notify_file_processed(file_path, &content) {
+                                debug!(
+                                    "Failed to pre-index file {} for semantic analysis: {}",
+                                    file_path.display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Capture variables for use in parallel threads
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();

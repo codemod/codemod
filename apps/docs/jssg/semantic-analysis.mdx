@@ -49,27 +49,42 @@ Workspace-wide analysis that resolves cross-file imports and finds references ac
 
 ## API Reference
 
-### `node.definition()`
+### `node.definition(options?)`
 
 Get the definition location for the symbol at this node's position.
 
-<ParamField path="definition()" type="DefinitionResult | null">
-Returns an object containing the definition node and its root, or null if not found.
+<ParamField path="definition(options?)" type="DefinitionResult | null">
+Returns an object containing the definition node, its root, and the kind of definition, or null if not found.
 </ParamField>
 
 ```ts
+interface DefinitionOptions {
+  /** If false, stop at import statements without resolving. Default: true (in workspace scope mode) */
+  resolveExternal?: boolean;
+}
+
 interface DefinitionResult<M> {
   /** The AST node at the definition location */
   node: SgNode<M>;
   /** The SgRoot for the file containing the definition */
   root: SgRoot<M>;
+  /** The kind of definition: 'local', 'import', or 'external' */
+  kind: 'local' | 'import' | 'external';
 }
 ```
+
+**Definition kinds:**
+- `'local'` — Definition is in the same file (local variable, function, class, etc.)
+- `'import'` — Definition traced to an import statement, but module couldn't be resolved (e.g., external package)
+- `'external'` — Definition resolved to a different file in the workspace
 
 **Returns null when:**
 - No semantic provider is configured
 - No symbol is found at this position
-- The definition cannot be resolved (e.g., external library)
+
+<Note>
+When a symbol comes from an unresolved import (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement with `kind: 'import'` instead of returning `null`. This allows you to at least trace the symbol back to where it was imported.
+</Note>
 
 ### `node.references()`
 
@@ -193,8 +208,55 @@ const transform: Transform<TSX> = (root) => {
   if (def) {
     console.log("Definition found in:", def.root.filename());
     console.log("Definition text:", def.node.text());
+    console.log("Definition kind:", def.kind); // 'local', 'import', or 'external'
+    
+    // Handle different definition kinds
+    if (def.kind === 'import') {
+      console.log("Symbol comes from an unresolved import");
+    } else if (def.kind === 'external') {
+      console.log("Symbol defined in another file");
+    } else {
+      console.log("Symbol defined locally");
+    }
   } else {
     console.log("Definition not found");
+  }
+  
+  return null;
+};
+
+export default transform;
+```
+
+### Handling Unresolved Imports
+
+When you need to trace symbols from external modules that can't be resolved:
+
+```ts
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = (root) => {
+  const rootNode = root.root();
+  
+  // Find a symbol that might come from an external module
+  const symbol = rootNode.find({ rule: { pattern: "externalSymbol" } });
+  if (!symbol) return null;
+  
+  // By default, definition() tries to resolve imports
+  const def = symbol.definition();
+  
+  if (def && def.kind === 'import') {
+    // The import couldn't be resolved (e.g., node_modules not installed)
+    // but we still have the import statement
+    console.log("Symbol imported from:", def.node.text());
+  }
+  
+  // Or explicitly stop at imports without trying to resolve
+  const importDef = symbol.definition({ resolveExternal: false });
+  if (importDef) {
+    // Always returns the import statement for imported symbols
+    console.log("Import statement:", importDef.node.text());
   }
   
   return null;

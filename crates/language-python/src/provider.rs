@@ -2,7 +2,8 @@
 
 use crate::analyzer::{FileScopeAnalyzer, WorkspaceScopeAnalyzer};
 use language_core::{
-    ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,7 @@ impl SemanticProvider for RuffSemanticProvider {
         &self,
         file_path: &Path,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // We need the file content for analysis
         let content = std::fs::read_to_string(file_path).map_err(|e| {
@@ -82,10 +84,10 @@ impl SemanticProvider for RuffSemanticProvider {
 
         match self {
             Self::FileScope(analyzer) => analyzer
-                .get_definition(file_path, &content, range)
+                .get_definition(file_path, &content, range, options)
                 .map_err(Into::into),
             Self::WorkspaceScope(analyzer) => analyzer
-                .get_definition(file_path, &content, range)
+                .get_definition(file_path, &content, range, options)
                 .map_err(Into::into),
         }
     }
@@ -149,13 +151,14 @@ impl RuffSemanticProvider {
         file_path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         match self {
             Self::FileScope(analyzer) => analyzer
-                .get_definition(file_path, content, range)
+                .get_definition(file_path, content, range, options)
                 .map_err(Into::into),
             Self::WorkspaceScope(analyzer) => analyzer
-                .get_definition(file_path, content, range)
+                .get_definition(file_path, content, range, options)
                 .map_err(Into::into),
         }
     }

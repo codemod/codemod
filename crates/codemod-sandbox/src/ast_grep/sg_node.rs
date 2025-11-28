@@ -10,7 +10,9 @@ use ast_grep_language::SupportLang;
 #[cfg(feature = "native")]
 use language_core::SemanticProvider;
 
-use rquickjs::{class, class::Trace, methods, Ctx, Exception, IntoJs, JsLifetime, Result, Value};
+use rquickjs::{
+    class, class::Trace, methods, prelude::Opt, Ctx, Exception, IntoJs, JsLifetime, Result, Value,
+};
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -608,7 +610,11 @@ impl<'js> SgNodeRjs<'js> {
     /// - The definition cannot be resolved (e.g., external symbol)
     #[cfg(feature = "native")]
     #[qjs(rename = "definition")]
-    pub fn definition(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+    pub fn definition(
+        &self,
+        ctx: Ctx<'js>,
+        options: Opt<rquickjs::Object<'js>>,
+    ) -> Result<Value<'js>> {
         let provider = match &self.root.semantic_provider {
             Some(p) => p,
             None => return Ok(Value::new_null(ctx)),
@@ -619,13 +625,26 @@ impl<'js> SgNodeRjs<'js> {
             None => return Ok(Value::new_null(ctx)),
         };
 
+        // Parse options
+        let resolve_external = if let Some(opts) = options.0 {
+            opts.get::<_, Option<bool>>("resolveExternal")?
+                .unwrap_or(true)
+        } else {
+            true
+        };
+
+        let def_options = language_core::DefinitionOptions { resolve_external };
+
         let byte_range = self.inner_node.range();
         let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
 
-        match provider.get_definition(&file_path, range) {
+        match provider.get_definition(&file_path, range, def_options) {
             Ok(Some(def_result)) => {
                 let is_same_file = def_result.location.file_path == file_path;
                 let loc = &def_result.location;
+
+                // Convert DefinitionKind to string for JS
+                let kind_str = def_result.kind.as_str();
 
                 if is_same_file {
                     // Definition is in the same file, use existing root
@@ -653,6 +672,7 @@ impl<'js> SgNodeRjs<'js> {
                             _phantom: PhantomData,
                         };
                         result_obj.set("root", sg_root)?;
+                        result_obj.set("kind", kind_str)?;
 
                         return result_obj.into_js(&ctx);
                     }
@@ -684,6 +704,7 @@ impl<'js> SgNodeRjs<'js> {
                             };
                             result_obj.set("node", sg_node)?;
                             result_obj.set("root", new_root)?;
+                            result_obj.set("kind", kind_str)?;
 
                             return result_obj.into_js(&ctx);
                         }

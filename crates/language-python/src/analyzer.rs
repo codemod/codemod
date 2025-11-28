@@ -5,7 +5,8 @@ use crate::cache::{
 };
 use crate::error::{PySemanticError, PySemanticResult};
 use language_core::{
-    ByteRange, DefinitionResult, FileReferences, ReferencesResult, SymbolKind, SymbolLocation,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ReferencesResult, SymbolKind, SymbolLocation,
 };
 use ruff_python_parser::parse_module;
 use ruff_text_size::{Ranged, TextRange};
@@ -261,6 +262,7 @@ impl FileScopeAnalyzer {
         path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> PySemanticResult<Option<DefinitionResult>> {
         // Ensure file is processed
         self.process_file(path, content)?;
@@ -276,6 +278,27 @@ impl FileScopeAnalyzer {
         if let Some(reference) = file_symbols.find_reference_at(range) {
             // Find the binding this reference points to
             if let Some(symbol) = file_symbols.find_symbol_by_id(reference.binding_id) {
+                // Check if this is an import
+                let kind = if symbol.kind == SymbolKind::Import {
+                    // If resolve_external is false, return the import directly
+                    if !options.resolve_external {
+                        return Ok(Some(DefinitionResult::new(
+                            SymbolLocation::new(
+                                path.to_path_buf(),
+                                symbol.range,
+                                symbol.kind,
+                                symbol.name.clone(),
+                            ),
+                            content.to_string(),
+                            DefinitionKind::Import,
+                        )));
+                    }
+                    // In file-scope mode, we can't resolve imports, so return Import kind
+                    DefinitionKind::Import
+                } else {
+                    DefinitionKind::Local
+                };
+
                 return Ok(Some(DefinitionResult::new(
                     SymbolLocation::new(
                         path.to_path_buf(),
@@ -284,12 +307,19 @@ impl FileScopeAnalyzer {
                         symbol.name.clone(),
                     ),
                     content.to_string(),
+                    kind,
                 )));
             }
         }
 
         // Check if we're on a symbol definition itself
         if let Some(symbol) = file_symbols.find_symbol_at(range) {
+            let kind = if symbol.kind == SymbolKind::Import {
+                DefinitionKind::Import
+            } else {
+                DefinitionKind::Local
+            };
+
             return Ok(Some(DefinitionResult::new(
                 SymbolLocation::new(
                     path.to_path_buf(),
@@ -298,6 +328,7 @@ impl FileScopeAnalyzer {
                     symbol.name.clone(),
                 ),
                 content.to_string(),
+                kind,
             )));
         }
 
@@ -418,6 +449,7 @@ impl WorkspaceScopeAnalyzer {
         path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> PySemanticResult<Option<DefinitionResult>> {
         // Ensure file is processed
         self.process_file(path, content)?;
@@ -435,18 +467,65 @@ impl WorkspaceScopeAnalyzer {
             if let Some(symbol) = file_symbols.find_symbol_by_id(reference.binding_id) {
                 // Check if this is an import - if so, try to resolve to the source
                 if symbol.kind == SymbolKind::Import {
+                    // If resolve_external is false, return the import statement directly
+                    if !options.resolve_external {
+                        return Ok(Some(DefinitionResult::new(
+                            SymbolLocation::new(
+                                path.to_path_buf(),
+                                symbol.range,
+                                symbol.kind,
+                                symbol.name.clone(),
+                            ),
+                            content.to_string(),
+                            DefinitionKind::Import,
+                        )));
+                    }
+
+                    // Try to resolve the import
                     if let Some(import) = file_symbols.imports.iter().find(|i| {
                         i.range.start <= symbol.range.start && i.range.end >= symbol.range.end
                     }) {
                         // Try to resolve the import to a file
                         if let Some(resolved) = self.resolve_import(&import.module, path) {
-                            let resolved_content = std::fs::read_to_string(&resolved).ok();
-                            if let Some(content) = resolved_content {
+                            if let Ok(resolved_content) = std::fs::read_to_string(&resolved) {
                                 // Process the resolved file
-                                let _ = self.process_file(&resolved, &content);
+                                let _ = self.process_file(&resolved, &resolved_content);
+
+                                // Try to find the symbol in the resolved file
+                                if let Some(resolved_symbols) = self.cache.get(&resolved) {
+                                    let import_name = import.name.as_ref().unwrap_or(&symbol.name);
+                                    if let Some(target_symbol) = resolved_symbols
+                                        .symbols
+                                        .iter()
+                                        .find(|s| &s.name == import_name)
+                                    {
+                                        return Ok(Some(DefinitionResult::new(
+                                            SymbolLocation::new(
+                                                resolved.clone(),
+                                                target_symbol.range,
+                                                target_symbol.kind,
+                                                target_symbol.name.clone(),
+                                            ),
+                                            resolved_content,
+                                            DefinitionKind::External,
+                                        )));
+                                    }
+                                }
                             }
                         }
                     }
+
+                    // Module couldn't be resolved, return the import statement
+                    return Ok(Some(DefinitionResult::new(
+                        SymbolLocation::new(
+                            path.to_path_buf(),
+                            symbol.range,
+                            symbol.kind,
+                            symbol.name.clone(),
+                        ),
+                        content.to_string(),
+                        DefinitionKind::Import,
+                    )));
                 }
 
                 return Ok(Some(DefinitionResult::new(
@@ -457,12 +536,19 @@ impl WorkspaceScopeAnalyzer {
                         symbol.name.clone(),
                     ),
                     content.to_string(),
+                    DefinitionKind::Local,
                 )));
             }
         }
 
         // Check if we're on a symbol definition itself
         if let Some(symbol) = file_symbols.find_symbol_at(range) {
+            let kind = if symbol.kind == SymbolKind::Import {
+                DefinitionKind::Import
+            } else {
+                DefinitionKind::Local
+            };
+
             return Ok(Some(DefinitionResult::new(
                 SymbolLocation::new(
                     path.to_path_buf(),
@@ -471,6 +557,7 @@ impl WorkspaceScopeAnalyzer {
                     symbol.name.clone(),
                 ),
                 content.to_string(),
+                kind,
             )));
         }
 
@@ -544,6 +631,27 @@ impl WorkspaceScopeAnalyzer {
                     if import.name.as_ref() == Some(&symbol_name)
                         || import.alias.as_ref() == Some(&symbol_name)
                     {
+                        // IMPORTANT: Verify that this import actually comes from the file
+                        // where the symbol is defined, not just any file with the same symbol name
+                        if let Some(resolved_import_path) =
+                            self.resolve_import(&import.module, &cached_path)
+                        {
+                            // Normalize both paths for comparison
+                            let resolved_canonical = resolved_import_path
+                                .canonicalize()
+                                .unwrap_or(resolved_import_path);
+                            let path_canonical =
+                                path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+                            if resolved_canonical != path_canonical {
+                                // This import is from a different file, skip it
+                                continue;
+                            }
+                        } else {
+                            // Could not resolve the import, skip it to avoid false positives
+                            continue;
+                        }
+
                         // Find references to this import in the other file
                         if let Some(import_symbol) = other_symbols.symbols.iter().find(|s| {
                             s.range.start >= import.range.start && s.range.end <= import.range.end

@@ -1,0 +1,12 @@
+version: "1"
+
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    steps:
+      - name: "Scan python files and apply fixes"
+        js-ast-grep:
+          js_file: fixtures/codemods/py_false_positive_references.js
+          language: "python"
+          semantic_analysis: workspace
+          max_threads: 1

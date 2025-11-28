@@ -4,7 +4,8 @@ use crate::cache::SymbolCache;
 use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use language_core::{
-    ByteRange, DefinitionResult, FileReferences, ReferencesResult, SemanticResult, SymbolLocation,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ReferencesResult, SemanticResult, SymbolLocation,
 };
 use oxc_resolver::{ResolveOptions, Resolver};
 use parking_lot::RwLock;
@@ -136,6 +137,7 @@ impl AccurateAnalyzer {
         file_path: &Path,
         content: &str,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // Ensure the file is indexed
         self.process_file(file_path, content)?;
@@ -166,19 +168,50 @@ impl AccurateAnalyzer {
                         symbol.name.clone(),
                     ),
                     content.to_string(),
+                    DefinitionKind::Local,
                 )));
             }
         }
 
         // Check if this is an import
         if let Some(import) = file_symbols.find_import_at(range) {
-            return self.resolve_import_definition(
+            // If resolve_external is false, return the import statement directly
+            if !options.resolve_external {
+                return Ok(Some(DefinitionResult::new(
+                    SymbolLocation::new(
+                        canonical,
+                        import.range,
+                        language_core::SymbolKind::Import,
+                        import.local_name.clone(),
+                    ),
+                    content.to_string(),
+                    DefinitionKind::Import,
+                )));
+            }
+
+            // Try to resolve the import
+            match self.resolve_import_definition(
                 &import.module_specifier,
                 &canonical,
                 &import.local_name,
                 import.imported_name.as_deref(),
                 import.is_default,
-            );
+            )? {
+                Some(def) => return Ok(Some(def)),
+                None => {
+                    // Module couldn't be resolved, return the import statement
+                    return Ok(Some(DefinitionResult::new(
+                        SymbolLocation::new(
+                            canonical,
+                            import.range,
+                            language_core::SymbolKind::Import,
+                            import.local_name.clone(),
+                        ),
+                        content.to_string(),
+                        DefinitionKind::Import,
+                    )));
+                }
+            }
         }
 
         // Check if this is a direct symbol
@@ -186,6 +219,7 @@ impl AccurateAnalyzer {
             return Ok(Some(DefinitionResult::new(
                 SymbolLocation::new(canonical, symbol.range, symbol.kind, symbol.name.clone()),
                 content.to_string(),
+                DefinitionKind::Local,
             )));
         }
 
@@ -343,6 +377,7 @@ impl AccurateAnalyzer {
     }
 
     /// Resolve an import to its definition.
+    /// Returns `DefinitionKind::External` for successfully resolved cross-file definitions.
     fn resolve_import_definition(
         &self,
         module_specifier: &str,
@@ -383,6 +418,7 @@ impl AccurateAnalyzer {
                             symbol.name.clone(),
                         ),
                         file_content,
+                        DefinitionKind::External,
                     )));
                 }
             }
@@ -394,6 +430,7 @@ impl AccurateAnalyzer {
                     export.name.clone(),
                 ),
                 file_content,
+                DefinitionKind::External,
             )));
         }
 
@@ -408,6 +445,7 @@ impl AccurateAnalyzer {
                         "default".to_string(),
                     ),
                     file_content,
+                    DefinitionKind::External,
                 )));
             }
         }
@@ -504,7 +542,12 @@ console.log(PI);
 
         // Find definition of 'add' function
         // "add" appears at byte 17 in "export function add"
-        let result = analyzer.get_definition(&file_path, &content, ByteRange::new(17, 20));
+        let result = analyzer.get_definition(
+            &file_path,
+            &content,
+            ByteRange::new(17, 20),
+            DefinitionOptions::default(),
+        );
 
         assert!(result.is_ok());
         let definition = result.unwrap();
@@ -514,6 +557,7 @@ console.log(PI);
         assert_eq!(def.location.name, "add");
         assert_eq!(def.location.kind, language_core::SymbolKind::Function);
         assert!(!def.content.is_empty());
+        assert_eq!(def.kind, DefinitionKind::Local);
     }
 
     #[test]
@@ -567,6 +611,7 @@ console.log(x);
             &main_path,
             &content,
             ByteRange::new(add_pos as u32, (add_pos + 3) as u32),
+            DefinitionOptions::default(),
         );
 
         assert!(result.is_ok());
@@ -576,6 +621,7 @@ console.log(x);
             assert_eq!(def.location.name, "add");
             assert!(def.location.file_path.to_string_lossy().contains("utils"));
             assert!(!def.content.is_empty());
+            assert_eq!(def.kind, DefinitionKind::External);
         }
     }
 

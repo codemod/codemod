@@ -4,7 +4,8 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use language_core::{
-    ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult,
 };
 
 use crate::config::SemanticConfig;
@@ -102,10 +103,11 @@ impl SemanticProvider for LazySemanticProvider {
         &self,
         file_path: &Path,
         range: ByteRange,
+        options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         let lang = Self::detect_language(file_path);
         match self.get_or_init(lang) {
-            Some(provider) => provider.get_definition(file_path, range),
+            Some(provider) => provider.get_definition(file_path, range, options),
             None => Ok(None), // Unsupported language
         }
     }
@@ -180,7 +182,11 @@ mod tests {
         assert!(provider.inner.get().is_none());
 
         // Trigger initialization
-        let _ = provider.get_definition(&file_path, ByteRange::new(6, 7));
+        let _ = provider.get_definition(
+            &file_path,
+            ByteRange::new(6, 7),
+            DefinitionOptions::default(),
+        );
 
         // Now initialized
         assert!(provider.inner.get().is_some());
@@ -193,7 +199,11 @@ mod tests {
         fs::write(&file_path, ".body { color: red; }").unwrap();
 
         let provider = LazySemanticProvider::file_scope();
-        let result = provider.get_definition(&file_path, ByteRange::new(0, 5));
+        let result = provider.get_definition(
+            &file_path,
+            ByteRange::new(0, 5),
+            DefinitionOptions::default(),
+        );
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -266,7 +276,11 @@ mod tests {
         assert!(provider.inner.get().is_none());
 
         // Trigger initialization with Python file
-        let _ = provider.get_definition(&file_path, ByteRange::new(0, 1));
+        let _ = provider.get_definition(
+            &file_path,
+            ByteRange::new(0, 1),
+            DefinitionOptions::default(),
+        );
 
         // Now initialized
         assert!(provider.inner.get().is_some());

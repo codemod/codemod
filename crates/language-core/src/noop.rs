@@ -1,7 +1,8 @@
 //! No-op semantic provider for languages without symbol indexing support.
 
 use crate::{
-    ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult,
 };
 use std::path::Path;
 
@@ -42,6 +43,7 @@ impl SemanticProvider for NoopSemanticProvider {
         &self,
         _file_path: &Path,
         _range: ByteRange,
+        _options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // No-op: always returns None
         Ok(None)
@@ -83,8 +85,13 @@ mod tests {
 
     #[test]
     fn test_noop_get_definition() {
+        use crate::DefinitionOptions;
         let provider = NoopSemanticProvider::new();
-        let result = provider.get_definition(Path::new("test.css"), ByteRange::new(0, 10));
+        let result = provider.get_definition(
+            Path::new("test.css"),
+            ByteRange::new(0, 10),
+            DefinitionOptions::default(),
+        );
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
     }

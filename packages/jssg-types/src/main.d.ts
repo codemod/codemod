@@ -57,15 +57,21 @@ export declare class SgNode<
    * Returns an object containing:
    * - `node`: The SgNode at the definition location
    * - `root`: The SgRoot for the file containing the definition
+   * - `kind`: The kind of definition ('local', 'import', or 'external')
    * 
    * Returns null if:
    * - No semantic provider is configured
    * - No symbol is found at this position
-   * - The definition cannot be resolved (e.g., external symbol)
    * 
-   * @returns An object with the definition node and its root, or null
+   * When a symbol comes from an import that can't be resolved (e.g., external module),
+   * the definition will point to the import statement with `kind: 'import'`.
+   * 
+   * @param options - Optional settings for definition lookup
+   * @param options.resolveExternal - If false, stop at import statements without
+   *   attempting to resolve the source module. Default: true
+   * @returns An object with the definition node, its root, and kind, or null
    */
-  definition(): DefinitionResult<M> | null;
+  definition(options?: DefinitionOptions): DefinitionResult<M> | null;
 
   /**
    * Find all references to the symbol at this node's position.
@@ -346,11 +352,33 @@ export interface Range {
 /**
  * Result of getDefinition() - contains the definition node and its root.
  */
+/**
+ * The kind of definition that was found.
+ * - 'local': Definition is in the same file (local variable, function, class, etc.)
+ * - 'import': Definition traced to an import statement but module couldn't be resolved
+ * - 'external': Definition resolved to a different file in the workspace
+ */
+export type DefinitionKind = 'local' | 'import' | 'external';
+
+/**
+ * Options for definition lookup.
+ */
+export interface DefinitionOptions {
+  /**
+   * If true, attempt to resolve imports to their source modules.
+   * If false, stop at the import statement.
+   * @default true
+   */
+  resolveExternal?: boolean;
+}
+
 export interface DefinitionResult<M extends TypesMap = TypesMap> {
   /** The SgNode at the definition location */
   node: SgNode<M>;
   /** The SgRoot for the file containing the definition */
   root: SgRoot<M>;
+  /** The kind of definition (local, import, or external) */
+  kind: DefinitionKind;
 }
 
 /**

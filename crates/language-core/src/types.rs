@@ -201,6 +201,62 @@ impl ReferencesResult {
     }
 }
 
+/// The kind of definition that was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DefinitionKind {
+    /// Definition is in the same file (local variable, function, class, etc.)
+    Local,
+    /// Definition traced to an import statement but module couldn't be resolved
+    Import,
+    /// Definition resolved to a different file in the workspace
+    External,
+}
+
+impl DefinitionKind {
+    /// Returns a human-readable name for the definition kind.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DefinitionKind::Local => "local",
+            DefinitionKind::Import => "import",
+            DefinitionKind::External => "external",
+        }
+    }
+}
+
+/// Options for definition lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefinitionOptions {
+    /// If true, attempt to resolve imports to their source modules.
+    /// If false, stop at the import statement.
+    /// Default: true
+    pub resolve_external: bool,
+}
+
+impl Default for DefinitionOptions {
+    fn default() -> Self {
+        Self {
+            resolve_external: true,
+        }
+    }
+}
+
+impl DefinitionOptions {
+    /// Create options that resolve external imports (default behavior).
+    pub fn resolve() -> Self {
+        Self {
+            resolve_external: true,
+        }
+    }
+
+    /// Create options that stop at import statements.
+    pub fn no_resolve() -> Self {
+        Self {
+            resolve_external: false,
+        }
+    }
+}
+
 /// Result of getting a definition - includes file content for SgRoot creation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DefinitionResult {
@@ -208,12 +264,18 @@ pub struct DefinitionResult {
     pub location: SymbolLocation,
     /// Source content of the file (needed to create SgRoot)
     pub content: String,
+    /// The kind of definition (local, import, or external)
+    pub kind: DefinitionKind,
 }
 
 impl DefinitionResult {
     /// Create a new definition result.
-    pub fn new(location: SymbolLocation, content: String) -> Self {
-        Self { location, content }
+    pub fn new(location: SymbolLocation, content: String, kind: DefinitionKind) -> Self {
+        Self {
+            location,
+            content,
+            kind,
+        }
     }
 }
 
