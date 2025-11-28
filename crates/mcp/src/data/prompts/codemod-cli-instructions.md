@@ -1,15 +1,21 @@
+# Codemod CLI Documentation
+
 The Codemod CLI is a self-hostable workflow engine designed for running large-scale code transformation jobs. It provides:
 
-- **Multiple transformation approaches**: YAML-based ast-grep rules, TypeScript-based JSSG codemods, shell scripts, and hybrid workflows
+- **Multiple transformation approaches**: TypeScript-based JSSG codemods, shell scripts, and hybrid workflows
 - **Workflow orchestration**: Define complex multi-step transformations with conditional logic
 - **Language support**: JavaScript, TypeScript, Python, Go, Rust, and many more
 - **Registry integration**: Publish and share codemods with the community
 - **Testing framework**: Built-in testing capabilities for reliable transformations
+- **Semantic analysis**: Cross-file symbol definitions and references (JavaScript/TypeScript and Python)
+
+**For writing codemods**, see the `jssg-instructions` document which covers ast-grep fundamentals, pattern matching, and codemod development.
 
 ## Installation and Setup
 
 ### Prerequisites
 
+- Node.js with npx (or pnpm/yarn/bun)
 - Basic understanding of code transformations
 - Familiarity with YAML for workflow configuration
 
@@ -21,7 +27,7 @@ Install and run Codemod CLI using npx:
 # Run a codemod from the registry
 npx codemod@latest run <package-name>
 
-# Initialize a new codemod project - This command is interactive. You should supply options for a non-interactive experience
+# Initialize a new codemod project
 npx codemod@latest init
 
 # View all available commands
@@ -32,16 +38,16 @@ npx codemod@latest --help
 
 When initializing a new codemod project, you can choose from several project types:
 
-### 1. JavaScript AST-Grep (`ast-grep-js`)
+### 1. JavaScript AST-Grep (`ast-grep-js`) - Recommended
 
 TypeScript-based codemods using the JSSG framework:
 
 ```bash
 npx codemod@latest init ./path/to/dir \
-  --name my-jssg-codemod \ # project name
-  --project-type ast-grep-js \ # required for non-interactive
+  --name my-jssg-codemod \
+  --project-type ast-grep-js \
   --package-manager pnpm \
-  --language typescript \ # required for non-interactive
+  --language typescript \
   --no-interactive
 ```
 
@@ -50,24 +56,7 @@ Best for:
 - Type-safe AST manipulations
 - Reusable utility functions
 
-### 2. Hybrid Workflow (`hybrid`)
-
-Multi-step workflows combining different transformation approaches:
-
-```bash
-npx codemod@latest init my-hybrid-codemod \
-  --name my-codemod \
-  --project-type hybrid \
-  --language typescript \
-  --no-interactive
-```
-
-Best for:
-- Complex transformations requiring multiple tools
-- Combining ast-grep with shell commands
-- Orchestrating multiple transformation steps
-
-### 3. YAML AST-Grep (`ast-grep-yaml`) - Legacy
+### 2. YAML AST-Grep (`ast-grep-yaml`) - Legacy
 
 Pure YAML-based ast-grep rules:
 
@@ -78,25 +67,15 @@ npx codemod@latest init my-yaml-codemod \
   --no-interactive
 ```
 
-Best for:
-- Simple pattern-based transformations
-- Quick rule-based changes
-- No custom logic needed
-
-### 4. Shell Command (`shell`) - Legacy
+### 3. Shell Command (`shell`) - Legacy
 
 Shell script-based transformations:
 
 ```bash
 npx codemod@latest init my-shell-codemod \
-  --project-type shell
+  --project-type shell \
   --no-interactive
 ```
-
-Best for:
-- File operations
-- Integration with external tools
-- Simple text replacements
 
 ## Codemod Configuration
 
@@ -159,7 +138,6 @@ nodes:
         name: Find deprecated patterns
         command: |
           echo "Analyzing codebase..."
-          # Your analysis logic here
 
   - id: transform
     name: Apply transformations
@@ -244,13 +222,27 @@ steps:
         - "**/*.tsx"
 ```
 
-For more information about how to write ast-grep YAML rules or JSSG codemods, check the corresponding resources.
+#### 4. Semantic Analysis Configuration
+
+Enable cross-file symbol analysis for JSSG codemods (JavaScript/TypeScript and Python only):
+
+```yaml
+steps:
+  - id: transform-with-semantics
+    name: Transform with cross-file analysis
+    js-ast-grep:
+      js_file: "scripts/codemod.ts"
+      semantic_analysis: workspace  # Enable workspace-wide analysis
+```
+
+**Semantic analysis modes:**
+- `file` — Single-file analysis (default, fast)
+- `workspace` — Cross-file analysis with import resolution
+- `{ mode: workspace, root: "./path" }` — Workspace with custom root
 
 ## CLI Commands
 
-### Core Commands
-
-#### Initialize a Project
+### Initialize a Project
 
 ```bash
 npx codemod@latest init [PATH] [OPTIONS]
@@ -268,33 +260,39 @@ Options:
   --no-interactive   Skip interactive prompts
 ```
 
-#### Workflow Management
+### Workflow Management
 
 ```bash
 # List available workflows
 npx codemod@latest workflow list
 
-# Run a workflow
-npx codemod@latest workflow run workflow.yaml
+# Run a workflow on a target directory
+npx codemod workflow run -w /path/to/workflow.yaml -t /path/to/target
 
 # Validate workflow syntax
 npx codemod@latest workflow validate workflow.yaml
 ```
 
-#### Testing
+### JSSG Commands
 
 ```bash
 # Test JSSG codemods
-npx codemod@latest jssg test -l typescript ./codemods/transform.ts
+npx codemod jssg test -l typescript ./codemods/transform.ts
 
 # Test with specific directory
-npx codemod@latest jssg test -l typescript ./codemods/transform.ts ./tests
+npx codemod jssg test -l typescript ./codemods/transform.ts ./tests
 
 # Update test snapshots
-npx codemod@latest jssg test -l typescript ./codemods/transform.ts -u
+npx codemod jssg test -l typescript ./codemods/transform.ts -u
+
+# Test with semantic analysis enabled
+npx codemod jssg test -l typescript ./codemods/transform.ts --semantic-workspace /path/to/project
+
+# Run a codemod directly
+npx codemod jssg run -l typescript ./codemods/transform.ts ./target
 ```
 
-#### Publishing
+### Publishing
 
 ```bash
 # Login to registry
@@ -330,7 +328,7 @@ npx codemod@latest run @scope/codemod-name
 
 3. **Test thoroughly**:
    ```bash
-   npm test
+   pnpm test
    npx codemod@latest workflow validate workflow.yaml
    ```
 
@@ -359,23 +357,6 @@ npx codemod@latest run @yourscope/codemod-name \
   --dry-run
 ```
 
-### 4. Testing Strategy
-
-**Create comprehensive test coverage**:
-
-```
-tests/
-├── basic/
-│   ├── input.ts
-│   └── expected.ts
-├── edge-cases/
-│   ├── empty-file/
-│   ├── syntax-errors/
-│   └── complex-nesting/
-└── integration/
-    └── full-project/
-```
-
 ## Language Support
 
 The workflow engine supports the following languages:
@@ -383,7 +364,7 @@ The workflow engine supports the following languages:
 - JavaScript (`javascript`, `js`)
 - TypeScript (`typescript`, `ts`)
 - JSX (`jsx`)
-- TSX (`tsx`) <-- Remember, tsx is different from ts
+- TSX (`tsx`) — Use TSX for any JSX code
 - Python (`python`)
 - Go (`go`)
 - Rust (`rust`)
@@ -397,3 +378,11 @@ The workflow engine supports the following languages:
 - Kotlin (`kotlin`)
 - Scala (`scala`)
 - And more...
+
+**Semantic Analysis Support:** Cross-file symbol analysis (`definition()`, `references()`) is only available for:
+- JavaScript/TypeScript (using [oxc](https://oxc.rs/))
+- Python (using [ruff](https://docs.astral.sh/ruff/))
+
+Other languages return no-op results for semantic methods.
+
+For more information about ast-grep: https://ast-grep.github.io/llms.txt
