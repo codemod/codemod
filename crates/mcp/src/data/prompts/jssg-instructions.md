@@ -1,20 +1,164 @@
-# JavaScript ast-grep (JSSG) Codemod Documentation
+# JSSG Codemod Documentation
 
-This guide provides comprehensive documentation for creating and working with JavaScript ast-grep (JSSG) codemods using the Codemod CLI. JSSG enables powerful, type-safe AST transformations for any codebases of any language supported by ast-grep.
+This guide provides comprehensive documentation for creating codemods using JavaScript ast-grep (JSSG) on the Codemod platform. JSSG enables powerful, type-safe AST transformations for any language supported by ast-grep.
 
-JSSG provides a powerful, type-safe approach to JavaScript and TypeScript code transformation. By following these guidelines and best practices, you can create robust codemods that:
+## Critical Constraints
 
-- Transform code reliably and predictably
-- Handle edge cases gracefully
-- Maintain high performance on large codebases
-- Provide excellent developer experience
+* **Use only JSSG** on the Codemod platform. Do **not** use jscodeshift, ts-morph, etc.
+* **Use the Codemod CLI** for all operations (scaffold, run, test).
+* Prefer **TypeScript** everywhere. Use `.ts`/`.tsx` (TSX for JSX) because TS/TSX are supersets of JS and parse JSX more robustly.
+* **Never use type `any`** in your code.
 
 ## Prerequisites
-You MUST check `ast-grep-instructions` and `codemod-cli-instructions` instructions in addition to this doc. Do not continue without checking those docs.
 
-## Introduction
+- Codemod CLI via `npx codemod` (nodejs with npx, pnpx, yarn dlx or bun with bunx)
+- Basic understanding of Abstract Syntax Trees (AST)
+- TypeScript knowledge
+- Familiarity with `codemod-cli-instructions` for project setup and workflow configuration
 
-### What is JSSG?
+---
+
+# Part 1: ast-grep Fundamentals
+
+## How ast-grep Works
+
+ast-grep works by:
+1. Parsing source code into an AST (Abstract Syntax Tree)
+2. Matching nodes in that tree using rules you define
+3. Optionally transforming or reporting on matched code
+
+When writing rules, prioritize correctness and clarity over complexity.
+
+## Patterns Are AST Signatures, Not Text
+
+**Core concept:** When you write a `pattern`, ast-grep **parses your snippet into an AST** and matches code with the *same syntactic structure*. It is **not** textual matching.
+
+**Why patterns can fail (JSX example):**
+- If you write `pattern: "dangerouslySetInnerHTML={$C}"` without JSX context, the parser treats it as an assignment expression (`dangerouslySetInnerHTML = $C`), not a JSX attribute.
+- **Fix:** Either give proper JSX context (`<$E dangerouslySetInnerHTML={$C} $$$REST>`) or use declarative rules with `kind`:
+
+```typescript
+// Match JSX attribute by kind instead of pattern
+const attrs = rootNode.findAll({
+  rule: {
+    kind: "jsx_attribute",
+    has: {
+      kind: "property_identifier",
+      regex: "^dangerouslySetInnerHTML$"
+    }
+  }
+});
+```
+
+**JSX note:** `jsx_attribute` does NOT expose a field named `"name"`. To match the attribute name, target its `property_identifier` child via `has`.
+
+## Meta-variables: `$`, `$$`, `$$$`
+
+* **`$VAR`**: matches **one** AST node (named nodes by default)
+* **`$$VAR`**: matches **one unnamed** node (punctuation, operators, keywords)
+* **`$$$VAR`**: matches a **sequence (zero or more)** of nodes (lazy matching)
+
+### CRITICAL: No Partial Matching in Meta-variables
+
+Meta-variables match **entire AST nodes**, not partial text. You **cannot** write `md5$VAR` or `prefix$VAR`.
+
+❌ **WRONG:**
+```typescript
+// INVALID — you can't do partial matching
+rootNode.find({ rule: { pattern: "DigestUtils.md5$VAR($$$ARGS)" } });
+```
+
+✅ **CORRECT:**
+```typescript
+// Capture the whole identifier, then filter with constraints
+rootNode.findAll({
+  rule: {
+    pattern: "DigestUtils.$VAR($$$ARGS)",
+    constraints: {
+      VAR: { regex: "^md5" }
+    }
+  }
+});
+```
+
+## Using `stopBy` for Relational Rules
+
+Relational rules (`has`, `inside`, `precedes`, `follows`) can use `stopBy` to control search depth:
+
+* **`stopBy: "neighbor"`**: search only immediate neighbors
+* **`stopBy: "end"`**: search to the boundary (full ascent/descent)
+* **`stopBy: <Rule>`**: search until a custom boundary rule matches
+
+```typescript
+// Find a string literal anywhere inside a call_expression ancestor
+rootNode.findAll({
+  rule: {
+    kind: "string",
+    inside: {
+      kind: call_expression",
+      stopBy: "end"
+    }
+  }
+});
+```
+
+Use `stopBy: "end"` when your relation should be "any ancestor/descendant until the structural boundary."
+
+## Rule Types Reference
+
+**For structural matching**, use `pattern` rules with meta-variables.
+
+**For precise node selection**, combine atomic rules:
+- `kind` to match specific AST node types
+- `regex` for text-based filtering when structure isn't enough
+- `nthChild` for positional selection
+
+**For contextual matching**, leverage relational rules:
+- `inside` to ensure nodes appear within specific contexts
+- `has` to find nodes containing certain children
+- `precedes`/`follows` for sequential relationships
+
+**For complex logic**, use composite rules thoughtfully:
+- `all` when multiple conditions must be true
+- `any` for alternative patterns
+- `not` to exclude specific cases
+
+## YAML Rule Structure (for reference)
+
+While JSSG uses TypeScript, understanding the YAML structure helps:
+
+```yaml
+id: descriptive-rule-name
+language: JavaScript
+rule:
+  pattern: 'code pattern with $META_VARS'
+constraints:
+  META_VAR: { additional rules for the meta-variable }
+fix: 'replacement code using $META_VARS'
+message: 'Clear explanation of what was found'
+```
+
+### Transform Operations
+
+Available transformations for meta-variables in YAML rules:
+- `substring`: Extract portions of matched text
+- `replace`: Perform text substitution
+- `convert`: Change naming conventions (camelCase, snake_case, etc.)
+
+### Pattern Disambiguation
+
+For ambiguous patterns, use context and selector:
+```yaml
+pattern:
+  context: '{ key: value }'
+  selector: pair
+```
+
+---
+
+# Part 2: Writing JSSG Codemods
+
+## What is JSSG?
 
 JavaScript ast-grep (JSSG) is a TypeScript-based codemod framework that leverages ast-grep's powerful AST pattern matching capabilities while providing:
 
@@ -23,42 +167,7 @@ JavaScript ast-grep (JSSG) is a TypeScript-based codemod framework that leverage
 - **Testing Framework**: Built-in test runner with snapshot testing
 - **Cross-Platform**: Works seamlessly across different operating systems
 - **Language Support**: JavaScript, TypeScript, JSX, TSX, Python, Go, Rust, and more
-
-### When to Use JSSG
-
-JSSG excels at structural code transformations that require:
-
-- Complex AST traversal and manipulation
-- Type-safe node operations
-- Reusable transformation logic
-- Comprehensive test coverage
-
-## Getting Started
-
-### Prerequisites
-
-- Codemod CLI via `npx codemod` (nodejs with npx, pnpx, yarn dlx or bun with bunx)
-- Basic understanding of Abstract Syntax Trees (AST)
-- TypeScript knowledge
-
-### Creating a New JSSG Project
-
-Initialize a new JSSG codemod project with explicit configuration:
-
-```bash
-npx codemod@latest init my-codemod \
-  --project-type ast-grep-js \
-  --language typescript \
-  --package-manager pnpm
-  --no-interactive
-```
-
-### Project Types Available
-
-- `ast-grep-js`: JavaScript/TypeScript ast-grep codemod (recommended)
-- `hybrid`: Multi-step workflow combining Shell, YAML, and JSSG
-- `shell`: Shell command workflow (legacy)
-- `ast-grep-yaml`: YAML-based ast-grep codemod (legacy)
+- **Semantic Analysis**: Find symbol definitions and references across files (JavaScript/TypeScript and Python)
 
 ## Project Structure
 
@@ -80,13 +189,26 @@ my-codemod/
         └── expected.tsx # Expected output
 ```
 
-### Essential Files
+## Core API: SgRoot and SgNode
 
-#### codemod.yaml and workflow.yaml
+The two fundamental types you'll work with:
 
-You must check codemod cli instructions to understand how to initialize the project.
+```typescript
+import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-#### scripts/codemod.ts
+// SgRoot - represents the entire file
+const root: SgRoot<TSX> = /* provided by framework */;
+const filename = root.filename(); // Get file path
+const rootNode = root.root(); // Get root AST node
+
+// SgNode - represents any AST node
+const node: SgNode<TSX> = rootNode.find({
+  rule: { pattern: "const $VAR = $VALUE" },
+});
+```
+
+## Transform Function
 
 Your main transformation logic with proper type annotations:
 
@@ -99,9 +221,9 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
   const rootNode = root.root();
 
   // Your transformation logic here
-  // Use explicit checks and type guards
+  const edits: Edit[] = [];
 
-  const edits = collectEdits(rootNode); // Must be an array of Edit
+  // Collect edits...
 
   if (edits.length === 0) {
     return null; // No changes needed
@@ -113,27 +235,7 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
 export default transform;
 ```
 
-## Writing JSSG Codemods
-
-### Core API Concepts
-
-#### SgRoot and SgNode
-
-The two fundamental types you'll work with:
-
-```typescript
-// SgRoot - represents the entire file
-const root: SgRoot<TSX> = /* provided by framework */;
-const filename = root.filename(); // Get file path
-const rootNode = root.root(); // Get root AST node
-
-// SgNode - represents any AST node
-const node: SgNode<TSX> = rootNode.find({
-  rule: { pattern: "const $VAR = $VALUE" },
-});
-```
-
-#### Pattern Matching
+## Pattern Matching
 
 Use ast-grep patterns to find specific code structures:
 
@@ -155,7 +257,7 @@ const imports = rootNode.findAll({
 });
 ```
 
-#### Type Guards and Safety
+## Type Guards and Safety
 
 Always verify node types before operations:
 
@@ -173,7 +275,7 @@ if (!typeAnnotation) {
 }
 ```
 
-#### Edit
+## Edit Interface
 
 ```typescript
 interface Edit {
@@ -197,148 +299,338 @@ const edit2 = anotherNode.replace("logger.log()");
 rootNode.commitEdits([edit1, edit2]);
 ```
 
-### Practical Example: Next.js Route Props Transform
+---
 
-Here's a complete example that adds type annotations to Next.js page components:
+# Part 3: Best Practices
+
+## Binding & Context: Don't Assume Names
+
+**Never hard-code names** like `app`, `router`, `jwt`, `useState`. A variable is relevant **because of its origin**, not its spelling.
+
+- Detect bindings (e.g., `const X = express()`), record `X` as the variable of interest, then match `X.get(...)`, etc.
+- Always **verify imports** for ambiguous symbols (ensure `useState` is from `'react'`, not a local)
+- Support all import shapes: default, namespace, named, CommonJS
+
+❌ **WRONG — Hardcoded for test fixture:**
+```typescript
+if (methodName === "unsafeEvaluation" && paramName === "userInput") {
+  return "sanitizeInput(userInput)";  // Only works for this exact fixture
+}
+```
+
+✅ **CORRECT — General pattern matching:**
+```typescript
+// Match ANY code with this structure using meta-variables
+const matches = rootNode.findAll({
+  rule: { pattern: "$OBJ.evaluate($EXPR)" }
+});
+// Then verify $OBJ is from a specific package before transforming
+```
+
+**Red flags you're doing this wrong:**
+- Checking `if (name === "specificName")` for names from your test fixtures
+- Logic that only handles exact scenarios in your tests
+- Not using meta-variables to capture dynamic parts
+
+## Edits, Inserts, and Commit Strategy
 
 ```typescript
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { getDefaultExport, isFunctionLike } from "./utils/ast-utils";
-import { getNextResolvedRoute } from "./utils/next-routes";
+async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  const rootNode = root.root();
+  const edits: Edit[] = []; // Always start with an empty array
 
+  // Collect all edits
+  const matches = rootNode.findAll({ rule: { pattern: "console.log($$$ARGS)" } });
+  for (const match of matches) {
+    edits.push(match.replace("logger.debug($$$ARGS)"));
+  }
+
+  // Return null if no changes (not empty string)
+  if (edits.length === 0) {
+    return null;
+  }
+
+  // Commit all edits at once
+  return rootNode.commitEdits(edits);
+}
+```
+
+**Import insertions:** Insert after the last import using `range().end.index`. If no imports exist, insert at file start with separating newlines.
+
+## File Filtering: Use Workflow Globs, Not JavaScript
+
+**Prefer workflow `include`/`exclude` globs** over filtering inside your codemod JavaScript. This is faster and cleaner:
+
+```yaml
+# workflow.yaml - PREFERRED approach
+steps:
+  - js-ast-grep:
+      js_file: scripts/codemod.ts
+      include:
+        - "**/*.ts"
+        - "**/*.tsx"
+      exclude:
+        # `.gitignore`'d files are excluded by default
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+```
+
+❌ **Avoid filtering in JavaScript:**
+```typescript
+async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  // BAD: Don't filter files in your codemod UNLESS there's not choice for some reason
+  if (root.filename().includes("node_modules")) return null;
+  if (root.filename().endsWith(".test.ts")) return null;
+  // ...
+}
+```
+
+The workflow engine handles file filtering more efficiently before parsing.
+
+## Handle Edge Cases Gracefully
+
+Your codemod should handle various code styles and edge cases:
+
+```typescript
+// Handle different import styles
+const imports = rootNode.findAll({
+  rule: {
+    any: [
+      { pattern: "import $NAME from $SOURCE" }, // Default import
+      { pattern: "import { $$$NAMES } from $SOURCE" }, // Named imports
+      { pattern: "import * as $NAME from $SOURCE" }, // Namespace import
+      { pattern: "const $NAME = require($SOURCE)" }, // CommonJS
+    ],
+  },
+});
+```
+
+## Optimize Performance
+
+For large codebases, optimize your traversal:
+
+```typescript
+// ✅ Good: Single traversal for multiple patterns
+const edits: Edit[] = [];
+rootNode.findAll({
+  rule: {
+    any: [
+      { pattern: "console.log($$$ARGS)" },
+      { pattern: "console.warn($$$ARGS)" },
+      { pattern: "console.error($$$ARGS)" },
+    ],
+  },
+}).forEach((node) => {
+  // Process all matches in one pass
+});
+
+// ❌ Avoid: Multiple separate traversals
+rootNode.findAll({ rule: { pattern: "console.log($$$)" } }).forEach(/* ... */);
+rootNode.findAll({ rule: { pattern: "console.warn($$$)" } }).forEach(/* ... */);
+```
+
+## Prefer `kind` + Declarative Rules Over Brittle Patterns
+
+```typescript
+// ✅ Good: Declarative with kind
+rootNode.findAll({
+  rule: {
+    kind: "call_expression",
+    has: {
+      kind: "member_expression",
+      has: { kind: "identifier", regex: "^console$" }
+    }
+  }
+});
+
+// ❌ Brittle: Giant pattern strings
+rootNode.findAll({ rule: { pattern: "console.log($A, $B, $C)" } }); // Only matches 3 args
+```
+
+## Be Explicit with Transformations
+
+JSSG codemods should be precise and predictable. Always include explicit checks:
+
+```typescript
+// ✅ Good: Explicit validation
+const param = node.field("parameters")?.child(0);
+if (!param || !param.is("required_parameter")) {
+  return null;
+}
+
+// ❌ Avoid: Assumptions without checks
+const param = node.field("parameters").child(0); // May throw
+```
+
+---
+
+# Part 4: Semantic Analysis
+
+JSSG provides semantic analysis capabilities for finding symbol definitions and references across files. This is supported for **JavaScript/TypeScript** (using [oxc](https://oxc.rs/)) and **Python** (using [ruff](https://docs.astral.sh/ruff/)). Other languages return no-op results.
+
+## Analysis Modes
+
+- **File Scope**: Single-file analysis (default, fast)
+- **Workspace Scope**: Cross-file analysis with import resolution
+
+## Using `node.definition()`
+
+Find where a symbol is defined:
+
+```typescript
 async function transform(root: SgRoot<TSX>): Promise<string | null> {
   const rootNode = root.root();
 
-  // Step 1: Find the default export
-  const defaultExport = getDefaultExport(rootNode);
-  if (!defaultExport || !isFunctionLike(defaultExport)) {
-    return null; // Not a function component
-  }
-
-  // Step 2: Check for parameters that need typing
-  const secondParam = defaultExport.field("parameters")?.child(1);
-
-  if (!secondParam?.is("required_parameter")) {
-    return null; // No second parameter or already destructured
-  }
-
-  // Step 3: Get the parameter's type annotation
-  const typeAnnotation = secondParam.field("type")?.child(1);
-  if (!typeAnnotation) {
-    return null; // Already typed
-  }
-
-  // Step 4: Determine the route and component type
-  const filePath = root.filename();
-  const route = await getNextResolvedRoute(filePath);
-
-  if (!route) {
-    return null; // Not in a Next.js app directory
-  }
-
-  const typeName = filePath.endsWith("/layout.tsx")
-    ? "LayoutProps"
-    : "PageProps";
-
-  // Step 5: Apply the transformation
-  const edit = typeAnnotation.replace(`${typeName}<"${route}">`);
-  return rootNode.commitEdits([edit]);
-}
-
-export default transform;
-```
-
-### Creating Utility Functions
-
-Organize reusable logic in utility modules:
-
-```typescript
-// utils/ast-utils.ts
-import type { SgNode } from "@codemod.com/jssg-types/main";
-import type TSX from "codemod:ast-grep/langs/tsx";
-
-export function getDefaultExport<T extends TSX>(
-  program: SgNode<T, "program">
-): SgNode<T> | null {
-  const exportDefault = program.find({
-    rule: { pattern: "export default $ARG" },
+  // Find a symbol reference
+  const symbolNode = rootNode.find({
+    rule: { pattern: "myFunction" },
   });
 
-  const arg = exportDefault?.getMatch("ARG");
-  if (!arg) return null;
+  if (!symbolNode) return null;
 
-  // Follow identifier references
-  if (arg.is("identifier")) {
-    return findDefinition(arg);
+  // Get its definition
+  const def = symbolNode.definition();
+
+  if (def) {
+    console.log("Definition in:", def.root.filename());
+    console.log("Definition text:", def.node.text());
+    console.log("Kind:", def.kind); // 'local', 'import', or 'external'
   }
 
-  return arg;
-}
-
-export function isFunctionLike<T extends TSX>(
-  node: SgNode<T>
-): node is SgNode<T, "function_declaration" | "arrow_function"> {
-  return (
-    node.is("function_declaration") ||
-    node.is("arrow_function") ||
-    node.is("function_expression")
-  );
+  return null;
 }
 ```
 
-## Testing Your Codemod
+**Definition kinds:**
+- `'local'` — Definition is in the same file
+- `'import'` — Traced to an import statement (module couldn't be resolved)
+- `'external'` — Definition resolved to a different file in the workspace
 
-### Test Structure
+## Using `node.references()`
 
-JSSG uses snapshot testing with input/expected file pairs:
+Find all references to a symbol across the workspace:
+
+```typescript
+async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  const rootNode = root.root();
+  const currentFile = root.filename();
+
+  // Find a function declaration name
+  const funcName = rootNode.find({
+    rule: {
+      pattern: "formatDate",
+      inside: {
+        pattern: "export function formatDate($$$PARAMS) { $$$BODY }",
+        stopBy: { kind: "export_statement" },
+      },
+    },
+  });
+
+  if (!funcName) return null;
+
+  // Find all references across the workspace
+  const refs = funcName.references();
+  const currentFileEdits = [];
+
+  for (const fileRef of refs) {
+    const edits = fileRef.nodes.map((node) => node.replace("formatDateTime"));
+
+    if (fileRef.root.filename() === currentFile) {
+      currentFileEdits.push(...edits);
+    } else {
+      // Write changes to other files
+      const newContent = fileRef.root.root().commitEdits(edits);
+      fileRef.root.write(newContent);
+    }
+  }
+
+  return rootNode.commitEdits(currentFileEdits);
+}
+```
+
+## Cross-File Editing with `root.write()`
+
+When you have an `SgRoot` from `definition()` or `references()`, you can write changes to other files:
+
+```typescript
+// Write to other files (NOT the current file)
+const def = node.definition();
+if (def && def.root.filename() !== root.filename()) {
+  const edits = [def.node.replace("newName")];
+  const newContent = def.root.root().commitEdits(edits);
+  def.root.write(newContent); // Writes to the other file
+}
+```
+
+**Important**: You cannot call `write()` on the current file. For the current file, return the modified content from `transform()`.
+
+## Enabling Semantic Analysis in Workflows
+
+Configure semantic analysis in your `workflow.yaml`:
+
+```yaml
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis: workspace  # or "file" for single-file mode
+```
+
+Run with:
+
+```bash
+npx codemod workflow run -w /path/to/workflow.yaml -t /path/to/target
+```
+
+---
+
+# Part 5: Testing (CRITICAL)
+
+## Test Structure — Use This Exact Layout
+
+Each test case is a folder with an `input`/`expected` pair:
 
 ```
 tests/
-├── basic-transform/
-│   ├── input.ts       # Original code
+├── positive-case-1/
+│   ├── input.ts       # Code before transformation
 │   └── expected.ts    # Expected output
-├── edge-cases/
+├── positive-case-2/
 │   ├── input.tsx
 │   └── expected.tsx
-└── complex-scenario/
-    ├── nested-dir/
-    │   ├── input.js
-    │   └── expected.js
-    └── config.json    # Optional test configuration
+├── negative-case-1/   # Code that should NOT change
+│   ├── input.ts
+│   └── expected.ts    # Same as input
+└── edge-case-1/
+    ├── input.ts
+    └── expected.ts
 ```
 
-### Running Tests
+**Guidelines:**
+- **Positive cases**: All specified transformations happen
+- **Negative cases**: Code remains unchanged
+- **Edge cases**: Import variants, nested forms, complex expressions, comments preservation
+- **Prefer `.ts`/`.tsx`** even when source is `.js`/`.jsx`
+- If a test fails only due to formatting but AST is correct, **update the expected output**
 
-Execute all tests:
-
-```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts
-```
-
-Run specific test directories:
-
-```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts tests/basic-transform
-```
-
-Advanced test options:
+## Running Tests
 
 ```bash
-# Update snapshots when output changes are intended
-npx codemod jssg test -l tsx ./scripts/codemod.ts -u
+# Run all tests (use pnpm test which calls jssg test)
+pnpm test
 
-# Run tests matching a pattern
-npx codemod jssg test -l tsx ./scripts/codemod.ts --filter "edge-cases"
+# Update expected outputs when changes are intended
+pnpm test -u
+
+# Run specific test
+pnpm test --filter <test-name>
 
 # Verbose output for debugging
 npx codemod jssg test -l tsx ./scripts/codemod.ts -v
-
-# Run tests sequentially (helpful for debugging)
-npx codemod jssg test -l tsx ./scripts/codemod.ts --sequential
 ```
 
-### Writing Effective Tests
+## Writing Effective Tests
 
 Create comprehensive test cases that cover:
 
@@ -376,389 +668,11 @@ function CorrectComponent() {
 }
 ```
 
-## CLI Commands Reference
+---
 
-### Core Commands
+# Part 6: API Reference
 
-#### Initialize a Project
-
-```bash
-npx codemod@latest init [OPTIONS] [PATH]
-
-Options:
-  --name               Project name
-  --project-type       Project type (ast-grep-js, hybrid, shell, ast-grep-yaml)
-  --package-manager    Package manager (npm, yarn, pnpm)
-  --language          Target language
-  --description       Project description
-  --author           Author name and email
-  --license          License type
-  --private          Make package private
-  --force            Overwrite existing files
-  --no-interactive   Use defaults without prompts
-```
-
-#### JSSG-Specific Commands
-
-##### Bundle
-
-```bash
-npx codemod jssg bundle <FILE>
-# Bundles TypeScript files and dependencies into a single file
-```
-
-##### Run
-
-```bash
-npx codemod jssg run [OPTIONS] <CODEMOD_FILE> <TARGET>
-# Execute codemod on target files/directories
-```
-
-##### Test
-
-```bash
-npx codemod jssg test [OPTIONS] <CODEMOD_FILE> [TEST_DIR]
-
-Options:
-  -l, --language         Language to process (required)
-  --filter              Run only tests matching pattern
-  -u, --update-snapshots Update expected outputs
-  -v, --verbose         Show detailed output
-  --sequential          Run tests sequentially
-  --max-threads         Maximum concurrent threads
-  --fail-fast          Stop on first failure
-  --watch              Watch for changes
-  --timeout            Test timeout in seconds
-```
-
-### Publishing and Distribution
-
-```bash
-# Login to registry
-npx codemod@latest login
-
-# Publish your codemod
-npx codemod@latest publish
-
-# Search for codemods
-npx codemod@latest search <query>
-
-# Run published codemod
-npx codemod@latest run <package-name>
-```
-
-## Best Practices
-
-### 1. Be Explicit with Transformations
-
-JSSG codemods should be precise and predictable. Always include explicit checks:
-
-```typescript
-// ✅ Good: Explicit validation
-const param = node.field("parameters")?.child(0);
-if (!param || !param.is("required_parameter")) {
-  return null;
-}
-
-// ❌ Avoid: Assumptions without checks
-const param = node.field("parameters").child(0); // May throw
-```
-
-### 2. Provide Context in Your Code
-
-Add clear comments explaining complex transformations:
-
-```typescript
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
-  const rootNode = root.root();
-
-  // Find all useEffect hooks that might have missing dependencies
-  // This helps prevent React Hook exhaustive-deps violations
-  const effects = rootNode.findAll({
-    rule: { pattern: "useEffect($CALLBACK, $DEPS)" }
-  });
-
-  // Process each effect to ensure correct dependency array
-  const edits = effects.flatMap((effect) => {
-    // Detailed logic with explanations...
-  });
-}
-```
-
-### 3. Handle Edge Cases Gracefully
-
-Your codemod should handle various code styles and edge cases:
-
-```typescript
-// Handle different import styles
-const imports = rootNode.findAll({
-  rule: {
-    any: [
-      { pattern: "import $NAME from $SOURCE" }, // Default import
-      { pattern: "import { $$$NAMES } from $SOURCE" }, // Named imports
-      { pattern: "import * as $NAME from $SOURCE" }, // Namespace import
-      { pattern: "const $NAME = require($SOURCE)" }, // CommonJS
-    ],
-  },
-});
-```
-
-### 4. Optimize Performance
-
-For large codebases, optimize your traversal:
-
-```typescript
-// ✅ Good: Single traversal collecting all edits
-const edits: Edit[] = [];
-rootNode.findAll({ rule: { pattern: "console.log($$$)" } }).forEach((node) => {
-  edits.push(node.replace("logger.debug($$$)"));
-});
-return rootNode.commitEdits(edits);
-
-// ❌ Avoid: Multiple traversals
-rootNode.findAll({ rule: { pattern: "console.log($$$)" } }).forEach(/* ... */);
-rootNode.findAll({ rule: { pattern: "console.warn($$$)" } }).forEach(/* ... */);
-```
-
-### 5. Write Comprehensive Tests
-
-Include tests for all transformation scenarios:
-
-```typescript
-// tests/all-scenarios/input.ts
-// Test 1: Basic transformation
-const simple = "before";
-
-// Test 2: Should not transform
-const preserved = "unchanged";
-
-// Test 3: Edge case with comments
-const withComment = /* comment */ "before";
-
-// Test 4: Complex nested structure
-const nested = {
-  value: "before",
-  inner: {
-    deep: "before",
-  },
-};
-```
-
-### 6. Use Type-Safe Patterns
-
-Leverage TypeScript's type system:
-
-```typescript
-import type { SgNode } from "@codemod.com/jssg-types/main";
-import type TSX from "codemod:ast-grep/langs/tsx";
-
-// Type-safe node type checking
-function isReactComponent(
-  node: SgNode<TSX>
-): node is SgNode<TSX, "function_declaration" | "arrow_function"> {
-  if (!isFunctionLike(node)) return false;
-
-  // Check if it returns JSX
-  const returnStatements = node.findAll({
-    rule: { pattern: "return $EXPR" },
-  });
-
-  return returnStatements.some((ret) => {
-    const expr = ret.getMatch("EXPR");
-    return expr?.kind() === "jsx_element" || expr?.kind() === "jsx_fragment";
-  });
-}
-```
-
-## Advanced Patterns
-
-### Async Transformations
-
-JSSG supports async operations for complex transformations:
-
-```typescript
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
-  const filePath = root.filename();
-
-  // Async file system operations
-  const config = await loadProjectConfig(filePath);
-
-  // Async API calls or analysis
-  const metadata = await analyzeImports(root.root());
-
-  // Use gathered data in transformation
-  const edits = await generateEdits(root.root(), config, metadata);
-
-  return root.root().commitEdits(edits);
-}
-```
-
-### Multi-File Context
-
-Access information from other files:
-
-```typescript
-import { findProjectRoot, analyzeExports } from "./utils/project-analysis";
-
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
-  const projectRoot = await findProjectRoot(root.filename());
-
-  // Analyze exports from related files
-  const componentExports = await analyzeExports(projectRoot, "src/components");
-
-  // Use cross-file information in transformation
-  const edits = transformImports(root.root(), componentExports);
-
-  return root.root().commitEdits(edits);
-}
-```
-
-### Custom Node Matchers
-
-Create reusable, complex matchers:
-
-```typescript
-// utils/matchers.ts
-export function createReactHookMatcher() {
-  return {
-    rule: {
-      pattern: "$HOOK($$$ARGS)",
-      where: {
-        HOOK: {
-          regex: "^use[A-Z]", // Matches useEffect, useState, etc.
-        },
-      },
-    },
-  };
-}
-
-// Usage in codemod
-const hooks = rootNode.findAll(createReactHookMatcher());
-```
-
-## Troubleshooting
-
-### Common Issues and Solutions
-
-#### 1. Transformation Not Applied
-
-**Issue**: Your codemod runs but doesn't make changes.
-
-**Debug steps**:
-
-```typescript
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
-  const rootNode = root.root();
-
-  // Add debug logging
-  console.log("Processing file:", root.filename());
-
-  const matches = rootNode.findAll({ rule: { pattern: "your pattern" } });
-  console.log("Found matches:", matches.length);
-
-  if (matches.length === 0) {
-    console.log("No matches found - check your pattern");
-    return null;
-  }
-
-  // Log each match for inspection
-  matches.forEach((match, i) => {
-    console.log(`Match ${i}:`, match.text());
-  });
-}
-```
-
-#### 2. Type Errors
-
-**Issue**: TypeScript compilation errors.
-
-**Solution**: Ensure proper type imports and annotations:
-
-```typescript
-// Always import these types
-import type { SgRoot, SgNode, Edit } from "@codemod.com/jssg-types/main";
-import type TSX from "codemod:ast-grep/langs/tsx";
-
-// Use proper type annotations
-function helper(node: SgNode<TSX>): Edit | null {
-  // Implementation
-}
-```
-
-#### 3. Test Failures
-
-**Issue**: Tests fail unexpectedly.
-
-**Debug with verbose output**:
-
-```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts -v
-```
-
-**Update snapshots if changes are intended**:
-
-```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts -u
-```
-
-#### 4. Pattern Matching Issues
-
-**Issue**: Patterns don't match expected code.
-
-**Use the ast-grep playground** to test patterns:
-
-1. Visit https://ast-grep.github.io/playground/
-2. Paste your code sample
-3. Test different patterns
-4. Use the AST viewer to understand structure
-
-### Performance Optimization
-
-For large codebases:
-
-1. **Early returns**: Skip files that don't need transformation
-2. **Efficient patterns**: Use specific patterns over generic ones
-3. **Batch operations**: Collect all edits before committing
-4. **Limit traversals**: Combine related searches
-
-```typescript
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
-  const rootNode = root.root();
-
-  // Early return for non-applicable files
-  if (!root.filename().endsWith(".tsx")) {
-    return null;
-  }
-
-  // Single traversal for multiple patterns
-  const edits: Edit[] = [];
-
-  rootNode
-    .findAll({
-      rule: {
-        any: [
-          { pattern: "console.log($$$ARGS)" },
-          { pattern: "console.warn($$$ARGS)" },
-          { pattern: "console.error($$$ARGS)" },
-        ],
-      },
-    })
-    .forEach((node) => {
-      const callee = callExpressionNode.field("function");
-      const method = callee.field("property")?.text();
-      const args = callExpressionNode
-        .getMultipleMatches("ARG")
-        .map(x => x.isNamed() ? x.text() : null)
-        .filter(x => x !== null)
-        .join(", ");
-      edits.push(callExpressionNode.replace(`logger.${method}(${args})`));
-    });
-
-  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
-}
-```
-
-### SgNode methods
+## SgNode Methods
 
 ```typescript
 class SgNode<
@@ -782,7 +696,6 @@ class SgNode<
   readonly kindToRefine: T;
   /** Check if the node is the same kind as the given `kind` string */
   is<K extends T>(kind: K): this is SgNode<M, K>;
-  // we need this override to allow string literal union
   is(kind: string): boolean;
 
   getMatch: NodeMethod<M, [mv: string]>;
@@ -811,7 +724,176 @@ class SgNode<
   prevAll(): Array<SgNode<M>>;
   replace(text: string): Edit;
   commitEdits(edits: Array<Edit>): string;
+  
+  // Semantic Analysis Methods (JavaScript/TypeScript and Python only)
+  /** Find the definition of the symbol at this node's position */
+  definition(options?: { resolveExternal?: boolean }): DefinitionResult | null;
+  /** Find all references to the symbol at this node's position */
+  references(): Array<FileReferences>;
 }
 ```
 
-When building JSSG codemods, always test your work using the jssg test command or the mcp tool for testing.
+## SgRoot Methods
+
+```typescript
+class SgRoot<M> {
+  root(): SgNode<M>;
+  filename(): string;
+  /** Write content to this file (only for files from definition()/references()) */
+  write(content: string): void;
+}
+```
+
+## Semantic Types
+
+```typescript
+interface DefinitionResult<M> {
+  node: SgNode<M>;
+  root: SgRoot<M>;
+  kind: 'local' | 'import' | 'external';
+}
+
+interface FileReferences<M> {
+  root: SgRoot<M>;
+  nodes: Array<SgNode<M>>;
+}
+```
+
+---
+
+# Part 7: Troubleshooting
+
+## Common Issues and Solutions
+
+### 1. Transformation Not Applied
+
+**Issue**: Your codemod runs but doesn't make changes.
+
+**Debug steps**:
+
+```typescript
+async function transform(root: SgRoot<TSX>): Promise<string | null> {
+  const rootNode = root.root();
+
+  // Add debug logging
+  console.log("Processing file:", root.filename());
+
+  const matches = rootNode.findAll({ rule: { pattern: "your pattern" } });
+  console.log("Found matches:", matches.length);
+
+  if (matches.length === 0) {
+    console.log("No matches found - check your pattern");
+    return null;
+  }
+
+  // Log each match for inspection
+  matches.forEach((match, i) => {
+    console.log(`Match ${i}:`, match.text());
+  });
+}
+```
+
+### 2. Type Errors
+
+**Issue**: TypeScript compilation errors.
+
+**Solution**: Ensure proper type imports and annotations:
+
+```typescript
+// Always import these types
+import type { SgRoot, SgNode, Edit } from "@codemod.com/jssg-types/main";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+// Use proper type annotations
+function helper(node: SgNode<TSX>): Edit | null {
+  // Implementation
+}
+```
+
+### 3. Test Failures
+
+**Issue**: Tests fail unexpectedly.
+
+**Debug with verbose output**:
+
+```bash
+npx codemod jssg test -l tsx ./scripts/codemod.ts -v
+```
+
+**Update snapshots if changes are intended**:
+
+```bash
+npx codemod jssg test -l tsx ./scripts/codemod.ts -u
+```
+
+### 4. Pattern Matching Issues
+
+**Issue**: Patterns don't match expected code.
+
+**Use MCP tools to debug patterns:**
+
+1. Use `dump_ast` tool with your code sample to see the AST structure
+2. Use `get_node_types` tool to see available node kinds for the language
+3. Compare the AST output with your pattern to understand mismatches
+
+## Performance Optimization
+
+For large codebases:
+
+1. **Early returns**: Skip files that don't need transformation
+2. **Efficient patterns**: Use specific patterns over generic ones
+3. **Batch operations**: Collect all edits before committing
+4. **Limit traversals**: Combine related searches
+
+---
+
+# Quality Bar & Anti-Pitfalls
+
+* **Package correctness**: Transformations must only apply to the intended library API — verify imports/bindings first
+* **No string-hacks**: Operate on AST nodes; use text checks only when intentionally heuristic
+* **Never write fixture-specific code**: Your codemod must be general and work with ANY code matching the pattern
+* **Debug properly**: Use the `dump_ast` MCP tool, log `node.kind()` and `node.text()` to investigate mismatches
+* **Performance**: Use specific `kind` filters; combine related checks with `any`/`all`; early-exit aggressively
+
+---
+
+# CLI Commands Reference
+
+## Initialize a Project
+
+```bash
+npx codemod@latest init [OPTIONS] [PATH]
+
+Options:
+  --name               Project name
+  --project-type       Project type (ast-grep-js, hybrid, shell, ast-grep-yaml)
+  --package-manager    Package manager (npm, yarn, pnpm)
+  --language          Target language
+  --no-interactive   Use defaults without prompts
+```
+
+## JSSG Commands
+
+```bash
+# Execute codemod on target files/directories
+npx codemod jssg run [OPTIONS] <CODEMOD_FILE> <TARGET>
+
+# Test codemod
+npx codemod jssg test [OPTIONS] <CODEMOD_FILE> [TEST_DIR]
+
+Options:
+  -l, --language         Language to process (required)
+  --filter              Run only tests matching pattern
+  -u, --update-snapshots Update expected outputs
+  -v, --verbose         Show detailed output
+  --fail-fast          Stop on first failure
+```
+
+## Publishing
+
+```bash
+npx codemod@latest login
+npx codemod@latest publish
+npx codemod@latest search <query>
+npx codemod@latest run <package-name>
+```
