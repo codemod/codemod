@@ -163,11 +163,13 @@ where
                     },
                 })?;
 
+            let file_path_str = options.file_path.to_string_lossy().to_string();
             let parsed_content =
                 SgRootRjs::try_new_with_semantic(
                     ast_grep,
-                    Some(options.file_path.to_string_lossy().to_string()),
+                    Some(file_path_str.clone()),
                     options.semantic_provider.clone(),
+                    Some(file_path_str), // Pass current file path for write() validation
                 ).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),

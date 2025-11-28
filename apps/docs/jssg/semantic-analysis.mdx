@@ -8,14 +8,16 @@ Semantic analysis enables your codemods to understand symbol relationships in co
 ## Supported Languages
 
 <Info>
-Semantic analysis is currently supported for **JavaScript/TypeScript** and **Python** only. For other languages, the semantic methods return no-op results (null for definitions, empty arrays for references).
+  Semantic analysis is currently supported for **JavaScript/TypeScript** and
+  **Python** only. For other languages, the semantic methods return no-op
+  results (null for definitions, empty arrays for references).
 </Info>
 
-| Language | Provider | Features |
-|----------|----------|----------|
-| JavaScript/TypeScript | [oxc](https://oxc.rs/) | Definitions, references, cross-file resolution |
-| Python | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution |
-| Other languages | — | Returns null/empty (no-op) |
+| Language              | Provider                             | Features                                       |
+| --------------------- | ------------------------------------ | ---------------------------------------------- |
+| JavaScript/TypeScript | [oxc](https://oxc.rs/)               | Definitions, references, cross-file resolution |
+| Python                | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution |
+| Other languages       | —                                    | Returns null/empty (no-op)                     |
 
 ## Analysis Modes
 
@@ -26,11 +28,13 @@ Semantic analysis operates in two modes, each with different performance and acc
 Single-file analysis that processes symbols within the current file only. This mode is fast and requires no additional configuration.
 
 **Best for:**
+
 - Quick analysis of local variables
 - Single-file transformations
 - Dry runs and exploratory analysis
 
 **Limitations:**
+
 - Cannot resolve cross-file imports
 - Cannot find references in other files
 
@@ -39,11 +43,13 @@ Single-file analysis that processes symbols within the current file only. This m
 Workspace-wide analysis that resolves cross-file imports and finds references across your entire project. This mode requires specifying a workspace root.
 
 **Best for:**
+
 - Renaming symbols across files
 - Finding all usages of exported functions
 - Dependency analysis and migration codemods
 
 **Requirements:**
+
 - Workspace root path must be specified
 - Files must be processed (indexed) before cross-file queries work
 
@@ -54,7 +60,8 @@ Workspace-wide analysis that resolves cross-file imports and finds references ac
 Get the definition location for the symbol at this node's position.
 
 <ParamField path="definition(options?)" type="DefinitionResult | null">
-Returns an object containing the definition node, its root, and the kind of definition, or null if not found.
+  Returns an object containing the definition node, its root, and the kind of
+  definition, or null if not found.
 </ParamField>
 
 ```ts
@@ -69,21 +76,26 @@ interface DefinitionResult<M> {
   /** The SgRoot for the file containing the definition */
   root: SgRoot<M>;
   /** The kind of definition: 'local', 'import', or 'external' */
-  kind: 'local' | 'import' | 'external';
+  kind: "local" | "import" | "external";
 }
 ```
 
 **Definition kinds:**
+
 - `'local'` — Definition is in the same file (local variable, function, class, etc.)
 - `'import'` — Definition traced to an import statement, but module couldn't be resolved (e.g., external package)
 - `'external'` — Definition resolved to a different file in the workspace
 
 **Returns null when:**
+
 - No semantic provider is configured
 - No symbol is found at this position
 
 <Note>
-When a symbol comes from an unresolved import (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement with `kind: 'import'` instead of returning `null`. This allows you to at least trace the symbol back to where it was imported.
+  When a symbol comes from an unresolved import
+  (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement 
+  with `kind: 'import'` instead of returning `null`. This allows you to at least
+  trace the symbol back to where it was imported.
 </Note>
 
 ### `node.references()`
@@ -91,7 +103,7 @@ When a symbol comes from an unresolved import (e.g., `import x from "some-extern
 Find all references to the symbol at this node's position.
 
 <ParamField path="references()" type="Array<FileReferences>">
-Returns an array of file references, grouped by file.
+  Returns an array of file references, grouped by file.
 </ParamField>
 
 ```ts
@@ -104,62 +116,62 @@ interface FileReferences<M> {
 ```
 
 **Returns empty array when:**
+
 - No semantic provider is configured
 - No symbol is found at this position
 
 <Note>
-In file scope mode, `references()` only searches the current file. In workspace scope mode, it searches all indexed files in the workspace.
+  In file scope mode, `references()` only searches the current file. In
+  workspace scope mode, it searches all indexed files in the workspace.
 </Note>
+
+### `root.write(content)`
+
+Write content to a file obtained via `definition()` or `references()`. This method allows cross-file editing within a single codemod execution.
+
+<ParamField path="write(content)" type="void">
+  Writes the provided content to the file and updates the semantic provider's
+  cache.
+</ParamField>
+
+```ts
+// Write to a file obtained from definition() or references()
+const def = node.definition();
+if (def && def.root.filename() !== root.filename()) {
+  const edits = [def.node.replace("newName")];
+  const newContent = def.root.root().commitEdits(edits);
+  def.root.write(newContent);
+}
+```
+
+**Throws an error when:**
+
+- Called on the current file being processed (use `return` instead)
+- The file has no path
+- The write operation fails
+
+<Warning>
+  You cannot call `write()` on the current file. For the current file, return
+  the modified content from `transform()` instead.
+</Warning>
 
 ## Using Semantic Analysis
 
-### Via CLI Commands
+### Via Workflow Configuration (Recommended)
 
-#### `jssg run`
-
-Enable workspace-wide semantic analysis with the `--semantic-workspace` flag:
-
-```bash
-# File scope (default) - no flag needed
-npx codemod jssg run ./scripts/codemod.ts --language tsx
-
-# Workspace scope - specify workspace root
-npx codemod jssg run ./scripts/codemod.ts --language tsx \
-  --semantic-workspace /path/to/project
-```
-
-<ParamField path="--semantic-workspace" type="PATH">
-Enable workspace-wide semantic analysis using the provided path as the workspace root. When not specified, semantic analysis defaults to file scope mode.
-</ParamField>
-
-#### `jssg test`
-
-Enable workspace-wide semantic analysis for tests:
-
-```bash
-# File scope (default)
-npx codemod jssg test ./scripts/codemod.ts --language tsx
-
-# Workspace scope
-npx codemod jssg test ./scripts/codemod.ts --language tsx \
-  --semantic-workspace /path/to/project
-```
-
-### Via Workflow Configuration
-
-Configure semantic analysis in your `workflow.yaml` using the `js-ast-grep` step type:
+The recommended way to use semantic analysis is through workflow files. Create a `workflow.yaml` that references your codemod script:
 
 <CodeGroup>
-```yaml File Scope
+```yaml workflow.yaml (File Scope)
 version: "1"
 nodes:
   transform:
     js-ast-grep:
       js_file: scripts/codemod.ts
-      semantic_analysis: file # default
+      semantic_analysis: file
 ```
 
-```yaml Workspace Scope
+```yaml workflow.yaml (Workspace Scope)
 version: "1"
 nodes:
   transform:
@@ -168,7 +180,7 @@ nodes:
       semantic_analysis: workspace
 ```
 
-```yaml Workspace with Custom Root
+```yaml workflow.yaml (Custom Root)
 version: "1"
 nodes:
   transform:
@@ -178,172 +190,598 @@ nodes:
         mode: workspace
         root: ./path/to/workspace
 ```
+
 </CodeGroup>
 
 <ParamField path="semantic_analysis" type="string | object">
 Configure semantic analysis mode. Can be:
-- `"file"` — Single-file analysis (default when enabled)
-- `"workspace"` — Workspace-wide analysis using the workflow's base path
+- `"file"` — Single-file analysis (default)
+- `"workspace"` — Workspace-wide analysis using the target path
 - `{ mode: "workspace", root: "./path" }` — Workspace-wide with custom root
 </ParamField>
 
+**Run the workflow:**
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t /path/to/target
+```
+
+<ParamField path="-w, --workflow" type="PATH">
+  Path to the workflow YAML file.
+</ParamField>
+
+<ParamField path="-t, --target" type="PATH">
+  Path to the target directory containing files to transform.
+</ParamField>
+
+### Via CLI Commands
+
+For quick testing or simple use cases, you can also use the `jssg` CLI directly:
+
+<Tabs>
+<Tab title="jssg run">
+```bash
+# File scope (default)
+npx codemod jssg run ./scripts/codemod.ts \
+  --language tsx \
+  --target /path/to/target
+
+# Workspace scope
+
+npx codemod jssg run ./scripts/codemod.ts \
+ --language tsx \
+ --target /path/to/target \
+ --semantic-workspace /path/to/target
+
+```
+
+<ParamField path="--semantic-workspace" type="PATH">
+Enable workspace-wide semantic analysis using the provided path as the workspace root.
+</ParamField>
+</Tab>
+
+<Tab title="jssg test">
+```bash
+# File scope (default)
+npx codemod jssg test ./scripts/codemod.ts --language tsx
+
+# Workspace scope
+npx codemod jssg test ./scripts/codemod.ts \
+  --language tsx \
+  --semantic-workspace /path/to/project
+```
+
+</Tab>
+</Tabs>
+
 ## Examples
 
-### Finding a Variable's Definition
+### Renaming a Utility Function Across Files (TypeScript)
 
-```ts
-import type { Transform } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+This example renames `formatDate` to `formatDateTime` across a multi-file TypeScript project.
 
-const transform: Transform<TSX> = (root) => {
-  const rootNode = root.root();
-  
-  // Find a variable reference
-  const varRef = rootNode.find({ rule: { pattern: "myVariable" } });
-  if (!varRef) return null;
-  
-  // Get its definition
-  const def = varRef.definition();
-  
-  if (def) {
-    console.log("Definition found in:", def.root.filename());
-    console.log("Definition text:", def.node.text());
-    console.log("Definition kind:", def.kind); // 'local', 'import', or 'external'
-    
-    // Handle different definition kinds
-    if (def.kind === 'import') {
-      console.log("Symbol comes from an unresolved import");
-    } else if (def.kind === 'external') {
-      console.log("Symbol defined in another file");
-    } else {
-      console.log("Symbol defined locally");
-    }
-  } else {
-    console.log("Definition not found");
-  }
-  
-  return null;
-};
+**Source codebase:**
 
-export default transform;
+<CodeGroup>
+```typescript src/utils/date.ts
+export function formatDate(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
+
+export function parseDate(str: string): Date {
+  return new Date(str);
+}
 ```
 
-### Handling Unresolved Imports
+```typescript src/components/EventCard.tsx
+import { formatDate } from "../utils/date";
 
-When you need to trace symbols from external modules that can't be resolved:
+interface Event {
+  title: string;
+  date: Date;
+}
 
-```ts
-import type { Transform } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-
-const transform: Transform<TSX> = (root) => {
-  const rootNode = root.root();
-  
-  // Find a symbol that might come from an external module
-  const symbol = rootNode.find({ rule: { pattern: "externalSymbol" } });
-  if (!symbol) return null;
-  
-  // By default, definition() tries to resolve imports
-  const def = symbol.definition();
-  
-  if (def && def.kind === 'import') {
-    // The import couldn't be resolved (e.g., node_modules not installed)
-    // but we still have the import statement
-    console.log("Symbol imported from:", def.node.text());
-  }
-  
-  // Or explicitly stop at imports without trying to resolve
-  const importDef = symbol.definition({ resolveExternal: false });
-  if (importDef) {
-    // Always returns the import statement for imported symbols
-    console.log("Import statement:", importDef.node.text());
-  }
-  
-  return null;
-};
-
-export default transform;
+export function EventCard({ title, date }: Event) {
+  return (
+    <div className="event-card">
+      <h3>{title}</h3>
+      <span>{formatDate(date)}</span>
+    </div>
+  );
+}
 ```
 
-### Cross-File Reference Analysis
+```typescript src/pages/Dashboard.tsx
+import { formatDate } from "../utils/date";
 
-```ts
-import type { Transform } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+export function Dashboard({ events }) {
+  return (
+    <div>
+      <h1>Upcoming Events</h1>
+      {events.map((event) => (
+        <p key={event.id}>
+          {event.name} - {formatDate(event.scheduledAt)}
+        </p>
+      ))}
+    </div>
+  );
+}
+```
 
-const transform: Transform<TSX> = (root) => {
+</CodeGroup>
+
+**Codemod and workflow:**
+
+<CodeGroup>
+```typescript scripts/rename-format-date.ts
+export default function transform(root) {
   const rootNode = root.root();
-  
-  // Find an exported function
-  const exportedFunc = rootNode.find({ 
-    rule: { pattern: "export function $NAME($$$) { $$$ }" } 
+  const currentFile = root.filename();
+
+  // Find the function declaration we want to rename
+  const funcDeclName = rootNode.find({
+    rule: {
+      pattern: "formatDate",
+      inside: {
+        pattern: "export function formatDate($$$PARAMS) { $$$BODY }",
+        stopBy: {
+          kind: "export_statement",
+        },
+      },
+    },
   });
-  if (!exportedFunc) return null;
-  
-  const funcName = exportedFunc.field("name");
-  if (!funcName) return null;
-  
+
+  if (!funcDeclName) return null;
+
   // Find all references across the workspace
-  const refs = funcName.references();
-  
-  // Log usage statistics
-  let totalRefs = 0;
-  const fileUsage: Record<string, number> = {};
-  
+  const refs = funcDeclName.references();
+  const currentFileEdits = [];
+
+  for (const fileRef of refs) {
+    const edits = fileRef.nodes.map((node) => node.replace("formatDateTime"));
+
+    if (fileRef.root.filename() === currentFile) {
+      currentFileEdits.push(...edits);
+    } else {
+      // Write changes to other files
+      const newContent = fileRef.root.root().commitEdits(edits);
+      fileRef.root.write(newContent);
+    }
+  }
+
+  return rootNode.commitEdits(currentFileEdits);
+}
+
+```
+
+```yaml workflow.yaml
+version: "1"
+nodes:
+  rename-format-date:
+    js-ast-grep:
+      js_file: scripts/rename-format-date.ts
+      semantic_analysis: workspace
+```
+
+</CodeGroup>
+
+**Run the workflow:**
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t ./src
+```
+
+**Result:**
+
+<CodeGroup>
+```typescript src/utils/date.ts
+export function formatDateTime(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
+
+export function parseDate(str: string): Date {
+  return new Date(str);
+}
+```
+
+```tsx src/components/EventCard.tsx
+import { formatDateTime } from "../utils/date";
+
+interface Event {
+  title: string;
+  date: Date;
+}
+
+export function EventCard({ title, date }: Event) {
+  return (
+    <div className="event-card">
+      <h3>{title}</h3>
+      <span>{formatDateTime(date)}</span>
+    </div>
+  );
+}
+```
+
+```tsx src/pages/Dashboard.tsx
+import { formatDateTime } from "../utils/date";
+
+export function Dashboard({ events }) {
+  return (
+    <div>
+      <h1>Upcoming Events</h1>
+      {events.map((event) => (
+        <p key={event.id}>
+          {event.name} - {formatDateTime(event.scheduledAt)}
+        </p>
+      ))}
+    </div>
+  );
+}
+```
+
+</CodeGroup>
+
+### Finding Usages of a Python Class
+
+Analyze how a class is used across a Python project without making changes.
+
+**Source codebase:**
+
+<CodeGroup>
+```python models/user.py
+class User:
+    def __init__(self, name: str, email: str):
+        self.name = name
+        self.email = email
+    
+    def display_name(self) -> str:
+        return f"{self.name} <{self.email}>"
+```
+
+```python services/auth.py
+from models.user import User
+
+def authenticate(username: str, password: str) -> User | None:
+    # Verify credentials
+    if verify_password(username, password):
+        return User(name=username, email=f"{username}@example.com")
+    return None
+
+def create_guest() -> User:
+    return User(name="Guest", email="guest@example.com")
+```
+
+```python api/routes.py
+from models.user import User
+from services.auth import authenticate
+
+def get_current_user(request) -> User:
+    user = authenticate(request.username, request.password)
+    if not user:
+        raise AuthError("Invalid credentials")
+    return user
+```
+
+</CodeGroup>
+
+**Codemod and workflow:**
+
+<CodeGroup>
+```typescript scripts/analyze-user-class.ts
+export default function transform(root) {
+  const rootNode = root.root();
+
+  // Find the User class definition
+  const classDefName = rootNode.find({
+    rule: { pattern: "User", inside: { pattern: "class User: $$$BODY" } },
+  });
+
+  if (!classDefName) return null;
+
+  const refs = classDefName.references();
+
+  // Log usage analysis
+  console.log("=== User class usage analysis ===\n");
+
+  let totalUsages = 0;
   for (const fileRef of refs) {
     const filename = fileRef.root.filename();
-    const count = fileRef.nodes.length;
-    fileUsage[filename] = count;
-    totalRefs += count;
+    console.log(`📄 ${filename}:`);
+    for (const node of fileRef.nodes) {
+      const line = node.range().start.line + 1;
+      const context = node.parent()?.text().slice(0, 50) || node.text();
+      console.log(`   Line ${line}: ${context}...`);
+      totalUsages++;
+    }
+    console.log("");
   }
-  
-  console.log(`Function "${funcName.text()}" is referenced ${totalRefs} times:`);
-  for (const [file, count] of Object.entries(fileUsage)) {
-    console.log(`  ${file}: ${count} references`);
-  }
-  
-  return null; // Analysis only, no changes
-};
 
-export default transform;
+  console.log(`Total: ${totalUsages} usages across ${refs.length} files`);
+
+  return null; // Analysis only, no changes
+}
+
 ```
 
-### Python Example: Finding Class References
+```yaml workflow.yaml
+version: "1"
+nodes:
+  analyze-user-class:
+    js-ast-grep:
+      js_file: scripts/analyze-user-class.ts
+      semantic_analysis: workspace
+```
 
-```ts
-import type { Transform } from "codemod:ast-grep";
-import type Python from "codemod:ast-grep/langs/python";
+</CodeGroup>
 
-const transform: Transform<Python> = (root) => {
-  const rootNode = root.root();
-  
-  // Find a class definition
-  const classDef = rootNode.find({ 
-    rule: { pattern: "class MyClass: $$$BODY" } 
+**Run the workflow:**
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t ./
+```
+
+**Output:**
+
+```
+=== User class usage analysis ===
+
+📄 models/user.py:
+   Line 1: class User:...
+
+📄 services/auth.py:
+   Line 1: from models.user import User...
+   Line 6: return User(name=username, email=f"{userna...
+   Line 10: return User(name="Guest", email="guest@exa...
+
+📄 api/routes.py:
+   Line 1: from models.user import User...
+   Line 4: def get_current_user(request) -> User:...
+
+Total: 6 usages across 3 files
+```
+
+### Tracing External Module Imports
+
+Find where external dependencies are imported when `node_modules` isn't available.
+
+**Source codebase:**
+
+<CodeGroup>
+```typescript src/api/client.ts
+import axios from 'axios';
+import { z } from 'zod';
+
+const UserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export async function fetchUser(id: string) {
+  const response = await axios.get(`/api/users/${id}`);
+  return UserSchema.parse(response.data);
+}
+```
+
+```typescript src/hooks/useUser.ts
+import { useQuery } from "@tanstack/react-query";
+import { fetchUser } from "../api/client";
+
+export function useUser(userId: string) {
+  return useQuery({
+    queryKey: ["user", userId],
+    queryFn: () => fetchUser(userId),
   });
-  if (!classDef) return null;
-  
-  // Get the class name node
-  const classNameNodes = rootNode.findAll({ rule: { pattern: "MyClass" } });
-  if (classNameNodes.length === 0) return null;
-  
-  const className = classNameNodes[0];
-  
-  // Find all references to this class
-  const refs = className.references();
-  
-  for (const fileRef of refs) {
-    console.log(`References in ${fileRef.root.filename()}:`);
-    for (const node of fileRef.nodes) {
-      console.log(`  - ${node.text()} at line ${node.range().start.line}`);
+}
+```
+
+</CodeGroup>
+
+**Codemod and workflow:**
+
+<CodeGroup>
+```typescript scripts/trace-external-imports.ts
+export default function transform(root) {
+  const rootNode = root.root();
+
+  // Find all identifiers that might be external imports
+  const identifiers = ["axios", "z", "useQuery"];
+
+  for (const name of identifiers) {
+    const node = rootNode.find({ rule: { pattern: name } });
+    for (const node of nodes) {
+      const def = node.definition();
+
+      if (def) {
+        if (def.kind === "import") {
+          // External module - couldn't resolve, but we have the import
+          console.log(`${name}: External import`);
+          console.log(`  Import statement: ${def.node.text()}`);
+        } else if (def.kind === "local") {
+          console.log(
+            `${name}: Defined locally at line ${
+              def.node.range().start.line + 1
+            }`
+          );
+        } else if (def.kind === "external") {
+          console.log(`${name}: Defined in ${def.root.filename()}`);
+        }
+      }
     }
   }
-  
-  return null;
-};
 
-export default transform;
+return null;
+}
+
 ```
+
+```yaml workflow.yaml
+version: "1"
+nodes:
+  trace-imports:
+    js-ast-grep:
+      js_file: scripts/trace-external-imports.ts
+      semantic_analysis: workspace
+```
+
+</CodeGroup>
+
+**Run the workflow:**
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t ./src
+```
+
+**Output:**
+
+```
+axios: External import
+  Import statement: import axios from 'axios'
+z: External import
+  Import statement: import { z } from 'zod'
+useQuery: External import
+  Import statement: import { useQuery } from '@tanstack/react-query'
+```
+
+<Note>
+  When a symbol comes from an unresolved import (e.g., `import x from "some-external-module"`),
+  `definition()` returns the import statement with `kind: 'import'`. This allows you to trace
+  symbols back to their import source even when the module can't be resolved or the semantic
+  mode is set to file scope.
+</Note>
+
+### Cross-File Editing with Definition Lookup
+
+Rename a constant and update all files that import it.
+
+**Source codebase:**
+
+<CodeGroup>
+```typescript src/constants.ts
+export const API_BASE_URL = "https://api.example.com";
+export const API_TIMEOUT = 5000;
+export const MAX_RETRIES = 3;
+```
+
+```typescript src/api/client.ts
+import { API_BASE_URL, API_TIMEOUT } from "../constants";
+
+export const client = {
+  baseURL: API_BASE_URL,
+  timeout: API_TIMEOUT,
+};
+```
+
+```typescript src/config/index.ts
+import { API_BASE_URL } from "../constants";
+
+export const config = {
+  apiUrl: API_BASE_URL,
+  debug: process.env.NODE_ENV === "development",
+};
+```
+
+</CodeGroup>
+
+**Codemod and workflow:**
+
+<CodeGroup>
+```typescript scripts/rename-constant.ts
+export default function transform(root) {
+  const rootNode = root.root();
+  const currentFile = root.filename();
+
+  // Find the constant declaration
+  const constDeclName = rootNode.find({
+    rule: {
+      pattern: "API_BASE_URL",
+      inside: {
+        pattern: "export const API_BASE_URL = $VALUE",
+        stopBy: {
+          kind: "export_statement",
+        },
+      },
+    },
+  });
+
+  if (!constDeclName) return null;
+
+  // Find all references to API_BASE_URL
+  const refs = constDeclName.references();
+  const currentFileEdits = [];
+
+  for (const fileRef of refs) {
+    const edits = fileRef.nodes.map((node) => node.replace("API_ENDPOINT"));
+
+    if (fileRef.root.filename() === currentFile) {
+      currentFileEdits.push(...edits);
+    } else {
+      const newContent = fileRef.root.root().commitEdits(edits);
+      fileRef.root.write(newContent);
+    }
+  }
+
+  return rootNode.commitEdits(currentFileEdits);
+}
+
+```
+
+```yaml workflow.yaml
+version: "1"
+nodes:
+  rename-constant:
+    js-ast-grep:
+      js_file: scripts/rename-constant.ts
+      semantic_analysis: workspace
+```
+
+</CodeGroup>
+
+**Run the workflow:**
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t ./src
+```
+
+**Result:**
+
+<CodeGroup>
+```typescript src/constants.ts
+export const API_ENDPOINT = "https://api.example.com";
+export const API_TIMEOUT = 5000;
+export const MAX_RETRIES = 3;
+```
+
+```typescript src/api/client.ts
+import { API_ENDPOINT, API_TIMEOUT } from "../constants";
+
+export const client = {
+  baseURL: API_ENDPOINT,
+  timeout: API_TIMEOUT,
+};
+```
+
+```typescript src/config/index.ts
+import { API_ENDPOINT } from "../constants";
+
+export const config = {
+  apiUrl: API_ENDPOINT,
+  debug: process.env.NODE_ENV === "development",
+};
+```
+
+</CodeGroup>
+
+<Warning>
+  You cannot call `write()` on the current file being processed. For the current
+  file, return the modified content from `transform()` instead. This ensures the
+  engine properly tracks and applies changes.
+</Warning>
+
+<Note>
+  When you call `write()` on an `SgRoot` obtained from `definition()` or
+  `references()`, the semantic provider's cache is automatically updated. This
+  ensures subsequent semantic queries reflect the changes.
+</Note>
 
 ## Best Practices
 
@@ -351,20 +789,15 @@ export default transform;
 <Accordion title="Use file scope for single-file transformations">
 File scope analysis is faster and doesn't require workspace configuration. Use it when your codemod only needs to understand symbols within a single file.
 
-```bash
-# Fast, single-file analysis
-npx codemod jssg run ./codemod.ts --language tsx
+```yaml workflow.yaml
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis: file # Fast, single-file analysis
 ```
-</Accordion>
 
-<Accordion title="Pre-index files for cross-file queries">
-In workspace scope mode, files are indexed as they're processed. For accurate cross-file reference finding, ensure all relevant files have been processed before querying.
-
-```ts
-// The semantic provider indexes files automatically during codemod execution
-// Cross-file references become available after files are processed
-const refs = node.references();
-```
 </Accordion>
 
 <Accordion title="Handle null/empty results gracefully">
@@ -383,6 +816,7 @@ if (refs.length === 0) {
   return null;
 }
 ```
+
 </Accordion>
 
 <Accordion title="Check file ownership before editing">
@@ -398,6 +832,7 @@ for (const fileRef of refs) {
   }
 }
 ```
+
 </Accordion>
 </AccordionGroup>
 
@@ -406,17 +841,19 @@ for (const fileRef of refs) {
 <AccordionGroup>
 <Accordion title="Semantic methods return null/empty">
 **Possible causes:**
-- No semantic provider is configured (add `--semantic-workspace` or `semantic_analysis` config)
+- No semantic analysis configured in workflow (add `semantic_analysis: workspace`)
 - The language isn't supported (only JavaScript/TypeScript and Python)
 - The symbol couldn't be resolved (external library, syntax error)
 
 **Debug steps:**
+
 ```ts
 const def = node.definition();
 console.log("Definition:", def);
 console.log("Node text:", node.text());
 console.log("Node kind:", node.kind());
 ```
+
 </Accordion>
 
 <Accordion title="Cross-file references not found">
@@ -426,18 +863,30 @@ console.log("Node kind:", node.kind());
 - Import resolution failed
 
 **Solution:**
-Ensure you're using workspace scope mode:
-```bash
-npx codemod jssg run ./codemod.ts --language tsx \
-  --semantic-workspace /path/to/project
+Ensure you're using workspace scope mode in your workflow:
+
+```yaml workflow.yaml
+version: "1"
+nodes:
+  transform:
+    js-ast-grep:
+      js_file: scripts/codemod.ts
+      semantic_analysis: workspace
 ```
+
+Then run:
+
+```bash
+npx codemod workflow run -w /path/to/codemod/workflow.yaml -t /path/to/target
+```
+
 </Accordion>
 
 <Accordion title="Performance issues with large workspaces">
 **Tips:**
 - Start with file scope for initial development
 - Use workspace scope only when cross-file analysis is needed
-- Consider running codemods on subsets of your codebase
+- Consider running workflows on subsets of your codebase by targeting specific directories
 </Accordion>
 </AccordionGroup>
 
@@ -449,15 +898,14 @@ Complete API documentation for SgNode and SgRoot methods.
 </Card>
 
 <Card title="Advanced Patterns" icon="code" href="/jssg/advanced">
-Learn advanced transformation techniques and best practices.
+  Learn advanced transformation techniques and best practices.
 </Card>
 
 <Card title="Testing" icon="flask" href="/jssg/testing">
-Test your codemods with fixtures and the test runner.
+  Test your codemods with fixtures and the test runner.
 </Card>
 
 <Card title="Security" icon="shield-check" href="/jssg/security">
 Understand jssg's security model and capabilities.
 </Card>
 </CardGroup>
-

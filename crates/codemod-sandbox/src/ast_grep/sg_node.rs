@@ -35,6 +35,9 @@ pub(crate) struct SgRootInner {
     /// Optional semantic provider for symbol indexing (native only)
     #[cfg(feature = "native")]
     pub(crate) semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    /// The current file being processed (for write() validation)
+    #[cfg(feature = "native")]
+    pub(crate) current_file_path: Option<String>,
 }
 
 #[derive(Trace, Clone)]
@@ -79,6 +82,56 @@ impl<'js> SgRootRjs<'js> {
     pub fn source(&self) -> Result<String> {
         Ok(self.inner.grep.source().to_string())
     }
+
+    /// Write content to this file.
+    ///
+    /// This method is only valid for files obtained via `definition()` or `references()`.
+    /// It cannot be called on the current file being processed - for that, return the
+    /// modified content from the `transform()` function instead.
+    ///
+    /// After writing, the semantic provider's cache is updated with the new content.
+    #[cfg(feature = "native")]
+    pub fn write(&self, content: String, ctx: Ctx<'js>) -> Result<()> {
+        let file_path = match &self.inner.filename {
+            Some(f) => f,
+            None => {
+                return Err(Exception::throw_message(
+                    &ctx,
+                    "Cannot write: file has no path",
+                ))
+            }
+        };
+
+        if let Some(current_file) = &self.inner.current_file_path {
+            let file_path_normalized = std::path::Path::new(file_path)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
+            let current_file_normalized = std::path::Path::new(current_file)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
+
+            if file_path_normalized == current_file_normalized {
+                return Err(Exception::throw_message(
+                    &ctx,
+                    "Cannot call write() on the current file. Return the modified content from transform() instead.",
+                ));
+            }
+        }
+
+        let path = std::path::Path::new(file_path);
+        std::fs::write(path, &content).map_err(|e| {
+            Exception::throw_message(
+                &ctx,
+                &format!("Failed to write file '{}': {}", file_path, e),
+            )
+        })?;
+
+        if let Some(ref provider) = self.inner.semantic_provider {
+            let _ = provider.notify_file_processed(path, &content);
+        }
+
+        Ok(())
+    }
 }
 
 impl<'js> SgRootRjs<'js> {
@@ -121,6 +174,8 @@ impl<'js> SgRootRjs<'js> {
                     filename,
                     #[cfg(feature = "native")]
                     semantic_provider: None,
+                    #[cfg(feature = "native")]
+                    current_file_path: None,
                 }),
                 _phantom: PhantomData,
             })
@@ -137,6 +192,8 @@ impl<'js> SgRootRjs<'js> {
                 filename,
                 #[cfg(feature = "native")]
                 semantic_provider: None,
+                #[cfg(feature = "native")]
+                current_file_path: None,
             }),
             _phantom: PhantomData,
         })
@@ -148,12 +205,14 @@ impl<'js> SgRootRjs<'js> {
         grep: AstGrep<TSDoc>,
         filename: Option<String>,
         semantic_provider: Option<Arc<dyn SemanticProvider>>,
+        current_file_path: Option<String>,
     ) -> std::result::Result<Self, String> {
         Ok(SgRootRjs {
             inner: Arc::new(SgRootInner {
                 grep,
                 filename,
                 semantic_provider,
+                current_file_path,
             }),
             _phantom: PhantomData,
         })
@@ -679,11 +738,16 @@ impl<'js> SgNodeRjs<'js> {
                 } else {
                     // Definition is in a different file, create new root
                     let lang_str = detect_language_from_path(&def_result.location.file_path);
+                    let lang = Lang::from_str(&lang_str).map_err(|e| {
+                        Exception::throw_message(&ctx, &format!("Unsupported language: {}", e))
+                    })?;
+                    let grep = AstGrep::new(def_result.content.clone(), lang);
 
-                    if let Ok(new_root) = SgRootRjs::try_new(
-                        lang_str,
-                        def_result.content.clone(),
+                    if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
+                        grep,
                         Some(def_result.location.file_path.to_string_lossy().to_string()),
+                        self.root.semantic_provider.clone(),
+                        self.root.current_file_path.clone(),
                     ) {
                         let root_node = new_root.inner.grep.root();
                         if let Some(node) = find_node_at_range(
@@ -792,11 +856,17 @@ impl<'js> SgNodeRjs<'js> {
                     } else {
                         // Create new root for different file
                         let lang_str = detect_language_from_path(&file_refs.file_path);
+                        let lang = match Lang::from_str(&lang_str) {
+                            Ok(l) => l,
+                            Err(_) => continue, // Skip files with unsupported languages
+                        };
+                        let grep = AstGrep::new(file_refs.content.clone(), lang);
 
-                        if let Ok(new_root) = SgRootRjs::try_new(
-                            lang_str,
-                            file_refs.content.clone(),
+                        if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
+                            grep,
                             Some(file_refs.file_path.to_string_lossy().to_string()),
+                            self.root.semantic_provider.clone(),
+                            self.root.current_file_path.clone(),
                         ) {
                             file_obj.set("root", new_root.clone())?;
 
@@ -879,10 +949,11 @@ impl<'js> SgNodeRjs<'js> {
 #[cfg(feature = "native")]
 fn detect_language_from_path(path: &std::path::Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("ts") => "typescript".to_string(),
+        Some("ts") | Some("mts") | Some("cts") => "typescript".to_string(),
         Some("tsx") => "tsx".to_string(),
         Some("js") | Some("mjs") | Some("cjs") => "javascript".to_string(),
         Some("jsx") => "jsx".to_string(),
+        Some("py") | Some("pyi") => "python".to_string(),
         _ => "typescript".to_string(), // Default to typescript
     }
 }
