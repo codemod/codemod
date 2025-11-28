@@ -50,7 +50,9 @@ impl AstDumpHandler {
         language: SupportLang,
     ) -> Result<String, String> {
         let root = AstGrep::new(source_code, language);
-        Ok(self.dump_ast_for_ai_context(root.root(), 0))
+        let result = self.dump_ast_for_ai_context(root.root(), 0);
+        let formatted_result = format!("```\n{result}\n```");
+        Ok(formatted_result)
     }
 
     #[allow(clippy::only_used_in_recursion)]
