@@ -4,24 +4,31 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Python semantic analysis provider using Ruff"
+description = "Python semantic analysis provider using Ruff ty_ide"
 
 [dependencies]
 language-core.workspace = true
 thiserror.workspace = true
 log.workspace = true
+anyhow.workspace = true
 
-# Ruff Python semantic analysis
-ruff_python_semantic.workspace = true
-ruff_python_parser.workspace = true
-ruff_python_ast.workspace = true
+# Ruff ty_ide for semantic analysis (goto-definition, find-references)
+ty_ide.workspace = true
+ty_project.workspace = true
+ty_python_semantic.workspace = true
+ruff_db.workspace = true
 ruff_text_size.workspace = true
-ruff_source_file.workspace = true
+ruff_python_ast.workspace = true
+ruff_python_parser.workspace = true
+
+# Salsa for incremental computation (same version as ty_*)
+salsa = { git = "https://github.com/salsa-rs/salsa.git", rev = "29ab321b45d00daa4315fa2a06f7207759a8c87e" }
+
+# Vendored typeshed stubs
+ty_vendored = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }
 
 # Concurrency
 parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile.workspace = true
-
-

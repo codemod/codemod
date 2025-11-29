@@ -40,14 +40,20 @@ export default function transform(root) {
     }
   }
 
+  // ty_ide finds all references including:
+  // 1. Definition: def calculate(x, y) in utils.py
+  // 2. Usage: calculate(1, 1) in utils.py
+  // 3. Import: from utils import calculate in main.py
+  // 4. Usage: calculate(2, 3) in main.py
+  // 5. Usage: calculate(3, 4) in main.py
   if (references.length !== 2) {
     throw new Error(
       "Expected 2 files with references, got " + references.length,
     );
   }
 
-  if (totalRefs !== 3) {
-    throw new Error("Expected 3 references, got " + totalRefs);
+  if (totalRefs !== 5) {
+    throw new Error("Expected 5 references, got " + totalRefs);
   }
 
   return null;
