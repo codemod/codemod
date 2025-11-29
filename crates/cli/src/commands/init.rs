@@ -245,7 +245,7 @@ pub fn handler(args: &Command) -> Result<()> {
     create_project(&project_path, &config)?;
 
     // Run post init commands
-    run_post_init_commands(&project_path, &config, args.no_interactive)?;
+    run_post_init_commands(&project_path, &config)?;
 
     let project_absolute_path = project_path.canonicalize()?;
 
@@ -332,6 +332,19 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
             .prompt()?
     };
 
+    let package_manager = if args.package_manager.is_some() {
+        args.package_manager.clone()
+    } else {
+        Some(
+            Select::new(
+                "Which package manager would you like to use?",
+                vec!["npm", "pnpm", "bun", "yarn"],
+            )
+            .prompt()?
+            .to_string(),
+        )
+    };
+
     Ok(ProjectConfig {
         name,
         description,
@@ -340,7 +353,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         project_type,
         language,
         private,
-        package_manager: args.package_manager.clone(),
+        package_manager,
         git_repository_url: if git_repository_url.is_empty() {
             None
         } else {
@@ -705,23 +718,10 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_post_init_commands(
-    project_path: &Path,
-    config: &ProjectConfig,
-    no_interactive: bool,
-) -> Result<()> {
+fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     match config.project_type {
         ProjectType::AstGrepJs | ProjectType::Hybrid => {
-            let package_manager = if no_interactive {
-                config.package_manager.clone().unwrap_or("npm".to_string())
-            } else {
-                Select::new(
-                    "Which package manager would you like to use?",
-                    vec!["npm", "yarn", "pnpm", "bun"],
-                )
-                .prompt()?
-                .to_string()
-            };
+            let package_manager = config.package_manager.clone().unwrap_or("npm".to_string());
 
             let output = ProcessCommand::new(package_manager)
                 .arg("install")
