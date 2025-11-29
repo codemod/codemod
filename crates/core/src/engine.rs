@@ -1655,16 +1655,15 @@ impl Engine {
             .bundle_path
             .join(&js_ast_grep.js_file);
 
-        let base_path = if let Some(base) = &js_ast_grep.base_path {
-            std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(base)
+        // Combine target_path with base_path if base_path is specified
+        let target_path = if let Some(base_path) = &js_ast_grep.base_path {
+            self.workflow_run_config.target_path.join(base_path)
         } else {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            self.workflow_run_config.target_path.clone()
         };
 
         if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_deref() {
-            pre_run_callback(base_path.as_path(), js_ast_grep.dry_run.unwrap_or(false));
+            pre_run_callback(target_path.as_path(), js_ast_grep.dry_run.unwrap_or(false));
         }
 
         if !js_file_path.exists() {
@@ -1701,8 +1700,8 @@ impl Engine {
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
             progress_callback: self.workflow_run_config.progress_callback.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
-            base_path: js_ast_grep.base_path.as_deref().map(PathBuf::from),
+            target_path: Some(target_path.clone()),
+            base_path: None,
             include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
             exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
             dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
@@ -1747,9 +1746,9 @@ impl Engine {
                     Some(Arc::new(LazySemanticProvider::file_scope()))
                 }
                 Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => {
-                    // use base_path as workspace root by default
+                    // use target_path as workspace root by default
                     Some(Arc::new(LazySemanticProvider::workspace_scope(
-                        base_path.clone(),
+                        target_path.clone(),
                     )))
                 }
                 Some(SemanticAnalysisConfig::Detailed(detailed)) => {
@@ -1758,12 +1757,12 @@ impl Engine {
                             Some(Arc::new(LazySemanticProvider::file_scope()))
                         }
                         SemanticAnalysisMode::Workspace => {
-                            // use custom root if provided, otherwise use base_path
+                            // use custom root if provided, otherwise use target_path
                             let root = detailed
                                 .root
                                 .as_ref()
                                 .map(PathBuf::from)
-                                .unwrap_or_else(|| base_path.clone());
+                                .unwrap_or_else(|| target_path.clone());
                             Some(Arc::new(LazySemanticProvider::workspace_scope(root)))
                         }
                     }

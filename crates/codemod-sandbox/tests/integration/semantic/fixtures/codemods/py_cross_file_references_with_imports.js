@@ -33,14 +33,18 @@ export default function transform(root) {
     totalRefs += fileRef.nodes.length;
   }
 
-  if (references.length !== 1) {
+  // ty_ide finds references in both files:
+  // models.py: class definition (1)
+  // app.py: import + 3 usages (4)
+  // Total: 5 references across 2 files
+  if (references.length !== 2) {
     throw new Error(
-      "Expected 1 file with references, got " + references.length,
+      "Expected 2 files with references, got " + references.length,
     );
   }
 
-  if (totalRefs !== 3) {
-    throw new Error("Expected 3 references, got " + totalRefs);
+  if (totalRefs !== 5) {
+    throw new Error("Expected 5 references, got " + totalRefs);
   }
 
   return null;

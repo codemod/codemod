@@ -1,7 +1,8 @@
-//! Python semantic analysis provider using Ruff.
+//! Python semantic analysis provider using Ruff's ty_ide.
 //!
 //! This crate provides semantic analysis capabilities for Python
-//! using the Ruff toolchain (parser and semantic analyzer).
+//! by leveraging Ruff's ty_ide crate for goto-definition and
+//! find-references functionality.
 //!
 //! # Features
 //!
@@ -37,7 +38,7 @@
 //! ```
 
 mod analyzer;
-mod cache;
+mod db;
 mod error;
 mod provider;
 
