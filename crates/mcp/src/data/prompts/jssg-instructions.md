@@ -506,6 +506,23 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
 - `'import'` — Traced to an import statement (module couldn't be resolved)
 - `'external'` — Definition resolved to a different file in the workspace
 
+### CRITICAL: definition() Returns Different Node Types
+
+**The `def.node` from `definition()` is NOT the same as `getImport().node`**. They return different AST node types:
+
+- For ESM imports (`import x from 'pkg'`), `definition()` returns the `import_clause` node
+- For CJS requires (`const x = require('pkg')`), `definition()` returns the `variable_declarator` node
+
+❌ **WRONG — Comparing node IDs directly:**
+```typescript
+const myImport = getImport(rootNode, { type: "default", from: "my-pkg" });
+const def = callee.definition();
+// This will NEVER match because they're different node types!
+if (def.node.id() === myImport.node.id()) { /* won't work */ }
+```
+
+✅ **CORRECT — Verify definition exists and check context**
+
 ## Using `node.references()`
 
 Find all references to a symbol across the workspace:
@@ -854,6 +871,162 @@ For large codebases:
 * **Never write fixture-specific code**: Your codemod must be general and work with ANY code matching the pattern
 * **Debug properly**: Use the `dump_ast` MCP tool, log `node.kind()` and `node.text()` to investigate mismatches
 * **Performance**: Use specific `kind` filters; combine related checks with `any`/`all`; early-exit aggressively
+
+---
+
+# Part 8: Common AST Patterns
+
+## NEVER Use String Operations When AST Can Be Used
+
+String operations like `.includes()`, `.startsWith()`, `.match()` on node text are **anti-patterns** when you're checking AST structure. Always use AST queries instead.
+
+### Checking Object Properties
+
+❌ **WRONG — String operations:**
+```typescript
+const optionsText = optionsArg.text();
+const hasStyles = optionsText.includes("styles:");
+const hasLabel = optionsText.includes("label:");
+```
+
+✅ **CORRECT — AST query:**
+```typescript
+function hasPropertyInObject(objectNode: SgNode<Language>, propertyName: string): boolean {
+  const pairs = objectNode.findAll({
+    rule: {
+      kind: "pair",
+      has: {
+        kind: "property_identifier",
+        regex: `^${propertyName}$`,
+      },
+    },
+  });
+  return pairs.length > 0;
+}
+
+const hasStyles = hasPropertyInObject(optionsArg, "styles");
+const hasLabel = hasPropertyInObject(optionsArg, "label");
+```
+
+### Getting String Content Without Quotes
+
+❌ **WRONG — String slicing:**
+```typescript
+const pathText = pathArg.text();
+const pathContent = pathText.slice(1, -1); // Remove quotes - fragile!
+```
+
+✅ **CORRECT — AST child node:**
+```typescript
+function getStringContent(node: SgNode<Language>): string | null {
+  if (!node.is("string")) return null;
+  
+  // Find the string_fragment child which contains the actual content
+  const fragment = node.find({
+    rule: { kind: "string_fragment" },
+  });
+  if (fragment) {
+    return fragment.text();
+  }
+  return null;
+}
+```
+
+### Finding Comments Before Statements
+
+Comments before a statement are **siblings**, not children. You have two approaches:
+
+❌ **WRONG — Looking in children:**
+```typescript
+const comments = callNode.findAll({ rule: { kind: "comment" } });
+// Won't find comments on the line before the call!
+```
+
+✅ **CORRECT Using `follows()` with regex:**
+```typescript
+function hasIgnoreComment(callNode: SgNode<Language>): boolean {
+  // Get the expression statement containing this call
+  const exprStmt = callNode.ancestors().find((a) => a.kind() === "expression_statement");
+  if (!exprStmt) return false;
+
+  // Use follows() to check if this statement follows a specific comment
+  return exprStmt.follows({
+    rule: {
+      kind: "comment",
+      regex: "//\s*codemod-ignore",
+    },
+  });
+}
+```
+
+**When to use which:**
+- Use `follows()` when you just need to check if a comment with a pattern exists before the node
+- Use `prevAll()` when you need more control (e.g., only check the immediately preceding comment, or extract values from the comment)
+
+### Finding Something in Arguments
+
+❌ **WRONG — String search:**
+```typescript
+const argsText = argsNode.text().toLowerCase();
+if (argsText.includes("ratelimit") || argsText.includes("limiter")) {
+  // ...
+}
+```
+
+✅ **CORRECT — Using `has()` with regex:**
+```typescript
+function hasRateLimitingInArgs(argsNode: SgNode<Language>): boolean {
+  // Use has() to check if args contain an identifier matching rate limiting patterns
+  // (?i) makes it case-insensitive
+  return argsNode.has({
+    rule: {
+      kind: "identifier",
+      regex: "(?i)(ratelimit|limiter|throttle)",
+    },
+  });
+}
+```
+
+### Checking for Specific Call Patterns
+
+❌ **WRONG — String contains:**
+```typescript
+if (stmt.text().includes("require(") || stmt.text().includes("express()")) {
+  // ...
+}
+```
+
+✅ **CORRECT — AST pattern matching:**
+```typescript
+const hasRequire = stmt.find({
+  rule: {
+    kind: "call_expression",
+    has: {
+      field: "function",
+      kind: "identifier",
+      regex: "^require$",
+    },
+  },
+});
+
+const hasExpressCall = stmt.find({
+  rule: {
+    kind: "call_expression",
+    has: {
+      field: "function",
+      kind: "identifier",
+    },
+  },
+});
+```
+
+## When String Checks ARE Acceptable
+
+String checks are acceptable when:
+1. **Checking actual string VALUES** (not AST structure): e.g., checking if a string literal contains `process.env`
+2. **Comment content**: Comments are text by nature
+3. **Regex patterns**: When the pattern itself needs text matching
+4. **Quote style preservation**: e.g., `value.startsWith('"')` to maintain quote consistency
 
 ---
 
