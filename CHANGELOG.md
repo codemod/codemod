@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.3.1] - 2025-11-29
+
+### 🚀 Features
+
+- Update jssg and Codemod CLI documentation, remove ast-grep instructions, and enhance semantic analysis details
+- Enhance project initialization by adding support for 'bun' package manager and updating codemod command in package.json
+- Format AST dump output for improved readability
+- *(language-python)* Switch python semantics to ruff's ty_ide
+
+### 🐛 Bug Fixes
+
+- Fix package manager selection
+
+### 📚 Documentation
+
+- Imropve jssg instructions in MCP
+
+### ⚙️ Miscellaneous Tasks
+
+- Bump jssg-types version to 1.3.0
+- *(bump)* Bump codemod crates version to v1.3.1
+
 ## [codemod-cli@1.3.0] - 2025-11-28
 
 ### 🚀 Features
