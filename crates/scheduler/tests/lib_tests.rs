@@ -557,3 +557,116 @@ async fn test_find_runnable_tasks_manual_node_type() {
     assert_eq!(runnable_after_node1.tasks_to_await_trigger.len(), 1);
     assert_eq!(runnable_after_node1.tasks_to_await_trigger[0], task2_id);
 }
+
+/// Test that failed tasks are reset to pending when state changes but hashes match.
+/// This simulates the scenario where a parent node (like evaluate-shards) is re-triggered,
+/// produces the same shards, but the failed child tasks should get a chance to re-run.
+#[tokio::test]
+async fn test_calculate_matrix_task_changes_resets_failed_tasks_on_state_change() {
+    let workflow = create_test_workflow(vec![
+        create_basic_node("node1", vec![]),
+        create_matrix_node_from_state("node2", vec!["node1"], "items"),
+    ]);
+    let run = create_test_run(workflow.clone());
+    let node2_id = "node2".to_string();
+
+    // --- Initial Setup: Simulating first run with items a, b ---
+    let master_task = Task::new(run.id, node2_id.clone(), true);
+    let mut task_a = Task::new_matrix(
+        run.id,
+        node2_id.clone(),
+        master_task.id,
+        HashMap::from([("id".to_string(), serde_json::Value::String("a".to_string()))]),
+    );
+    let mut task_b = Task::new_matrix(
+        run.id,
+        node2_id.clone(),
+        master_task.id,
+        HashMap::from([("id".to_string(), serde_json::Value::String("b".to_string()))]),
+    );
+
+    // Simulate that task_a completed successfully and task_b failed
+    task_a.status = TaskStatus::Completed;
+    task_b.status = TaskStatus::Failed;
+
+    let initial_tasks = vec![
+        Task::new(run.id, "node1".to_string(), false),
+        master_task.clone(),
+        task_a.clone(),
+        task_b.clone(),
+    ];
+
+    // State produces the SAME items as before (same hashes)
+    // This simulates evaluate-shards being re-triggered and producing the same shards
+    let new_state = HashMap::from([("items".to_string(), json!([{"id": "a"}, {"id": "b"}]))]);
+
+    let scheduler = Scheduler::new();
+
+    // --- Calculation ---
+    let changes = scheduler
+        .calculate_matrix_task_changes(run.id, &run, &initial_tasks, &new_state)
+        .await
+        .unwrap();
+
+    // --- Assertions ---
+    // Should NOT create new tasks (hashes match existing tasks)
+    assert_eq!(changes.new_tasks.len(), 0);
+
+    // Should NOT mark any tasks as WontDo (all hashes still exist)
+    assert_eq!(changes.tasks_to_mark_wont_do.len(), 0);
+
+    // Should reset task_b (Failed) to Pending so it can be re-run
+    assert_eq!(changes.tasks_to_reset_to_pending.len(), 1);
+    assert_eq!(changes.tasks_to_reset_to_pending[0], task_b.id);
+
+    // Should update the master task
+    assert_eq!(changes.master_tasks_to_update.len(), 1);
+    assert_eq!(changes.master_tasks_to_update[0], master_task.id);
+}
+
+/// Test that completed tasks are NOT reset when state changes
+#[tokio::test]
+async fn test_calculate_matrix_task_changes_does_not_reset_completed_tasks() {
+    let workflow = create_test_workflow(vec![
+        create_basic_node("node1", vec![]),
+        create_matrix_node_from_state("node2", vec!["node1"], "items"),
+    ]);
+    let run = create_test_run(workflow.clone());
+    let node2_id = "node2".to_string();
+
+    let master_task = Task::new(run.id, node2_id.clone(), true);
+    let mut task_a = Task::new_matrix(
+        run.id,
+        node2_id.clone(),
+        master_task.id,
+        HashMap::from([("id".to_string(), serde_json::Value::String("a".to_string()))]),
+    );
+
+    // Task is completed - should NOT be reset
+    task_a.status = TaskStatus::Completed;
+
+    let initial_tasks = vec![
+        Task::new(run.id, "node1".to_string(), false),
+        master_task.clone(),
+        task_a.clone(),
+    ];
+
+    // Same state as before
+    let new_state = HashMap::from([("items".to_string(), json!([{"id": "a"}]))]);
+
+    let scheduler = Scheduler::new();
+
+    let changes = scheduler
+        .calculate_matrix_task_changes(run.id, &run, &initial_tasks, &new_state)
+        .await
+        .unwrap();
+
+    // Should NOT create new tasks
+    assert_eq!(changes.new_tasks.len(), 0);
+
+    // Should NOT reset completed tasks
+    assert_eq!(changes.tasks_to_reset_to_pending.len(), 0);
+
+    // Should NOT mark any tasks as WontDo
+    assert_eq!(changes.tasks_to_mark_wont_do.len(), 0);
+}
