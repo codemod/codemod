@@ -1155,6 +1155,38 @@ impl Engine {
                 .await?;
         }
 
+        for task_id in changes.tasks_to_reset_to_pending {
+            debug!("Resetting task {task_id} from Failed to Pending");
+            let mut fields = HashMap::new();
+            fields.insert(
+                "status".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::to_value(TaskStatus::Pending)?),
+                },
+            );
+            fields.insert(
+                "error".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::Value::Null),
+                },
+            );
+            fields.insert(
+                "ended_at".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::Value::Null),
+                },
+            );
+            let task_diff = TaskDiff { task_id, fields };
+            self.state_adapter
+                .lock()
+                .await
+                .apply_task_diff(&task_diff)
+                .await?;
+        }
+
         // Update master task status
         for master_task_id in changes.master_tasks_to_update {
             debug!("Updating master task {master_task_id} status");

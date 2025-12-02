@@ -28,6 +28,7 @@ type State = Record<string, unknown>;
 interface MatrixTaskChanges {
     new_tasks: Task[];
     tasks_to_mark_wont_do: Uuid[];
+    tasks_to_reset_to_pending: Uuid[];
     master_tasks_to_update: Uuid[];
 }
 
@@ -40,8 +41,13 @@ interface RunnableTaskChanges {
 /// Struct to hold the result of matrix task recompilation calculations
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct MatrixTaskChanges {
+    /// Tasks that should be created
     pub new_tasks: Vec<Task>,
+    /// Tasks that should be marked as WontDo
     pub tasks_to_mark_wont_do: Vec<Uuid>,
+    /// Tasks that should be reset to Pending
+    pub tasks_to_reset_to_pending: Vec<Uuid>,
+    /// Master tasks that should be updated
     pub master_tasks_to_update: Vec<Uuid>,
 }
 
@@ -318,6 +324,7 @@ impl Scheduler {
     ) -> Result<MatrixTaskChanges> {
         let mut new_tasks = Vec::new();
         let mut tasks_to_mark_wont_do = Vec::new();
+        let mut tasks_to_reset_to_pending = Vec::new();
         let mut master_tasks_to_update = Vec::new();
 
         for node in &workflow_run.workflow.nodes {
@@ -437,6 +444,23 @@ impl Scheduler {
                     }
                 }
 
+                // --- Identify Tasks to Reset to Pending ---
+                // When state changes (this function is called), existing tasks that are
+                // still valid (hash matches) but are in Failed state should be reset to
+                // Pending.
+                for (task_hash, task) in &existing_child_tasks_by_hash {
+                    if current_item_hashes.contains(task_hash) {
+                        // Task hash still matches current state - task is still valid
+                        if task.status == TaskStatus::Failed {
+                            debug!(
+                                "Need to reset task {} (hash: {}, matrix_values: {:?}) for node '{}' from Failed to Pending",
+                                task.id, task_hash, task.matrix_values, node.id
+                            );
+                            tasks_to_reset_to_pending.push(task.id);
+                        }
+                    }
+                }
+
                 // --- Identify Tasks to Mark as WontDo ---
                 for (task_hash, task) in &existing_child_tasks_by_hash {
                     if !current_item_hashes.contains(task_hash) {
@@ -459,6 +483,7 @@ impl Scheduler {
         Ok(MatrixTaskChanges {
             new_tasks,
             tasks_to_mark_wont_do,
+            tasks_to_reset_to_pending,
             master_tasks_to_update,
         })
     }
