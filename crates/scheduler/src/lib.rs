@@ -443,7 +443,7 @@ impl Scheduler {
                         // Mark as WontDo only if it's not already in a terminal state
                         if !matches!(
                             task.status,
-                            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
+                            TaskStatus::Completed | TaskStatus::WontDo
                         ) {
                             debug!(
                                 "Need to mark task {} (hash: {}, matrix_values: {:?}) for node '{}' as WontDo",
