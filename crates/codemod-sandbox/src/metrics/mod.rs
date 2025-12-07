@@ -44,24 +44,24 @@ fn set_metric(scope_name: String, value: usize) {
     let mut scopes = METRIC_SCOPES.lock().unwrap();
     if let Some(s) = scopes.iter().find(|m| m.name == scope_name).cloned() {
         scopes.remove(&s);
-        let mut updated = s;
-        updated.value = value as usize;
+        let updated = Metric {
+            name: scope_name,
+            value,
+        };
         scopes.insert(updated);
     } else {
         scopes.insert(Metric {
             name: scope_name,
-            value: value,
+            value,
         });
     }
 }
 
-fn use_metric(ctx: Ctx<'_>, scope_name: String, initial: Option<usize>) -> Result<Object<'_>> {
+fn use_metric(ctx: Ctx<'_>, scope_name: String) -> Result<Object<'_>> {
     let scopes = METRIC_SCOPES.lock().unwrap();
-    if let Some(v) = initial {
-        if !scopes.iter().any(|s| s.name == scope_name) {
-            drop(scopes);
-            set_metric(scope_name.clone(), v);
-        }
+    if !scopes.iter().any(|s| s.name == scope_name) {
+        drop(scopes);
+        set_metric(scope_name.clone(), 0);
     }
 
     let obj = Object::new(ctx.clone())?;
@@ -76,4 +76,10 @@ fn use_metric(ctx: Ctx<'_>, scope_name: String, initial: Option<usize>) -> Resul
         Func::new(move |_ctx: Ctx<'_>, value: usize| set_metric(scope_name_clone2.clone(), value)),
     )?;
     Ok(obj)
+}
+
+#[allow(dead_code)]
+pub fn get_all_metrics() -> Vec<(String, usize)> {
+    let scopes = METRIC_SCOPES.lock().unwrap();
+    scopes.iter().map(|m| (m.name.clone(), m.value)).collect()
 }
