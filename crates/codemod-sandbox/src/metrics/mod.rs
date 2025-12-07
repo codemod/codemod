@@ -31,16 +31,16 @@ impl ModuleDef for MetricModule {
     }
 }
 
-fn get_metric(scope_name: String) -> f64 {
+fn get_metric(scope_name: String) -> usize {
     let scopes = METRIC_SCOPES.lock().unwrap();
     scopes
         .iter()
         .find(|m| m.name == scope_name)
-        .map(|m| m.value as f64)
-        .unwrap_or(0.0)
+        .map(|m| m.value)
+        .unwrap_or(0)
 }
 
-fn set_metric(scope_name: String, value: f64) {
+fn set_metric(scope_name: String, value: usize) {
     let mut scopes = METRIC_SCOPES.lock().unwrap();
     if let Some(s) = scopes.iter().find(|m| m.name == scope_name).cloned() {
         scopes.remove(&s);
@@ -50,26 +50,30 @@ fn set_metric(scope_name: String, value: f64) {
     } else {
         scopes.insert(Metric {
             name: scope_name,
-            value: value as usize,
+            value: value,
         });
     }
 }
 
-fn use_metric(ctx: Ctx<'_>, scope_name: String, initial: Option<f64>) -> Result<Object<'_>> {
+fn use_metric(ctx: Ctx<'_>, scope_name: String, initial: Option<usize>) -> Result<Object<'_>> {
+    let scopes = METRIC_SCOPES.lock().unwrap();
     if let Some(v) = initial {
-        set_metric(scope_name.clone(), v);
+        if !scopes.iter().any(|s| s.name == scope_name) {
+            drop(scopes);
+            set_metric(scope_name.clone(), v);
+        }
     }
 
     let obj = Object::new(ctx.clone())?;
     let scope_name_clone = scope_name.clone();
     obj.set(
         "get",
-        Func::new(move |_ctx: Ctx<'_>, ()| get_metric(scope_name_clone.clone())),
+        Func::new(move |_ctx: Ctx<'_>| get_metric(scope_name_clone.clone())),
     )?;
     let scope_name_clone2 = scope_name.clone();
     obj.set(
         "set",
-        Func::new(move |_ctx: Ctx<'_>, value: f64| set_metric(scope_name_clone2.clone(), value)),
+        Func::new(move |_ctx: Ctx<'_>, value: usize| set_metric(scope_name_clone2.clone(), value)),
     )?;
     Ok(obj)
 }
