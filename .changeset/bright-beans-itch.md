@@ -2,4 +2,4 @@
 "@codemod.com/jssg-types": minor
 ---
 
-Implement codemod:metric package and metric system for workflow runtime
+Implement codemod:metrics package and metric system for workflow runtime

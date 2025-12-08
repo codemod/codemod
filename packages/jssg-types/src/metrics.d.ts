@@ -54,7 +54,6 @@ export interface Metric {
  * so you can track cumulative statistics.
  * 
  * @param scopeName - A unique name for the metric scope
- * @param initial - Optional initial value (defaults to 0)
  * @returns A Metric object with get() and set() methods
  * 
  * @example
@@ -94,5 +93,5 @@ export interface Metric {
  * }
  * ```
  */
-export declare function useMetric(scopeName: string, initial?: number): Metric;
+export declare function useMetric(scopeName: string): Metric;
 
