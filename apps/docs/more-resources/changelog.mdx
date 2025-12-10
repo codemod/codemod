@@ -7,6 +7,7 @@ mode: "center"
 
 
 <Update label="November 2025">
+- **Semantic analysis for codemods**: JS/TS and Python now support workspace-wide definitions and references, enabling cross-file aware codemods powered by semantic providers. ([Learn more ->](/jssg/semantic-analysis))
 - **Campaign creation streamlined**: The campaign creation UI is now cleaner, and when launching from “apply to repository,” the associated codemod is pre-selected to accelerate setup.
 - **Login flow improved**: Enhanced loading and error handling, plus stronger OIDC authentication via JWT.
 - **Insights & dashboards**:
@@ -45,7 +46,7 @@ mode: "center"
 
 **Stripe-powered subscriptions:** Seamless billing management directly in organization settings, with pro plan access controls for premium features and enterprise codemods.
 
-**jssg security & capabilities:** jssg now enforces a deny-by-default security model. File system access, network requests, and process spawning are disabled by default and must be explicitly enabled via the `capabilities` field in `codemod.yaml` or CLI flags. This ensures untrusted codemods cannot access sensitive resources without explicit permission, providing better security and auditability.
+**JSSG security & capabilities:** JSSG now enforces a deny-by-default security model. File system access, network requests, and process spawning are disabled by default and must be explicitly enabled via the `capabilities` field in `codemod.yaml` or CLI flags. This ensures untrusted codemods cannot access sensitive resources without explicit permission, providing better security and auditability.
 
 **Platform upgrades:**
 - Next.js 16 and React 19 for improved performance and developer experience
