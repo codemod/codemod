@@ -26,19 +26,14 @@
         "groups": [
           {
             "group": "Getting Started",
-            "pages": [
-              "introduction",
-              {
-                "group": "Quickstart",
-                "pages": ["quickstart-enterprise", "quickstart-oss"]
-              }
-            ]
+            "pages": ["introduction", "quickstart"]
           },
           {
             "group": "Codemod Platform",
             "pages": [
               "campaigns",
               "insights",
+              "registry",
               "codemod-studio",
               {
                 "icon": "plug",
@@ -54,6 +49,7 @@
           {
             "group": "OSS & Community",
             "pages": [
+              "oss",
               "cli/cli-reference",
               "/model-context-protocol",
               {
@@ -64,7 +60,7 @@
                 ]
               },
               {
-                "group": "jssg",
+                "group": "JSSG",
                 "pages": [
                   "/jssg/quickstart",
                   "/jssg/testing",
@@ -73,8 +69,7 @@
                   "/jssg/advanced",
                   "/jssg/security"
                 ]
-              },
-              "registry"
+              }
             ]
           },
           {
@@ -208,8 +203,12 @@
       "destination": "/campaigns"
     },
     {
-      "source": "/quickstart",
-      "destination": "/quickstart-oss"
+      "source": "/quickstart-enterprise",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/quickstart-oss",
+      "destination": "/oss"
     }
   ],
   "contextual": {

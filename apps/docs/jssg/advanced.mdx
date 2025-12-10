@@ -2,11 +2,11 @@
 title: "Advanced Patterns"
 ---
 
-This guide covers advanced jssg features that enable you to build more sophisticated and efficient codemods. You'll learn how to parse code dynamically, optimize performance with selectors, use parameters for flexibility, and leverage matrix values for complex workflows.
+This guide covers advanced JSSG features that enable you to build more sophisticated and efficient codemods. You'll learn how to parse code dynamically, optimize performance with selectors, use parameters for flexibility, and leverage matrix values for complex workflows.
 
 ## Transform Function Contract
 
-Every jssg codemod must export a default function with this exact signature:
+Every JSSG codemod must export a default function with this exact signature:
 
 ```ts
 import type { Transform } from "codemod:ast-grep";
@@ -253,11 +253,11 @@ state:
 
 ### Selectors (getSelector)
 
-By default, jssg processes every file in your project, which can be inefficient for large codebases.
+By default, JSSG processes every file in your project, which can be inefficient for large codebases.
 
 When a selector is exported, you can pre-filter files based on specific patterns, so that the engine only calls your transform for files that match it.
 
-- jssg scans files using the selector before calling your transform
+- JSSG scans files using the selector before calling your transform
 - Files without matches are skipped, reducing work
 - Matched nodes are available via `options.matches`
 
@@ -280,7 +280,7 @@ State conveys execution context and progress signals across runs (e.g., total fi
 
 ### Persistent State Across Runs
 
-jssg codemods can leverage persistent state for large-scale migrations:
+JSSG codemods can leverage persistent state for large-scale migrations:
 
 ```ts
 import type { Transform } from "codemod:ast-grep";
@@ -292,7 +292,7 @@ const transform: Transform<TSX> = async (root, options) => {
   // Access current state
   // The following meta properties are example placeholders.
   // In a real migration, _meta_progress and _meta_total_files should be set and updated
-  // by your orchestration logic or jssg's state management system.
+  // by your orchestration logic or JSSG's state management system.
   // They are used here to illustrate how you might track progress across files.
   const currentProgress = options.matrixValues?._meta_progress || 0;
   const totalFiles = options.matrixValues?._meta_total_files || 0;

@@ -1,13 +1,13 @@
 ---
 title: "Security & Capabilities"
-description: "Understand jssg's deny-by-default security model and how to enable capabilities for file system, network, and process operations"
+description: "Understand JSSG's deny-by-default security model and how to enable capabilities for file system, network, and process operations"
 ---
 
-jssg follows a **deny-by-default security model** for sensitive operations. This means potentially unsafe modules like file system access, network requests, and child processes are disabled by default and must be explicitly enabled.
+JSSG follows a **deny-by-default security model** for sensitive operations. This means potentially unsafe modules like file system access, network requests, and child processes are disabled by default and must be explicitly enabled.
 
 ## Why deny-by-default?
 
-Codemods run arbitrary code transformations on your codebase. By restricting capabilities by default, jssg ensures:
+Codemods run arbitrary code transformations on your codebase. By restricting capabilities by default, JSSG ensures:
 
 - **Safe execution**: Untrusted codemods cannot access sensitive resources without explicit permission
 - **Audit trail**: The `capabilities` field in `codemod.yaml` provides a clear record of what permissions a codemod requires
@@ -250,7 +250,7 @@ codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/w
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/jssg/quickstart">
-    Build your first jssg codemod
+    Build your first JSSG codemod
   </Card>
   <Card title="Advanced patterns" icon="code" href="/jssg/advanced">
     Learn advanced transformation techniques

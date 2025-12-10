@@ -2,15 +2,7 @@
 title: Introduction
 ---
 
-{/* Rename from quickstart to introduction. Consider adding a quickstart section that links to different guides for framework builders, people looking for running codemods, etc. */}
-
-Codemod Platform keeps your code modern—continuously. It helps teams:
-
-* **Spot modernization opportunities** in aging codebases.
-* **Apply migrations** for frameworks, APIs, and dependencies.
-* **Orchestrate and track** those changes across every repo and service.
-
-By closing the loop from discovery to rollout, teams win back thousands of engineering hours and stop tech debt before it stacks up—regaining the speed and reliability that drive competitive edge.
+Codemod provides tools and infra to deploy task-specific codemods or micro-agents (a workflow comprised of codemods and AI) to automate any repetitive or large scale codebase remediation end to end, from planning, to reliable transformations, to orchestrating changes across teams, to easy and safe deployments across repos, to tracking and leadership dashboard.
 
 <img 
   className="block dark:hidden" 
@@ -24,29 +16,50 @@ By closing the loop from discovery to rollout, teams win back thousands of engin
   alt="Dark mode interface"
 />
 
+## Use cases
+- End-of-life framework and SDK upgrades (React, Nuxt, etc.)
+- Large-scale API migrations and deprecations
+- Security and compliance patches across fleets of services
+- Dependency consistency, lint fixes, and other sweeping chores
+- Internationalization (i18n) rollouts and other cross-cutting mandates
+- Tech unification after M&A or platform consolidation (CommonJS → ESM/TS)
+- Infrastructure migrations (RDS → DynamoDB, on-prem → cloud)
+
+## Who it's for
+
+<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart">
+  Orchestrate migrations at scale using Campaigns, Insights, and Pro codemods.
+  
+  <b>Best for:</b> Platform teams, I18n engineers
+  Security engineers, Tech leads, Engineering leaders and CTOs
+</Card>
+
+<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/oss">
+  Build and publish codemods for your community using CLI, MCP, and the public registry.  
+  
+  <b>Best for:</b> Framework maintainers, open-source contributors, individual developers building migration tools.
+</Card>
+
+
+---
+
+
+### Enterprise
+1. Platform teams
+2. I18n engineers
+3. Security engineers
+4. Tech leads
+5. Engineering leaders and CTOs
+
+### OSS & frameworks
+1. Framework/library builders — ship one-click upgrade recipes to your users. See the OSS path in `OSS & Community`.
+
 The platform stands on two complementary foundations:
 
-* **Open-source toolkit** – a free CLI and public registry maintained by the community, ensuring migrations stay current and battle-tested.
+* **Open-source toolkit** – free CLI and public registry maintained by the community, ensuring migrations stay current and battle-tested.
 * **Enterprise capabilities** – Studio, Campaigns, Insights, and private registries that add creation, orchestration, and governance for larger engineering orgs.
 
 Community-powered migrations, paired with enterprise-grade automation, make Codemod the gold standard for keeping codebases up to date.
-
-## Problems it solves
-* End-of-life package & SDK upgrades (e.g. React, Nuxt, etc. upgrades)
-* Large-scale API refactors & deprecations
-* Security / compliance patches across fleets of services
-* Dependency consistency, lint-fixes, and other “sweeping” chores
-* Internationalization (i18n) roll-outs and other cross-cutting business mandates
-* Tech unification after M&A or platform consolidation (CommonJS → ESM/TS)
-* Infrastructure migrations (RDS → Dynamo DB, on-prem → cloud)
-
-## Who is it for?
-
-| Audience | How Codemod helps |
-| --- | --- |
-| <Icon icon="github-alt" iconType="solid" /> **OSS framework maintainers**  | Ship one-click upgrade recipes to your users |
-| <Icon icon="user-helmet-safety" iconType="solid" /> **Platform engineers / DevEx teams** | Automate org-wide migrations & standards |
-| <Icon icon="people-group" iconType="solid" /> **Engineering leaders** | Track modernization, risk, and ROI with *Insights* |
 
 ### Open-source building blocks
 
@@ -69,13 +82,13 @@ Community-powered migrations, paired with enterprise-grade automation, make Code
 
 Choose your path based on how you want to use Codemod:
 
-<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/quickstart-oss">
+<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/oss">
   Build and publish codemods for your community using CLI, MCP, and the public registry.  
   
   <b>Best for:</b> Framework maintainers, open-source contributors, individual developers building migration tools.
 </Card>
 
-<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart-enterprise">
+<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart">
   Orchestrate migrations at scale using Campaigns, Insights, and Pro codemods.
   
   <b>Best for:</b> Engineering leaders, platform teams, DevEx teams managing large-scale migrations.
