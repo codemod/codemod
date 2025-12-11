@@ -1,35 +1,37 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.1.1/schema.json",
-  "assist": { "actions": { "source": { "organizeImports": "off" } } },
+  "organizeImports": {
+    "enabled": false
+  },
   "files": {
-    "includes": [
-      "**",
-      "!**/__testfixtures__/**",
-      "!**/schemas/**",
-      "!**/submodules/**",
-      "!crates/cli/src/templates/**",
-      "!**/target/**",
-      "!**/build/**",
-      "!**/.next/**",
-      "!**/dist/**"
+    "include": ["**"],
+    "ignore": [
+      "**/__testfixtures__/**",
+      "**/schemas/**",
+      "**/submodules/**",
+      "crates/cli/src/templates/**",
+      "**/target/**",
+      "**/build/**",
+      "**/.next/**",
+      "**/dist/**"
     ]
   },
   "linter": {
-    "includes": [
-      "!packages",
-      "!**/*.d.ts",
-      "!**/*.js",
-      "!**/dist",
-      "!**/cdmd_dist",
-      "!**/build",
-      "!**/pnpm-lock.yaml",
-      "!**/node_modules",
-      "!**/.eslint*",
-      "!**/.next",
-      "!**/.vscode",
-      "!**/build-ncc",
-      "!**/generated",
-      "!**/target"
+    "ignore": [
+      "packages",
+      "**/*.d.ts",
+      "**/*.js",
+      "**/dist",
+      "**/cdmd_dist",
+      "**/build",
+      "**/pnpm-lock.yaml",
+      "**/node_modules",
+      "**/.eslint*",
+      "**/.next",
+      "**/.vscode",
+      "**/build-ncc",
+      "**/generated",
+      "**/target"
     ],
     "rules": {
       "suspicious": {
@@ -56,7 +58,7 @@
         "noExplicitAny": "warn",
         "noUnsafeDeclarationMerging": "warn",
         "noArrayIndexKey": "off",
-        "noWith": "warn"
+        "useValidTypeof": "warn"
       },
       "correctness": {
         "noUndeclaredVariables": "off",
@@ -74,18 +76,15 @@
         "useYield": "warn",
         "useIsNan": "warn",
         "useHookAtTopLevel": "error",
-        "useJsxKeyInIterable": "warn",
-        "useValidTypeof": "warn",
-        "noInvalidBuiltinInstantiation": "warn"
+        "useJsxKeyInIterable": "warn"
       },
       "complexity": {
         "noUselessConstructor": "off",
         "noUselessLabel": "warn",
         "noUselessRename": "warn",
         "noForEach": "off",
-        "noAdjacentSpacesInRegex": "warn",
-        "noArguments": "warn",
-        "noCommaOperator": "warn"
+        "noMultipleSpacesInRegularExpressionLiterals": "warn",
+        "noWith": "warn"
       },
       "style": {
         "noUnusedTemplateLiteral": "off",
@@ -116,33 +115,32 @@
       },
       "performance": { "noDelete": "off", "noAccumulatingSpread": "warn" },
       "security": {
-        "noDangerouslySetInnerHtml": "warn",
-        "noBlankTarget": "warn"
+        "noDangerouslySetInnerHtml": "warn"
       }
     }
   },
   "formatter": {
     "formatWithErrors": true,
     "indentStyle": "space",
-    "includes": [
-      "**",
-      "!**/*.d.ts",
-      "!**/input.js",
-      "!**/output.js",
-      "!**/dist",
-      "!**/cdmd_dist",
-      "!**/build",
-      "!**/pnpm-lock.yaml",
-      "!**/node_modules",
-      "!**/build-ncc",
-      "!**/.next",
-      "!**/.vscode",
-      "!**/generated",
-      "!**/*.py",
-      "!apps/ai/**",
-      "!**/.all-contributorsrc",
-      "!**/__testfixtures__/**",
-      "!**/target"
+    "include": ["**"],
+    "ignore": [
+      "**/*.d.ts",
+      "**/input.js",
+      "**/output.js",
+      "**/dist",
+      "**/cdmd_dist",
+      "**/build",
+      "**/pnpm-lock.yaml",
+      "**/node_modules",
+      "**/build-ncc",
+      "**/.next",
+      "**/.vscode",
+      "**/generated",
+      "**/*.py",
+      "apps/ai/**",
+      "**/.all-contributorsrc",
+      "**/__testfixtures__/**",
+      "**/target"
     ]
   }
 }
