@@ -31,12 +31,33 @@ pub fn set_step_output(output_name: &str, value: &str) -> Result<(), Box<dyn std
         fs::File::create(&file_path)?;
     }
 
+    let search_key = format!("{}.{}", step_id, output_name);
+    let mut lines: Vec<String> = Vec::new();
+
+    if file_path.exists() {
+        let content = fs::read_to_string(&file_path)?;
+        for line in content.lines() {
+            if let Some((key, _)) = line.split_once('=') {
+                if key.trim() != search_key {
+                    lines.push(line.to_string());
+                }
+            } else if !line.trim().is_empty() {
+                lines.push(line.to_string());
+            }
+        }
+    }
+
+    lines.push(format!("{}={}", search_key, value));
+
     let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&file_path)?;
 
-    writeln!(file, "{}.{}={}", step_id, output_name, value)?;
+    for line in lines {
+        writeln!(file, "{}", line)?;
+    }
+
     Ok(())
 }
 
