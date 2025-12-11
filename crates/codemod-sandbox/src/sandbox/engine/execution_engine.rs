@@ -100,8 +100,6 @@ where
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
     // Add WorkflowGlobalModule (step outputs)
-    let step_outputs_path = std::env::temp_dir().join("codemod_step_outputs.txt");
-    std::env::set_var("STEP_OUTPUTS", &step_outputs_path);
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
 
