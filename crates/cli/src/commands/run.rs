@@ -190,6 +190,13 @@ pub async fn handler(
     println!("\n📝 Modified files: {files_modified}");
     println!("✅ Unmodified files: {files_unmodified}");
     println!("❌ Files with errors: {files_with_errors}");
+    let metrics = codemod_sandbox::metrics::get_all_metrics();
+    if !metrics.is_empty() {
+        println!("📊 Metrics:");
+        for (name, value) in metrics {
+            println!(" - {name}: {value}");
+        }
+    }
 
     let execution_id = generate_execution_id();
 

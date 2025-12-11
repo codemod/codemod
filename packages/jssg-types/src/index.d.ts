@@ -7,6 +7,10 @@ declare module "codemod:workflow" {
   export * from "@codemod.com/jssg-types/workflow";
 }
 
+declare module "codemod:metrics" {
+  export * from "@codemod.com/jssg-types/metrics";
+}
+
 declare module "codemod:ast-grep/langs/angular" {
   export { default } from "@codemod.com/jssg-types/langs/angular";
 }

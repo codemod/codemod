@@ -1,5 +1,6 @@
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
+use crate::metrics::MetricModule;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
@@ -80,9 +81,12 @@ where
 
     // Add WorkflowGlobalModule (step outputs)
     let step_outputs_path = std::env::temp_dir().join("codemod_step_outputs.txt");
-    std::env::set_var("STEP_OUTPUTS", &step_outputs_path);
+    unsafe { std::env::set_var("STEP_OUTPUTS", &step_outputs_path) };
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+
+    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
+    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricModule);
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;

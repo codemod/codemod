@@ -1,5 +1,6 @@
 mod ast_grep;
 pub mod capabilities;
+pub mod metrics;
 #[cfg(feature = "wasm")]
 mod plugins;
 pub mod sandbox;
