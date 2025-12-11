@@ -7,17 +7,15 @@ Semantic analysis enables your codemods to understand symbol relationships in co
 
 ## Supported Languages
 
-<Info>
-  Semantic analysis is currently supported for **JavaScript/TypeScript** and
-  **Python** only. For other languages, the semantic methods return no-op
-  results (null for definitions, empty arrays for references).
-</Info>
+| Language              | Provider                             | Features                                                                            |
+| --------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| JavaScript/TypeScript | [oxc](https://oxc.rs/)               | Definitions, references, cross-file resolution                                      |
+| Python                | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution                                      |
+| Other languages       | Codemod                              | Enterprise features available.<br />For JSSG open-source, it returns no-op results. |
 
-| Language              | Provider                             | Features                                       |
-| --------------------- | ------------------------------------ | ---------------------------------------------- |
-| JavaScript/TypeScript | [oxc](https://oxc.rs/)               | Definitions, references, cross-file resolution |
-| Python                | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution |
-| Other languages       | —                                    | Returns null/empty (no-op)                     |
+<Info>
+  **Enterprise customers** can get semantic analysis for Go, Rust, Java, C, C++, C Sharp, Ruby, PHP, Swift, Kotlin, Haskell, and Elixir. [Contact us](https://codemod.com/contact) to learn more.
+</Info>
 
 ## Analysis Modes
 
