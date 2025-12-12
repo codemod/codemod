@@ -21,12 +21,12 @@ title: "API Reference"
 ## Runtime and built-ins
 
 <Info>
-jssg is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
+JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
 </Info>
 
 ## Transform Function
 
-Every jssg codemod exports a transform function:
+Every JSSG codemod exports a transform function:
 
 ```ts
 import type { Transform } from "codemod:ast-grep";
@@ -134,7 +134,7 @@ Semantic analysis is only supported for **JavaScript/TypeScript** (using oxc) an
 
 ## Pattern Matching
 
-jssg uses ast-grep patterns to find code structures. Patterns are more powerful than regex because they understand code syntax.
+JSSG uses ast-grep patterns to find code structures. Patterns are more powerful than regex because they understand code syntax.
 
 ### Basic Patterns
 
@@ -525,7 +525,7 @@ export default function main() {
 
 ## Async Transformations
 
-jssg supports async operations for complex transformations:
+JSSG supports async operations for complex transformations:
 
 ```ts
 export default async function transform(root: SgRoot<TSX>): Promise<string | null> {

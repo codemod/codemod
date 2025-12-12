@@ -2,22 +2,22 @@
 title: "Quickstart"
 ---
 
-Build a working JavaScript ast-grep (jssg) codemod in minutes.
+Build a working JavaScript ast-grep (JSSG) codemod in minutes.
 
-## What is jssg?
+## What is JSSG?
 
-JavaScript ast-grep (jssg) is a **secure JavaScript runtime** for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
+JavaScript ast-grep (JSSG) is a **secure JavaScript runtime** for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
 
 <Info>
-jssg is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility.
+JSSG is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility.
 </Info>
 
 <Warning>
-jssg follows a **deny-by-default security model**. Unsafe operations like file system access (`fs`), network requests (`fetch`), and process spawning (`child_process`) are disabled by default. See [Security & Capabilities](/jssg/security) to learn how to enable them.
+JSSG follows a **deny-by-default security model**. Unsafe operations like file system access (`fs`), network requests (`fetch`), and process spawning (`child_process`) are disabled by default. See [Security & Capabilities](/jssg/security) to learn how to enable them.
 </Warning>
 
 **How it works:**
-- A jssg codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
+- A JSSG codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
 - The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
 - You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
 
@@ -32,19 +32,19 @@ For engine details and built-ins, see <a href="/jssg/reference#runtime-and-built
 - **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
 
 <Tip>
-You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [jssg API reference](/jssg/reference#rule-configuration).
+You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [JSSG API reference](/jssg/reference#rule-configuration).
 </Tip>
 
 ## Build your first codemod
 
 <Steps>
-  <Step title="Scaffold a jssg package">
+  <Step title="Scaffold a JSSG package">
 
 ```bash
 npx codemod init
 ```
 
-Pick `JavaScript ast-grep (jssg) codemod` when prompted.
+Pick `JavaScript ast-grep (JSSG) codemod` when prompted.
 
 This will scaffold a new folder with the required files and structure.
 
@@ -53,7 +53,7 @@ This will scaffold a new folder with the required files and structure.
 ├── codemod.yaml
 ├── workflow.yaml       # references scripts/codemod.ts in a js-ast-grep step
 └── scripts/
-    └── codemod.ts      # write your jssg transform here
+    └── codemod.ts      # write your JSSG transform here
 ```
 
   </Step>
@@ -147,7 +147,7 @@ This will scaffold a new folder with the required files and structure.
     href="/jssg/security"
     icon="shield-check"
   >
-    Learn about jssg's security model and how to enable file system, network, and process capabilities.
+    Learn about JSSG's security model and how to enable file system, network, and process capabilities.
   </Card>
   <Card
     title="Test your codemod"
@@ -157,7 +157,7 @@ This will scaffold a new folder with the required files and structure.
     Validate your codemod with before/after fixtures and the test runner.
   </Card>
   <Card
-    title="jssg reference"
+    title="JSSG reference"
     href="/jssg/reference"
     icon="book"
   >
