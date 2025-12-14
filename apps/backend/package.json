@@ -29,7 +29,7 @@
     "supertest": "catalog:",
     "ts-node": "10.9.2",
     "tsx": "^4.7.1",
-    "vitest": "1.1.0"
+    "vitest": "1.6.1"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "catalog:",
