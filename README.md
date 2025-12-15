@@ -62,7 +62,7 @@ We welcome contributions to the Codemod CLI. Please see the [contributing guide]
 
 ### Contributors ✨
 
-![Alt](https://repobeats.axiom.co/api/embed/a601b01213da7b870268b1fe2ee8384efc40c308.svg "Repobeats analytics image")
+![Chart of Codemod repo contributions](https://repobeats.axiom.co/api/embed/520c1e566aa9c25858d654a72a33c48c31783971.svg "Repobeats analytics image")
 
 Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
 
