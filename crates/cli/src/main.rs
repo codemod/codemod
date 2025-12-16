@@ -114,6 +114,9 @@ enum WorkflowCommands {
 
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
+
+    /// Interactive TUI for workflow management
+    Tui(commands::workflow::tui::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -281,6 +284,9 @@ async fn main() -> Result<()> {
             }
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
+            }
+            WorkflowCommands::Tui(args) => {
+                commands::workflow::tui::handler(args).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {
