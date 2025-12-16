@@ -2,15 +2,7 @@
 title: Introduction
 ---
 
-{/* Rename from quickstart to introduction. Consider adding a quickstart section that links to different guides for framework builders, people looking for running codemods, etc. */}
-
-Codemod Platform keeps your code modern—continuously. It helps teams:
-
-* **Spot modernization opportunities** in aging codebases.
-* **Apply migrations** for frameworks, APIs, and dependencies.
-* **Orchestrate and track** those changes across every repo and service.
-
-By closing the loop from discovery to rollout, teams win back thousands of engineering hours and stop tech debt before it stacks up—regaining the speed and reliability that drive competitive edge.
+Codemod provides tools and infrastructure to automate repetitive or large-scale codebase remediation from end to end. You can deploy task-specific codemods or micro-agents—workflows that combine codemods and AI—to handle complex migrations and upgrades. Codemod supports every stage of the process: planning, reliable code transformations, orchestrating changes across teams, safe deployments across repositories, and tracking progress with leadership dashboards.
 
 <img 
   className="block dark:hidden" 
@@ -24,61 +16,28 @@ By closing the loop from discovery to rollout, teams win back thousands of engin
   alt="Dark mode interface"
 />
 
-The platform stands on two complementary foundations:
+## Use cases
+- End-of-life framework and SDK upgrades (React, Nuxt, etc.)
+- Large-scale API migrations and deprecations
+- Security and compliance patches across fleets of services
+- Dependency consistency, lint fixes, and other sweeping chores
+- Internationalization (i18n) rollouts and other cross-cutting mandates
+- Tech unification after M&A or platform consolidation (CommonJS → ESM/TS)
+- Infrastructure migrations (RDS → DynamoDB, on-prem → cloud)
 
-* **Open-source toolkit** – a free CLI and public registry maintained by the community, ensuring migrations stay current and battle-tested.
-* **Enterprise capabilities** – Studio, Campaigns, Insights, and private registries that add creation, orchestration, and governance for larger engineering orgs.
+## Who it's for
 
-Community-powered migrations, paired with enterprise-grade automation, make Codemod the gold standard for keeping codebases up to date.
+<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart">
+  Orchestrate migrations at scale using Campaigns, Insights, and Pro codemods.
+  
+  <b>Best for:</b> Platform teams, I18n engineers
+  Security engineers, Tech leads, Engineering leaders and CTOs
+</Card>
 
-## Problems it solves
-* End-of-life package & SDK upgrades (e.g. React, Nuxt, etc. upgrades)
-* Large-scale API refactors & deprecations
-* Security / compliance patches across fleets of services
-* Dependency consistency, lint-fixes, and other “sweeping” chores
-* Internationalization (i18n) roll-outs and other cross-cutting business mandates
-* Tech unification after M&A or platform consolidation (CommonJS → ESM/TS)
-* Infrastructure migrations (RDS → Dynamo DB, on-prem → cloud)
-
-## Who is it for?
-
-| Audience | How Codemod helps |
-| --- | --- |
-| <Icon icon="github-alt" iconType="solid" /> **OSS framework maintainers**  | Ship one-click upgrade recipes to your users |
-| <Icon icon="user-helmet-safety" iconType="solid" /> **Platform engineers / DevEx teams** | Automate org-wide migrations & standards |
-| <Icon icon="people-group" iconType="solid" /> **Engineering leaders** | Track modernization, risk, and ROI with *Insights* |
-
-### Open-source building blocks
-
-* **[CLI](/cli/cli-reference)** – build, run, & publish Codemod packages
-* **[Codemod MCP](/model-context-protocol)** – build Codemod packages with AI in IDEs
-* **[Public Registry](https://codemod.com/registry)** – discover community-led codemods
-
-### Enterprise & engineering teams' features
-
-<Note>
-  The following capabilities are available on the [Pro and Enterprise tiers](https://codemod.com/pricing).
-</Note>
-
-* **[Studio](/codemod-studio)** – AI-generated codemods & recipes
-* **[Campaigns](/campaigns)** – run and orchestrate changes at scale
-* **[Insights](/insights)** – plan and track fleet-wide progress
-* **Private / Pro Registry** – secure, organization-scoped codemods
-
-## Get Started
-
-Choose your path based on how you want to use Codemod:
-
-<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/quickstart-oss">
+<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/oss">
   Build and publish codemods for your community using CLI, MCP, and the public registry.  
   
   <b>Best for:</b> Framework maintainers, open-source contributors, individual developers building migration tools.
-</Card>
-
-<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart-enterprise">
-  Orchestrate migrations at scale using Campaigns, Insights, and Pro codemods.
-  
-  <b>Best for:</b> Engineering leaders, platform teams, DevEx teams managing large-scale migrations.
 </Card>
 
 ## Quick Links
