@@ -72,6 +72,10 @@ posthog-rs = "0.3.7"
 async-trait.workspace = true
 indicatif = "0.18.0"
 
+# TUI dependencies
+ratatui = "0.29"
+crossterm = "0.28"
+
 [features]
 default = []
 docker = ["butterflow-models/docker", "butterflow-runners/docker"]
