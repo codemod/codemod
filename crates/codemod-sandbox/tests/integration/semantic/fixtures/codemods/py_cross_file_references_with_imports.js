@@ -38,9 +38,7 @@ export default function transform(root) {
   // app.py: import + 3 usages (4)
   // Total: 5 references across 2 files
   if (references.length !== 2) {
-    throw new Error(
-      "Expected 2 files with references, got " + references.length,
-    );
+    throw new Error("Expected 2 files with references, got " + references.length);
   }
 
   if (totalRefs !== 5) {

@@ -1,16 +1,8 @@
 import * as fs from "node:fs";
-import {
-  ConsoleStdout,
-  OpenFile,
-  WASI,
-  File as WasiFile,
-} from "@bjorn3/browser_wasi_shim";
+import { ConsoleStdout, OpenFile, WASI, File as WasiFile } from "@bjorn3/browser_wasi_shim";
 import factory from "../target/wasm-bindgen/codemod-sandbox_bg.js";
 
-const path = new URL(
-  "../target/wasm-bindgen/codemod-sandbox_bg.wasm",
-  import.meta.url,
-);
+const path = new URL("../target/wasm-bindgen/codemod-sandbox_bg.wasm", import.meta.url);
 const wasi = new WASI(
   [],
   [],

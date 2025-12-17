@@ -10,9 +10,7 @@ export default function transform(root) {
   // Definition may or may not be found depending on cross-file resolution
   if (definition === null) {
     // It's okay if cross-file definition isn't resolved yet
-    console.log(
-      "Definition not found (cross-file resolution may not be complete)",
-    );
+    console.log("Definition not found (cross-file resolution may not be complete)");
     return null;
   }
 
@@ -26,5 +24,3 @@ export default function transform(root) {
 
   return null;
 }
-
-

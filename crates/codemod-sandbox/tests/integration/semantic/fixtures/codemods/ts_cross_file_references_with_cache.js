@@ -1,12 +1,8 @@
 export default function transform(root) {
   // Find all 'formatDate' identifiers
-  const formatDateNodes = root
-    .root()
-    .findAll({ rule: { pattern: "formatDate" } });
+  const formatDateNodes = root.root().findAll({ rule: { pattern: "formatDate" } });
   if (formatDateNodes.length < 1) {
-    throw new Error(
-      "Expected at least 1 'formatDate' node, got " + formatDateNodes.length,
-    );
+    throw new Error("Expected at least 1 'formatDate' node, got " + formatDateNodes.length);
   }
 
   const funcNameNode = formatDateNodes[0];

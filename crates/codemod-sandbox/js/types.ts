@@ -20,10 +20,7 @@ export type DescriberOutputs = {
 export type InvokeInputs = Values;
 export type InvokeOutputs = Values;
 
-export type CapabilityFunction = (
-  inputs: Values,
-  path: number[],
-) => Promise<Values | undefined>;
+export type CapabilityFunction = (inputs: Values, path: number[]) => Promise<Values | undefined>;
 
 export type CapabilityRegistry = {
   fetch?: CapabilityFunction;

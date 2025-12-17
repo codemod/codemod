@@ -1,39 +1,48 @@
 {
-  "name": "@codemod-com/codemod",
+  "name": "@codemod/codemod",
   "version": "0.0.0-development",
-  "type": "module",
-  "author": "Codemod, Inc.",
-  "license": "Apache License, Version 2.0",
-  "description": "A monorepo for all the interconnected tools of codemod.com",
   "private": true,
-  "packageManager": "pnpm@10.19.0",
-  "prisma": {
-    "schema": "packages/database/prisma/schema.prisma",
-    "seed": "tsx packages/database/src/seed.ts"
-  },
-  "engines": {
-    "node": ">=24.x",
-    "pnpm": ">=10.x"
-  },
+  "description": "A monorepo for all the interconnected tools of codemod.com",
   "keywords": [
+    "AST",
+    "cli",
     "codemod",
-    "migration",
     "jscodeshift",
-    "ts-morph",
+    "migration",
     "next.js",
     "react",
     "refactoring",
-    "transform",
-    "cli",
     "studio",
-    "AST"
+    "transform",
+    "ts-morph"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/codemod/codemod.git"
   },
+  "author": "Codemod, Inc.",
+  "license": "Apache License, Version 2.0",
+  "type": "module",
   "scripts": {
-    "release": "pnpm changeset publish"
-
+    "release": "pnpm changeset publish",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format:fix": "oxfmt --write",
+    "format": "oxfmt --check",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,vue,astro,svelte}": "oxlint"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "oxfmt": "^0.18.0",
+    "oxlint": "^1.33.0",
+    "oxlint-tsgolint": "^0.9.1"
+  },
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=24.x",
+    "pnpm": ">=10.x"
   }
 }

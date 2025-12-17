@@ -1,25 +1,23 @@
 {
   "name": "codemod",
   "version": "0.0.0",
-  "publishConfig": {
-    "access": "public"
-  },
   "description": "Codemod platform for semantic code transformations",
+  "keywords": [
+    "ast",
+    "codemod",
+    "migration",
+    "refactoring",
+    "transformation"
+  ],
   "homepage": "https://codemod.com",
   "repository": "https://github.com/codemod/codemod",
-  "engines": {
-    "node": ">= 16.0.0"
+  "license": "Apache-2.0",
+  "bin": {
+    "codemod": "codemod"
   },
-  "keywords": [
-    "codemod",
-    "ast",
-    "transformation",
-    "refactoring",
-    "migration"
-  ],
   "files": [
-    "codemod",
-    "README.md"
+    "README.md",
+    "codemod"
   ],
   "dependencies": {
     "detect-libc": "^2.0.3"
@@ -31,8 +29,10 @@
     "@codemod.com/cli-linux-x64-gnu": "0.0.0",
     "@codemod.com/cli-win32-x64-msvc": "0.0.0"
   },
-  "bin": {
-    "codemod": "codemod"
+  "engines": {
+    "node": ">= 16.0.0"
   },
-  "license": "Apache-2.0"
+  "publishConfig": {
+    "access": "public"
+  }
 }

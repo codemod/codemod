@@ -91,5 +91,5 @@ limit_commits = 50
 initial_tag = "codemod-cli@1.0.0"
 
 [remote.github]
-owner = "codemod-com"
+owner = "codemod"
 repo = "codemod"

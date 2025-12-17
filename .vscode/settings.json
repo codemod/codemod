@@ -1,24 +1,19 @@
 {
-  "editor.defaultFormatter": "biomejs.biome",
+  "editor.defaultFormatter": "oxc.oxc-vscode",
   "editor.formatOnSave": true,
-  "editor.codeActionsOnSave": {
-    "source.fixAll": "explicit",
-    "quickfix.biome": "explicit",
-    "source.organizeImports.biome": "explicit"
-  },
   "[typescript]": {
-    "editor.defaultFormatter": "biomejs.biome"
+    "editor.defaultFormatter": "oxc.oxc-vscode"
   },
   "[json]": {
-    "editor.defaultFormatter": "biomejs.biome"
+    "editor.defaultFormatter": "oxc.oxc-vscode"
   },
   "[javascript]": {
-    "editor.defaultFormatter": "biomejs.biome"
+    "editor.defaultFormatter": "oxc.oxc-vscode"
   },
-  "typescript.tsdk": "node_modules/typescript/lib",
   "[typescriptreact]": {
-    "editor.defaultFormatter": "biomejs.biome"
+    "editor.defaultFormatter": "oxc.oxc-vscode"
   },
+  "oxc.fmt.experimental": true,
   "workbench.colorCustomizations": {
     "titleBar.foreground": "#d6ff62",
     "titleBar.activeForeground": "#d6ff62",

@@ -11,10 +11,12 @@ assignees: ''
 > **Please do not report faulty codemods in this repository unless instructed below.**
 >
 > **Step 1:** Identify the codemod's publisher:
+>
 > - If the codemod is published by Codemod, check the [`codemod/commons`](https://github.com/codemod/commons) repository and open an issue there.
 > - If the codemod is a community codemod, open an issue in the author's repository. You can find the repository link in the [Codemod Registry](https://codemod.com/registry).
 >
 > **Step 2:** If the codemod's repository is missing, unresponsive, or you are unable to report the issue there, please open a Faulty codemod issue in [`codemod/commons`](https://github.com/codemod/commons) and include:
+>
 > - The codemod name and registry link
 > - A description of the problem
 > - Steps to reproduce

@@ -61,11 +61,7 @@ function createMatrixNodeValues(
   };
 }
 
-function createMatrixNodeFromState(
-  id: string,
-  dependsOn: string[],
-  stateKey: string,
-): Node {
+function createMatrixNodeFromState(id: string, dependsOn: string[], stateKey: string): Node {
   return {
     id,
     name: `Node ${id}`,
@@ -176,12 +172,8 @@ describe("Scheduler WASM Module", () => {
       const tasks: Task[] = await scheduler.calculateInitialTasks(run);
 
       expect(tasks).toHaveLength(2);
-      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(
-        true,
-      );
-      expect(tasks.some((t) => t.node_id === "node2" && !t.is_master)).toBe(
-        true,
-      );
+      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(true);
+      expect(tasks.some((t) => t.node_id === "node2" && !t.is_master)).toBe(true);
       expect(tasks.filter((t) => t.is_master).length).toBe(0);
     });
 
@@ -196,31 +188,15 @@ describe("Scheduler WASM Module", () => {
       const tasks: Task[] = await scheduler.calculateInitialTasks(run);
 
       expect(tasks).toHaveLength(4); // 1 node1 + 1 master node2 + 2 children node2
-      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(
-        true,
-      );
-      const masterTask = tasks.find(
-        (t) => t.node_id === "node2" && t.is_master,
-      );
+      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(true);
+      const masterTask = tasks.find((t) => t.node_id === "node2" && t.is_master);
       expect(masterTask).toBeDefined();
 
-      const childTasks = tasks.filter(
-        (t) => t.node_id === "node2" && !t.is_master,
-      );
+      const childTasks = tasks.filter((t) => t.node_id === "node2" && !t.is_master);
       expect(childTasks).toHaveLength(2);
-      expect(childTasks.every((t) => t.master_task_id === masterTask?.id)).toBe(
-        true,
-      );
-      expect(
-        childTasks.some((t) =>
-          deepEqual(t.matrix_values?.k, matrixValues[0].k),
-        ),
-      ).toBe(true);
-      expect(
-        childTasks.some((t) =>
-          deepEqual(t.matrix_values?.k, matrixValues[1].k),
-        ),
-      ).toBe(true);
+      expect(childTasks.every((t) => t.master_task_id === masterTask?.id)).toBe(true);
+      expect(childTasks.some((t) => deepEqual(t.matrix_values?.k, matrixValues[0].k))).toBe(true);
+      expect(childTasks.some((t) => deepEqual(t.matrix_values?.k, matrixValues[1].k))).toBe(true);
     });
 
     it("should create only master task for matrix from state initially", async () => {
@@ -233,15 +209,9 @@ describe("Scheduler WASM Module", () => {
       const tasks: Task[] = await scheduler.calculateInitialTasks(run);
 
       expect(tasks).toHaveLength(2); // 1 node1 + 1 master node2
-      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(
-        true,
-      );
-      expect(tasks.some((t) => t.node_id === "node2" && t.is_master)).toBe(
-        true,
-      );
-      expect(
-        tasks.filter((t) => t.node_id === "node2" && !t.is_master).length,
-      ).toBe(0);
+      expect(tasks.some((t) => t.node_id === "node1" && !t.is_master)).toBe(true);
+      expect(tasks.some((t) => t.node_id === "node2" && t.is_master)).toBe(true);
+      expect(tasks.filter((t) => t.node_id === "node2" && !t.is_master).length).toBe(0);
     });
   });
 
@@ -256,36 +226,25 @@ describe("Scheduler WASM Module", () => {
       const initialState = { items: [{ id: "a" }, { id: "b" }] };
       const initialTasks = [createTask(run.id, "node1", false)]; // Only node1 task
 
-      const changes: MatrixTaskChanges =
-        await scheduler.calculateMatrixTaskChanges(
-          run.id,
-          run,
-          initialTasks,
-          initialState,
-        );
+      const changes: MatrixTaskChanges = await scheduler.calculateMatrixTaskChanges(
+        run.id,
+        run,
+        initialTasks,
+        initialState,
+      );
 
       const newTasks = changes.new_tasks as Task[];
       const tasksToMarkWontDo = changes.tasks_to_mark_wont_do as string[];
       const masterTasksToUpdate = changes.master_tasks_to_update as string[];
 
       expect(newTasks).toHaveLength(3); // 1 master + 2 children
-      expect(newTasks.some((t) => t.is_master && t.node_id === "node2")).toBe(
-        true,
-      );
+      expect(newTasks.some((t) => t.is_master && t.node_id === "node2")).toBe(true);
       expect(tasksToMarkWontDo).toHaveLength(0);
       expect(masterTasksToUpdate).toHaveLength(1);
       const childTasks = newTasks.filter((t) => !t.is_master);
       expect(childTasks).toHaveLength(2);
-      expect(
-        childTasks.some((t) =>
-          deepEqual(t.matrix_values, new Map([["id", "a"]])),
-        ),
-      ).toBe(true);
-      expect(
-        childTasks.some((t) =>
-          deepEqual(t.matrix_values, new Map([["id", "b"]])),
-        ),
-      ).toBe(true);
+      expect(childTasks.some((t) => deepEqual(t.matrix_values, new Map([["id", "a"]])))).toBe(true);
+      expect(childTasks.some((t) => deepEqual(t.matrix_values, new Map([["id", "b"]])))).toBe(true);
     });
 
     it("should add new tasks and mark removed tasks as WontDo", async () => {
@@ -297,40 +256,20 @@ describe("Scheduler WASM Module", () => {
       const node2Id = "node2";
 
       const masterTask = createTask(run.id, node2Id, true);
-      const taskA = createTask(
-        run.id,
-        node2Id,
-        false,
-        "Pending",
-        masterTask.id,
-        { id: "a" },
-      );
-      const taskB = createTask(
-        run.id,
-        node2Id,
-        false,
-        "Pending",
-        masterTask.id,
-        { id: "b" },
-      );
+      const taskA = createTask(run.id, node2Id, false, "Pending", masterTask.id, { id: "a" });
+      const taskB = createTask(run.id, node2Id, false, "Pending", masterTask.id, { id: "b" });
 
-      const initialTasks = [
-        createTask(run.id, "node1", false),
-        masterTask,
-        taskA,
-        taskB,
-      ];
+      const initialTasks = [createTask(run.id, "node1", false), masterTask, taskA, taskB];
 
       // New state: remove 'b', add 'c'
       const newState = { items: [{ id: "a" }, { id: "c" }] };
 
-      const changes: MatrixTaskChanges =
-        await scheduler.calculateMatrixTaskChanges(
-          run.id,
-          run,
-          initialTasks,
-          newState,
-        );
+      const changes: MatrixTaskChanges = await scheduler.calculateMatrixTaskChanges(
+        run.id,
+        run,
+        initialTasks,
+        newState,
+      );
 
       const newTasks = changes.new_tasks as Task[];
       const tasksToMarkWontDo = changes.tasks_to_mark_wont_do as string[];
@@ -338,9 +277,7 @@ describe("Scheduler WASM Module", () => {
 
       // Should create task 'c'
       expect(newTasks).toHaveLength(1);
-      expect(deepEqual(newTasks[0].matrix_values, new Map([["id", "c"]]))).toBe(
-        true,
-      );
+      expect(deepEqual(newTasks[0].matrix_values, new Map([["id", "c"]]))).toBe(true);
       expect(newTasks[0].master_task_id).toBe(masterTask.id);
 
       // Should mark task 'b' as WontDo
@@ -353,22 +290,19 @@ describe("Scheduler WASM Module", () => {
     });
 
     it("should handle missing state key gracefully", async () => {
-      const workflow = createTestWorkflow([
-        createMatrixNodeFromState("node2", [], "items"),
-      ]);
+      const workflow = createTestWorkflow([createMatrixNodeFromState("node2", [], "items")]);
       const run = createTestRun(workflow);
       const node2Id = "node2";
       const masterTask = createTask(run.id, node2Id, true);
       const initialTasks = [masterTask];
       const emptyState = {};
 
-      const changes: MatrixTaskChanges =
-        await scheduler.calculateMatrixTaskChanges(
-          run.id,
-          run,
-          initialTasks,
-          emptyState,
-        );
+      const changes: MatrixTaskChanges = await scheduler.calculateMatrixTaskChanges(
+        run.id,
+        run,
+        initialTasks,
+        emptyState,
+      );
 
       const newTasks = changes.new_tasks as Task[];
       const tasksToMarkWontDo = changes.tasks_to_mark_wont_do as string[];
@@ -395,10 +329,7 @@ describe("Scheduler WASM Module", () => {
 
       // Case 1: node1 pending, node2 pending -> only node1 runnable
       let tasks = [task1_pending, task2_pending];
-      let runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(
-        run,
-        tasks,
-      );
+      let runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(run, tasks);
       let runnableTaskIds = runnable.runnable_tasks as string[];
       expect(runnableTaskIds).toHaveLength(1);
       expect(runnableTaskIds[0]).toBe(task1_pending.id);
@@ -464,10 +395,7 @@ describe("Scheduler WASM Module", () => {
 
       // Case 1: All node1 tasks pending -> only node1 children runnable
       let tasks = [node1_master, node1_child1, node1_child2, node2_task];
-      let runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(
-        run,
-        tasks,
-      );
+      let runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(run, tasks);
       let runnableTaskIds = runnable.runnable_tasks as string[];
       expect(runnableTaskIds).toHaveLength(2);
       expect(runnableTaskIds).toContain(node1_child1.id);
@@ -494,12 +422,7 @@ describe("Scheduler WASM Module", () => {
         ...node1_master,
         status: "Completed" as TaskStatus,
       };
-      tasks = [
-        node1_master_completed,
-        node1_child1_completed,
-        node1_child2_completed,
-        node2_task,
-      ];
+      tasks = [node1_master_completed, node1_child1_completed, node1_child2_completed, node2_task];
       runnable = await scheduler.findRunnableTasks(run, tasks);
       runnableTaskIds = runnable.runnable_tasks as string[];
       expect(runnableTaskIds).toHaveLength(1);
@@ -516,10 +439,7 @@ describe("Scheduler WASM Module", () => {
       const task1 = createTask(run.id, "node1", false, "Completed");
       const task2 = createTask(run.id, "node2", false, "Pending");
 
-      const runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(
-        run,
-        [task1, task2],
-      );
+      const runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(run, [task1, task2]);
 
       const runnableTaskIds = runnable.runnable_tasks as string[];
       const tasksToAwaitTrigger = runnable.tasks_to_await_trigger as string[];
@@ -542,10 +462,7 @@ describe("Scheduler WASM Module", () => {
       const task1 = createTask(run.id, "node1", false, "Completed");
       const task2 = createTask(run.id, "node2", false, "Pending");
 
-      const runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(
-        run,
-        [task1, task2],
-      );
+      const runnable: RunnableTaskChanges = await scheduler.findRunnableTasks(run, [task1, task2]);
 
       const runnableTaskIds = runnable.runnable_tasks as string[];
       const tasksToAwaitTrigger = runnable.tasks_to_await_trigger as string[];
@@ -564,12 +481,7 @@ describe("Scheduler WASM Module", () => {
 function deepEqual(obj1: unknown, obj2: unknown): boolean {
   if (obj1 === obj2) return true;
 
-  if (
-    obj1 === null ||
-    obj2 === null ||
-    typeof obj1 !== "object" ||
-    typeof obj2 !== "object"
-  ) {
+  if (obj1 === null || obj2 === null || typeof obj1 !== "object" || typeof obj2 !== "object") {
     return false;
   }
 
@@ -583,10 +495,7 @@ function deepEqual(obj1: unknown, obj2: unknown): boolean {
   if (keys1.length !== keys2.length) return false;
 
   for (const key of keys1) {
-    if (
-      !keys2.includes(key) ||
-      !deepEqual(obj1NonNull[key], obj2NonNull[key])
-    ) {
+    if (!keys2.includes(key) || !deepEqual(obj1NonNull[key], obj2NonNull[key])) {
       return false;
     }
   }

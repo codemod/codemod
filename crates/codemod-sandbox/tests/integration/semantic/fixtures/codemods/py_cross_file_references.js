@@ -2,9 +2,7 @@ export default function transform(root) {
   // Find all 'calculate' identifiers
   const calcNodes = root.root().findAll({ rule: { pattern: "calculate" } });
   if (calcNodes.length < 1) {
-    throw new Error(
-      "Expected at least 1 'calculate' node, got " + calcNodes.length,
-    );
+    throw new Error("Expected at least 1 'calculate' node, got " + calcNodes.length);
   }
 
   // Use the first one (the function name in definition)
@@ -47,9 +45,7 @@ export default function transform(root) {
   // 4. Usage: calculate(2, 3) in main.py
   // 5. Usage: calculate(3, 4) in main.py
   if (references.length !== 2) {
-    throw new Error(
-      "Expected 2 files with references, got " + references.length,
-    );
+    throw new Error("Expected 2 files with references, got " + references.length);
   }
 
   if (totalRefs !== 5) {

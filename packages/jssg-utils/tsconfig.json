@@ -1,16 +1,12 @@
 {
+  "extends": "@codemod.com/tsconfig/lib.json",
+  "include": ["./src"],
+  "exclude": ["./dist", "./build", "./node_modules"],
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "types": ["@codemod.com/jssg-types"],
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "verbatimModuleSyntax": false,
-    "erasableSyntaxOnly": true,
-    "strict": true,
-    "strictNullChecks": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true
-  },
+    "baseUrl": ".",
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "emitDeclarationOnly": false
+  }
 }

@@ -9,16 +9,12 @@ export default function transform(root) {
   const def = importSpec.definition({ resolveExternal: false });
 
   if (!def) {
-    throw new Error(
-      "Expected to find definition for 'something' (import statement)",
-    );
+    throw new Error("Expected to find definition for 'something' (import statement)");
   }
 
   // Should be an import kind since we're not resolving external
   if (def.kind !== "import") {
-    throw new Error(
-      "Expected definition kind to be 'import', got '" + def.kind + "'",
-    );
+    throw new Error("Expected definition kind to be 'import', got '" + def.kind + "'");
   }
 
   console.log("Definition kind:", def.kind);
@@ -26,5 +22,3 @@ export default function transform(root) {
 
   return null;
 }
-
-

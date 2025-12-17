@@ -20,23 +20,15 @@ export default function transform(root) {
 
   // Check the kind field
   if (def.kind !== "local") {
-    throw new Error(
-      "Expected definition kind to be 'local', got '" + def.kind + "'",
-    );
+    throw new Error("Expected definition kind to be 'local', got '" + def.kind + "'");
   }
 
   // Verify it's pointing to the right node
   if (!def.node.text().includes("myVar")) {
-    throw new Error(
-      "Expected definition node to contain 'myVar', got '" +
-        def.node.text() +
-        "'",
-    );
+    throw new Error("Expected definition node to contain 'myVar', got '" + def.node.text() + "'");
   }
 
   console.log("Definition kind:", def.kind);
 
   return null;
 }
-
-

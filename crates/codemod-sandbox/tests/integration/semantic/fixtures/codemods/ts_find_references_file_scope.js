@@ -9,22 +9,16 @@ export default function transform(root) {
 
   // Should return array of file references
   if (!Array.isArray(references)) {
-    throw new Error(
-      "Expected references to be an array, got: " + typeof references,
-    );
+    throw new Error("Expected references to be an array, got: " + typeof references);
   }
 
   if (references.length === 0) {
-    console.log(
-      "No references found - semantic provider may not have indexed yet",
-    );
+    console.log("No references found - semantic provider may not have indexed yet");
     return null;
   }
 
   if (references.length !== 1) {
-    throw new Error(
-      "Expected exactly 1 file with references, got " + references.length,
-    );
+    throw new Error("Expected exactly 1 file with references, got " + references.length);
   }
 
   const fileRef = references[0];
@@ -37,9 +31,7 @@ export default function transform(root) {
 
   // Should find 2 references (x + 2 and console.log(x))
   if (fileRef.nodes.length !== 2) {
-    throw new Error(
-      "Expected 2 references to 'x', got " + fileRef.nodes.length,
-    );
+    throw new Error("Expected 2 references to 'x', got " + fileRef.nodes.length);
   }
 
   // Check that nodes have expected methods and values
@@ -48,9 +40,7 @@ export default function transform(root) {
       throw new Error("Expected node.text to be a function");
     }
     if (node.text() !== "x") {
-      throw new Error(
-        "Expected reference text to be 'x', got '" + node.text() + "'",
-      );
+      throw new Error("Expected reference text to be 'x', got '" + node.text() + "'");
     }
   }
 
@@ -61,5 +51,3 @@ export default function transform(root) {
 
   return null;
 }
-
-

@@ -1,0 +1,136 @@
+name: CI
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      js: ${{ steps.filter.outputs.js }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            js:
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+
+  rust-lint:
+    name: Rust Lint
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
+        with:
+          components: clippy
+      - run: cargo clippy --tests --no-deps -- -D warnings
+
+  rust-format:
+    name: Rust Format
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  js-lint:
+    name: JS Lint
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  js-format:
+    name: JS Format
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format
+
+  rust-test:
+    name: Rust Test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
+      - name: Run tests
+        run: cargo test
+      - name: Check schema generation
+        run: |
+          # Generate schema
+          cargo xtask schema
+          # Check for uncommitted changes (excluding schemas/workflow.ts)
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo '❌ Uncommitted changes detected after running `cargo xtask schema`:'
+            git --no-pager diff -- .
+            exit 1
+          else
+            echo "✅ No changes — schema is up to date."
+          fi

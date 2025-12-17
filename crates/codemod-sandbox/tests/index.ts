@@ -53,10 +53,7 @@ describe("runtime errors", () => {
   test("handles invalid module", async () => {
     await rejects(run("export"), /invalid export syntax/);
 
-    await rejects(
-      run("FOO"),
-      /Error converting from js 'undefined' into type 'function'/,
-    );
+    await rejects(run("FOO"), /Error converting from js 'undefined' into type 'function'/);
   });
 
   test("handles errors thrown", async () => {

@@ -1,13 +1,26 @@
 {
   "name": "@codemod.com/jssg-types",
-  "author": "Codemod, Inc.",
   "version": "1.3.0",
+  "private": false,
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
+  "keywords": [
+    "ast",
+    "ast-grep",
+    "codemod",
+    "types"
+  ],
+  "author": "Codemod, Inc.",
+  "license": "Apache-2.0",
+  "sideEffects": false,
   "type": "module",
   "exports": {
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.d.ts"
+    },
+    "./langs/*": {
+      "types": "./src/langs/*.d.ts",
+      "default": "./src/langs/*.d.ts"
     },
     "./main": {
       "types": "./src/main.d.ts",
@@ -16,28 +29,16 @@
     "./workflow": {
       "types": "./src/workflow.d.ts",
       "default": "./src/workflow.d.ts"
-    },
-    "./langs/*": {
-      "types": "./src/langs/*.d.ts",
-      "default": "./src/langs/*.d.ts"
     }
   },
-  "sideEffects": false,
-  "private": false,
   "files": [
     "./src"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit --emitDeclarationOnly false"
   },
-  "keywords": [
-    "ast-grep",
-    "codemod",
-    "ast",
-    "types"
-  ],
-  "license": "Apache-2.0",
   "devDependencies": {
-    "typescript": "catalog:"
+    "@codemod.com/tsconfig": "workspace:*",
+    "typescript": "5.5.4"
   }
 }

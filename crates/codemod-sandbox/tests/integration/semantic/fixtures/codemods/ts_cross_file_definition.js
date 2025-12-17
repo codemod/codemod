@@ -24,9 +24,7 @@ export default function transform(root) {
 
   // Definition may or may not be found depending on cross-file resolution
   if (definition === null) {
-    console.log(
-      "Definition not found (cross-file resolution may not be complete)",
-    );
+    console.log("Definition not found (cross-file resolution may not be complete)");
     return null;
   }
 
@@ -43,5 +41,3 @@ export default function transform(root) {
 
   return null;
 }
-
-
