@@ -5,7 +5,7 @@
   "homepage": "https://github.com/codemod/arc-codemods",
   "repository": "https://github.com/codemod/arc-codemods",
   "author": "Mohebifar <mo@codemod.com>",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "exports": {
     "./javascript/*": {
       "types": "./src/javascript/exports/*.ts",
