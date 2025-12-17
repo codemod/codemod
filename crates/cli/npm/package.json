@@ -6,7 +6,7 @@
   },
   "description": "Codemod platform for semantic code transformations",
   "homepage": "https://codemod.com",
-  "repository": "https://github.com/codemod-com/codemod",
+  "repository": "https://github.com/codemod/codemod",
   "engines": {
     "node": ">= 16.0.0"
   },

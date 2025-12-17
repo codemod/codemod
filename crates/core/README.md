@@ -8,7 +8,7 @@ Butterflow is a lightweight, self-hostable workflow engine designed for running 
 
 ```bash
 # Clone the repository
-git clone https://github.com/codemod-com/butterflow.git
+git clone https://github.com/codemod/butterflow.git
 cd butterflow
 
 # Build the project
