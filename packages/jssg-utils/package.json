@@ -1,0 +1,26 @@
+{
+  "name": "@jssg/utils",
+  "version": "0.0.1",
+  "description": "Codemod utils for jssg engine",
+  "author": "Mohebifar <mo@codemod.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/codemod/arc-codemods",
+  "repository": "https://github.com/codemod/arc-codemods",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    "./javascript/*": {
+      "types": "./src/javascript/exports/*.ts",
+      "default": "./src/javascript/exports/*.ts"
+    }
+  },
+  "scripts": {
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts",
+    "check-types": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "@codemod.com/jssg-types": "workspace:*"
+  }
+}

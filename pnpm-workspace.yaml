@@ -2,3 +2,6 @@ packages:
   - crates/cli/npm
   - crates/scheduler/npm
   - crates/codemod-sandbox
+
+catalog:
+  typescript: "^5.9.3"
