@@ -1,11 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {
-  ConsoleStdout,
-  OpenFile,
-  WASI,
-  File as WasiFile,
-} from "@bjorn3/browser_wasi_shim";
+import { ConsoleStdout, OpenFile, WASI, File as WasiFile } from "@bjorn3/browser_wasi_shim";
 import factory from "./factory.js";
 import type { ModuleSpec, Sandbox } from "./types.js";
 import type { UUID } from "./types.js";
@@ -13,9 +8,7 @@ import type { UUID } from "./types.js";
 export { NodeSandbox };
 
 async function loadWasmRuntime(): Promise<Buffer> {
-  const wasmFile = import.meta.resolve(
-    "@codemod-com/codemod-sandbox/sandbox.wasm",
-  );
+  const wasmFile = import.meta.resolve("@codemod.com/codemod-sandbox/sandbox.wasm");
   return readFile(fileURLToPath(wasmFile));
 }
 
@@ -94,9 +87,7 @@ class NodeSandbox implements Sandbox {
     if (typeof sandboxFactory.__wbindgen_init_externref_table === "function") {
       sandboxFactory.__wbindgen_init_externref_table();
     } else {
-      console.warn(
-        "Heap system detected - ensure factory.js has proper heap setup",
-      );
+      console.warn("Heap system detected - ensure factory.js has proper heap setup");
     }
 
     this.sandbox = sandboxFactory;

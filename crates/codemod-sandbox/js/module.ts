@@ -76,10 +76,6 @@ class SandboxedModule {
   }
 
   describe(name: string, inputs: DescriberInputs): Promise<DescriberOutputs> {
-    return this.executeModule(
-      "describe",
-      name,
-      inputs,
-    ) as Promise<DescriberOutputs>;
+    return this.executeModule("describe", name, inputs) as Promise<DescriberOutputs>;
   }
 }

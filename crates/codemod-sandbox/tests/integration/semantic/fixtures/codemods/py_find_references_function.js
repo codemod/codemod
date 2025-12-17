@@ -2,9 +2,7 @@ export default function transform(root) {
   // Find all 'greet' identifiers
   const greetNodes = root.root().findAll({ rule: { pattern: "greet" } });
   if (greetNodes.length < 1) {
-    throw new Error(
-      "Expected at least 1 'greet' node, got " + greetNodes.length,
-    );
+    throw new Error("Expected at least 1 'greet' node, got " + greetNodes.length);
   }
 
   // Use the first one (the function name in definition)
@@ -17,9 +15,7 @@ export default function transform(root) {
   }
 
   if (references.length === 0) {
-    console.log(
-      "No references found - semantic provider may not have indexed yet",
-    );
+    console.log("No references found - semantic provider may not have indexed yet");
     return null;
   }
 
@@ -43,13 +39,9 @@ export default function transform(root) {
   // All references should be 'greet'
   for (const text of refTexts) {
     if (text !== "greet") {
-      throw new Error(
-        "Expected reference text to be 'greet', got: '" + text + "'",
-      );
+      throw new Error("Expected reference text to be 'greet', got: '" + text + "'");
     }
   }
 
   return null;
 }
-
-

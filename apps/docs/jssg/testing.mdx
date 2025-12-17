@@ -198,8 +198,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
-          node-version: '22' # Use current LTS
-      - run: npm ci # Do not recreate lockfile; ensures reproducible installs
+          node-version: '24' # Use current LTS
       - run: npm test
 ```
 

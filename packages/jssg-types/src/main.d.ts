@@ -1,7 +1,4 @@
-export declare class SgNode<
-  M extends TypesMap = TypesMap,
-  out T extends Kinds<M> = Kinds<M>
-> {
+export declare class SgNode<M extends TypesMap = TypesMap, out T extends Kinds<M> = Kinds<M>> {
   /** Returns the node's id */
   id(): number;
   range(): Range;
@@ -29,15 +26,11 @@ export declare class SgNode<
   getRoot(): SgRoot<M>;
   children(): Array<SgNode<M>>;
   find: NodeMethod<M, [matcher: string | number | RuleConfig<M>]>;
-  findAll<K extends Kinds<M>>(
-    matcher: string | number | RuleConfig<M>
-  ): Array<RefineNode<M, K>>;
+  findAll<K extends Kinds<M>>(matcher: string | number | RuleConfig<M>): Array<RefineNode<M, K>>;
   /** Finds the first child node in the `field` */
   field<F extends FieldNames<M[T]>>(name: F): FieldNode<M, T, F>;
   /** Finds all the children nodes in the `field` */
-  fieldChildren<F extends FieldNames<M[T]>>(
-    name: F
-  ): Exclude<FieldNode<M, T, F>, null>[];
+  fieldChildren<F extends FieldNames<M[T]>>(name: F): Exclude<FieldNode<M, T, F>, null>[];
   parent: NodeMethod<M>;
   child(nth: number): SgNode<M, ChildKinds<M, T>> | null;
   child<K extends NamedChildKinds<M, T>>(nth: number): RefineNode<M, K> | null;
@@ -50,22 +43,22 @@ export declare class SgNode<
   commitEdits(edits: Array<Edit>): string;
 
   // Semantic analysis methods (requires semantic provider)
-  
+
   /**
    * Get the definition for the symbol at this node's position.
-   * 
+   *
    * Returns an object containing:
    * - `node`: The SgNode at the definition location
    * - `root`: The SgRoot for the file containing the definition
    * - `kind`: The kind of definition ('local', 'import', or 'external')
-   * 
+   *
    * Returns null if:
    * - No semantic provider is configured
    * - No symbol is found at this position
-   * 
+   *
    * When a symbol comes from an import that can't be resolved (e.g., external module),
    * the definition will point to the import statement with `kind: 'import'`.
-   * 
+   *
    * @param options - Optional settings for definition lookup
    * @param options.resolveExternal - If false, stop at import statements without
    *   attempting to resolve the source module. Default: true
@@ -75,18 +68,18 @@ export declare class SgNode<
 
   /**
    * Find all references to the symbol at this node's position.
-   * 
+   *
    * Returns an array of objects, one per file, each containing:
    * - `root`: The SgRoot for the file
    * - `nodes`: Array of SgNode objects for each reference in that file
-   * 
+   *
    * Returns an empty array if:
-   * - No semantic provider is configured  
+   * - No semantic provider is configured
    * - No symbol is found at this position
-   * 
+   *
    * In file scope mode, it only searches files that have been processed.
    * In workspace scope mode, it searches the entire workspace.
-   * 
+   *
    * @returns An array of file references, each with a root and nodes
    */
   references(): Array<FileReferences<M>>;
@@ -106,31 +99,31 @@ export declare class SgRoot<M extends TypesMap = TypesMap> {
   source(): string;
   /**
    * Write content to this file.
-   * 
+   *
    * This method is only valid for files obtained via `definition()` or `references()`.
    * It cannot be called on the current file being processed - for that, return the
    * modified content from the `transform()` function instead.
-   * 
+   *
    * After writing, the semantic provider's cache is automatically updated with the new content.
-   * 
+   *
    * @param content - The new content to write to the file
    * @throws Error if called on the current file being processed
    * @throws Error if the file has no path
    * @throws Error if the write operation fails
-   * 
+   *
    * @example
    * ```ts
    * export default function transform(root) {
    *   const node = root.root().find({ rule: { pattern: "myVar" } });
    *   const def = node.definition();
-   *   
+   *
    *   if (def && def.root.filename() !== root.filename()) {
    *     // Edit the other file
    *     const edits = [def.node.replace("newVar")];
    *     const newContent = def.root.root().commitEdits(edits);
    *     def.root.write(newContent);
    *   }
-   *   
+   *
    *   // Return changes for the current file
    *   return root.root().commitEdits([...]);
    * }
@@ -151,8 +144,8 @@ interface NodeMethod<M extends TypesMap, Args extends unknown[] = []> {
 type RefineNode<M extends TypesMap, K> = string extends K
   ? SgNode<M>
   : K extends Kinds<M>
-  ? SgNode<M, K>
-  : never;
+    ? SgNode<M, K>
+    : never;
 
 /**
  * return the SgNode of the field in the node.
@@ -161,7 +154,7 @@ type RefineNode<M extends TypesMap, K> = string extends K
 type FieldNode<
   M extends TypesMap,
   K extends Kinds<M>,
-  F extends FieldNames<M[K]>
+  F extends FieldNames<M[K]>,
 > = F extends string ? FieldNodeImpl<M, ExtractField<M[K], F>> : never;
 
 type FieldNodeImpl<M extends TypesMap, I extends NodeFieldInfo> = I extends {
@@ -216,9 +209,7 @@ export interface PatternObject<M extends TypesMap = TypesMap> {
   strictness?: Strictness;
 }
 
-export type PatternStyle<M extends TypesMap = TypesMap> =
-  | string
-  | PatternObject<M>;
+export type PatternStyle<M extends TypesMap = TypesMap> = string | PatternObject<M>;
 
 export interface Relation<M extends TypesMap = TypesMap> extends Rule<M> {
   /**
@@ -242,10 +233,7 @@ export interface NthChildObject<M extends TypesMap = TypesMap> {
  * * string: An + B style string like CSS nth-child selector.
  * * object: An object with `position` and `ofRule` fields.
  */
-export type NthChild<M extends TypesMap = TypesMap> =
-  | number
-  | string
-  | NthChildObject<M>;
+export type NthChild<M extends TypesMap = TypesMap> = number | string | NthChildObject<M>;
 
 export interface Rule<M extends TypesMap = TypesMap> {
   /** A pattern string or a pattern object. */
@@ -293,13 +281,7 @@ export interface Rule<M extends TypesMap = TypesMap> {
   matches?: string;
 }
 
-type Separator =
-  | "caseChange"
-  | "dash"
-  | "dot"
-  | "slash"
-  | "space"
-  | "underscore";
+type Separator = "caseChange" | "dash" | "dot" | "slash" | "space" | "underscore";
 
 type StringCase =
   | "lowerCase"
@@ -344,8 +326,7 @@ type SerializableFixer = string | SerializableFixConfig;
 
 export type Severity = "hint" | "info" | "warning" | "error" | "off";
 
-export interface CompleteRuleConfig<M extends TypesMap = TypesMap>
-  extends RuleConfig<M> {
+export interface CompleteRuleConfig<M extends TypesMap = TypesMap> extends RuleConfig<M> {
   id: string;
   fix?: SerializableFixer;
   transform?: Record<string, Transformation>;
@@ -395,7 +376,7 @@ export interface Range {
  * - 'import': Definition traced to an import statement but module couldn't be resolved
  * - 'external': Definition resolved to a different file in the workspace
  */
-export type DefinitionKind = 'local' | 'import' | 'external';
+export type DefinitionKind = "local" | "import" | "external";
 
 /**
  * Options for definition lookup.
@@ -466,16 +447,10 @@ export interface TypesMap {
   [key: string]: NodeType;
 }
 
-export type FieldNames<N extends NodeType> = N extends { fields: infer F }
-  ? keyof F
-  : string;
+export type FieldNames<N extends NodeType> = N extends { fields: infer F } ? keyof F : string;
 
-export type ExtractField<
-  N extends NodeType,
-  F extends FieldNames<N>
-> = N["fields"] extends Record<F, NodeFieldInfo>
-  ? N["fields"][F]
-  : NodeFieldInfo;
+export type ExtractField<N extends NodeType, F extends FieldNames<N>> =
+  N["fields"] extends Record<F, NodeFieldInfo> ? N["fields"][F] : NodeFieldInfo;
 
 // in case of empty types array, return string as fallback
 type NoNever<T, Fallback> = [T] extends [never] ? Fallback : T;
@@ -485,10 +460,9 @@ export type TypesInField<M extends TypesMap, I extends NodeFieldInfo> = NoNever<
   Kinds<M>
 >;
 
-export type NamedChildKinds<
-  M extends TypesMap,
-  T extends Kinds<M>
-> = M[T] extends { children: infer C extends NodeFieldInfo }
+export type NamedChildKinds<M extends TypesMap, T extends Kinds<M>> = M[T] extends {
+  children: infer C extends NodeFieldInfo;
+}
   ? TypesInField<M, C>
   : NamedKinds<M>;
 export type ChildKinds<M extends TypesMap, T extends Kinds<M>> =
@@ -523,9 +497,7 @@ type LowPriorityKey = string & {};
  * tree-sitter Kinds also include unnamed nodes which is not usable in rule
  * NOTE: SgNode can return a string type if it is not a named node
  */
-export type Kinds<M extends TypesMap = TypesMap> =
-  | NamedKinds<M>
-  | LowPriorityKey;
+export type Kinds<M extends TypesMap = TypesMap> = NamedKinds<M> | LowPriorityKey;
 
 /**
  * The root node kind of the tree.
@@ -536,8 +508,10 @@ export type RootKind<M extends TypesMap> = NoNever<
 >;
 
 export declare function parse<M extends TypesMap = TypesMap>(lang: string, src: string): SgRoot<M>;
-export declare function parseAsync<M extends TypesMap = TypesMap>(lang: string, src: string): Promise<SgRoot<M>>;
-
+export declare function parseAsync<M extends TypesMap = TypesMap>(
+  lang: string,
+  src: string,
+): Promise<SgRoot<M>>;
 
 export type TransformOptions<T extends TypesMap> = {
   params: Record<string, string>;
@@ -548,13 +522,11 @@ export type TransformOptions<T extends TypesMap> = {
 
 export type Transform<T extends TypesMap> = (
   root: SgRoot<T>,
-  options: TransformOptions<T>
+  options: TransformOptions<T>,
 ) => Promise<string | null>;
 
 export type GetSelectorOptions<_T extends TypesMap> = {
   params: Record<string, string>;
 };
 
-export type GetSelector<T extends TypesMap> = ({
-  params,
-}: GetSelectorOptions<T>) => RuleConfig<T>;
+export type GetSelector<T extends TypesMap> = ({ params }: GetSelectorOptions<T>) => RuleConfig<T>;

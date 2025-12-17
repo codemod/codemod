@@ -25,8 +25,7 @@ class Capabilities {
     const isOutputOperation = capabilityName === "output";
     const { $metadata, ...cleanInputs } = parsedInputs;
 
-    const actualInputs =
-      !isOutputOperation && $metadata ? cleanInputs : parsedInputs;
+    const actualInputs = !isOutputOperation && $metadata ? cleanInputs : parsedInputs;
 
     let result: OutputValues;
     try {
@@ -42,9 +41,7 @@ class Capabilities {
 
   install(sessionId: UUID, capabilities: CapabilityRegistry) {
     if (this.contextMap.has(sessionId)) {
-      throw new Error(
-        `Session ID collision: "${sessionId}" capabilities were already installed.`,
-      );
+      throw new Error(`Session ID collision: "${sessionId}" capabilities were already installed.`);
     }
 
     this.contextMap.set(sessionId, {

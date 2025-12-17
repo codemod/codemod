@@ -1,9 +1,4 @@
-import {
-  ConsoleStdout,
-  OpenFile,
-  WASI,
-  File as WasiFile,
-} from "@bjorn3/browser_wasi_shim";
+import { ConsoleStdout, OpenFile, WASI, File as WasiFile } from "@bjorn3/browser_wasi_shim";
 
 import factory from "./factory.js";
 import type { InvokeInputs, ModuleSpec, Sandbox } from "./types.js";
@@ -35,32 +30,23 @@ class WebSandbox implements Sandbox {
       [],
       [
         new OpenFile(new WasiFile([])), // stdin
-        ConsoleStdout.lineBuffered((message) =>
-          console.log(`[WASI stdout] ${message}`),
-        ),
-        ConsoleStdout.lineBuffered((message) =>
-          console.warn(`[WASI stderr] ${message}`),
-        ),
+        ConsoleStdout.lineBuffered((message) => console.log(`[WASI stdout] ${message}`)),
+        ConsoleStdout.lineBuffered((message) => console.warn(`[WASI stderr] ${message}`)),
       ],
     );
 
     const sandboxFactory = factory();
-    const { instance } = await WebAssembly.instantiateStreaming(
-      fetch(this.runtimeUrl),
-      {
-        "./codemod-sandbox_bg.js": sandboxFactory,
-        wasi_snapshot_preview1: wasiRuntime.wasiImport,
-      },
-    );
+    const { instance } = await WebAssembly.instantiateStreaming(fetch(this.runtimeUrl), {
+      "./codemod-sandbox_bg.js": sandboxFactory,
+      wasi_snapshot_preview1: wasiRuntime.wasiImport,
+    });
 
     sandboxFactory.__wbg_set_wasm(instance.exports);
 
     if (typeof sandboxFactory.__wbindgen_init_externref_table === "function") {
       sandboxFactory.__wbindgen_init_externref_table();
     } else {
-      console.warn(
-        "Heap system detected - ensure factory.js has proper heap setup",
-      );
+      console.warn("Heap system detected - ensure factory.js has proper heap setup");
     }
 
     // @ts-expect-error 2739
@@ -93,12 +79,7 @@ class WebSandbox implements Sandbox {
     }
 
     const inputData = JSON.stringify(moduleInputs);
-    console.debug(
-      ...formatDataSize(
-        `Run module: "${moduleName}": input size`,
-        inputData.length,
-      ),
-    );
+    console.debug(...formatDataSize(`Run module: "${moduleName}": input size`, inputData.length));
 
     const executionResult = await sandboxInstance.run_module(
       sessionId,

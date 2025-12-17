@@ -1,14 +1,14 @@
 {
-	"name": "{name}",
-	"version": "0.1.0",
-	"description": "{description}",
-	"type": "module",
-	"devDependencies": {
-		"@codemod.com/jssg-types": "^1.3.0",
-		"typescript": "^5.8.3"
-	},
-	"scripts": {
-		"test": "{codemod_command} jssg test -l typescript ./scripts/codemod.ts",
-		"check-types": "tsc --noEmit"
-	}
+  "name": "{name}",
+  "version": "0.1.0",
+  "description": "{description}",
+  "type": "module",
+  "scripts": {
+    "test": "{codemod_command} jssg test -l typescript ./scripts/codemod.ts",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@codemod.com/jssg-types": "^1.3.0",
+    "typescript": "^5.8.3"
+  }
 }

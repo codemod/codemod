@@ -1,10 +1,6 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import {
-  getImport,
-  addImport,
-  removeImport,
-} from "../src/javascript/exports/imports.ts";
+import { getImport, addImport, removeImport } from "../src/javascript/exports/imports.ts";
 import type JS from "@codemod.com/jssg-types/langs/javascript";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type TSX from "@codemod.com/jssg-types/langs/tsx";
@@ -33,29 +29,20 @@ function testReturnsNullWhenNoMatches() {
 }
 
 function testDefaultImportFromDEFAULT_NAME() {
-  const program = parseProgram(
-    "javascript",
-    "import foo from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import foo from 'mod';\nconsole.log(foo);\n");
   const res = getImport(program, { type: "default", from: "mod" });
   assert(res !== null, "Expected a result for default import");
   assert(res!.alias === "foo", "Alias should be DEFAULT_NAME value");
   assert(res!.isNamespace === false, "isNamespace should be false");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for import statement"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for import statement");
   assert(
     typeof res!.node.text === "function" && res!.node.text() === "foo",
-    "Node should reflect identifier"
+    "Node should reflect identifier",
   );
 }
 
 function testDefaultImportFromVAR_NAME() {
-  const program = parseProgram(
-    "javascript",
-    "const bar = require('mod');\nconsole.log(bar);\n"
-  );
+  const program = parseProgram("javascript", "const bar = require('mod');\nconsole.log(bar);\n");
   const res = getImport(program, { type: "default", from: "mod" });
   assert(res !== null, "Expected a result for var-based import");
   assert(res!.alias === "bar", "Alias should be VAR_NAME value");
@@ -65,7 +52,7 @@ function testDefaultImportFromVAR_NAME() {
 function testNamedImportWithAlias() {
   const program = parseProgram(
     "javascript",
-    "import { baz as qux } from 'mod';\nconsole.log(qux);\n"
+    "import { baz as qux } from 'mod';\nconsole.log(qux);\n",
   );
   const res = getImport(program, {
     type: "named",
@@ -74,21 +61,12 @@ function testNamedImportWithAlias() {
   });
   assert(res !== null, "Expected a result for named import with alias");
   assert(res!.alias === "qux", "Alias should use ALIAS when present");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for named import"
-  );
-  assert(
-    res!.node.text() === "qux",
-    "Node should be alias identifier when aliased"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for named import");
+  assert(res!.node.text() === "qux", "Node should be alias identifier when aliased");
 }
 
 function testNamedImportWithoutAlias() {
-  const program = parseProgram(
-    "javascript",
-    "import { q } from 'mod';\nconsole.log(q);\n"
-  );
+  const program = parseProgram("javascript", "import { q } from 'mod';\nconsole.log(q);\n");
   const res = getImport(program, {
     type: "named",
     name: "q",
@@ -96,87 +74,60 @@ function testNamedImportWithoutAlias() {
   });
   assert(res !== null, "Expected a result for named import without alias");
   assert(res!.alias === "q", "Alias should fallback to ORIGINAL when no alias");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for named import"
-  );
-  assert(
-    res!.node.text() === "q",
-    "Node should be original identifier when no alias"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for named import");
+  assert(res!.node.text() === "q", "Node should be original identifier when no alias");
 }
 
 function testNamedImportNotFound() {
-  const program = parseProgram(
-    "javascript",
-    "import { alpha } from 'mod';\nconsole.log(alpha);\n"
-  );
+  const program = parseProgram("javascript", "import { alpha } from 'mod';\nconsole.log(alpha);\n");
   const res = getImport(program, {
     type: "named",
     name: "beta",
     from: "mod",
   });
-  assert(
-    res === null,
-    "Expected null when requested named import does not exist"
-  );
+  assert(res === null, "Expected null when requested named import does not exist");
 }
 
 function testDynamicImportModuleType() {
   const program = parseProgram(
     "javascript",
-    "const foo = await import('mod');\nconsole.log(foo);\n"
+    "const foo = await import('mod');\nconsole.log(foo);\n",
   );
   const res = getImport(program, { type: "default", from: "mod" });
   assert(res !== null, "Expected a result for dynamic import");
   assert(res!.alias === "foo", "Alias should be variable name");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for dynamic import()"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for dynamic import()");
 }
 
 function testDestructuredRequireModuleType() {
   const program = parseProgram(
     "javascript",
-    "const { bar } = require('mod');\nconsole.log(bar);\n"
+    "const { bar } = require('mod');\nconsole.log(bar);\n",
   );
   const res = getImport(program, { type: "named", name: "bar", from: "mod" });
   assert(res !== null, "Expected a result for destructured require");
   assert(res!.alias === "bar", "Alias should be destructured name");
-  assert(
-    res!.moduleType === "cjs",
-    "moduleType should be cjs for destructured require()"
-  );
+  assert(res!.moduleType === "cjs", "moduleType should be cjs for destructured require()");
 }
 
 function testDestructuredDynamicImportModuleType() {
   const program = parseProgram(
     "javascript",
-    "const { baz } = await import('mod');\nconsole.log(baz);\n"
+    "const { baz } = await import('mod');\nconsole.log(baz);\n",
   );
   const res = getImport(program, { type: "named", name: "baz", from: "mod" });
   assert(res !== null, "Expected a result for destructured dynamic import");
   assert(res!.alias === "baz", "Alias should be destructured name");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for destructured dynamic import()"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for destructured dynamic import()");
 }
 
 function testNamespaceImportModuleType() {
-  const program = parseProgram(
-    "javascript",
-    "import * as ns from 'mod';\nconsole.log(ns);\n"
-  );
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
   const res = getImport(program, { type: "default", from: "mod" });
   assert(res !== null, "Expected a result for namespace import");
   assert(res!.alias === "ns", "Alias should be namespace name");
   assert(res!.isNamespace === true, "isNamespace should be true");
-  assert(
-    res!.moduleType === "esm",
-    "moduleType should be esm for namespace import"
-  );
+  assert(res!.moduleType === "esm", "moduleType should be esm for namespace import");
 }
 
 // ============================================================================
@@ -192,10 +143,7 @@ function testAddDefaultImportESM() {
   });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    result.includes("import foo from 'mod'"),
-    "Should add ESM default import"
-  );
+  assert(result.includes("import foo from 'mod'"), "Should add ESM default import");
 }
 
 function testAddDefaultImportCJS() {
@@ -208,10 +156,7 @@ function testAddDefaultImportCJS() {
   });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    result.includes("const bar = require('mod')"),
-    "Should add CJS require"
-  );
+  assert(result.includes("const bar = require('mod')"), "Should add CJS require");
 }
 
 function testAddNamespaceImport() {
@@ -223,10 +168,7 @@ function testAddNamespaceImport() {
   });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    result.includes("import * as ns from 'mod'"),
-    "Should add namespace import"
-  );
+  assert(result.includes("import * as ns from 'mod'"), "Should add namespace import");
 }
 
 function testAddNamedImportESM() {
@@ -240,7 +182,7 @@ function testAddNamedImportESM() {
   const result = program.commitEdits([edit!]);
   assert(
     result.includes("import { foo, bar as baz } from 'mod'"),
-    "Should add ESM named import with alias"
+    "Should add ESM named import with alias",
   );
 }
 
@@ -256,15 +198,12 @@ function testAddNamedImportCJS() {
   const result = program.commitEdits([edit!]);
   assert(
     result.includes("const { x, y: z } = require('mod')"),
-    "Should add CJS destructured require"
+    "Should add CJS destructured require",
   );
 }
 
 function testAddImportSkipsExistingDefault() {
-  const program = parseProgram(
-    "javascript",
-    "import foo from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import foo from 'mod';\nconsole.log(foo);\n");
   const edit = addImport(program, {
     type: "default",
     name: "bar",
@@ -274,10 +213,7 @@ function testAddImportSkipsExistingDefault() {
 }
 
 function testAddImportSkipsExistingNamed() {
-  const program = parseProgram(
-    "javascript",
-    "import { foo } from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import { foo } from 'mod';\nconsole.log(foo);\n");
   const edit = addImport(program, {
     type: "named",
     specifiers: [{ name: "foo" }],
@@ -287,10 +223,7 @@ function testAddImportSkipsExistingNamed() {
 }
 
 function testAddImportMergesNamedSpecifiers() {
-  const program = parseProgram(
-    "javascript",
-    "import { foo } from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import { foo } from 'mod';\nconsole.log(foo);\n");
   const edit = addImport(program, {
     type: "named",
     specifiers: [{ name: "bar" }],
@@ -301,20 +234,14 @@ function testAddImportMergesNamedSpecifiers() {
   // Check that both foo and bar are in the same import statement
   assert(
     result.includes("foo") && result.includes("bar") && result.includes("from 'mod'"),
-    "Should merge bar into existing named imports"
+    "Should merge bar into existing named imports",
   );
   // Make sure we didn't create a new import statement
-  assert(
-    (result.match(/import/g) || []).length === 1,
-    "Should have only one import statement"
-  );
+  assert((result.match(/import/g) || []).length === 1, "Should have only one import statement");
 }
 
 function testAddImportAfterExisting() {
-  const program = parseProgram(
-    "javascript",
-    "import x from 'other';\nconsole.log(x);\n"
-  );
+  const program = parseProgram("javascript", "import x from 'other';\nconsole.log(x);\n");
   const edit = addImport(program, {
     type: "default",
     name: "foo",
@@ -333,38 +260,26 @@ function testAddImportAfterExisting() {
 // ============================================================================
 
 function testRemoveDefaultImportESM() {
-  const program = parseProgram(
-    "javascript",
-    "import foo from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import foo from 'mod';\nconsole.log(foo);\n");
   const edit = removeImport(program, { type: "default", from: "mod" });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    !result.includes("import foo from 'mod'"),
-    "Should remove the import statement"
-  );
+  assert(!result.includes("import foo from 'mod'"), "Should remove the import statement");
   assert(result.includes("console.log"), "Should keep other code");
 }
 
 function testRemoveNamespaceImport() {
-  const program = parseProgram(
-    "javascript",
-    "import * as ns from 'mod';\nconsole.log(ns);\n"
-  );
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
   const edit = removeImport(program, { type: "namespace", from: "mod" });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    !result.includes("import * as ns from 'mod'"),
-    "Should remove namespace import"
-  );
+  assert(!result.includes("import * as ns from 'mod'"), "Should remove namespace import");
 }
 
 function testRemoveNamedImportSpecific() {
   const program = parseProgram(
     "javascript",
-    "import { foo, bar } from 'mod';\nconsole.log(foo, bar);\n"
+    "import { foo, bar } from 'mod';\nconsole.log(foo, bar);\n",
   );
   const edit = removeImport(program, {
     type: "named",
@@ -377,15 +292,12 @@ function testRemoveNamedImportSpecific() {
   assert(!result.includes("import { foo"), "Should remove foo from import");
   assert(
     result.includes("bar") && result.includes("from 'mod'"),
-    "Should keep bar specifier in import"
+    "Should keep bar specifier in import",
   );
 }
 
 function testRemoveNamedImportLast() {
-  const program = parseProgram(
-    "javascript",
-    "import { foo } from 'mod';\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "import { foo } from 'mod';\nconsole.log(foo);\n");
   const edit = removeImport(program, {
     type: "named",
     specifiers: ["foo"],
@@ -393,10 +305,7 @@ function testRemoveNamedImportLast() {
   });
   assert(edit !== null, "Should return an edit");
   const result = program.commitEdits([edit!]);
-  assert(
-    !result.includes("import"),
-    "Should remove entire import when last specifier removed"
-  );
+  assert(!result.includes("import"), "Should remove entire import when last specifier removed");
 }
 
 function testRemoveImportNotFound() {
@@ -406,10 +315,7 @@ function testRemoveImportNotFound() {
 }
 
 function testRemoveDefaultCJS() {
-  const program = parseProgram(
-    "javascript",
-    "const foo = require('mod');\nconsole.log(foo);\n"
-  );
+  const program = parseProgram("javascript", "const foo = require('mod');\nconsole.log(foo);\n");
   const edit = removeImport(program, { type: "default", from: "mod" });
   assert(edit !== null, "Should return an edit for CJS");
   const result = program.commitEdits([edit!]);

@@ -1,30 +1,30 @@
 {
   "name": "@codemod.com/cli-darwin-x64",
   "version": "0.0.0",
+  "description": "Codemod platform for semantic code transformations - macOS x64 binary",
+  "keywords": [
+    "ast",
+    "codemod",
+    "migration",
+    "refactoring",
+    "transformation"
+  ],
+  "repository": "https://github.com/codemod/codemod",
+  "license": "Apache-2.0",
+  "files": [
+    "codemod"
+  ],
+  "engines": {
+    "node": ">= 10"
+  },
   "os": [
     "darwin"
   ],
   "cpu": [
     "x64"
   ],
-  "files": [
-    "codemod"
-  ],
-  "description": "Codemod platform for semantic code transformations - macOS x64 binary",
-  "keywords": [
-    "codemod",
-    "ast",
-    "transformation",
-    "refactoring",
-    "migration"
-  ],
-  "license": "Apache-2.0",
-  "engines": {
-    "node": ">= 10"
-  },
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
-    "access": "public"
-  },
-  "repository": "https://github.com/codemod/codemod"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

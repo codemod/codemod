@@ -4,9 +4,7 @@ export default function transform(root) {
   // Find all 'my_var' identifiers
   const myVarNodes = root.root().findAll({ rule: { pattern: "my_var" } });
   if (myVarNodes.length < 1) {
-    throw new Error(
-      "Expected at least 1 'my_var' node, got " + myVarNodes.length,
-    );
+    throw new Error("Expected at least 1 'my_var' node, got " + myVarNodes.length);
   }
 
   // Use the first one (the variable definition)
@@ -24,9 +22,7 @@ export default function transform(root) {
     // 1. app.py itself (with the print statement using my_var)
     // 2. really_imports.py (which imports from app)
     if (references.length !== 2) {
-      throw new Error(
-        "app.py: Expected 2 file references, got " + references.length,
-      );
+      throw new Error("app.py: Expected 2 file references, got " + references.length);
     }
 
     // Verify one reference is in app.py
@@ -36,9 +32,7 @@ export default function transform(root) {
     }
 
     // Verify one reference is in really_imports.py
-    const importRef = references.find((r) =>
-      r.root.filename().endsWith("really_imports.py"),
-    );
+    const importRef = references.find((r) => r.root.filename().endsWith("really_imports.py"));
     if (!importRef) {
       throw new Error("app.py: Expected a reference in really_imports.py");
     }
@@ -55,18 +49,14 @@ export default function transform(root) {
     // Verify the reference is in models.py itself
     if (!references[0].root.filename().endsWith("models.py")) {
       throw new Error(
-        "models.py: Expected reference to be in models.py, got " +
-          references[0].root.filename(),
+        "models.py: Expected reference to be in models.py, got " + references[0].root.filename(),
       );
     }
   } else if (filename.endsWith("really_imports.py")) {
     // really_imports.py defines my_var_alias (via import), not my_var
     // So references to my_var in this file should only find 1 file reference
     if (references.length !== 1) {
-      throw new Error(
-        "really_imports.py: Expected 1 file reference, got " +
-          references.length,
-      );
+      throw new Error("really_imports.py: Expected 1 file reference, got " + references.length);
     }
   }
 

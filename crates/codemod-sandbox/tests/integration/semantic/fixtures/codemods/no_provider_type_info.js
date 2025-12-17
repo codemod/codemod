@@ -8,12 +8,8 @@ export default function transform(root) {
 
   // Should return null when no provider is configured
   if (typeInfo !== null) {
-    throw new Error(
-      "Expected null when no semantic provider is configured, got: " + typeInfo,
-    );
+    throw new Error("Expected null when no semantic provider is configured, got: " + typeInfo);
   }
 
   return null;
 }
-
-

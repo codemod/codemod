@@ -51,7 +51,7 @@ jobs:
           title: "chore(bump): Bump codemod crates version to v${{ github.event.inputs.version }}"
           body: |
             This PR bumps the codemod crates version to v${{ github.event.inputs.version }}.
-            
+
             Changes:
             - Updated version in Cargo.toml
             - Regenerated Cargo.lock

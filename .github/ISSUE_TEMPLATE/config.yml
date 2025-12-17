@@ -1,4 +1,4 @@
 contact_links:
-    - name: Questions
-      url: https://codemod.com/community
-      about: Ask us any questions on our Slack community.
+  - name: Questions
+    url: https://codemod.com/community
+    about: Ask us any questions on our Slack community.

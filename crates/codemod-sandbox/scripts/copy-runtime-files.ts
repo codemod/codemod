@@ -4,14 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const WASM_BUILD_DIR = resolve(
-  SCRIPT_DIR,
-  "..",
-  "..",
-  "..",
-  "target",
-  "wasm-bindgen",
-);
+const WASM_BUILD_DIR = resolve(SCRIPT_DIR, "..", "..", "..", "target", "wasm-bindgen");
 
 interface FileCopyTask {
   readonly sourceFileName: string;
@@ -45,9 +38,7 @@ async function performFileCopy(task: FileCopyTask): Promise<void> {
   const fileExists = await validateFileExists(sourcePath);
 
   if (!fileExists) {
-    console.warn(
-      `WARNING: Codemod Sandbox bits weren't found at:\n${sourcePath}`,
-    );
+    console.warn(`WARNING: Codemod Sandbox bits weren't found at:\n${sourcePath}`);
     process.exit(0);
   }
 

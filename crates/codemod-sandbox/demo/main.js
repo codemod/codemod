@@ -6,10 +6,7 @@ import {
 } from "https://esm.sh/@bjorn3/browser_wasi_shim";
 import factory from "../../../target/wasm-bindgen/codemod-sandbox_bg.js";
 
-const path = new URL(
-  "../../../target/wasm-bindgen/codemod-sandbox_bg.wasm",
-  import.meta.url,
-);
+const path = new URL("../../../target/wasm-bindgen/codemod-sandbox_bg.wasm", import.meta.url);
 
 const wasi = new WASI(
   [],

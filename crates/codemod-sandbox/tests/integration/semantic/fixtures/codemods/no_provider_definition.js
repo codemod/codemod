@@ -9,12 +9,9 @@ export default function transform(root) {
   // Should return null when no provider is configured
   if (definition !== null) {
     throw new Error(
-      "Expected null when no semantic provider is configured, got: " +
-        JSON.stringify(definition),
+      "Expected null when no semantic provider is configured, got: " + JSON.stringify(definition),
     );
   }
 
   return null;
 }
-
-

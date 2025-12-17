@@ -8,9 +8,7 @@ export default function transform(root) {
 
   // Should return empty array when no provider is configured
   if (!Array.isArray(references)) {
-    throw new Error(
-      "Expected references to be an array, got: " + typeof references,
-    );
+    throw new Error("Expected references to be an array, got: " + typeof references);
   }
 
   if (references.length !== 0) {
@@ -22,5 +20,3 @@ export default function transform(root) {
 
   return null;
 }
-
-

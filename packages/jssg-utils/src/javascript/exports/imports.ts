@@ -47,9 +47,7 @@ function getModuleType<T extends Language>(match: SgNode<T>): "esm" | "cjs" {
     varDeclarator = tsMatch;
   } else {
     varDeclarator =
-      (tsMatch
-        .ancestors()
-        .find((a) => a.kind() === "variable_declarator") as SgNode<TS>) ?? null;
+      (tsMatch.ancestors().find((a) => a.kind() === "variable_declarator") as SgNode<TS>) ?? null;
   }
 
   if (!varDeclarator) {
@@ -95,7 +93,7 @@ function getModuleType<T extends Language>(match: SgNode<T>): "esm" | "cjs" {
  */
 export const getImport = <T extends Language>(
   program: SgNode<T, "program">,
-  options: GetImportOptions
+  options: GetImportOptions,
 ): GetImportResult<T> => {
   const tsProgram = program as unknown as SgNode<TS, "program">;
 
@@ -539,10 +537,7 @@ export const getImport = <T extends Language>(
       alias: namespaceImport.getMatch("NAMESPACE_ALIAS")?.text() ?? "",
       isNamespace: true,
       moduleType: "esm" as const, // Namespace imports are always ESM
-      node: namespaceImport.getMatch("NAMESPACE_ALIAS")! as unknown as SgNode<
-        T,
-        "identifier"
-      >,
+      node: namespaceImport.getMatch("NAMESPACE_ALIAS")! as unknown as SgNode<T, "identifier">,
     };
   }
 
@@ -583,9 +578,7 @@ interface Edit {
 /**
  * Find all import statements and require declarations in the program.
  */
-function findAllImportStatements<T extends Language>(
-  program: SgNode<T, "program">
-): SgNode<T>[] {
+function findAllImportStatements<T extends Language>(program: SgNode<T, "program">): SgNode<T>[] {
   const tsProgram = program as unknown as SgNode<TS, "program">;
 
   // Find ESM import statements
@@ -634,7 +627,7 @@ function findAllImportStatements<T extends Language>(
  */
 function findExistingEsmImport<T extends Language>(
   program: SgNode<T, "program">,
-  source: string
+  source: string,
 ): SgNode<T, "import_statement"> | null {
   const tsProgram = program as unknown as SgNode<TS, "program">;
 
@@ -657,9 +650,7 @@ function findExistingEsmImport<T extends Language>(
 /**
  * Find the named_imports node within an import statement.
  */
-function findNamedImports<T extends Language>(
-  importStmt: SgNode<T>
-): SgNode<T> | null {
+function findNamedImports<T extends Language>(importStmt: SgNode<T>): SgNode<T> | null {
   const tsImport = importStmt as unknown as SgNode<TS>;
   const namedImports = tsImport.find({
     rule: { kind: "named_imports" },
@@ -737,12 +728,9 @@ function generateCjsRequire(options: AddImportOptions): string {
  */
 export function addImport<T extends Language>(
   program: SgNode<T, "program">,
-  options: AddImportOptions
+  options: AddImportOptions,
 ): Edit | null {
-  const moduleType =
-    options.type === "namespace"
-      ? "esm"
-      : (options.moduleType ?? "esm");
+  const moduleType = options.type === "namespace" ? "esm" : (options.moduleType ?? "esm");
 
   // Check if import already exists
   if (options.type === "default") {
@@ -783,15 +771,12 @@ export function addImport<T extends Language>(
           const namedImportsText = namedImports.text();
           const closingBraceIdx = namedImportsText.lastIndexOf("}");
           if (closingBraceIdx > 0) {
-            const insertPos =
-              namedImports.range().start.index + closingBraceIdx;
+            const insertPos = namedImports.range().start.index + closingBraceIdx;
             const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
             // Check if there are existing specifiers (need comma)
             const hasExistingSpecifiers =
               namedImportsText.slice(1, closingBraceIdx).trim().length > 0;
-            const insertText = hasExistingSpecifiers
-              ? `, ${specifierStr}`
-              : ` ${specifierStr} `;
+            const insertText = hasExistingSpecifiers ? `, ${specifierStr}` : ` ${specifierStr} `;
 
             return {
               startPos: insertPos,
@@ -839,9 +824,7 @@ export function addImport<T extends Language>(
 
   // Generate import text
   const importText =
-    moduleType === "esm"
-      ? generateEsmImport(options)
-      : generateCjsRequire(options);
+    moduleType === "esm" ? generateEsmImport(options) : generateCjsRequire(options);
 
   return {
     startPos: insertPos,
@@ -860,7 +843,7 @@ export function addImport<T extends Language>(
 function findImportStatementForSpecifier<T extends Language>(
   program: SgNode<T, "program">,
   specifierName: string,
-  source: string
+  source: string,
 ): { statement: SgNode<T>; specifier: SgNode<T> } | null {
   const tsProgram = program as unknown as SgNode<TS, "program">;
 
@@ -893,9 +876,7 @@ function findImportStatementForSpecifier<T extends Language>(
 
   if (esmSpecifier) {
     // Find the parent import_statement
-    const importStmt = esmSpecifier
-      .ancestors()
-      .find((a) => a.kind() === "import_statement");
+    const importStmt = esmSpecifier.ancestors().find((a) => a.kind() === "import_statement");
     if (importStmt) {
       return {
         statement: importStmt as unknown as SgNode<T>,
@@ -1001,9 +982,7 @@ function findImportStatementForSpecifier<T extends Language>(
 
   if (cjsSpecifier) {
     // Find the parent lexical_declaration
-    const lexicalDecl = cjsSpecifier
-      .ancestors()
-      .find((a) => a.kind() === "lexical_declaration");
+    const lexicalDecl = cjsSpecifier.ancestors().find((a) => a.kind() === "lexical_declaration");
     if (lexicalDecl) {
       return {
         statement: lexicalDecl as unknown as SgNode<T>,
@@ -1018,9 +997,7 @@ function findImportStatementForSpecifier<T extends Language>(
 /**
  * Count the number of specifiers in an import statement.
  */
-function countSpecifiersInStatement<T extends Language>(
-  statement: SgNode<T>
-): number {
+function countSpecifiersInStatement<T extends Language>(statement: SgNode<T>): number {
   const tsStmt = statement as unknown as SgNode<TS>;
 
   if (tsStmt.kind() === "import_statement") {
@@ -1045,7 +1022,7 @@ function countSpecifiersInStatement<T extends Language>(
  */
 function getStatementRangeWithNewline<T extends Language>(
   statement: SgNode<T>,
-  programText: string
+  programText: string,
 ): { start: number; end: number } {
   const range = statement.range();
   let end = range.end.index;
@@ -1063,7 +1040,7 @@ function getStatementRangeWithNewline<T extends Language>(
  */
 function getSpecifierRangeWithSeparator<T extends Language>(
   specifier: SgNode<T>,
-  programText: string
+  programText: string,
 ): { start: number; end: number } {
   const range = specifier.range();
   let start = range.start.index;
@@ -1104,7 +1081,7 @@ function getSpecifierRangeWithSeparator<T extends Language>(
  */
 export function removeImport<T extends Language>(
   program: SgNode<T, "program">,
-  options: RemoveImportOptions
+  options: RemoveImportOptions,
 ): Edit | null {
   const programText = program.text();
 
@@ -1151,7 +1128,7 @@ export function removeImport<T extends Language>(
     if (importStmt) {
       const { start, end } = getStatementRangeWithNewline(
         importStmt as unknown as SgNode<T>,
-        programText
+        programText,
       );
       return { startPos: start, endPos: end, insertedText: "" };
     }
@@ -1199,7 +1176,7 @@ export function removeImport<T extends Language>(
     if (cjsDecl) {
       const { start, end } = getStatementRangeWithNewline(
         cjsDecl as unknown as SgNode<T>,
-        programText
+        programText,
       );
       return { startPos: start, endPos: end, insertedText: "" };
     }
@@ -1252,7 +1229,7 @@ export function removeImport<T extends Language>(
     if (importStmt) {
       const { start, end } = getStatementRangeWithNewline(
         importStmt as unknown as SgNode<T>,
-        programText
+        programText,
       );
       return { startPos: start, endPos: end, insertedText: "" };
     }
@@ -1264,29 +1241,19 @@ export function removeImport<T extends Language>(
   if (options.type === "named") {
     // Find the first specifier to remove
     for (const specName of options.specifiers) {
-      const found = findImportStatementForSpecifier(
-        program,
-        specName,
-        options.from
-      );
+      const found = findImportStatementForSpecifier(program, specName, options.from);
 
       if (found) {
         const specifierCount = countSpecifiersInStatement(found.statement);
 
         // If this is the last specifier, remove the entire statement
         if (specifierCount <= options.specifiers.length) {
-          const { start, end } = getStatementRangeWithNewline(
-            found.statement,
-            programText
-          );
+          const { start, end } = getStatementRangeWithNewline(found.statement, programText);
           return { startPos: start, endPos: end, insertedText: "" };
         }
 
         // Otherwise, just remove this specifier
-        const { start, end } = getSpecifierRangeWithSeparator(
-          found.specifier,
-          programText
-        );
+        const { start, end } = getSpecifierRangeWithSeparator(found.specifier, programText);
         return { startPos: start, endPos: end, insertedText: "" };
       }
     }
