@@ -6,14 +6,14 @@
   "license": "Apache License, Version 2.0",
   "description": "A monorepo for all the interconnected tools of codemod.com",
   "private": true,
-  "packageManager": "pnpm@9.5.0",
+  "packageManager": "pnpm@10.19.0",
   "prisma": {
     "schema": "packages/database/prisma/schema.prisma",
     "seed": "tsx packages/database/src/seed.ts"
   },
   "engines": {
-    "node": ">=20.x",
-    "pnpm": ">=8.x"
+    "node": ">=24.x",
+    "pnpm": ">=10.x"
   },
   "keywords": [
     "codemod",
@@ -30,78 +30,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/codemod-com/codemod.git"
+    "url": "https://github.com/codemod/codemod.git"
   },
   "scripts": {
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "build:local": "turbo run build:local",
-    "build:prod": "turbo run build:prod",
-    "build:publish": "turbo run build:publish",
-    "clean": "turbo run clean",
-    "link": "turbo run link",
-    "lint": "biome check .",
-    "lint:write": "biome check --write --diagnostic-level=error .",
-    "lint:linter": "biome lint --write --diagnostic-level=error .",
-    "lint:formatter": "biome format --write --diagnostic-level=error .",
-    "test": "pnpm run test:unit && pnpm run test:backend",
-    "test:silent": "pnpm run test:unit --silent && pnpm run test:backend --silent",
-    "test:unit": "vitest run --exclude '(apps/backend/**/*.*|submodules/**/*.*|crates/**/*.*)'",
-    "test:backend": "pnpm --filter @codemod-com/backend test",
-    "coverage": "pnpm test:unit --coverage",
-    "prepare": "husky install",
-    "release": "pnpm changeset publish --tag legacy",
-    "db:up": "docker-compose up -d",
-    "db:generate": "turbo run db:generate",
-    "db:migrate:create": "turbo run db:migrate:create -- --name ",
-    "db:migrate:deploy": "turbo run db:migrate:deploy",
-    "db:push": "turbo run db:push",
-    "db:reset": "turbo run db:reset",
-    "db:seed": "turbo run db:seed",
-    "db:studio": "turbo run db:studio"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "catalog:",
-    "@changesets/cli": "catalog:",
-    "@codemod-com/tsconfig": "workspace:*",
-    "@codemod-com/utilities": "workspace:*",
-    "@total-typescript/ts-reset": "catalog:",
-    "@types/node": "^22.15.35",
-    "@vitest/coverage-v8": "catalog:",
-    "commitizen": "catalog:",
-    "concurrently": "catalog:",
-    "cz-conventional-changelog": "catalog:",
-    "husky": "8.0.3",
-    "lint-staged": "catalog:",
-    "tsx": "^4.2.0",
-    "turbo": "catalog:",
-    "typescript": "^5.4.5",
-    "vite-tsconfig-paths": "catalog:",
-    "vitest": "^2.1.9"
-  },
-  "lint-staged": {
-    "*": [
-      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error"
-    ]
-  },
-  "pnpm": {
-    "peerDependencyRules": {
-      "ignoreMissing": [
-        "@babel/core"
-      ]
-    },
-    "overrides": {
-      "postcss": "8.4.35",
-      "whatwg-url": "^14.0.0"
-    }
-  },
-  "config": {
-    "commitizen": {
-      "path": "node_modules/cz-conventional-changelog"
-    }
-  },
-  "dependencies": {
-    "langchain": "catalog:",
-    "react-use": "catalog:"
+    "release": "pnpm changeset publish"
+
   }
 }

@@ -5,3 +5,5 @@ function printCounter() {
     console.log("Counter:", counter);
 }
 
+
+

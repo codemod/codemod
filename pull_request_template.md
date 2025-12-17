@@ -2,7 +2,7 @@
 THANK YOU for contributing to Codemod! Let's speed up migration velocity for all, one PR at a time! :)
 
 Before opening this PR, please:
-1. Read and accept the contributing guidelines here: https://github.com/codemod-com/codemod-registry/blob/main/CONTRIBUTING.md
+1. Read and accept the contributing guidelines here: https://github.com/codemod/codemod-registry/blob/main/CONTRIBUTING.md
 2. Ensure that the PR title follows conventional commits: https://www.conventionalcommits.org
 
 Here are some examples:

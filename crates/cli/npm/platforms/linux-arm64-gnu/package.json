@@ -29,5 +29,5 @@
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
-  "repository": "https://github.com/codemod-com/codemod"
+  "repository": "https://github.com/codemod/codemod"
 }
