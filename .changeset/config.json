@@ -7,5 +7,12 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["crates/cli/**"]
+  "ignore": [
+    "codemod",
+    "@codemod.com/cli-darwin-arm64",
+    "@codemod.com/cli-darwin-x64",
+    "@codemod.com/cli-linux-arm64-gnu",
+    "@codemod.com/cli-linux-x64-gnu",
+    "@codemod.com/cli-win32-x64-msvc"
+  ]
 }
