@@ -11,6 +11,10 @@ on:
         required: true
         type: string
 
+permissions:
+  id-token: write
+  contents: write
+
 jobs:
   build:
     name: Build Release
@@ -292,8 +296,6 @@ jobs:
           sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Verify npm authentication
           echo "Verifying npm authentication..."
@@ -326,8 +328,6 @@ jobs:
           done
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd crates/cli/npm
           npm publish --tag ${{ steps.version.outputs.npm_tag }}
