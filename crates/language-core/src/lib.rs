@@ -4,6 +4,7 @@
 //! and semantic analysis across different programming languages.
 
 mod error;
+pub mod filesystem;
 mod noop;
 mod provider;
 mod types;

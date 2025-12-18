@@ -30,5 +30,8 @@ ty_vendored = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }
 # Concurrency
 parking_lot = "0.12"
 
+# Virtual filesystem
+vfs = { workspace = true }
+
 [dev-dependencies]
 tempfile.workspace = true

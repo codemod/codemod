@@ -19,6 +19,9 @@ ignore = { workspace = true }
 # Concurrency
 parking_lot = "0.12"
 
+# Virtual filesystem
+vfs = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

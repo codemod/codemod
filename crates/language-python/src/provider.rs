@@ -2,10 +2,19 @@
 
 use crate::analyzer::{FileScopeAnalyzer, WorkspaceScopeAnalyzer};
 use language_core::{
-    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
     SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
+use vfs::VfsPath;
+
+/// Inner analyzer type for the provider.
+enum AnalyzerKind {
+    /// FileScope mode analyzer (single-file analysis)
+    FileScope(FileScopeAnalyzer),
+    /// WorkspaceScope mode analyzer (workspace-wide analysis)
+    WorkspaceScope(WorkspaceScopeAnalyzer),
+}
 
 /// Semantic analysis provider for Python using Ruff's ty_ide.
 ///
@@ -15,11 +24,18 @@ use std::path::{Path, PathBuf};
 ///
 /// Under the hood, both modes use Ruff's ty_ide crate which provides
 /// battle-tested semantic analysis with Salsa-based incremental computation.
-pub enum RuffSemanticProvider {
-    /// FileScope mode analyzer (single-file analysis)
-    FileScope(FileScopeAnalyzer),
-    /// WorkspaceScope mode analyzer (workspace-wide analysis)
-    WorkspaceScope(WorkspaceScopeAnalyzer),
+///
+/// The provider uses a virtual filesystem abstraction, allowing it to work with
+/// either real filesystems or in-memory filesystems (useful for testing or
+/// environments like pg_ast_grep).
+pub struct RuffSemanticProvider {
+    /// The analyzer implementation
+    analyzer: AnalyzerKind,
+    /// Virtual filesystem root for file operations
+    fs_root: VfsPath,
+    /// Physical root path for converting absolute paths to relative paths.
+    /// Only used when fs_root is PhysicalFS.
+    physical_root: Option<PathBuf>,
 }
 
 impl RuffSemanticProvider {
@@ -30,8 +46,32 @@ impl RuffSemanticProvider {
     /// - High-level analysis
     /// - Single-file transformations
     /// - When cross-file references are not needed
+    ///
+    /// Uses the real filesystem (PhysicalFS) with the current directory as root.
     pub fn file_scope() -> Self {
-        Self::FileScope(FileScopeAnalyzer::new())
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self {
+            analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
+            fs_root: filesystem::physical_path(&cwd),
+            physical_root: Some(cwd),
+        }
+    }
+
+    /// Create a file-scope provider with a custom virtual filesystem.
+    ///
+    /// This is useful for:
+    /// - Testing with in-memory filesystems
+    /// - Running in environments without real filesystem access (e.g., pg_ast_grep)
+    ///
+    /// # Arguments
+    ///
+    /// * `fs_root` - The virtual filesystem root to use for file operations
+    pub fn file_scope_with_fs(fs_root: VfsPath) -> Self {
+        Self {
+            analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
+            fs_root,
+            physical_root: None, // MemoryFS or other VFS - paths are virtual
+        }
     }
 
     /// Create a workspace-scope provider for workspace-wide analysis.
@@ -40,33 +80,86 @@ impl RuffSemanticProvider {
     /// - Full codemod runs requiring cross-file references
     /// - Precise symbol resolution
     /// - When you need to find all usages of a symbol across the workspace
+    ///
+    /// Uses the real filesystem (PhysicalFS) with the workspace root.
     pub fn workspace_scope(workspace_root: PathBuf) -> Self {
-        Self::WorkspaceScope(WorkspaceScopeAnalyzer::new(workspace_root))
+        let fs_root = filesystem::physical_path(&workspace_root);
+        Self {
+            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(
+                workspace_root.clone(),
+            )),
+            fs_root,
+            physical_root: Some(workspace_root),
+        }
+    }
+
+    /// Create a workspace-scope provider with a custom virtual filesystem.
+    ///
+    /// # Arguments
+    ///
+    /// * `workspace_root` - The workspace root path for module resolution
+    /// * `fs_root` - The virtual filesystem root to use for file operations
+    pub fn workspace_scope_with_fs(workspace_root: PathBuf, fs_root: VfsPath) -> Self {
+        Self {
+            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(workspace_root)),
+            fs_root,
+            physical_root: None, // Custom VFS - paths handled by VFS implementation
+        }
     }
 
     /// Clear all cached data.
     pub fn clear_cache(&self) {
-        match self {
-            Self::FileScope(analyzer) => analyzer.clear_cache(),
-            Self::WorkspaceScope(analyzer) => analyzer.clear(),
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer.clear_cache(),
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer.clear(),
         }
     }
 
     /// Get the number of cached files.
     /// With Salsa, this returns 1 if database is initialized, 0 otherwise.
     pub fn cached_file_count(&self) -> usize {
-        match self {
-            Self::FileScope(analyzer) => analyzer.cache().len(),
-            Self::WorkspaceScope(analyzer) => analyzer.cache().len(),
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer.cache().len(),
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer.cache().len(),
         }
+    }
+
+    /// Read file content using the virtual filesystem.
+    fn read_file(&self, file_path: &Path) -> SemanticResult<String> {
+        // For PhysicalFS, convert absolute paths to paths relative to the physical root.
+        // For MemoryFS and other VFS implementations, use paths as-is.
+        let relative_path = if let Some(ref root) = self.physical_root {
+            file_path.strip_prefix(root).unwrap_or(file_path)
+        } else {
+            file_path
+        };
+
+        let path_str = relative_path.to_string_lossy();
+        let vfs_path =
+            self.fs_root
+                .join(&*path_str)
+                .map_err(|e| language_core::SemanticError::FileRead {
+                    path: file_path.to_path_buf(),
+                    message: e.to_string(),
+                })?;
+
+        filesystem::read_to_string(&vfs_path).map_err(|e| language_core::SemanticError::FileRead {
+            path: file_path.to_path_buf(),
+            message: e.to_string(),
+        })
+    }
+
+    /// Get the virtual filesystem root used by this provider.
+    pub fn fs_root(&self) -> &VfsPath {
+        &self.fs_root
     }
 }
 
 impl std::fmt::Debug for RuffSemanticProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FileScope(_) => write!(f, "RuffSemanticProvider::FileScope"),
-            Self::WorkspaceScope(_) => write!(f, "RuffSemanticProvider::WorkspaceScope"),
+        match &self.analyzer {
+            AnalyzerKind::FileScope(_) => write!(f, "RuffSemanticProvider::FileScope"),
+            AnalyzerKind::WorkspaceScope(_) => write!(f, "RuffSemanticProvider::WorkspaceScope"),
         }
     }
 }
@@ -79,18 +172,13 @@ impl SemanticProvider for RuffSemanticProvider {
         options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
         // We need the file content for analysis
-        let content = std::fs::read_to_string(file_path).map_err(|e| {
-            language_core::SemanticError::FileRead {
-                path: file_path.to_path_buf(),
-                message: e.to_string(),
-            }
-        })?;
+        let content = self.read_file(file_path)?;
 
-        match self {
-            Self::FileScope(analyzer) => analyzer
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer
                 .get_definition(file_path, &content, range, options)
                 .map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => analyzer
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
                 .get_definition(file_path, &content, range, options)
                 .map_err(Into::into),
         }
@@ -101,18 +189,13 @@ impl SemanticProvider for RuffSemanticProvider {
         file_path: &Path,
         range: ByteRange,
     ) -> SemanticResult<ReferencesResult> {
-        let content = std::fs::read_to_string(file_path).map_err(|e| {
-            language_core::SemanticError::FileRead {
-                path: file_path.to_path_buf(),
-                message: e.to_string(),
-            }
-        })?;
+        let content = self.read_file(file_path)?;
 
-        match self {
-            Self::FileScope(analyzer) => analyzer
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer
                 .find_references(file_path, &content, range)
                 .map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => analyzer
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
                 .find_references(file_path, &content, range)
                 .map_err(Into::into),
         }
@@ -125,11 +208,11 @@ impl SemanticProvider for RuffSemanticProvider {
     }
 
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
-        match self {
-            Self::FileScope(analyzer) => analyzer
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer
                 .process_file(file_path, content)
                 .map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => analyzer
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
                 .process_file(file_path, content)
                 .map_err(Into::into),
         }
@@ -140,9 +223,9 @@ impl SemanticProvider for RuffSemanticProvider {
     }
 
     fn mode(&self) -> ProviderMode {
-        match self {
-            Self::FileScope(_) => ProviderMode::FileScope,
-            Self::WorkspaceScope(_) => ProviderMode::WorkspaceScope,
+        match &self.analyzer {
+            AnalyzerKind::FileScope(_) => ProviderMode::FileScope,
+            AnalyzerKind::WorkspaceScope(_) => ProviderMode::WorkspaceScope,
         }
     }
 }
@@ -157,11 +240,11 @@ impl RuffSemanticProvider {
         range: ByteRange,
         options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
-        match self {
-            Self::FileScope(analyzer) => analyzer
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer
                 .get_definition(file_path, content, range, options)
                 .map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => analyzer
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
                 .get_definition(file_path, content, range, options)
                 .map_err(Into::into),
         }
@@ -174,11 +257,11 @@ impl RuffSemanticProvider {
         content: &str,
         range: ByteRange,
     ) -> SemanticResult<ReferencesResult> {
-        match self {
-            Self::FileScope(analyzer) => analyzer
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => analyzer
                 .find_references(file_path, content, range)
                 .map_err(Into::into),
-            Self::WorkspaceScope(analyzer) => analyzer
+            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
                 .find_references(file_path, content, range)
                 .map_err(Into::into),
         }

@@ -7,6 +7,7 @@ use language_core::{
     ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
     SemanticProvider, SemanticResult,
 };
+use vfs::VfsPath;
 
 use crate::config::SemanticConfig;
 use crate::factory::SemanticFactory;
@@ -49,13 +50,59 @@ impl LazySemanticProvider {
     }
 
     /// Create a lazy provider with default FileScope configuration.
+    ///
+    /// Uses the real filesystem (PhysicalFS) with the current directory as root.
     pub fn file_scope() -> Self {
         Self::new(SemanticConfig::file_scope())
     }
 
+    /// Create a lazy provider with FileScope configuration and a custom virtual filesystem.
+    ///
+    /// This is useful for:
+    /// - Testing with in-memory filesystems
+    /// - Running in environments without real filesystem access (e.g., pg_ast_grep)
+    ///
+    /// # Arguments
+    ///
+    /// * `fs_root` - The virtual filesystem root to use for file operations
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use semantic_factory::LazySemanticProvider;
+    /// use language_core::{MemoryFS, VfsPath};
+    /// use std::io::Write;
+    ///
+    /// // Create in-memory filesystem
+    /// let memory_fs: VfsPath = MemoryFS::new().into();
+    /// let file = memory_fs.join("test.ts").unwrap();
+    /// file.create_file().unwrap().write_all(b"const x = 1;").unwrap();
+    ///
+    /// // Create provider with memory filesystem
+    /// let provider = LazySemanticProvider::file_scope_with_fs(memory_fs);
+    /// ```
+    pub fn file_scope_with_fs(fs_root: VfsPath) -> Self {
+        Self::new(SemanticConfig::file_scope_with_fs(fs_root))
+    }
+
     /// Create a lazy provider with WorkspaceScope configuration.
+    ///
+    /// Uses the real filesystem (PhysicalFS) with the workspace root.
     pub fn workspace_scope(root: std::path::PathBuf) -> Self {
         Self::new(SemanticConfig::workspace_scope(root))
+    }
+
+    /// Create a lazy provider with WorkspaceScope configuration and a custom virtual filesystem.
+    ///
+    /// # Arguments
+    ///
+    /// * `workspace_root` - The workspace root path for module resolution
+    /// * `fs_root` - The virtual filesystem root to use for file operations
+    pub fn workspace_scope_with_fs(workspace_root: std::path::PathBuf, fs_root: VfsPath) -> Self {
+        Self::new(SemanticConfig::workspace_scope_with_fs(
+            workspace_root,
+            fs_root,
+        ))
     }
 
     /// Get or create the underlying provider for the given language.

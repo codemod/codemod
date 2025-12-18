@@ -3460,6 +3460,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.16",
+ "vfs",
 ]
 
 [[package]]
@@ -3476,6 +3477,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.16",
+ "vfs",
 ]
 
 [[package]]
@@ -3497,6 +3499,7 @@ dependencies = [
  "ty_project",
  "ty_python_semantic",
  "ty_vendored",
+ "vfs",
 ]
 
 [[package]]
@@ -7503,6 +7506,7 @@ dependencies = [
  "log",
  "tempfile",
  "thiserror 2.0.16",
+ "vfs",
 ]
 
 [[package]]
