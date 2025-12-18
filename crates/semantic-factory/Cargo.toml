@@ -12,6 +12,7 @@ language-javascript.workspace = true
 language-python.workspace = true
 thiserror.workspace = true
 log.workspace = true
+vfs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

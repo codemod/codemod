@@ -33,9 +33,7 @@ mod lazy;
 
 pub use config::{SemanticConfig, SemanticScope};
 pub use factory::SemanticFactory;
-pub use lazy::LazySemanticProvider;
-
-// Re-export core types for convenience
 pub use language_core::{
     ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider,
 };
+pub use lazy::LazySemanticProvider;

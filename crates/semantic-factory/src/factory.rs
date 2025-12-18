@@ -41,18 +41,30 @@ impl SemanticFactory {
         match language.to_lowercase().as_str() {
             // JavaScript/TypeScript family
             "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" => {
-                Some(Arc::new(match config.scope {
-                    SemanticScope::FileScope => OxcSemanticProvider::file_scope(),
-                    SemanticScope::WorkspaceScope { root } => {
-                        OxcSemanticProvider::workspace_scope(root)
+                Some(Arc::new(match (&config.scope, config.fs_root) {
+                    (SemanticScope::FileScope, None) => OxcSemanticProvider::file_scope(),
+                    (SemanticScope::FileScope, Some(fs_root)) => {
+                        OxcSemanticProvider::file_scope_with_fs(fs_root)
+                    }
+                    (SemanticScope::WorkspaceScope { root }, None) => {
+                        OxcSemanticProvider::workspace_scope(root.clone())
+                    }
+                    (SemanticScope::WorkspaceScope { root }, Some(fs_root)) => {
+                        OxcSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)
                     }
                 }))
             }
             // Python
-            "python" | "py" => Some(Arc::new(match config.scope {
-                SemanticScope::FileScope => RuffSemanticProvider::file_scope(),
-                SemanticScope::WorkspaceScope { root } => {
-                    RuffSemanticProvider::workspace_scope(root)
+            "python" | "py" => Some(Arc::new(match (&config.scope, config.fs_root) {
+                (SemanticScope::FileScope, None) => RuffSemanticProvider::file_scope(),
+                (SemanticScope::FileScope, Some(fs_root)) => {
+                    RuffSemanticProvider::file_scope_with_fs(fs_root)
+                }
+                (SemanticScope::WorkspaceScope { root }, None) => {
+                    RuffSemanticProvider::workspace_scope(root.clone())
+                }
+                (SemanticScope::WorkspaceScope { root }, Some(fs_root)) => {
+                    RuffSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)
                 }
             })),
             // Languages without semantic support
