@@ -11,6 +11,7 @@ use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use language_core::SemanticProvider;
 use rquickjs::{
     async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
 };
@@ -36,6 +37,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     /// Optional file path for the source code
     pub file_path: Option<&'a str>,
+    /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
+    pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -152,7 +155,7 @@ where
                 })?;
 
             let parsed_content =
-                SgRootRjs::try_new_from_ast_grep(ast_grep, options.file_path.map(|p| p.to_string())).map_err(|e| ExecutionError::Runtime {
+                SgRootRjs::try_new_with_semantic(ast_grep, options.file_path.map(|p| p.to_string()), options.semantic_provider, options.file_path.map(|p| p.to_string())).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
                     },
@@ -306,6 +309,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: None,
+            semantic_provider: None,
         });
 
         match result {
