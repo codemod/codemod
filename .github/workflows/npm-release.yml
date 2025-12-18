@@ -15,6 +15,7 @@ permissions:
 jobs:
   release:
     name: NPM Release
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Check out Git repository
