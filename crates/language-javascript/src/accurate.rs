@@ -33,6 +33,7 @@ impl AccurateAnalyzer {
     /// Create a new accurate analyzer for a workspace.
     ///
     /// Uses the real filesystem (PhysicalFS) with the workspace root.
+    #[allow(dead_code)]
     pub fn new(workspace_root: PathBuf) -> Self {
         // Canonicalize workspace root to handle symlinks (e.g., /var -> /private/var on macOS)
         let canonical_root = workspace_root
@@ -503,6 +504,7 @@ impl AccurateAnalyzer {
 
     /// Gets the type of a symbol at the given byte range.
     /// Type inference is not yet fully implemented, returns None.
+    #[allow(dead_code)]
     pub fn get_type(
         &self,
         _file_path: &Path,

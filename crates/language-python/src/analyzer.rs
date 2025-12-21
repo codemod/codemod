@@ -195,6 +195,7 @@ impl WorkspaceScopeAnalyzer {
     }
 
     /// Get the workspace root.
+    #[allow(dead_code)]
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }
@@ -206,9 +207,11 @@ impl WorkspaceScopeAnalyzer {
 
     /// Process a file (store content for cross-file analysis).
     pub fn process_file(&self, path: &Path, content: &str) -> PySemanticResult<()> {
+        // Canonicalize the path to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         self.file_contents
             .write()
-            .insert(path.to_path_buf(), content.to_string());
+            .insert(canonical, content.to_string());
         Ok(())
     }
 
@@ -220,17 +223,20 @@ impl WorkspaceScopeAnalyzer {
         range: ByteRange,
         _options: DefinitionOptions,
     ) -> PySemanticResult<Option<DefinitionResult>> {
+        // Canonicalize the path to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
         // add current file to contents
         let mut file_contents = self.file_contents.read().clone();
-        file_contents.insert(path.to_path_buf(), content.to_string());
+        file_contents.insert(canonical.clone(), content.to_string());
 
         let db = create_db_with_files(&self.workspace_root, &file_contents)
             .map_err(|e| PySemanticError::Other(e.to_string()))?;
 
         let file = db
-            .get_file(path)
+            .get_file(&canonical)
             .ok_or_else(|| PySemanticError::FileNotCached {
-                path: path.to_path_buf(),
+                path: canonical.clone(),
             })?;
 
         let offset = TextSize::from(range.start);
@@ -274,16 +280,19 @@ impl WorkspaceScopeAnalyzer {
         content: &str,
         range: ByteRange,
     ) -> PySemanticResult<ReferencesResult> {
+        // Canonicalize the path to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
         let mut file_contents = self.file_contents.read().clone();
-        file_contents.insert(path.to_path_buf(), content.to_string());
+        file_contents.insert(canonical.clone(), content.to_string());
 
         let db = create_db_with_files(&self.workspace_root, &file_contents)
             .map_err(|e| PySemanticError::Other(e.to_string()))?;
 
         let file = db
-            .get_file(path)
+            .get_file(&canonical)
             .ok_or_else(|| PySemanticError::FileNotCached {
-                path: path.to_path_buf(),
+                path: canonical.clone(),
             })?;
 
         let offset = TextSize::from(range.start);
@@ -351,10 +360,12 @@ impl CacheStats {
         self.len
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    #[allow(dead_code)]
     pub fn contains(&self, _path: &Path) -> bool {
         self.len > 0
     }

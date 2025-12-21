@@ -84,14 +84,18 @@ impl OxcSemanticProvider {
     ///
     /// Uses the real filesystem (PhysicalFS) with the workspace root.
     pub fn workspace_scope(workspace_root: PathBuf) -> Self {
-        let fs_root = filesystem::physical_path(&workspace_root);
+        // Canonicalize workspace root to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.clone());
+        let fs_root = filesystem::physical_path(&canonical_root);
         Self {
             analyzer: AnalyzerKind::WorkspaceScope(AccurateAnalyzer::new_with_fs(
-                workspace_root.clone(),
+                canonical_root.clone(),
                 fs_root.clone(),
             )),
             fs_root,
-            physical_root: Some(workspace_root),
+            physical_root: Some(canonical_root),
         }
     }
 
@@ -130,22 +134,52 @@ impl OxcSemanticProvider {
 
     /// Read file content using the virtual filesystem.
     fn read_file(&self, file_path: &Path) -> SemanticResult<String> {
-        // For PhysicalFS, convert absolute paths to paths relative to the physical root.
-        // For MemoryFS and other VFS implementations, use paths as-is.
-        let relative_path = if let Some(ref root) = self.physical_root {
-            file_path.strip_prefix(root).unwrap_or(file_path)
+        // Canonicalize the file path to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical_file = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+
+        // For PhysicalFS, try to convert to a path relative to the physical root.
+        // If the file is outside the root, read it directly using its absolute path.
+        let (vfs_root, relative_path) = if let Some(ref root) = self.physical_root {
+            match canonical_file.strip_prefix(root) {
+                Ok(rel) => (&self.fs_root, rel.to_path_buf()),
+                Err(_) => {
+                    // File is outside the VFS root, create a VFS at the file's parent directory
+                    let parent = canonical_file.parent().unwrap_or(Path::new("/"));
+                    let file_name = canonical_file
+                        .file_name()
+                        .ok_or_else(|| language_core::SemanticError::FileRead {
+                            path: file_path.to_path_buf(),
+                            message: "Invalid file path".to_string(),
+                        })?;
+                    let temp_root = filesystem::physical_path(parent);
+                    let path_str = file_name.to_string_lossy();
+                    let vfs_path = temp_root
+                        .join(&*path_str)
+                        .map_err(|e| language_core::SemanticError::FileRead {
+                            path: file_path.to_path_buf(),
+                            message: e.to_string(),
+                        })?;
+                    return filesystem::read_to_string(&vfs_path).map_err(|e| {
+                        language_core::SemanticError::FileRead {
+                            path: file_path.to_path_buf(),
+                            message: e.to_string(),
+                        }
+                    });
+                }
+            }
         } else {
-            file_path
+            (&self.fs_root, file_path.to_path_buf())
         };
 
         let path_str = relative_path.to_string_lossy();
-        let vfs_path =
-            self.fs_root
-                .join(&*path_str)
-                .map_err(|e| language_core::SemanticError::FileRead {
-                    path: file_path.to_path_buf(),
-                    message: e.to_string(),
-                })?;
+        let vfs_path = vfs_root
+            .join(&*path_str)
+            .map_err(|e| language_core::SemanticError::FileRead {
+                path: file_path.to_path_buf(),
+                message: e.to_string(),
+            })?;
 
         filesystem::read_to_string(&vfs_path).map_err(|e| language_core::SemanticError::FileRead {
             path: file_path.to_path_buf(),
@@ -405,5 +439,158 @@ console.log(x);"#;
         let result = provider.get_type(&file_path, ByteRange::new(6, 7));
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    // VFS (Virtual FileSystem) tests
+
+    #[test]
+    fn test_file_scope_with_memory_fs() {
+        use std::io::Write;
+        use std::path::PathBuf;
+
+        let fs_root = filesystem::memory_fs();
+
+        // Create a file in the memory filesystem
+        let file = fs_root.join("test.ts").unwrap();
+        let content = "const x = 1;\nconst y = x + 2;";
+        file.create_file().unwrap().write_all(content.as_bytes()).unwrap();
+
+        let provider = OxcSemanticProvider::file_scope_with_fs(fs_root);
+        assert_eq!(provider.mode(), ProviderMode::FileScope);
+
+        // Use a virtual path for the file
+        let file_path = PathBuf::from("test.ts");
+
+        // Process the file
+        let result = provider.notify_file_processed(&file_path, content);
+        assert!(result.is_ok());
+        assert_eq!(provider.cached_file_count(), 1);
+
+        // Get definition using the _with_content method (bypasses read_file)
+        let def_result = provider.get_definition_with_content(
+            &file_path,
+            content,
+            ByteRange::new(6, 7),
+            language_core::DefinitionOptions::default(),
+        );
+        assert!(def_result.is_ok());
+        assert!(def_result.unwrap().is_some());
+
+        // Find references using the _with_content method
+        let refs_result = provider.find_references_with_content(&file_path, content, ByteRange::new(6, 7));
+        assert!(refs_result.is_ok());
+        assert!(!refs_result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_workspace_scope_with_memory_fs() {
+        use std::io::Write;
+        use std::path::PathBuf;
+
+        let fs_root = filesystem::memory_fs();
+
+        // Create files in the memory filesystem
+        fs_root.join("src").unwrap().create_dir().unwrap();
+
+        let utils_content = "export function add(a, b) { return a + b; }";
+        fs_root
+            .join("src/utils.ts")
+            .unwrap()
+            .create_file()
+            .unwrap()
+            .write_all(utils_content.as_bytes())
+            .unwrap();
+
+        let main_content = "import { add } from './utils';\nconst result = add(1, 2);";
+        fs_root
+            .join("src/main.ts")
+            .unwrap()
+            .create_file()
+            .unwrap()
+            .write_all(main_content.as_bytes())
+            .unwrap();
+
+        let workspace_root = PathBuf::from("/virtual/workspace");
+        let provider = OxcSemanticProvider::workspace_scope_with_fs(workspace_root, fs_root);
+        assert_eq!(provider.mode(), ProviderMode::WorkspaceScope);
+
+        // Process the utils file
+        let utils_path = PathBuf::from("src/utils.ts");
+        let result = provider.notify_file_processed(&utils_path, utils_content);
+        assert!(result.is_ok());
+
+        // Process the main file
+        let main_path = PathBuf::from("src/main.ts");
+        let result = provider.notify_file_processed(&main_path, main_content);
+        assert!(result.is_ok());
+
+        assert_eq!(provider.cached_file_count(), 2);
+
+        // Get definition of 'add' in utils.ts
+        let def_result = provider.get_definition_with_content(
+            &utils_path,
+            utils_content,
+            ByteRange::new(16, 19), // position of 'add'
+            language_core::DefinitionOptions::default(),
+        );
+        assert!(def_result.is_ok());
+        let def = def_result.unwrap();
+        assert!(def.is_some());
+        assert_eq!(def.unwrap().location.name, "add");
+    }
+
+    #[test]
+    fn test_memory_fs_read_file() {
+        use std::io::Write;
+        use std::path::PathBuf;
+
+        let fs_root = filesystem::memory_fs();
+
+        // Create a file in the memory filesystem
+        let content = "const hello = 'world';";
+        fs_root
+            .join("test.js")
+            .unwrap()
+            .create_file()
+            .unwrap()
+            .write_all(content.as_bytes())
+            .unwrap();
+
+        let provider = OxcSemanticProvider::file_scope_with_fs(fs_root);
+
+        // The read_file method should work with virtual paths
+        let file_path = PathBuf::from("test.js");
+        let read_result = provider.read_file(&file_path);
+        assert!(read_result.is_ok());
+        assert_eq!(read_result.unwrap(), content);
+    }
+
+    #[test]
+    fn test_memory_fs_nested_paths() {
+        use std::io::Write;
+        use std::path::PathBuf;
+
+        let fs_root = filesystem::memory_fs();
+
+        // Create nested directory structure
+        fs_root.join("src").unwrap().create_dir().unwrap();
+        fs_root.join("src/components").unwrap().create_dir().unwrap();
+
+        let content = "export const Button = () => {};";
+        fs_root
+            .join("src/components/Button.tsx")
+            .unwrap()
+            .create_file()
+            .unwrap()
+            .write_all(content.as_bytes())
+            .unwrap();
+
+        let provider = OxcSemanticProvider::file_scope_with_fs(fs_root);
+
+        // Read the nested file
+        let file_path = PathBuf::from("src/components/Button.tsx");
+        let read_result = provider.read_file(&file_path);
+        assert!(read_result.is_ok());
+        assert_eq!(read_result.unwrap(), content);
     }
 }
