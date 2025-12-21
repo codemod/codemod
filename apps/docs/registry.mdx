@@ -95,47 +95,22 @@ Version pinning ensures your codemods behave consistently across different envir
 
 ## Publishing Packages
 
-### Prerequisites
-
-Before publishing, you need to:
-
-1. **Create a Codemod package** – Use `npx codemod init` to scaffold a new package. Learn more about [building Codemod packages](/cli/packages/building-workflows).
-2. **Authenticate** – Login to the registry using `npx codemod login`. Learn more about [authentication](/cli/cli-reference#codemod-login).
-
-### Publishing Your First Package
+Publish your codemods to the registry to share them with others or use them across projects.
 
 ```bash
-# 1. Navigate to your codemod directory
-cd my-codemod
+# 1. Create a codemod package
+npx codemod init
 
-# 2. Publish (first publish must be interactive)
+# 2. Login to the registry
+npx codemod login
+
+# 3. Publish your codemod
 npx codemod publish
 ```
 
-During the first publish, you'll be prompted to:
-- Choose an organization or user scope
-- Set access level (public or private)
-- Confirm package metadata
-
-<Tip>
-  Most packages do not need a scope, but use a scoped name if you are distributing official Codemod packages for a framework or library, or if you are an enterprise team distributing Codemod packages across your organization. Scoped codemods support features like organization-private visibility.
-</Tip>
-
-**Unpublishing packages:**
-
-```bash
-# Unpublish a specific version
-npx codemod unpublish <package-name> --version 1.0.0
-
-# Unpublish all versions (requires --force)
-npx codemod unpublish <package-name> --force
-```
-
-<Warning>
-  Unpublishing is a destructive action. Consider deprecating packages instead of unpublishing if others may depend on them. You must use `--version` to unpublish a specific version, or `--force` to unpublish all versions.
-</Warning>
-
-Learn more about the [`publish`](/cli/cli-reference#codemod-publish) and [`unpublish`](/cli/cli-reference#codemod-unpublish) commands.
+<Card title="Publishing Guide" icon="upload" href="/publishing">
+  Learn about all publishing methods: interactive login, API keys, and trusted publishers for CI/CD.
+</Card>
 
 ### Configuring Access and Visibility
 
@@ -166,22 +141,6 @@ registry:
 </Tip>
 
 Learn more about [configuring packages](/cli/packages/building-workflows#package-metadata-codemod-yaml).
-
-## Publishing from CI/CD
-
-The easiest way to set up CI/CD publishing is to use the [migrations template repository](https://github.com/codemod/migrations-template).
-
-<Card title="Migrations Template" icon="github" href="https://github.com/codemod/migrations-template">
-  The migrations template repository includes a preconfigured GitHub Action workflow for automatic publishing.
-</Card>
-
-This GitHub template includes:
-
-- Preconfigured GitHub Action workflow for automatic publishing
-- Setup instructions for GitHub App installation and API key configuration
-- Repository structure optimized for codemod packages
-
-After setup, codemods are automatically published to the registry when PRs are merged. See the template repository for complete setup instructions.
 
 ## Using Packages in Workflows
 

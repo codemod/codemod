@@ -51,6 +51,7 @@
             "pages": [
               "oss",
               "cli/cli-reference",
+              "publishing",
               "/model-context-protocol",
               {
                 "group": "Workflows",
