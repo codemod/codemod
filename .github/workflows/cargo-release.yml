@@ -19,7 +19,6 @@ permissions:
 jobs:
   build:
     name: Build Release
-    environment: production
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -233,6 +232,7 @@ jobs:
   release_npm:
     name: Release NPM Package
     needs: [build]
+    environment: production
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
