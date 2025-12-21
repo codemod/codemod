@@ -107,24 +107,16 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .unwrap_or(&config.default_registry)
         .clone();
 
-    // Check authentication
-    let auth = storage
-        .get_auth_for_registry(&registry_url)?
-        .ok_or_else(|| {
-            anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first.",
-                registry_url
-            )
-        })?;
+    let access_token = match std::env::var("CODEMOD_AUTH_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => {
+            debug!("Using auth token from CODEMOD_AUTH_TOKEN environment variable");
+            token
+        }
+        _ => get_stored_auth_token(&storage, &registry_url)?,
+    };
 
     // Upload package
-    let response = upload_package(
-        &registry_url,
-        &bundle_path,
-        &manifest,
-        &auth.tokens.access_token,
-    )
-    .await?;
+    let response = upload_package(&registry_url, &bundle_path, &manifest, &access_token).await?;
 
     if !response.success {
         return Err(anyhow!("Failed to publish package"));
@@ -554,4 +546,16 @@ fn format_package_name(package: &PublishedPackage) -> String {
     } else {
         package.name.clone()
     }
+}
+
+fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<String> {
+    let auth = storage
+        .get_auth_for_registry(registry_url)?
+        .ok_or_else(|| {
+            anyhow!(
+                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first, or set CODEMOD_AUTH_TOKEN environment variable.",
+                registry_url
+            )
+        })?;
+    Ok(auth.tokens.access_token)
 }
