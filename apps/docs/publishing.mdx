@@ -12,7 +12,7 @@ Codemod supports three authentication methods for publishing:
 
 | Method | Best For | Secrets Required | Setup |
 |--------|----------|------------------|-------|
-| [Interactive Login](#interactive-login) | Local development, first-time publish | None | None |
+| [Interactive Login](#interactive-login) | Local development | None | None |
 | [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
 | [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | None for org scopes* |
 
@@ -36,9 +36,11 @@ After logging in, you can publish packages:
 npx codemod publish
 ```
 
-<Info>
-  If you are planning to use an API key, interactive login is required for the **first publish** of a new package. Subsequent versions can be published using the API key.
-</Info>
+### When to Use
+
+- Local development and testing
+- Quick one-off publishes
+- When you prefer browser-based authentication
 
 ## API Keys
 
@@ -296,16 +298,14 @@ jobs:
 | Secrets to manage | None | Yes | None |
 | Works locally | Yes | Yes | No |
 | Works in CI/CD | No | Yes | GitHub Actions only |
-| First publish | Yes | No* | Yes** |
+| New package publish | Yes | Yes | Yes* |
 | Token lifetime | Long-lived | Long-lived | ~5 minutes |
 | Rotation needed | No | Recommended | No |
-| UI configuration | None | Create key | None for org scopes*** |
+| UI configuration | None | Create key | None for org scopes** |
 
-<sub>* API keys require interactive login for the first publish of a new package.</sub>
+<sub>* Trusted publishers can publish new packages when using a matching organization scope.</sub>
 
-<sub>** Trusted publishers can publish new packages if using a matching organization scope.</sub>
-
-<sub>*** Organization scopes that match your GitHub org name require no UI configuration. Individual packages require adding a trusted publisher in the UI.</sub>
+<sub>** Organization scopes that match your GitHub org name require no configuration in app.codemod.com. Individual packages require adding a trusted publisher in the UI.</sub>
 
 ## Best Practices
 
