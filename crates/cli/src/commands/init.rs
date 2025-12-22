@@ -56,6 +56,14 @@ pub struct Command {
     /// Use defaults without prompts
     #[arg(long)]
     no_interactive: bool,
+
+    /// Create GitHub Actions workflow for publishing
+    #[arg(long)]
+    github_action: bool,
+
+    /// Create a monorepo workspace structure
+    #[arg(long)]
+    workspace: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
@@ -80,6 +88,8 @@ struct ProjectConfig {
     private: bool,
     package_manager: Option<String>,
     git_repository_url: Option<String>,
+    github_action: bool,
+    workspace: bool,
 }
 
 // Template constants using include_str!
@@ -91,6 +101,9 @@ const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
 const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
+const GITHUB_ACTION_TEMPLATE: &str = include_str!("../templates/common/publish.yml");
+const GITHUB_ACTION_WORKSPACE_TEMPLATE: &str =
+    include_str!("../templates/common/publish-workspace.yml");
 
 // Shell project templates
 const SHELL_SETUP_SCRIPT: &str = include_str!("../templates/shell/scripts/setup.sh");
@@ -206,11 +219,21 @@ pub fn handler(args: &Command) -> Result<()> {
             }
             other => other,
         };
-        let package_manager = match (&normalized_project_type, args.package_manager.clone()) {
-            (ProjectType::AstGrepJs, Some(pm)) | (ProjectType::Hybrid, Some(pm)) => Some(pm),
-            (ProjectType::AstGrepJs, None) | (ProjectType::Hybrid, None) => {
+        let package_manager = match (
+            &normalized_project_type,
+            args.package_manager.clone(),
+            args.workspace,
+        ) {
+            (ProjectType::AstGrepJs, Some(pm), _) | (ProjectType::Hybrid, Some(pm), _) => Some(pm),
+            (_, Some(pm), true) => Some(pm), // Workspace mode always needs package manager
+            (ProjectType::AstGrepJs, None, _) | (ProjectType::Hybrid, None, _) => {
                 return Err(anyhow!(
                     "--package-manager is required when --project-type is ast-grep-js or hybrid"
+                ));
+            }
+            (_, None, true) => {
+                return Err(anyhow!(
+                    "--package-manager is required when --workspace is enabled"
                 ));
             }
             _ => None,
@@ -237,21 +260,43 @@ pub fn handler(args: &Command) -> Result<()> {
             private: args.private,
             package_manager,
             git_repository_url,
+            github_action: args.github_action,
+            workspace: args.workspace,
         }
     } else {
         interactive_setup(&project_name, args)?
     };
 
-    create_project(&project_path, &config)?;
+    if config.workspace {
+        create_workspace_project(&project_path, &config)?;
+    } else {
+        create_project(&project_path, &config)?;
+    }
 
     // Run post init commands
-    run_post_init_commands(&project_path, &config)?;
+    let codemod_path = if config.workspace {
+        project_path
+            .join("codemods")
+            .join(get_codemod_dir_name(&config.name))
+    } else {
+        project_path.clone()
+    };
+    run_post_init_commands(&codemod_path, &config)?;
 
     let project_absolute_path = project_path.canonicalize()?;
 
     print_next_steps(&project_absolute_path, &config)?;
 
     Ok(())
+}
+
+/// Extracts the directory name from a codemod name (removes scope if present)
+fn get_codemod_dir_name(name: &str) -> String {
+    if let Some(pos) = name.find('/') {
+        name[pos + 1..].to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
@@ -280,7 +325,10 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     let name = if args.name.is_some() {
         args.name.clone().unwrap()
     } else {
-        Text::new("Project name:")
+        Text::new("Codemod name:")
+            .with_help_message(
+                "You can use the @scope/name format to create a scoped codemod. The scope is recommended to be your GitHub organization name."
+            )
             .with_default(project_name)
             .prompt()?
     };
@@ -345,6 +393,31 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         )
     };
 
+    let workspace = if args.workspace {
+        true
+    } else {
+        Confirm::new("Create a monorepo workspace structure?")
+            .with_default(false)
+            .with_help_message(
+                "Organizes codemods in a 'codemods/' folder with shared workspace config",
+            )
+            .prompt()?
+    };
+
+    let github_action = if args.github_action {
+        true
+    } else {
+        let help_msg = if workspace {
+            "This creates .github/workflows/publish.yml triggered by <codemod-name>@v* tags"
+        } else {
+            "This creates .github/workflows/publish.yml using codemod-com/publish-action"
+        };
+        Confirm::new("Create GitHub Actions workflow for publishing?")
+            .with_default(false)
+            .with_help_message(help_msg)
+            .prompt()?
+    };
+
     Ok(ProjectConfig {
         name,
         description,
@@ -359,6 +432,8 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         } else {
             Some(git_repository_url)
         },
+        github_action,
+        workspace,
     })
 }
 
@@ -427,6 +502,11 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     // Create common files
     create_gitignore(project_path)?;
     create_readme(project_path, config)?;
+
+    // Create GitHub Actions workflow if requested
+    if config.github_action {
+        create_github_action(project_path, false)?;
+    }
 
     info!("✓ Created {} project", config.name);
     Ok(())
@@ -718,6 +798,102 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
+fn create_github_action(project_path: &Path, workspace: bool) -> Result<()> {
+    let workflows_dir = project_path.join(".github").join("workflows");
+    fs::create_dir_all(&workflows_dir)?;
+    let template = if workspace {
+        GITHUB_ACTION_WORKSPACE_TEMPLATE
+    } else {
+        GITHUB_ACTION_TEMPLATE
+    };
+    fs::write(workflows_dir.join("publish.yml"), template)?;
+    Ok(())
+}
+
+fn create_workspace_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    // Create root workspace directory
+    fs::create_dir_all(project_path)?;
+
+    // Create codemods directory
+    let codemods_dir = project_path.join("codemods");
+    fs::create_dir_all(&codemods_dir)?;
+
+    // Get the codemod directory name (without scope)
+    let codemod_dir_name = get_codemod_dir_name(&config.name);
+    let codemod_path = codemods_dir.join(&codemod_dir_name);
+
+    // Create the codemod project inside codemods/<name>/
+    create_codemod_in_workspace(&codemod_path, config)?;
+
+    // Create root workspace files
+    create_workspace_root_package_json(project_path, config)?;
+    create_gitignore(project_path)?;
+
+    // Create GitHub Actions workflow at root level if requested
+    if config.github_action {
+        create_github_action(project_path, true)?;
+    }
+
+    info!("✓ Created {} workspace project", config.name);
+    Ok(())
+}
+
+fn create_codemod_in_workspace(codemod_path: &Path, config: &ProjectConfig) -> Result<()> {
+    // Create codemod directory
+    fs::create_dir_all(codemod_path)?;
+
+    // Create codemod.yaml
+    create_manifest(codemod_path, config)?;
+
+    // Create workflow.yaml
+    create_workflow(codemod_path, config)?;
+
+    // Create project-specific structure
+    match config.project_type {
+        ProjectType::Shell => create_shell_project(codemod_path, config)?,
+        ProjectType::AstGrepJs => create_js_astgrep_project(codemod_path, config)?,
+        ProjectType::AstGrepYaml => create_astgrep_yaml_project(codemod_path, config)?,
+        ProjectType::Hybrid => create_hybrid_project(codemod_path, config)?,
+    }
+
+    // Create codemod-specific readme
+    create_readme(codemod_path, config)?;
+
+    Ok(())
+}
+
+fn create_workspace_root_package_json(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let package_manager = config.package_manager.clone().unwrap_or("npm".to_string());
+
+    let workspaces_config = match package_manager.as_str() {
+        "pnpm" => {
+            // pnpm uses pnpm-workspace.yaml
+            let pnpm_workspace = "packages:\n  - \"codemods/*\"\n";
+            fs::write(project_path.join("pnpm-workspace.yaml"), pnpm_workspace)?;
+            "" // No workspaces field in package.json for pnpm
+        }
+        _ => {
+            r#",
+  "workspaces": [
+    "codemods/*"
+  ]"#
+        }
+    };
+
+    let root_package_json = format!(
+        r#"{{
+  "name": "{}-workspace",
+  "private": true,
+  "description": "Monorepo workspace for codemods"{}
+}}"#,
+        get_codemod_dir_name(&config.name),
+        workspaces_config
+    );
+
+    fs::write(project_path.join("package.json"), root_package_json)?;
+    Ok(())
+}
+
 fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     match config.project_type {
         ProjectType::AstGrepJs | ProjectType::Hybrid => {
@@ -836,25 +1012,61 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 }
 
 fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let codemod_dir_name = get_codemod_dir_name(&config.name);
+
     println!();
-    println!(
-        "{} Created {} project",
-        CHECKMARK,
-        style(&config.name).green().bold()
-    );
-    println!("{CHECKMARK} Generated codemod.yaml manifest");
-    println!("{CHECKMARK} Generated workflow.yaml definition");
-    println!("{CHECKMARK} Created project structure");
+    if config.workspace {
+        println!(
+            "{} Created {} workspace",
+            CHECKMARK,
+            style(&config.name).green().bold()
+        );
+        println!("{CHECKMARK} Created workspace structure with codemods/ folder");
+        println!(
+            "{CHECKMARK} Created initial codemod in codemods/{}/",
+            codemod_dir_name
+        );
+    } else {
+        println!(
+            "{} Created {} project",
+            CHECKMARK,
+            style(&config.name).green().bold()
+        );
+        println!("{CHECKMARK} Generated codemod.yaml manifest");
+        println!("{CHECKMARK} Generated workflow.yaml definition");
+        println!("{CHECKMARK} Created project structure");
+    }
+    if config.github_action {
+        if config.workspace {
+            println!(
+                "{CHECKMARK} Created GitHub Actions workflow (triggers on {}@v* tags)",
+                codemod_dir_name
+            );
+        } else {
+            println!("{CHECKMARK} Created GitHub Actions workflow (.github/workflows/publish.yml)");
+        }
+    }
     println!();
     println!("{}", style("Next steps:").bold());
+
+    // Determine the path to the workflow.yaml
+    let workflow_path = if config.workspace {
+        format!(
+            "{}/codemods/{}/workflow.yaml",
+            project_path.display(),
+            codemod_dir_name
+        )
+    } else {
+        format!("{}/workflow.yaml", project_path.display())
+    };
 
     println!();
     println!("  {}", style("Validate your workflow").bold().cyan());
     println!(
         "  {}",
         style(format!(
-            "npx codemod@latest workflow validate -w {}/workflow.yaml",
-            project_path.display()
+            "npx codemod@latest workflow validate -w {}",
+            workflow_path
         ))
         .dim()
     );
@@ -869,11 +1081,46 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     println!(
         "  {}",
         style(format!(
-            "npx codemod@latest workflow run -w {}/workflow.yaml --target ./some/target/path",
-            project_path.display()
+            "npx codemod@latest workflow run -w {} --target ./some/target/path",
+            workflow_path
         ))
         .dim()
     );
+    if config.github_action {
+        println!();
+        println!(
+            "  {}",
+            style("Set up trusted publisher for GitHub Actions")
+                .bold()
+                .cyan()
+        );
+        println!(
+            "  {}",
+            style("Configure your repository at codemod.com to enable OIDC publishing:").dim()
+        );
+        println!(
+            "  {}",
+            style("https://go.codemod.com/trusted-publishers")
+                .underlined()
+                .dim()
+        );
+        if config.workspace {
+            println!();
+            println!(
+                "  {}",
+                style("To publish a codemod, create a tag like:").dim()
+            );
+            println!(
+                "  {}",
+                style(format!(
+                    "git tag {}@v1.0.0 && git push origin {}@v1.0.0",
+                    codemod_dir_name, codemod_dir_name
+                ))
+                .cyan()
+            );
+        }
+    }
+
     println!();
     println!(
         "  {}",

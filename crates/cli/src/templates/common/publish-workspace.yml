@@ -1,0 +1,27 @@
+name: Publish Codemod
+on:
+  push:
+    tags:
+      - "*@v*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract codemod name from tag
+        id: extract
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          CODEMOD_NAME="${TAG%@v*}"
+          echo "codemod_name=$CODEMOD_NAME" >> $GITHUB_OUTPUT
+
+      - name: Publish codemod
+        uses: codemod-com/publish-action@v1
+        with:
+          path: codemods/${{ steps.extract.outputs.codemod_name }}
