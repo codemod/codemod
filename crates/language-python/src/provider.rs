@@ -143,20 +143,20 @@ impl RuffSemanticProvider {
                 Err(_) => {
                     // File is outside the VFS root, create a VFS at the file's parent directory
                     let parent = canonical_file.parent().unwrap_or(Path::new("/"));
-                    let file_name = canonical_file
-                        .file_name()
-                        .ok_or_else(|| language_core::SemanticError::FileRead {
+                    let file_name = canonical_file.file_name().ok_or_else(|| {
+                        language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
                             message: "Invalid file path".to_string(),
-                        })?;
+                        }
+                    })?;
                     let temp_root = filesystem::physical_path(parent);
                     let path_str = file_name.to_string_lossy();
-                    let vfs_path = temp_root
-                        .join(&*path_str)
-                        .map_err(|e| language_core::SemanticError::FileRead {
+                    let vfs_path = temp_root.join(&*path_str).map_err(|e| {
+                        language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
                             message: e.to_string(),
-                        })?;
+                        }
+                    })?;
                     return filesystem::read_to_string(&vfs_path).map_err(|e| {
                         language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
@@ -170,12 +170,13 @@ impl RuffSemanticProvider {
         };
 
         let path_str = relative_path.to_string_lossy();
-        let vfs_path = vfs_root
-            .join(&*path_str)
-            .map_err(|e| language_core::SemanticError::FileRead {
-                path: file_path.to_path_buf(),
-                message: e.to_string(),
-            })?;
+        let vfs_path =
+            vfs_root
+                .join(&*path_str)
+                .map_err(|e| language_core::SemanticError::FileRead {
+                    path: file_path.to_path_buf(),
+                    message: e.to_string(),
+                })?;
 
         filesystem::read_to_string(&vfs_path).map_err(|e| language_core::SemanticError::FileRead {
             path: file_path.to_path_buf(),
@@ -370,7 +371,10 @@ mod tests {
         // Create a file in the memory filesystem
         let file = fs_root.join("test.py").unwrap();
         let content = "x = 1\ny = x + 2";
-        file.create_file().unwrap().write_all(content.as_bytes()).unwrap();
+        file.create_file()
+            .unwrap()
+            .write_all(content.as_bytes())
+            .unwrap();
 
         let provider = RuffSemanticProvider::file_scope_with_fs(fs_root);
         assert_eq!(provider.mode(), ProviderMode::FileScope);
@@ -394,7 +398,8 @@ mod tests {
         // The main thing is that it doesn't crash with MemoryFS
 
         // Find references using the _with_content method
-        let refs_result = provider.find_references_with_content(&file_path, content, ByteRange::new(0, 1));
+        let refs_result =
+            provider.find_references_with_content(&file_path, content, ByteRange::new(0, 1));
         assert!(refs_result.is_ok());
     }
 
