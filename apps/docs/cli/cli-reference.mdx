@@ -546,36 +546,16 @@ npx codemod whoami [--registry <REGISTRY>] [--detailed]
 Publish a Codemod package to a registry.
 
 ```bash
-npx codemod publish [PATH] [options]
+npx codemod publish [PATH]
 ```
 
 <ResponseField name="[PATH]" type="string">
-  Path to codemod directory.
+  Path to codemod directory (defaults to current directory).
 </ResponseField>
 
-<ResponseField name="--version <VERSION>" type="string">
-  Explicit version override.
-</ResponseField>
-
-<ResponseField name="--registry <REGISTRY>" type="string">
-  Target registry URL.
-</ResponseField>
-
-<ResponseField name="--tag <TAG>" type="string">
-  Tag for the release.
-</ResponseField>
-
-<ResponseField name="--access <ACCESS>" type="string">
-  Access level (`public`, `private`).
-</ResponseField>
-
-<ResponseField name="--dry-run" type="boolean">
-  Validate and pack without uploading.
-</ResponseField>
-
-<ResponseField name="--scope <SCOPE>" type="string">
-  Organization scope for the package.
-</ResponseField>
+<Info>
+  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Building Workflows](/cli/packages/building-workflows#package-metadata-codemod-yaml) for configuration options.
+</Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">
   Learn about all publishing methods including API keys, trusted publishers (OIDC), and CI/CD setup.

@@ -1,10 +1,11 @@
-use crate::utils::manifest::{CodemodManifest, RegistryConfig};
+use crate::utils::manifest::CodemodManifest;
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
+use console::style;
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
@@ -24,21 +25,6 @@ use codemod_telemetry::send_event::BaseEvent;
 pub struct Command {
     /// Path to codemod directory
     path: Option<PathBuf>,
-    /// Explicit version override
-    #[arg(long)]
-    version: Option<String>,
-    /// Target registry URL
-    #[arg(long)]
-    registry: Option<String>,
-    /// Tag for the release
-    #[arg(long)]
-    tag: Option<String>,
-    /// Access level (public, private)
-    #[arg(long)]
-    access: Option<String>,
-    /// Validate and pack without uploading
-    #[arg(long)]
-    dry_run: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -69,43 +55,19 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     info!("Publishing codemod from: {}", package_path.display());
 
     // Load and validate manifest
-    let mut manifest = load_manifest(&package_path)?;
-
-    // Override version if specified
-    if let Some(version) = &args.version {
-        manifest.version = version.clone();
-    }
-
-    // Override access if specified
-    if let Some(access) = &args.access {
-        if manifest.registry.is_none() {
-            manifest.registry = Some(RegistryConfig {
-                access: Some(access.clone()),
-                scope: None,
-                visibility: None,
-            });
-        } else if let Some(ref mut registry) = manifest.registry {
-            registry.access = Some(access.clone());
-        }
-    }
+    let manifest = load_manifest(&package_path)?;
 
     // Validate package structure and get JS files to bundle
     let js_files_to_bundle = validate_package_structure(&package_path, &manifest)?;
 
     // Create package bundle with bundled JS files
-    let bundle_path =
-        create_package_bundle(&package_path, &manifest, &js_files_to_bundle, args.dry_run).await?;
-
-    println!("bundle_path: {}", bundle_path.display());
+    let bundle_path = create_package_bundle(&package_path, &manifest, &js_files_to_bundle).await?;
 
     // Get registry configuration
     let storage = TokenStorage::new()?;
     let config = storage.load_config()?;
-    let registry_url = args
-        .registry
-        .as_ref()
-        .unwrap_or(&config.default_registry)
-        .clone();
+    let registry_url = config.default_registry.clone();
+    let storage = TokenStorage::new()?;
 
     let access_token = match std::env::var("CODEMOD_AUTH_TOKEN") {
         Ok(token) if !token.trim().is_empty() => {
@@ -138,10 +100,25 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         )
         .await;
 
-    println!("✅ Package published successfully!");
-    println!("📦 {}", format_package_name(&response.package));
-    println!("🏷️  Version: {}", response.package.version);
-    println!("📅 Published: {}", response.package.published_at);
+    println!(
+        "{} Package published successfully!",
+        style("✓").green().bold()
+    );
+    println!(
+        "  {} {}",
+        style("Package:").dim(),
+        style(format_package_name(&response.package)).cyan()
+    );
+    println!(
+        "  {} {}",
+        style("Version:").dim(),
+        style(&response.package.version).cyan()
+    );
+    println!(
+        "  {} {}",
+        style("Published:").dim(),
+        style(&response.package.published_at).cyan()
+    );
 
     // Clean up temporary bundle
     if let Err(e) = fs::remove_file(&bundle_path) {
@@ -293,7 +270,6 @@ async fn create_package_bundle(
     package_path: &Path,
     manifest: &CodemodManifest,
     js_files_to_bundle: &[String],
-    dry_run: bool,
 ) -> Result<PathBuf> {
     let temp_dir = TempDir::new()?;
     let bundle_name = format!(
@@ -373,14 +349,9 @@ async fn create_package_bundle(
 
     info!("Created bundle: {bundle_name} ({bundle_size} bytes)");
 
-    // Move to a persistent location (both dry-run and regular publishing)
-    let output_path = if dry_run {
-        std::env::current_dir()?.join(&bundle_name)
-    } else {
-        // Create a temporary file in the system temp directory that won't be auto-cleaned
-        let system_temp = std::env::temp_dir();
-        system_temp.join(&bundle_name)
-    };
+    // Move to a persistent location in the system temp directory
+    let system_temp = std::env::temp_dir();
+    let output_path = system_temp.join(&bundle_name);
 
     fs::copy(&temp_bundle_path, &output_path)?;
     Ok(output_path)

@@ -147,20 +147,20 @@ impl OxcSemanticProvider {
                 Err(_) => {
                     // File is outside the VFS root, create a VFS at the file's parent directory
                     let parent = canonical_file.parent().unwrap_or(Path::new("/"));
-                    let file_name = canonical_file
-                        .file_name()
-                        .ok_or_else(|| language_core::SemanticError::FileRead {
+                    let file_name = canonical_file.file_name().ok_or_else(|| {
+                        language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
                             message: "Invalid file path".to_string(),
-                        })?;
+                        }
+                    })?;
                     let temp_root = filesystem::physical_path(parent);
                     let path_str = file_name.to_string_lossy();
-                    let vfs_path = temp_root
-                        .join(&*path_str)
-                        .map_err(|e| language_core::SemanticError::FileRead {
+                    let vfs_path = temp_root.join(&*path_str).map_err(|e| {
+                        language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
                             message: e.to_string(),
-                        })?;
+                        }
+                    })?;
                     return filesystem::read_to_string(&vfs_path).map_err(|e| {
                         language_core::SemanticError::FileRead {
                             path: file_path.to_path_buf(),
@@ -174,12 +174,13 @@ impl OxcSemanticProvider {
         };
 
         let path_str = relative_path.to_string_lossy();
-        let vfs_path = vfs_root
-            .join(&*path_str)
-            .map_err(|e| language_core::SemanticError::FileRead {
-                path: file_path.to_path_buf(),
-                message: e.to_string(),
-            })?;
+        let vfs_path =
+            vfs_root
+                .join(&*path_str)
+                .map_err(|e| language_core::SemanticError::FileRead {
+                    path: file_path.to_path_buf(),
+                    message: e.to_string(),
+                })?;
 
         filesystem::read_to_string(&vfs_path).map_err(|e| language_core::SemanticError::FileRead {
             path: file_path.to_path_buf(),
@@ -453,7 +454,10 @@ console.log(x);"#;
         // Create a file in the memory filesystem
         let file = fs_root.join("test.ts").unwrap();
         let content = "const x = 1;\nconst y = x + 2;";
-        file.create_file().unwrap().write_all(content.as_bytes()).unwrap();
+        file.create_file()
+            .unwrap()
+            .write_all(content.as_bytes())
+            .unwrap();
 
         let provider = OxcSemanticProvider::file_scope_with_fs(fs_root);
         assert_eq!(provider.mode(), ProviderMode::FileScope);
@@ -477,7 +481,8 @@ console.log(x);"#;
         assert!(def_result.unwrap().is_some());
 
         // Find references using the _with_content method
-        let refs_result = provider.find_references_with_content(&file_path, content, ByteRange::new(6, 7));
+        let refs_result =
+            provider.find_references_with_content(&file_path, content, ByteRange::new(6, 7));
         assert!(refs_result.is_ok());
         assert!(!refs_result.unwrap().is_empty());
     }
@@ -574,7 +579,11 @@ console.log(x);"#;
 
         // Create nested directory structure
         fs_root.join("src").unwrap().create_dir().unwrap();
-        fs_root.join("src/components").unwrap().create_dir().unwrap();
+        fs_root
+            .join("src/components")
+            .unwrap()
+            .create_dir()
+            .unwrap();
 
         let content = "export const Button = () => {};";
         fs_root
