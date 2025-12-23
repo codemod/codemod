@@ -69,7 +69,8 @@
                   "/jssg/advanced",
                   "/jssg/security"
                 ]
-              }
+              },
+              "publishing"
             ]
           },
           {

@@ -11,6 +11,11 @@ on:
         required: true
         type: string
 
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
 jobs:
   build:
     name: Build Release
@@ -227,7 +232,11 @@ jobs:
   release_npm:
     name: Release NPM Package
     needs: [build]
+    environment: production
     runs-on: ubuntu-22.04
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -292,42 +301,34 @@ jobs:
           sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Verify npm authentication
-          echo "Verifying npm authentication..."
-          npm whoami
-
           # Publish each platform package with error handling
           for platform in crates/cli/npm/platforms/*/; do
             platform_name=$(basename "$platform")
             echo "Publishing $platform_name..."
             cd "$platform"
-            
+
             # Show package info before publishing
             echo "Package details:"
             cat package.json | jq '.name, .version'
-            
+
             # Check if package.json exists and is valid
             if ! jq empty package.json 2>/dev/null; then
               echo "Error: Invalid package.json in $platform_name"
               exit 1
             fi
-            
-            # Publish with explicit tag and error handling
-            if ! npm publish --tag "${{ steps.version.outputs.npm_tag }}" --access public; then
+
+            # Publish with explicit tag, provenance for OIDC auth, and error handling
+            if ! npm publish --tag "${{ steps.version.outputs.npm_tag }}" --access public --provenance; then
               echo "Failed to publish $platform_name"
               exit 1
             fi
-            
+
             echo "Successfully published $platform_name"
             cd - > /dev/null
           done
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd crates/cli/npm
-          npm publish --tag ${{ steps.version.outputs.npm_tag }}
+          npm publish --tag ${{ steps.version.outputs.npm_tag }} --provenance

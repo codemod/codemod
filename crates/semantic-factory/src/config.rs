@@ -1,6 +1,7 @@
 //! Configuration types for semantic analysis.
 
 use std::path::PathBuf;
+use vfs::VfsPath;
 
 /// Determines the scope of semantic analysis.
 #[derive(Debug, Clone, Default)]
@@ -26,10 +27,22 @@ pub enum SemanticScope {
 }
 
 /// Configuration for creating semantic providers.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct SemanticConfig {
     /// The scope of semantic analysis.
     pub scope: SemanticScope,
+    /// Optional virtual filesystem root for file operations.
+    /// If None, the provider will use the real filesystem (PhysicalFS).
+    pub fs_root: Option<VfsPath>,
+}
+
+impl std::fmt::Debug for SemanticConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticConfig")
+            .field("scope", &self.scope)
+            .field("fs_root", &self.fs_root.as_ref().map(|_| "<VfsPath>"))
+            .finish()
+    }
 }
 
 impl SemanticConfig {
@@ -37,6 +50,15 @@ impl SemanticConfig {
     pub fn file_scope() -> Self {
         Self {
             scope: SemanticScope::FileScope,
+            fs_root: None,
+        }
+    }
+
+    /// Create a file-scope configuration with a custom virtual filesystem.
+    pub fn file_scope_with_fs(fs_root: VfsPath) -> Self {
+        Self {
+            scope: SemanticScope::FileScope,
+            fs_root: Some(fs_root),
         }
     }
 
@@ -44,6 +66,15 @@ impl SemanticConfig {
     pub fn workspace_scope(root: PathBuf) -> Self {
         Self {
             scope: SemanticScope::WorkspaceScope { root },
+            fs_root: None,
+        }
+    }
+
+    /// Create a workspace-scope configuration with a custom virtual filesystem.
+    pub fn workspace_scope_with_fs(root: PathBuf, fs_root: VfsPath) -> Self {
+        Self {
+            scope: SemanticScope::WorkspaceScope { root },
+            fs_root: Some(fs_root),
         }
     }
 }

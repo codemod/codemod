@@ -110,6 +110,7 @@ impl Scheduler {
 impl Scheduler {
     // Expose constructor to WASM
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {}
     }

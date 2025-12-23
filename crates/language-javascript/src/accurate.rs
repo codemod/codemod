@@ -4,17 +4,16 @@ use crate::cache::SymbolCache;
 use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use language_core::{
-    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    filesystem, ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
     ReferencesResult, SemanticResult, SymbolLocation,
 };
 use oxc_resolver::{ResolveOptions, Resolver};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
+use vfs::VfsPath;
 
 /// Accurate semantic analyzer with workspace-wide lazy indexing.
-#[derive(Debug)]
 pub struct AccurateAnalyzer {
     /// Symbol cache for indexed files
     cache: SymbolCache,
@@ -26,11 +25,31 @@ pub struct AccurateAnalyzer {
     indexed_files: RwLock<HashSet<PathBuf>>,
     /// Files currently being indexed (to prevent cycles)
     indexing_in_progress: RwLock<HashSet<PathBuf>>,
+    /// Virtual filesystem root for file operations
+    fs_root: VfsPath,
 }
 
 impl AccurateAnalyzer {
     /// Create a new accurate analyzer for a workspace.
+    ///
+    /// Uses the real filesystem (PhysicalFS) with the workspace root.
+    #[allow(dead_code)]
     pub fn new(workspace_root: PathBuf) -> Self {
+        // Canonicalize workspace root to handle symlinks (e.g., /var -> /private/var on macOS)
+        let canonical_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.clone());
+        let fs_root = filesystem::physical_path(&canonical_root);
+        Self::new_with_fs(canonical_root, fs_root)
+    }
+
+    /// Create a new accurate analyzer with a custom virtual filesystem.
+    ///
+    /// # Arguments
+    ///
+    /// * `workspace_root` - The workspace root path for module resolution
+    /// * `fs_root` - The virtual filesystem root to use for file operations
+    pub fn new_with_fs(workspace_root: PathBuf, fs_root: VfsPath) -> Self {
         let resolve_options = ResolveOptions {
             extensions: vec![
                 ".ts".to_string(),
@@ -56,7 +75,26 @@ impl AccurateAnalyzer {
             resolver: Resolver::new(resolve_options),
             indexed_files: RwLock::new(HashSet::new()),
             indexing_in_progress: RwLock::new(HashSet::new()),
+            fs_root,
         }
+    }
+
+    /// Read file content using the virtual filesystem.
+    fn read_file(&self, file_path: &Path) -> Result<String, JsSemanticError> {
+        // For PhysicalFS, we need to convert absolute paths to paths relative to the workspace root.
+        // For MemoryFS, paths are virtual and should be used as-is.
+        let relative_path = file_path
+            .strip_prefix(&self.workspace_root)
+            .unwrap_or(file_path);
+
+        let path_str = relative_path.to_string_lossy();
+        let vfs_path = self
+            .fs_root
+            .join(&*path_str)
+            .map_err(|e| JsSemanticError::Internal(format!("Failed to join path: {}", e)))?;
+
+        filesystem::read_to_string(&vfs_path)
+            .map_err(|e| JsSemanticError::Internal(format!("Failed to read file: {}", e)))
     }
 
     /// Index a file and its dependencies lazily.
@@ -78,9 +116,8 @@ impl AccurateAnalyzer {
         // Mark as in progress
         self.indexing_in_progress.write().insert(canonical.clone());
 
-        // Read and parse the file
-        let content = fs::read_to_string(&canonical)
-            .map_err(|e| JsSemanticError::Internal(format!("Failed to read file: {}", e)))?;
+        // Read and parse the file using the virtual filesystem
+        let content = self.read_file(&canonical)?;
 
         let file_symbols = parse_and_analyze(&canonical, &content)?;
 
@@ -467,6 +504,7 @@ impl AccurateAnalyzer {
 
     /// Gets the type of a symbol at the given byte range.
     /// Type inference is not yet fully implemented, returns None.
+    #[allow(dead_code)]
     pub fn get_type(
         &self,
         _file_path: &Path,
@@ -478,9 +516,19 @@ impl AccurateAnalyzer {
     }
 }
 
+impl std::fmt::Debug for AccurateAnalyzer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccurateAnalyzer")
+            .field("workspace_root", &self.workspace_root)
+            .field("indexed_files_count", &self.indexed_files.read().len())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn create_test_workspace() -> TempDir {

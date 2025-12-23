@@ -17,6 +17,7 @@ pub struct Symbol {
     /// Unique symbol ID (from oxc)
     pub symbol_id: u32,
     /// Scope ID this symbol belongs to
+    #[allow(dead_code)]
     pub scope_id: u32,
 }
 
@@ -34,6 +35,7 @@ pub struct ImportedSymbol {
     /// Whether this is a default import
     pub is_default: bool,
     /// Whether this is a namespace import (import * as X)
+    #[allow(dead_code)]
     pub is_namespace: bool,
 }
 
@@ -49,6 +51,7 @@ pub struct ExportedSymbol {
     /// Whether this is the default export
     pub is_default: bool,
     /// Whether this is a re-export (export { x } from './other')
+    #[allow(dead_code)]
     pub re_export_from: Option<String>,
 }
 
@@ -60,6 +63,7 @@ pub struct SymbolReference {
     /// Byte range of the reference
     pub range: ByteRange,
     /// Whether this is a write reference
+    #[allow(dead_code)]
     pub is_write: bool,
 }
 
@@ -75,11 +79,13 @@ pub struct FileSymbols {
     /// All references in this file
     pub references: Vec<SymbolReference>,
     /// Source content hash (for invalidation)
+    #[allow(dead_code)]
     pub content_hash: u64,
 }
 
 impl FileSymbols {
     /// Create empty file symbols.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -163,6 +169,7 @@ impl SymbolCache {
     }
 
     /// Remove a file from the cache.
+    #[allow(dead_code)]
     pub fn remove(&self, path: &Path) -> Option<(FileSymbols, String)> {
         self.files
             .write()
@@ -181,6 +188,7 @@ impl SymbolCache {
     }
 
     /// Check if the cache is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.files.read().is_empty()
     }

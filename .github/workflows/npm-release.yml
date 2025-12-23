@@ -7,9 +7,15 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
 jobs:
   release:
     name: NPM Release
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Check out Git repository
@@ -19,6 +25,7 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 24
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install modules
         uses: pnpm/action-setup@v4
@@ -33,4 +40,3 @@ jobs:
           publish: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
