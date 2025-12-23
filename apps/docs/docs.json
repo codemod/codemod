@@ -17,14 +17,20 @@
   "styling": {
     "eyebrows": "breadcrumbs"
   },
+  "interaction": {
+    "drilldown": true
+  },
   "navigation": {
     "dropdowns": [
       {
         "dropdown": "Getting Started",
         "icon": "book",
         "description": "Get started with Codemod",
-        "pages": ["introduction"],
         "groups": [
+          {
+            "group": "First steps",
+            "pages": ["introduction"]
+          },
           {
             "group": "Enterprise",
             "pages": [
