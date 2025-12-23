@@ -23,14 +23,12 @@
         "dropdown": "Getting Started",
         "icon": "book",
         "description": "Get started with Codemod",
+        "pages": ["introduction"],
         "groups": [
           {
-            "group": "Getting Started",
-            "pages": ["introduction", "quickstart"]
-          },
-          {
-            "group": "Codemod Platform",
+            "group": "Enterprise",
             "pages": [
+              "quickstart",
               "campaigns",
               "insights",
               "registry",
@@ -47,11 +45,9 @@
             ]
           },
           {
-            "group": "OSS & Community",
+            "group": "Community",
             "pages": [
-              "oss",
               "cli/cli-reference",
-              "/model-context-protocol",
               {
                 "group": "Workflows",
                 "pages": [
@@ -70,7 +66,9 @@
                   "/jssg/security"
                 ]
               },
-              "publishing"
+              "publishing",
+              "model-context-protocol",
+              "oss"
             ]
           },
           {
