@@ -123,10 +123,8 @@ import { MigrationsTemplateDemo } from "/snippets/migrations-template-demo.mdx";
     Run your codemod against a target directory:
 
     ```bash
-    npx codemod workflow run -w ./my-codemod/ -t ./path/to/test-repo --dry-run
+    npx codemod workflow run -w ./my-codemod/ -t ./path/to/test-repo 
     ```
-
-    The `--dry-run` flag shows what changes would be made without applying them.
 
     For automated testing, create input/expected fixtures:
 
