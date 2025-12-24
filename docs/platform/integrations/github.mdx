@@ -1,0 +1,118 @@
+---
+title: "GitHub Integration"
+icon: "github"
+---
+
+import AddOrganizationStep from "/snippets/add-organization-step.mdx";
+import { ManagingIntegration } from "/snippets/managing-integration.mdx";
+import { NeedHelpFooter } from "/snippets/need-help-footer.mdx";
+import ManagingTeamMembers from "/snippets/managing-team-members.mdx";
+
+Connect Codemod to your GitHub repositories to enable automated code transformations across your codebase.
+
+## Why integrate GitHub?
+
+Integrating Codemod with GitHub allows you to apply codemods directly to your repositories and create pull requests with automated code changes.
+
+## Set up the integration
+
+<Steps>
+  <AddOrganizationStep />
+
+  <Step title="Connect GitHub">
+    Click the **"Connect GitHub"** button to begin the integration process.
+
+    <img
+      src="/images/integrations/github-step-connect-dark.png"
+      alt="Screenshot of how you connect Github in Codemod platform"
+      title="Screenshot of how you connect Github in Codemod platform"
+      className="hidden dark:block mx-auto"
+      style={{ width:"58%" }}
+    />
+
+    <img
+      src="/images/integrations/github-step-connect-light.png"
+      alt="Screenshot of how you connect Github in Codemod platform"
+      title="Screenshot of how you connect Github in Codemod platform"
+      className="block dark:hidden mx-auto"
+      style={{ width:"58%" }}
+    />
+  </Step>
+
+  <Step title="Install the GitHub App">
+    You'll be redirected to GitHub where you can:
+
+    1. Select the **GitHub account** (personal or organization) where you want to install the Codemod app
+    2. Choose which **repositories** to grant access to (all repositories or select specific ones)
+    3. Review the permissions requested by the app
+
+    After approving the installation on GitHub, you'll be redirected back to Codemod where you can confirm the integration is active.
+
+    <img
+      src="/images/integrations/github-step-configure-dark.png"
+      alt="Screenshot of how you connect Github in Codemod platform"
+      title="Screenshot of how you connect Github in Codemod platform"
+      className="hidden dark:block mx-auto"
+      style={{ width:"58%" }}
+    />
+
+    <img
+      src="/images/integrations/github-step-configure-light.png"
+      alt="Screenshot of how you connect Github in Codemod platform"
+      title="Screenshot of how you connect Github in Codemod platform"
+      className="block dark:hidden mx-auto"
+      style={{ width:"58%" }}
+    />
+  </Step>
+</Steps>
+
+## Using the GitHub integration
+
+Once connected, you can:
+
+- Select connected repositories when running codemods
+- Automatically create pull requests with your code transformations
+- Configure which repositories to target for specific codemods
+
+## Managing Permissions
+
+You can modify repository access at any time:
+
+1. Go to your GitHub account settings
+2. Navigate to **Applications** → **Installed GitHub Apps**
+3. Find **Codemod** and click **Configure**
+4. Update repository access as needed
+
+### Required permissions
+
+Codemod requires the following GitHub permissions:
+
+**Read** access to:
+
+- Repository metadata
+- Repository code
+- Commit statuses
+
+**Read and Write** access to:
+
+- Code (to create branches and commits)
+- Pull requests (to create and update PRs)
+
+These permissions allow Codemod to read your code, create branches with transformations, and open pull requests for review.
+
+### Managing team members
+
+<ManagingTeamMembers />
+
+## Security considerations
+
+- We recommend enabling branch protections on your main branches to ensure changes are reviewed before merging
+- Codemod can only access repositories you explicitly grant during the installation process
+- You can revoke access at any time through your GitHub settings
+- All code transformations are submitted as pull requests for your review
+
+<ManagingIntegration provider="GitHub" />
+
+---
+
+<NeedHelpFooter provider="GitHub" />

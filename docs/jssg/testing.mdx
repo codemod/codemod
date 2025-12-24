@@ -1,0 +1,213 @@
+---
+title: "Testing"
+---
+
+Test your JSSG codemod using snapshot testing with input/expected file pairs.
+
+## Test structure
+
+JSSG tests use a simple directory structure where each test case contains two files:
+
+```plaintext
+tests/
+  basic-transform/          # Test case directory
+    input.ts               # Code before transformation
+    expected.ts            # Expected output after transformation
+  edge-cases/               # Another test case
+    input.tsx
+    expected.tsx
+```
+
+**File naming:**
+- Input files must be named `input.ts` (or appropriate extension)
+- Expected files must be named `expected.ts` (or appropriate extension)
+- File extensions should match your target language (`.ts`, `.tsx`, `.js`, `.jsx`)
+
+## Command reference
+
+### Basic syntax
+
+```bash
+npx codemod jssg test -l <language> <codemod-file> [test-directory]
+```
+
+<ParamField path="-l, --language" type="string" required>Language parser to use (e.g., "tsx", "javascript", "typescript").</ParamField>
+<ParamField path="codemod-file" type="string" required>Path to your transform file (e.g., "./scripts/codemod.ts").</ParamField>
+<ParamField path="test-directory" type="string">Path to test directory (defaults to "./tests").</ParamField>
+
+### Common options
+
+```bash
+# Update expected outputs when changes are intentional
+npx codemod jssg test -l tsx ./scripts/codemod.ts -u
+
+# Run only tests matching a pattern
+npx codemod jssg test -l tsx ./scripts/codemod.ts --filter "edge-cases"
+
+# Show detailed output for debugging
+npx codemod jssg test -l tsx ./scripts/codemod.ts -v
+
+# Run tests one at a time (helpful for debugging)
+npx codemod jssg test -l tsx ./scripts/codemod.ts --sequential
+```
+
+<Info>
+See all available options in the [CLI reference](/cli#codemod-jssg).
+</Info>
+
+## Creating effective test cases
+
+**1. Start simple:**
+```ts
+// input.ts
+console.log("test");
+
+// expected.ts  
+logger.log("test");
+```
+
+**2. Add edge cases:**
+```ts
+// input.ts
+// Should not transform
+const preserved = "unchanged";
+
+// Should transform
+console.log("transform me");
+```
+
+**3. Test different file types:**
+```tsx
+// input.tsx
+function Component() {
+  console.log("Hello");
+  return <div>World</div>;
+}
+```
+
+## Understanding test results
+
+### Exit codes
+- **0**: All tests passed
+- **1**: At least one test failed (diffs are printed)
+- **2**: Error occurred (e.g., syntax error in codemod)
+
+### Reading test output
+
+```bash
+✓ tests/basic-transform
+✗ tests/edge-cases
+  Expected: logger.log("test")
+  Actual:   console.log("test")
+```
+
+<Check>
+**Pro tip:** Use `-v` flag for detailed output when debugging test failures.
+</Check>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Language mismatch">
+    **Problem:** Tests fail with parsing errors.<br/><br/>
+    **Solution:** Ensure the `-l` flag matches your source files:
+    ```bash
+    # For TypeScript files
+    npx codemod jssg test -l typescript ./scripts/codemod.ts
+    
+    # For TSX files  
+    npx codemod jssg test -l tsx ./scripts/codemod.ts
+    
+    # For JavaScript files
+    npx codemod jssg test -l javascript ./scripts/codemod.ts
+    ```
+  </Accordion>
+  
+  <Accordion title="Files not found">
+    **Problem:** "No test files found" error.<br/><br/>
+    **Solution:** Check your directory structure and file names:
+    ```bash
+    # Verify structure
+    ls -la tests/basic-transform/
+    # Should show: input.ts  expected.ts
+    
+    # Check file names are correct
+    ls tests/basic-transform/
+    # Should show: input.ts  expected.ts
+    ```
+  </Accordion>
+  
+  <Accordion title="Transform not applied">
+    **Problem:** Test passes but no changes were made.<br/><br/>
+    **Solution:** This is normal if your transform returns `null` for unchanged files. If you expect changes:
+    ```bash
+    # Run with verbose output to debug
+    npx codemod jssg test -l tsx ./scripts/codemod.ts -v
+    ```
+  </Accordion>
+  
+  <Accordion title="Unexpected diffs">
+    **Problem:** Test fails with unexpected output.<br/><br/>
+    **Solution:** Update expected output if changes are intentional:
+    ```bash
+    # Update snapshots
+    npx codemod jssg test -l tsx ./scripts/codemod.ts -u
+    ```
+  </Accordion>
+  
+  <Accordion title="Codemod syntax errors">
+    **Problem:** "Syntax error in codemod" or TypeScript errors.<br/><br/>
+    **Solution:** Check your transform file:
+    ```bash
+    # Validate TypeScript
+    npx tsc --noEmit ./scripts/codemod.ts
+    
+    # Test with a simple file first
+    echo 'console.log("test");' > test-input.js
+    npx codemod jssg run -l javascript ./scripts/codemod.ts test-input.js
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Workflow integration
+
+### Package script
+
+Add to your `package.json`:
+
+```json package.json
+{
+  "scripts": {
+    "test": "npx codemod jssg test -l tsx ./scripts/codemod.ts",
+    "test:update": "npx codemod jssg test -l tsx ./scripts/codemod.ts -u",
+    "test:verbose": "npx codemod jssg test -l tsx ./scripts/codemod.ts -v"
+  }
+}
+```
+
+### CI/CD integration
+
+```yaml .github/workflows/test.yml
+name: Test Codemod
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '24' # Use current LTS
+      - run: npm test
+```
+
+## Best practices
+
+- **Start simple**: Begin with basic transformations before complex ones
+- **Test edge cases**: Include empty files, files with comments, and malformed code
+- **Use descriptive names**: Make test cases self-documenting
+- **Keep tests focused**: One transformation per test case
+- **Validate locally**: Always test before publishing
+
+

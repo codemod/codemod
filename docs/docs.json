@@ -1,0 +1,275 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "Codemod.com",
+  "colors": {
+    "primary": "#7faa09",
+    "light": "#d5ff61",
+    "dark": "#0B151E"
+  },
+  "background": {
+    "color": {
+      "dark": "#0b141e",
+      "light": "#FFF"
+    }
+  },
+  "favicon": "/images/favicon.svg",
+  "styling": {
+    "eyebrows": "breadcrumbs"
+  },
+  "interaction": {
+    "drilldown": true
+  },
+  "navigation": {
+    "dropdowns": [
+      {
+        "dropdown": "Getting Started",
+        "icon": "book",
+        "description": "Get started with Codemod",
+        "groups": [
+          {
+            "group": "First steps",
+            "pages": ["introduction"]
+          },
+          {
+            "group": "Enterprise",
+            "pages": [
+              "platform/quickstart",
+              "platform/campaigns",
+              "platform/insights",
+              "platform/registry",
+              "platform/codemod-studio",
+              {
+                "icon": "plug",
+                "group": "Integrations",
+                "pages": [
+                  "platform/integrations/github",
+                  "platform/integrations/gitlab",
+                  "platform/integrations/jira"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "cli",
+              {
+                "group": "Workflows",
+                "pages": [
+                  "workflows/quickstart",
+                  "workflows/building-workflows"
+                ]
+              },
+              {
+                "group": "JSSG",
+                "pages": [
+                  "jssg/quickstart",
+                  "jssg/testing",
+                  "jssg/reference",
+                  "jssg/semantic-analysis",
+                  "jssg/advanced",
+                  "jssg/security"
+                ]
+              },
+              "publishing",
+              "model-context-protocol",
+              "oss"
+            ]
+          },
+          {
+            "group": "Other Resources",
+            "pages": ["changelog"]
+          }
+        ]
+      },
+      {
+        "dropdown": "Guides",
+        "icon": "chalkboard",
+        "description": "Learn more with hands-on guides.",
+        "groups": [
+          {
+            "group": "Guides & Examples",
+            "pages": ["guides/introduction"]
+          },
+          {
+            "group": "Migrations",
+            "pages": [
+              "guides/migrations/react-18-19",
+              "guides/migrations/nuxt-3-4",
+              "guides/migrations/zod-3-4",
+              "guides/migrations/msw-v1-v2",
+              "guides/migrations/pnpm-catalog",
+              "guides/external-links/radix-reka",
+              "guides/external-links/fastify-v3-v4",
+              "guides/external-links/meteor-v2-v3",
+              "guides/external-links/valibot"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg",
+    "href": "https://codemod.com"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Community",
+        "href": "https://go.codemod.com/community"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/codemod/codemod"
+    }
+  },
+  "footer": {
+    "socials": {
+      "twitter": "https://twitter.com/codemod",
+      "github": "https://github.com/codemod",
+      "linkedin": "https://www.linkedin.com/company/codemod"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/more-resources/legal/telemetry-compliance",
+      "destination": "https://codemod.com/telemetry-compliance"
+    },
+    {
+      "source": "/more-resources/legal/privacy-policy",
+      "destination": "https://codemod.com/privacy-policy"
+    },
+    {
+      "source": "/more-resources/legal/terms-and-conditions",
+      "destination": "https://codemod.com/terms-and-conditions"
+    },
+    {
+      "source": "/more-resources/changelog",
+      "destination": "/changelog"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/platform/quickstart"
+    },
+    {
+      "source": "/campaigns",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/insights",
+      "destination": "/platform/insights"
+    },
+    {
+      "source": "/registry",
+      "destination": "/platform/registry"
+    },
+    {
+      "source": "/codemod-studio",
+      "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/integrations/github",
+      "destination": "/platform/integrations/github"
+    },
+    {
+      "source": "/integrations/gitlab",
+      "destination": "/platform/integrations/gitlab"
+    },
+    {
+      "source": "/integrations/jira",
+      "destination": "/platform/integrations/jira"
+    },
+    {
+      "source": "/cli/cli-reference",
+      "destination": "/cli"
+    },
+    {
+      "source": "/cli/packages/quickstart",
+      "destination": "/workflows/quickstart"
+    },
+    {
+      "source": "/cli/packages/building-workflows",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/cli/packages/package-structure",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/platform/plan",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/platform/automate",
+      "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/platform/orchestrate",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/platform/track",
+      "destination": "/platform/insights"
+    },
+    {
+      "source": "/cli/workflows/quickstart",
+      "destination": "/workflows/quickstart"
+    },
+    {
+      "source": "/cli/workflows/package-structure",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/cli/workflows/building-workflows",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/cli/workflows",
+      "destination": "/workflows/quickstart"
+    },
+    {
+      "source": "/cli/mcp",
+      "destination": "/model-context-protocol"
+    },
+    {
+      "source": "/deploying-codemods/cli",
+      "destination": "/cli"
+    },
+    {
+      "source": "/building-codemods/package-requirements",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/building-codemods/codemod2",
+      "destination": "/workflows/quickstart"
+    },
+    {
+      "source": "/scanner",
+      "destination": "/platform/insights"
+    },
+    {
+      "source": "/migrations",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/quickstart-enterprise",
+      "destination": "/platform/quickstart"
+    },
+    {
+      "source": "/quickstart-oss",
+      "destination": "/oss"
+    }
+  ],
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude"]
+  },
+  "integrations": {
+    "ga4": {
+      "measurementId": "G-RW6RM5EL6S"
+    }
+  }
+}

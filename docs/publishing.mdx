@@ -1,0 +1,348 @@
+---
+title: "Publishing Codemods"
+sidebarTitle: "Publishing"
+description: "Learn how to publish codemods to the Codemod Registry using different authentication methods"
+---
+
+This guide covers all the ways to publish codemods to the [Codemod Registry](/platform/registry), from local development to automated CI/CD pipelines.
+
+## Authentication Methods
+
+Codemod supports three authentication methods for publishing:
+
+| Method | Best For | Secrets Required | Setup |
+|--------|----------|------------------|-------|
+| [Interactive Login](#interactive-login) | Local development | None | None |
+| [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
+| [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | None for org scopes* |
+
+<sub>* If your GitHub organization name matches your package scope, trusted publishing works automatically with zero configuration. See [Organization Scopes](#organization-scopes-zero-configuration).</sub>
+
+## Interactive Login
+
+The simplest way to authenticate for local development. Opens a browser for OAuth authentication.
+
+```bash
+# Login to the registry
+npx codemod login
+
+# Verify authentication
+npx codemod whoami
+```
+
+After logging in, you can publish packages:
+
+```bash
+npx codemod publish
+```
+
+### When to Use
+
+- Local development and testing
+- Quick one-off publishes
+- When you prefer browser-based authentication
+
+## API Keys
+
+API keys allow non-interactive authentication, perfect for CI/CD pipelines and automation.
+
+### Creating an API Key
+
+1. Go to [codemod.com/api-keys](https://go.codemod.com/api-keys)
+2. Click **Create API Key**
+3. Give it a descriptive name (e.g., "GitHub Actions - my-repo")
+4. Select the permissions (typically "Publish Packages")
+5. Copy the key (it won't be shown again)
+
+### Using API Keys
+
+**Option 1: Login with API key**
+
+```bash
+npx codemod login --api-key $CODEMOD_API_KEY
+npx codemod publish
+```
+
+**Option 2: Environment variable**
+
+```bash
+CODEMOD_AUTH_TOKEN=$CODEMOD_API_KEY npx codemod publish
+```
+
+### GitHub Actions Example
+
+```yaml
+name: Publish Codemod
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Codemod Registry
+        run: npx codemod login --api-key ${{ secrets.CODEMOD_API_KEY }}
+
+      - name: Publish codemod
+        run: npx codemod publish
+```
+
+<Warning>
+  Store your API key as a repository secret. Never commit API keys to your repository.
+</Warning>
+
+### When to Use
+
+- CI/CD pipelines without GitHub Actions OIDC
+- GitLab CI, CircleCI, Jenkins, etc.
+- Automated publishing from any environment
+- When you need explicit control over credentials
+
+## Trusted Publishers
+
+Trusted publishers enable **passwordless publishing** from GitHub Actions using OpenID Connect (OIDC). No secrets to manage or rotate.
+
+<Card title="How OIDC Works" icon="shield-check">
+  GitHub Actions can request short-lived tokens that cryptographically prove the workflow's identity. Codemod verifies these tokens against your configured trusted publishers.
+</Card>
+
+### Benefits
+
+- **No secrets to manage** – No API keys to create, rotate, or accidentally leak
+- **Cryptographically secure** – Tokens are signed by GitHub and verified by Codemod
+- **Fine-grained control** – Restrict by repository, workflow, environment, or git ref
+- **Short-lived tokens** – Tokens expire in ~5 minutes, limiting exposure
+
+### Organization Scopes (Zero Configuration)
+
+<Note>
+  **This is the recommended approach for organizations.** If your GitHub organization name matches your package scope, trusted publishing works automatically with no UI configuration needed.
+</Note>
+
+For packages under an organization scope (e.g., `@my-org/my-codemod`), trusted publishers work **automatically** when:
+
+1. Your GitHub organization name matches the package scope (e.g., GitHub org `my-org` → scope `@my-org`)
+2. You've [linked your GitHub organization](https://go.codemod.com/organizations) to your Codemod organization
+
+That's it. Any repository in your GitHub organization can publish packages under your scope—both new packages and updates to existing ones.
+
+**Example:** If your GitHub organization is `acme-corp` and you've linked it to your Codemod organization with scope `@acme-corp`:
+
+```yaml
+name: Publish Codemod
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: codemod/publish-action@v1
+```
+
+This workflow can publish `@acme-corp/any-codemod` from any repository in the `acme-corp` GitHub organization.
+
+### Individual Packages (Manual Configuration)
+
+For packages that don't match an organization scope (unscoped packages or packages where the GitHub org doesn't match), you need to configure a trusted publisher manually:
+
+<Steps>
+  <Step title="Configure Trusted Publisher in UI">
+    1. Go to [codemod.com/api-keys](https://go.codemod.com/api-keys)
+    2. Scroll to **Trusted Publishers**
+    3. Click **Add Trusted Publisher**
+    4. Select your package and enter the GitHub repository details
+    5. (Optional) Add restrictions for extra security
+  </Step>
+
+  <Step title="Configure Your Workflow">
+    ```yaml
+    name: Publish Codemod
+    on:
+      release:
+        types: [published]
+
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: read
+
+    jobs:
+      publish:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: codemod/publish-action@v1
+    ```
+  </Step>
+</Steps>
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| Package | The package to publish to | `my-codemod` or `@org/my-codemod` |
+| Repository Owner | GitHub org or username | `my-org` |
+| Repository Name | Repository name | `my-codemod-repo` |
+
+Once configured, any workflow in that repository can publish to the package.
+
+### Optional Restrictions
+
+Add restrictions for additional security:
+
+| Restriction | Description | Example |
+|-------------|-------------|---------|
+| Workflow Path | Only allow specific workflow files | `.github/workflows/publish.yml` |
+| Environment | Require GitHub Environment approval | `production` |
+| Ref Pattern | Only allow specific git refs | `refs/tags/v*` |
+
+**Example with restrictions:**
+
+```yaml
+name: Publish Codemod
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: production  # Matches "Environment" restriction
+    steps:
+      - uses: actions/checkout@v4
+      - uses: codemod/publish-action@v1
+```
+
+### Manual OIDC Setup
+
+If you prefer not to use the action, you can manually obtain and use the OIDC token:
+
+```yaml
+name: Publish Codemod
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install codemod CLI
+        run: npm install -g codemod@latest
+
+      - name: Get OIDC token
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('https://codemod.com');
+            core.setOutput('token', token);
+            core.setSecret(token);
+
+      - name: Publish codemod
+        env:
+          CODEMOD_AUTH_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: codemod publish
+```
+
+### Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No trusted publisher found">
+    Verify your trusted publisher configuration matches:
+    - Repository owner (case-insensitive)
+    - Repository name (exact match)
+    - Any configured restrictions (workflow path, environment, ref pattern)
+  </Accordion>
+
+  <Accordion title="Permission denied">
+    Ensure your workflow has the required permissions:
+    ```yaml
+    permissions:
+      id-token: write  # Required for OIDC token
+      contents: read   # Required to checkout code
+    ```
+  </Accordion>
+
+  <Accordion title="Token audience mismatch">
+    The OIDC token audience must be `https://codemod.com`. If using a custom registry, configure `GITHUB_OIDC_AUDIENCE` on the server.
+  </Accordion>
+</AccordionGroup>
+
+## Comparison
+
+| Feature | Interactive Login | API Keys | Trusted Publishers |
+|---------|-------------------|----------|-------------------|
+| Secrets to manage | None | Yes | None |
+| Works locally | Yes | Yes | No |
+| Works in CI/CD | No | Yes | GitHub Actions only |
+| New package publish | Yes | Yes | Yes* |
+| Token lifetime | Long-lived | Long-lived | ~5 minutes |
+| Rotation needed | No | Recommended | No |
+| UI configuration | None | Create key | None for org scopes** |
+
+<sub>* Trusted publishers can publish new packages when using a matching organization scope.</sub>
+
+<sub>** Organization scopes that match your GitHub org name require no configuration in app.codemod.com. Individual packages require adding a trusted publisher in the UI.</sub>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Trusted Publishers" icon="shield-check">
+    For GitHub Actions, prefer trusted publishers over API keys. No secrets to leak or rotate.
+  </Card>
+
+  <Card title="Restrict Access" icon="lock">
+    When using trusted publishers, add restrictions like environment protection for sensitive packages.
+  </Card>
+
+  <Card title="Rotate API Keys" icon="rotate">
+    If using API keys, rotate them periodically and use the minimum required permissions.
+  </Card>
+
+  <Card title="Tag Releases" icon="tag">
+    Use git tags and GitHub releases to trigger publish workflows for clear version history.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Registry" icon="globe" href="/platform/registry">
+    Learn about package access levels and discovery.
+  </Card>
+
+  <Card title="Building Packages" icon="hammer" href="/workflows/building-workflows">
+    Create and configure Codemod packages.
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/cli#codemod-publish">
+    Complete publish command options.
+  </Card>
+
+  <Card title="API Keys" icon="key" href="https://go.codemod.com/api-keys">
+    Manage your API keys and trusted publishers.
+  </Card>
+</CardGroup>

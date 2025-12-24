@@ -1,9 +1,9 @@
 <p align="center">
   <a href="https://codemod.com">
       <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="/apps/docs/images/intro/codemod-docs-hero-dark.jpg">
-          <source media="(prefers-color-scheme: light)" srcset="/apps/docs/images/intro/codemod-docs-hero-light.jpg">
-          <img alt="Codemod Registry Header" src="/apps/docs/images/intro/codemod-docs-hero-light.jpg"></picture>
+          <source media="(prefers-color-scheme: dark)" srcset="/docs/images/intro/codemod-docs-hero-dark.jpg">
+          <source media="(prefers-color-scheme: light)" srcset="/docs/images/intro/codemod-docs-hero-light.jpg">
+          <img alt="Codemod Registry Header" src="/docs/images/intro/codemod-docs-hero-light.jpg"></picture>
   </a>
 
   <p align="center">
@@ -27,9 +27,11 @@ This repo houses the **Codemod CLI** and its underlying **workflow engine** – 
 
 ## Key Features
 
-- [**Workflows**](https://go.codemod.com/workflows-docs) – Scaffold, test, and orchestrate complex, multi-step migrations with ast-grep YAML or JavaScript ast-grep (jssg).
+- [**Codemod CLI**](https://docs.codemod.com/cli) – Run, test, and publish codemods from your terminal or CI.
+- [**Workflows**](https://docs.codemod.com/workflows/quickstart) – Orchestrate multi-step migrations with YAML configuration, matrix strategies, and manual approval gates.
+- [**JSSG**](https://docs.codemod.com/jssg/quickstart) – JavaScript ast-grep: write powerful AST transformations in TypeScript with pattern matching and semantic analysis.
 - [**Codemod Registry**](https://go.codemod.com/registry) – Share or discover community codemods via `npx codemod publish` or `npx codemod search`.
-- [**Codemod MCP**](https://go.codemod.com/mcp-docs) – AI tools for code analysis, AST manipulation, and codemod creation in AI-powered IDEs.
+- [**Codemod MCP**](https://docs.codemod.com/model-context-protocol) – AI tools for code analysis, AST manipulation, and codemod creation in AI-powered IDEs.
 
 ## Getting Started
 
@@ -47,18 +49,32 @@ npx codemod publish my-codemod
 npx codemod @codemod/my-codemod
 ```
 
-See the full [CLI reference](https://docs.codemod.com/cli/cli-reference) for every command and option.
+See the full [CLI reference](https://docs.codemod.com/cli) for every command and option.
 
 ## Codemod Platform
 
 The CLI is the engine that powers campaigns inside [Codemod Platform](https://app.codemod.com).
 Need to coordinate changes across multiple repositories, track progress, or collaborate with your team? The Platform adds insights, orchestration, dashboards, and authoring tools that help teams successfully land large-scale code migrations.
 
-Learn more in the [docs](https://docs.codemod.com) and share feedback on the [feedback board](https://feedback.codemod.com). We also hang out in Slack — join us at [go.codemod.com/community](https://go.codemod.com/community).
+Explore our [documentation](https://docs.codemod.com) to learn more, and join the conversation or share your feedback in our [Slack community](https://go.codemod.com/community).
 
 ## Contributing
 
-We welcome contributions to the Codemod CLI. Please see the [contributing guide](/CONTRIBUTING.md) to get started.
+There are two ways to contribute to the Codemod ecosystem:
+
+### Contribute to Codemod OSS
+
+Help improve the CLI, workflow engine, and JSSG runtime. See the [contributing guide](/CONTRIBUTING.md) to get started with development setup, testing, and pull requests.
+
+### Build and share codemods
+
+Create codemods for framework upgrades, security patches, or common refactoring patterns. Published codemods help the entire community migrate faster.
+
+- [**Workflows quickstart**](https://docs.codemod.com/workflows/quickstart) – Scaffold your first codemod package
+- [**JSSG guide**](https://docs.codemod.com/jssg/quickstart) – Write AST transformations in JS/TS
+- [**Publishing**](https://docs.codemod.com/publishing) – Share your contributions to Codemod Registry
+
+Looking for ideas? Spark a discussion in our [Slack community](https://go.codemod.com/community) or browse [Codemod Registry](https://go.codemod.com/registry) for codemods that could use improvements.
 
 ### Contributors ✨
 

@@ -1,0 +1,730 @@
+---
+title: "Codemod CLI"
+sidebarTitle: 'CLI'
+description: "Scaffold, publish, and run codemod projects, recipes, or packages from your terminal using Codemod's open-source CLI."
+---
+
+import { CLIDemo } from "/snippets/cli-demo.mdx";
+
+## Quick Start
+
+<Frame>
+  <CLIDemo />
+</Frame>
+
+<Steps>
+  <Step title="Initialize a new codemod project">
+    ```bash
+    npx codemod init
+    ```
+
+    This scaffolds a new codemod project in the current directory.
+  </Step>
+  <Step title="Run and test your codemod">
+    ```bash
+    cd /path/to/project-to-migrate
+
+    npx codemod workflow run -w /path/to/my-codemod/workflow.yaml
+    ```
+
+    This runs your local Codemod package on your codebase to test it before publishing.
+  </Step>
+  <Step title="Publish your codemod">
+    ```bash
+    npx codemod publish
+    ```
+
+    This publishes your codemod to the registry (you may need to <a href="#codemod-login">login</a> first).
+  </Step>
+  <Step title="Run the published codemod">
+    ```bash
+    npx codemod @codemod/my-test-pkg
+    ```
+
+    Run your published codemod directly from the [Codemod Registry](https://app.codemod.com/registry).
+  </Step>
+</Steps>
+
+For more details on building and running Codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
+
+---
+
+## Command Relationships
+
+The Codemod CLI provides different commands for different stages of development:
+
+### High-Level Commands (Production)
+```bash
+# Run a published package from the registry
+npx codemod @org/my-package
+
+# Run a local workflow package
+npx codemod workflow run -w ./my-package/
+```
+**Use for**: Production codemods, multi-step workflows, parameterized transforms
+
+### Quick Testing Commands (Development)
+```bash
+# Test a jssg transform directly
+npx codemod jssg run ./transform.ts ./src --language tsx
+
+# Test jssg transform with fixtures
+npx codemod jssg test ./transform.ts --language tsx
+```
+**Use for**: Rapid iteration, testing patterns, development
+
+### Package Lifecycle
+```bash
+# Scaffold a new package
+npx codemod init
+
+# Validate workflow
+npx codemod workflow validate -w workflow.yaml
+
+# Publish to registry
+npx codemod publish
+```
+
+<Info>
+  **When to use what**: Use `codemod workflow run` for orchestrated, multi-step transformations with parameters. Use `codemod jssg run` for quick testing of a single jssg transform during development.
+</Info>
+
+---
+
+# CLI Command Reference
+
+Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
+
+### `codemod workflow`
+
+Manage and execute [Codemod packages](/workflows/quickstart).
+
+A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
+
+**When to use**:
+- ✅ Production codemods with multiple steps
+- ✅ Parameterized transformations
+- ✅ Multi-repo orchestration
+- ✅ State management and resumption
+
+**Learn more**: [Building Workflows](/workflows/building-workflows)
+
+**`workflow run`**
+
+Run a complete Codemod package.
+
+- Use `npx codemod workflow run -w <path>` for local Codemod packages and directories
+- Use `npx codemod <package-name>` to run packages directly from the [Codemod Registry](https://app.codemod.com/registry)
+
+<CodeGroup>
+
+```bash Running a local workflow
+npx codemod workflow run -w <workflow.yaml|directory>
+```
+
+```bash Running a workflow from Codemod Registry
+npx codemod <package-name>
+```
+
+</CodeGroup>
+
+<ResponseField name="-w, --workflow <PATH>" type="string" required>
+  Path to workflow file or directory.
+</ResponseField>
+
+<ResponseField name="-t, --target <PATH>" type="string">
+  Target directory to run the workflow on.
+  
+  ```bash
+  # Specify a target directory
+  npx codemod workflow run -w ./my-codemod -t /abs/path/to/repo
+
+  # Specify a target directory
+  npx codemod @codemod/my-test-pkg -t /abs/path/to/repo
+  ```
+</ResponseField>
+
+<ResponseField name="--param <KEY=VALUE>" type="string">
+  Pass key=value pairs to your workflow. Parameters are exposed to jssg transforms via `options.params`.
+
+  ```bash
+  # Single parameter:
+  npx codemod workflow run -w workflow.yaml --param format=cjs
+  
+  # Multiple parameters:
+  npx codemod workflow run -w workflow.yaml --param format=cjs --param strict=true
+  ```
+</ResponseField>
+
+**`workflow resume`**
+
+Resume a paused workflow.
+
+```bash
+npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
+```
+
+<ResponseField name="-i, --id <ID>" type="string" required>
+  Workflow run ID.
+</ResponseField>
+
+<ResponseField name="-t, --task <TASK>" type="string">
+  Task ID to trigger (can be specified multiple times).
+</ResponseField>
+
+<ResponseField name="--trigger-all" type="boolean">
+  Trigger all awaiting tasks.
+</ResponseField>
+
+**`workflow validate`**
+
+Validate a workflow file.
+
+```bash
+npx codemod workflow validate -w <workflow.yaml>
+```
+
+<ResponseField name="-w, --workflow <FILE>" type="string" required>
+  Path to workflow file.
+</ResponseField>
+
+| Check                       | Ensures                                |
+| --------------------------- | -------------------------------------- |
+| Schema validation           | YAML matches the workflow spec         |
+| Unique IDs                  | Node & template IDs are unique         |
+| Dependency validation       | Every `depends_on` exists              |
+| Cyclic dependency detection | DAG has no cycles                      |
+| Template references         | All `template:` IDs exist              |
+| Matrix validation           | `from_state` matches schema            |
+| State schema validation     | `state.schema` is valid                |
+| Variable syntax             | `${{…}}` uses `params`, `env`, `state` |
+
+<Info>
+  Why validate?
+
+  Validation catches issues before execution, saving time and preventing runtime errors.
+</Info>
+
+<Accordion title="Validation vs. Logical Correctness">
+  The `workflow validate` command ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
+
+  - **Logical correctness**: Whether your workflow does what you intend
+  - **Runtime behavior**: How your workflow behaves with real data
+  - **Dependencies**: Whether external files/scripts exist
+  - **State consistency**: Whether state updates are logically sound
+</Accordion>
+
+**`workflow status`**
+
+Show workflow run status.
+
+```bash
+npx codemod workflow status -i <ID>
+```
+
+<ResponseField name="-i, --id <ID>" type="string" required>
+  Workflow run ID.
+</ResponseField>
+
+**`workflow list`**
+
+List workflow runs.
+
+```bash
+npx codemod workflow list [-l <LIMIT>]
+```
+
+<ResponseField name="-l, --limit <LIMIT>" type="number">
+  Number of workflow runs to show. (default: 10)
+</ResponseField>
+
+**`workflow cancel`**
+
+Cancel a workflow run.
+
+```bash
+npx codemod workflow cancel -i <ID>
+```
+
+<ResponseField name="-i, --id <ID>" type="string" required>
+  Workflow run ID.
+</ResponseField>
+
+### `codemod jssg`
+
+Run [jssg (JS ast-grep)](/jssg/quickstart) transforms directly without a workflow.
+
+jssg is the **primary transformation engine** for Codemod. These commands let you test jssg transforms quickly during development.
+
+**When to use**:
+- ✅ Quick testing of a single transform
+- ✅ Iterating on pattern matching
+- ✅ Development and debugging
+
+**When NOT to use**:
+- ❌ Multi-step transformations → use `codemod workflow`
+- ❌ Parameterized transforms → use `codemod workflow` with `--param`
+- ❌ Production deployments → use `codemod workflow` for orchestration
+
+<Tip>
+  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Building Workflows: JS ast-grep step](/workflows/building-workflows#js-ast-grep-step).
+</Tip>
+
+**Learn more**: [jssg documentation](/jssg/quickstart)
+
+<Steps>
+  <Step title="Write your codemod">
+    Create a JS/TS file that exports your codemod logic.
+  </Step>
+  <Step title="Run your codemod">
+    ```bash
+    npx codemod jssg run my-codemod.js ./src --language javascript
+    ```
+  </Step>
+  <Step title="Test your codemod">
+    Organize your tests as follows:
+
+    ```
+    tests/
+    ├── simple-transform/
+    │   ├── input.js
+    │   └── expected.js
+    └── multi-file-case/
+        ├── input/
+        │   ├── file1.js
+        │   └── file2.js
+        └── expected/
+            ├── file1.js
+            └── file2.js
+    ```
+
+    Then run:
+
+    ```bash
+    npx codemod jssg test my-codemod.js --language javascript
+    ```
+  </Step>
+</Steps>
+
+**`jssg run`**
+
+Run a JS ast-grep (jssg) codemod.
+
+```bash
+npx codemod jssg run <codemod_file> <target_directory> [options]
+```
+
+<ResponseField name="codemod_file" type="string" required>
+  Path to the JS ast-grep (jssg) codemod file (JS/TS).
+</ResponseField>
+
+<ResponseField name="target_directory" type="string" required>
+  Directory to apply the codemod to.
+</ResponseField>
+
+<ResponseField name="--language <LANG>" type="string" required>
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+</ResponseField>
+
+<ResponseField name="--extensions <ext1,ext2>" type="string">
+  Comma-separated list of file extensions to process.
+</ResponseField>
+
+<ResponseField name="--no-gitignore" type="boolean">
+  Do not respect `.gitignore` files.
+</ResponseField>
+
+<ResponseField name="--include-hidden" type="boolean">
+  Include hidden files and directories in the scan.
+</ResponseField>
+
+<ResponseField name="--max-threads <N>" type="number">
+  Maximum number of concurrent threads to use.
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Perform a dry-run to see the changes without applying them.
+</ResponseField>
+
+**`jssg test`**
+
+Test a JS ast-grep(jssg) codemod using before/after fixtures.
+
+```bash
+npx codemod jssg test <codemod_file> [options]
+```
+
+<ResponseField name="codemod_file" type="string" required>
+  Path to the JS ast-grep (jssg) codemod file, which is a JS/TS file.
+</ResponseField>
+
+<ResponseField name="--language" type="string" required>
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+</ResponseField>
+
+<ResponseField name="--test-directory" type="string">
+  The directory containing your tests (default: `"tests"`).
+</ResponseField>
+
+<ResponseField name="--filter" type="string">
+  A pattern to run only tests whose names match the filter.
+</ResponseField>
+
+<ResponseField name="--reporter" type="string">
+  The output format for test results. Can be `console`, `json`, or `terse`.
+</ResponseField>
+
+<ResponseField name="--verbose" type="boolean">
+  Show detailed output, including diffs for failed tests.
+</ResponseField>
+
+<ResponseField name="--context-lines" type="number">
+  The number of context lines to show in diffs (default: 3).
+</ResponseField>
+
+<ResponseField name="--ignore-whitespace" type="boolean">
+  Ignore whitespace differences when comparing test outputs.
+</ResponseField>
+
+<ResponseField name="--timeout" type="number">
+  Test timeout in seconds (default: 30).
+</ResponseField>
+
+<ResponseField name="--max-threads" type="number">
+  Maximum number of concurrent threads to use for running tests.
+</ResponseField>
+
+<ResponseField name="--sequential" type="boolean">
+  Run tests sequentially instead of in parallel.
+</ResponseField>
+
+<ResponseField name="--fail-fast" type="boolean">
+  Stop the test run on the first failure.
+</ResponseField>
+
+<ResponseField name="--update-snapshots, -u" type="boolean">
+  Create or update the `expected` files with the output of the codemod. (`-u` is a shorthand for `--update-snapshots`)
+</ResponseField>
+
+<ResponseField name="--expect-errors" type="string">
+  A comma-separated list of test patterns that are expected to fail.
+</ResponseField>
+
+<ResponseField name="--watch" type="boolean">
+  Enable watch mode to automatically re-run tests when files change.
+</ResponseField>
+
+<AccordionGroup>
+  <Accordion title="When should I define a workflow instead?">
+    - When you need to chain multiple codemods or scripts.
+    - When you want manual review, approval steps, or CI/CD integration.
+    - When you want to use engines other than ast-grep (e.g., jscodeshift, YAML, or custom scripts).
+  </Accordion>
+  <Accordion title="Why ast-grep?">
+    ast-grep is extremely fast and robust for syntax-aware code transformations. We made it first-class in the CLI for the most common use case, but you can still use any engine via workflows.
+
+    jssg replicates the ast-grep NAPI, but with a few key differences:
+
+    - It's built into the CLI, so you can run it directly without needing to install it separately.
+    - It's built for speed and simplicity, making ast-grep codemods a first-class experience.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+### `codemod init`
+
+Initialize a new Codemod package project.
+
+```bash
+npx codemod init [PATH] [options]
+```
+
+<ResponseField name="[PATH]" type="string">
+  Project directory name.
+</ResponseField>
+
+<ResponseField name="--name <NAME>" type="string">
+  Project name (defaults to directory name).
+</ResponseField>
+
+<ResponseField name="--project-type <PROJECT_TYPE>" type="string">
+  Project type: `ast-grep-js`.
+
+  <Accordion title="More package types (advanced)">
+    - `shell`: Shell script-based codemods
+    - `ast-grep-yaml`: YAML-based ast-grep codemods
+  </Accordion>
+</ResponseField>
+
+<ResponseField name="--language <LANGUAGE>" type="string">
+  Target language.
+</ResponseField>
+
+<ResponseField name="--description <DESCRIPTION>" type="string">
+  Project description.
+</ResponseField>
+
+<ResponseField name="--author <AUTHOR>" type="string">
+  Author name and email.
+</ResponseField>
+
+<ResponseField name="--license <LICENSE>" type="string">
+  License.
+</ResponseField>
+
+<ResponseField name="--private" type="boolean">
+  Make package private.
+</ResponseField>
+
+<ResponseField name="--force" type="boolean">
+  Overwrite existing files.
+</ResponseField>
+
+<ResponseField name="--no-interactive" type="boolean">
+  Use defaults without prompts.
+</ResponseField>
+
+### `codemod login`
+
+Login to a registry.
+
+```bash
+npx codemod login [--api-key <API_KEY>] [--registry <REGISTRY>] [--scope <SCOPE>]
+```
+
+<ResponseField name="--api-key <API_KEY>" type="string">
+  Authenticate using an API key. Skips the browser login & is ideal for CI.
+</ResponseField>
+
+<ResponseField name="--registry <REGISTRY>" type="string">
+  Registry URL.
+</ResponseField>
+
+<ResponseField name="--scope <SCOPE>" type="string">
+  Organization or user scope for publishing.
+</ResponseField>
+
+<Tip>
+  Need a key? Generate one in the Codemod app [here ->](https://app.codemod.com/api-keys).
+</Tip>
+
+### `codemod logout`
+
+Logout from a registry.
+
+```bash
+npx codemod logout [--registry <REGISTRY>] [--all]
+```
+
+<ResponseField name="--registry <REGISTRY>" type="string">
+  Registry URL to logout from.
+</ResponseField>
+
+<ResponseField name="--all" type="boolean">
+  Logout from all registries.
+</ResponseField>
+
+### `codemod whoami`
+
+Show current authentication status.
+
+```bash
+npx codemod whoami [--registry <REGISTRY>] [--detailed]
+```
+
+<ResponseField name="--registry <REGISTRY>" type="string">
+  Registry URL to check.
+</ResponseField>
+
+<ResponseField name="--detailed" type="boolean">
+  Show detailed information including token scopes.
+</ResponseField>
+
+### `codemod publish`
+
+Publish a Codemod package to a registry.
+
+```bash
+npx codemod publish [PATH]
+```
+
+<ResponseField name="[PATH]" type="string">
+  Path to codemod directory (defaults to current directory).
+</ResponseField>
+
+<Info>
+  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Building Workflows](/workflows/building-workflows#package-metadata-codemod-yaml) for configuration options.
+</Info>
+
+<Card title="Publishing Guide" icon="upload" href="/publishing">
+  Learn about all publishing methods including API keys, trusted publishers (OIDC), and CI/CD setup.
+</Card>
+
+### `codemod unpublish`
+
+Remove a package or selected version from the registry.
+
+```bash
+npx codemod unpublish <PACKAGE> [options]
+```
+
+<ResponseField name="<PACKAGE>" type="string" required>
+  Package name (e.g., `@org/my-codemod` or `my-codemod`).
+</ResponseField>
+
+<ResponseField name="--version <VERSION>" type="string">
+  Specific semver to unpublish. Requires confirmation.
+</ResponseField>
+
+<ResponseField name="--force" type="boolean">
+  Unpublish **all** versions (irreversible). Confirmation required.
+</ResponseField>
+
+<ResponseField name="--registry <REGISTRY>" type="string">
+  Target registry URL.
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Show what would be removed without actually unpublishing.
+</ResponseField>
+
+<Tip>
+  The CLI always prompts for confirmation when `--version` or `--force` is used. This interactive step cannot be bypassed programmatically.
+</Tip>
+
+<Accordion title="Examples">
+  ```bash
+  # Preview removal of a single version
+  npx codemod unpublish my-codemod --version 0.1.0 --dry-run
+  
+  # Remove a single version (will prompt)
+  npx codemod unpublish my-codemod --version 0.1.0
+  
+  # Remove all versions (will prompt)
+  npx codemod unpublish my-codemod --force
+  
+  # Unpublish from a custom registry
+  npx codemod unpublish my-codemod --force --registry https://registry.example.com
+  ```
+</Accordion>
+
+### `codemod search`
+
+Search for packages in the registry.
+
+```bash
+npx codemod search [OPTIONS] [QUERY]
+```
+
+<ResponseField name="[QUERY]" type="string">
+  Search query
+</ResponseField>
+
+<ResponseField name="--language <LANGUAGE>" type="string">
+  Filter by programming language
+</ResponseField>
+
+<ResponseField name="--framework <FRAMEWORK>" type="string">
+  Filter by framework
+</ResponseField>
+
+<ResponseField name="--category <CATEGORY>" type="string">
+  Filter by category
+</ResponseField>
+
+<ResponseField name="--size <SIZE>" type="number">
+  Number of results to return (default: 20)
+</ResponseField>
+
+<ResponseField name="--from <FROM>" type="number">
+  Pagination offset (default: 0)
+</ResponseField>
+
+<ResponseField name="--scope <SCOPE>" type="string">
+  Filter by organization scope
+</ResponseField>
+
+<ResponseField name="--registry <REGISTRY>" type="string">
+  Registry URL
+</ResponseField>
+
+<ResponseField name="--format <FORMAT>" type="string">
+  Output format (default: table). Possible values: table, json, yaml
+</ResponseField>
+
+<Accordion title="Examples">
+  Search for codemods related to React:
+
+  ```bash
+  npx codemod search react
+  ```
+
+  Filter by language and category:
+
+  ```bash
+  npx codemod search --language typescript --category migration
+  ```
+
+  Get results in JSON format:
+
+  ```bash
+  npx codemod search --format json next
+  ```
+</Accordion>
+
+### `codemod cache`
+
+Manage the local package cache for Codemod packages.
+
+**`cache info`**
+
+Show cache information and statistics.
+
+```bash
+npx codemod cache info
+```
+
+**`cache list`**
+
+List cached packages.
+
+```bash
+npx codemod cache list [--detailed]
+```
+
+<ResponseField name="--detailed" type="boolean">
+  Show package details.
+</ResponseField>
+
+**`cache clear`**
+
+Clear cache for a specific package, or all packages.
+
+```bash
+npx codemod cache clear [PACKAGE] [--all]
+```
+
+<ResponseField name="[PACKAGE]" type="string">
+  Package name (e.g., `@org/package` or `package`).
+</ResponseField>
+
+<ResponseField name="--all" type="boolean">
+  Clear all cached packages.
+</ResponseField>
+
+**`cache prune`**
+
+Prune old or unused cache entries.
+
+```bash
+npx codemod cache prune [--max-age <MAX_AGE>] [--dry-run]
+```
+
+<ResponseField name="--max-age <MAX_AGE>" type="number">
+  Maximum age in days to keep (default: 30).
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Dry run - show what would be removed.
+</ResponseField>
