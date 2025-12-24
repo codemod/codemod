@@ -16,7 +16,7 @@ Codemod CLI and workflow features are free for local use. For large-scale refact
 ---
 
 <Tip>
-  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/codemod-studio) or [Codemod MCP](/model-context-protocol) to create your Codemod package with the help of AI.
+  This is an advanced topic. If you're just getting started, we recommend using [Codemod Studio](/platform/codemod-studio) or [Codemod MCP](/model-context-protocol) to create your Codemod package with the help of AI.
 </Tip>
 
 ## Package Structure
@@ -646,7 +646,7 @@ To use a Codemod Registry step:
   <Step title="Find or publish a codemod to the Codemod Registry:">
     You can:
     - find and use an existing codemod in [Codemod Registry](https://go.codemod.com/registry), or
-    - [publish a Codemod package](/cli/cli-reference#publish-codemod) to Codemod Registry.
+    - [publish a Codemod package](/cli#codemod-publish) to Codemod Registry.
   </Step>
   <Step title="Add a Codemod Registry step to your workflow:">
     ```yaml workflow.yaml
@@ -887,7 +887,7 @@ export default function transform(root: SgRoot<TSX>, options) {
 - **PR settings:** Size limits, auto AI review, pre/post run scripts
 
 <Info>
-**Enterprise Features:** In the Codemod app, you can configure parameters visually through the UI. See [Campaigns](/migrations) for running parameterized workflows at scale.
+**Enterprise Features:** In the Codemod app, you can configure parameters visually through the UI. See [Campaigns](/platform/campaigns) for running parameterized workflows at scale.
 </Info>
 
 ---
@@ -1110,7 +1110,7 @@ nodes:
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Codemod CLI Reference" icon="terminal" href="/cli/cli-reference">
+  <Card title="Codemod CLI Reference" icon="terminal" href="/cli">
     Explore the full command and option reference for Codemod CLI.
   </Card>
   <Card title="Build with Codemod MCP" icon="robot" href="/model-context-protocol">

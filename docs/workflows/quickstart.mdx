@@ -22,7 +22,7 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
     npx codemod init
     ```
 
-    Each package includes your transformation logic (written in JavaScript, TypeScript, or YAML), a project manifest, and [workflow](/cli/packages/building-workflows) specification.
+    Each package includes your transformation logic (written in JavaScript, TypeScript, or YAML), a project manifest, and [workflow](/workflows/building-workflows) specification.
 
     When creating a new codemod project, you'll be prompted for:
 
@@ -59,7 +59,7 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
       You can combine different codemod types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths you prefer as long as you reference them correctly from <code>workflow.yaml</code>.
     </Info>
 
-    Check out the [Codemod package structure](/cli/packages/package-structure) for more details.
+    Check out the [Codemod package structure](/workflows/building-workflows) for more details.
   </Step>
 
   <Step title="Understand an example workflow">
@@ -124,7 +124,7 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
             run: npx prettier --write "src/**/*.{ts,tsx,js,jsx}"
     ```
 
-    Learn more about building workflows [here](/cli/packages/building-workflows).
+    Learn more about building workflows [here](/workflows/building-workflows).
   </Step>
 
   <Step title="Validate & run your Codemod package">

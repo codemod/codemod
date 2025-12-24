@@ -4,7 +4,7 @@ sidebarTitle: 'Registry'
 icon: 'globe'
 ---
 
-The **Codemod Registry** is a centralized repository for discovering, consuming, and distributing [Codemod packages](/cli/packages/quickstart). It enables the community to share reusable code transformation tools and allows organizations to maintain private codemods for their internal use. It provides:
+The **Codemod Registry** is a centralized repository for discovering, consuming, and distributing [Codemod packages](/workflows/quickstart). It enables the community to share reusable code transformation tools and allows organizations to maintain private codemods for their internal use. It provides:
 
 - **Package discovery** – Search and browse codemods by language, framework, category, and keywords
 - **Version management** – Semantic versioning with support for version pinning
@@ -64,7 +64,7 @@ Use the `codemod search` command to find packages:
 npx codemod search [query]
 ```
 
-Learn more about search options in the [CLI Reference](/cli/cli-reference#codemod-search).
+Learn more about search options in the [CLI Reference](/cli#codemod-search).
 
 ## Running Packages from the Registry
 
@@ -140,7 +140,7 @@ registry:
   Access and visibility work together. For example, `visibility: public` with `access: private` shows the package publicly, but only the owner can run it.
 </Tip>
 
-Learn more about [configuring packages](/cli/packages/building-workflows#package-metadata-codemod-yaml).
+Learn more about [configuring packages](/workflows/building-workflows#package-metadata-codemod-yaml).
 
 ## Using Packages in Workflows
 
@@ -153,7 +153,7 @@ steps:
       source: "@nodejs/create-require-from-path@1.1.0"
 ```
 
-Learn more about [using Codemod packages in workflows](/cli/packages/building-workflows#codemod-registry-step).
+Learn more about [using Codemod packages in workflows](/workflows/building-workflows#codemod-registry-step).
 
 ## Best Practices
 
@@ -197,11 +197,11 @@ For individual developers or one-off codemods, unscoped package names are usuall
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="CLI Reference" icon="terminal" href="/cli/cli-reference">
+  <Card title="CLI Reference" icon="terminal" href="/cli">
     Complete command reference for registry operations.
   </Card>
   
-  <Card title="Building Workflows" icon="diagram-project" href="/cli/packages/building-workflows">
+  <Card title="Building Workflows" icon="diagram-project" href="/workflows/building-workflows">
     Learn how to create and configure Codemod packages.
   </Card>
 </CardGroup>

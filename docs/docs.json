@@ -13,7 +13,7 @@
       "light": "#FFF"
     }
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/images/favicon.svg",
   "styling": {
     "eyebrows": "breadcrumbs"
   },
@@ -34,18 +34,18 @@
           {
             "group": "Enterprise",
             "pages": [
-              "quickstart",
-              "campaigns",
-              "insights",
-              "registry",
-              "codemod-studio",
+              "platform/quickstart",
+              "platform/campaigns",
+              "platform/insights",
+              "platform/registry",
+              "platform/codemod-studio",
               {
                 "icon": "plug",
                 "group": "Integrations",
                 "pages": [
-                  "integrations/github",
-                  "integrations/gitlab",
-                  "integrations/jira"
+                  "platform/integrations/github",
+                  "platform/integrations/gitlab",
+                  "platform/integrations/jira"
                 ]
               }
             ]
@@ -53,23 +53,23 @@
           {
             "group": "Community",
             "pages": [
-              "cli/cli-reference",
+              "cli",
               {
                 "group": "Workflows",
                 "pages": [
-                  "cli/packages/quickstart",
-                  "cli/packages/building-workflows"
+                  "workflows/quickstart",
+                  "workflows/building-workflows"
                 ]
               },
               {
                 "group": "JSSG",
                 "pages": [
-                  "/jssg/quickstart",
-                  "/jssg/testing",
-                  "/jssg/reference",
-                  "/jssg/semantic-analysis",
-                  "/jssg/advanced",
-                  "/jssg/security"
+                  "jssg/quickstart",
+                  "jssg/testing",
+                  "jssg/reference",
+                  "jssg/semantic-analysis",
+                  "jssg/advanced",
+                  "jssg/security"
                 ]
               },
               "publishing",
@@ -79,7 +79,7 @@
           },
           {
             "group": "Other Resources",
-            "pages": ["more-resources/changelog"]
+            "pages": ["changelog"]
           }
         ]
       },
@@ -111,8 +111,8 @@
     ]
   },
   "logo": {
-    "light": "/logo/codemod-logo-light.svg",
-    "dark": "/logo/codemod-logo-dark.svg",
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg",
     "href": "https://codemod.com"
   },
   "navbar": {
@@ -148,36 +148,88 @@
       "destination": "https://codemod.com/terms-and-conditions"
     },
     {
+      "source": "/more-resources/changelog",
+      "destination": "/changelog"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/platform/quickstart"
+    },
+    {
+      "source": "/campaigns",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/insights",
+      "destination": "/platform/insights"
+    },
+    {
+      "source": "/registry",
+      "destination": "/platform/registry"
+    },
+    {
+      "source": "/codemod-studio",
+      "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/integrations/github",
+      "destination": "/platform/integrations/github"
+    },
+    {
+      "source": "/integrations/gitlab",
+      "destination": "/platform/integrations/gitlab"
+    },
+    {
+      "source": "/integrations/jira",
+      "destination": "/platform/integrations/jira"
+    },
+    {
+      "source": "/cli/cli-reference",
+      "destination": "/cli"
+    },
+    {
+      "source": "/cli/packages/quickstart",
+      "destination": "/workflows/quickstart"
+    },
+    {
+      "source": "/cli/packages/building-workflows",
+      "destination": "/workflows/building-workflows"
+    },
+    {
+      "source": "/cli/packages/package-structure",
+      "destination": "/workflows/building-workflows"
+    },
+    {
       "source": "/platform/plan",
-      "destination": "/migrations"
+      "destination": "/platform/campaigns"
     },
     {
       "source": "/platform/automate",
-      "destination": "/codemod-studio"
+      "destination": "/platform/codemod-studio"
     },
     {
       "source": "/platform/orchestrate",
-      "destination": "/migrations"
+      "destination": "/platform/campaigns"
     },
     {
       "source": "/platform/track",
-      "destination": "/insights"
+      "destination": "/platform/insights"
     },
     {
       "source": "/cli/workflows/quickstart",
-      "destination": "/cli/packages/quickstart"
+      "destination": "/workflows/quickstart"
     },
     {
       "source": "/cli/workflows/package-structure",
-      "destination": "/cli/packages/package-structure"
+      "destination": "/workflows/building-workflows"
     },
     {
       "source": "/cli/workflows/building-workflows",
-      "destination": "/cli/packages/building-workflows"
+      "destination": "/workflows/building-workflows"
     },
     {
       "source": "/cli/workflows",
-      "destination": "/cli/packages/quickstart"
+      "destination": "/workflows/quickstart"
     },
     {
       "source": "/cli/mcp",
@@ -185,31 +237,27 @@
     },
     {
       "source": "/deploying-codemods/cli",
-      "destination": "/cli/cli-reference"
+      "destination": "/cli"
     },
     {
       "source": "/building-codemods/package-requirements",
-      "destination": "/cli/packages/building-workflows"
-    },
-    {
-      "source": "/cli/packages/package-structure",
-      "destination": "/cli/packages/building-workflows"
+      "destination": "/workflows/building-workflows"
     },
     {
       "source": "/building-codemods/codemod2",
-      "destination": "/cli/packages/quickstart"
+      "destination": "/workflows/quickstart"
     },
     {
       "source": "/scanner",
-      "destination": "/insights"
+      "destination": "/platform/insights"
     },
     {
       "source": "/migrations",
-      "destination": "/campaigns"
+      "destination": "/platform/campaigns"
     },
     {
       "source": "/quickstart-enterprise",
-      "destination": "/quickstart"
+      "destination": "/platform/quickstart"
     },
     {
       "source": "/quickstart-oss",

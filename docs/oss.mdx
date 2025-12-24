@@ -15,14 +15,14 @@ Codemods address this by making upgrades less painful.
 ## What Codemod enables
 
 - **Eliminate repetitive migration work** - Codemods handle mechanical changes like renaming APIs, updating imports, and refactoring patterns. Your users focus on the parts that require human judgment.
-- **Handle real-world complexity** - Migrations aren't always simple. [Workflows](/cli/packages/building-workflows) supports [multiple step types](/cli/packages/building-workflows#steps), [manual approval gates](/cli/packages/building-workflows#manual-trigger) for human intervention, and [AI-assisted steps](/cli/packages/building-workflows#ai-step) for non-deterministic tasks.
-- **Distribute through a central registry** - Publish codemods to the [Codemod Registry](/registry) where users discover and run them via CLI or Codemod platform.
+- **Handle real-world complexity** - Migrations aren't always simple. [Workflows](/workflows/building-workflows) supports [multiple step types](/workflows/building-workflows#steps), [manual approval gates](/workflows/building-workflows#manual-trigger) for human intervention, and [AI-assisted steps](/workflows/building-workflows#ai-step) for non-deterministic tasks.
+- **Distribute through a central registry** - Publish codemods to the [Codemod Registry](/platform/registry) where users discover and run them via CLI or Codemod platform.
 
 ## How it works
 
-1. **[Write codemods](/cli/packages/quickstart)** that automate breaking changes using jssg, YAML rules, or multi-step workflows
+1. **[Write codemods](/workflows/quickstart)** that automate breaking changes using jssg, YAML rules, or multi-step workflows
 2. **[Publish to the registry](/publishing)** under your framework's namespace using the CLI or CI/CD
-3. **Users run them** with a single [CLI](/cli/cli-reference) command or through [Codemod platform](/campaigns)
+3. **Users run them** with a single [CLI](/cli) command or through [Codemod platform](/platform/campaigns)
 
 ## Examples
 
@@ -56,9 +56,9 @@ See how other frameworks use Codemod to help their communities upgrade:
 ## Getting started
 
 Codemods can be built using:
-- **[CLI](/cli/cli-reference)** - Scaffold and build locally with `npx codemod init`
+- **[CLI](/cli)** - Scaffold and build locally with `npx codemod init`
 - **[MCP](/model-context-protocol)** - AI-assisted creation in your IDE
-- **[Studio](/codemod-studio)** - Web-based prototyping with Codemod AI
+- **[Studio](/platform/codemod-studio)** - Web-based prototyping with Codemod AI
 
 This guide uses the CLI. The workflow is the same regardless of how you create the codemod.
 
@@ -172,7 +172,7 @@ Once your codemod works locally, publish it so your users can run it.
 </Steps>
 
 <Tip>
-  Use [scoped package names](/registry#package-naming) (e.g., `@nuxt/v3-to-v4`) to group codemods under your framework's namespace.
+  Use [scoped package names](/platform/registry#package-naming) (e.g., `@nuxt/v3-to-v4`) to group codemods under your framework's namespace.
 </Tip>
 
 ### CI/CD and automation
@@ -229,10 +229,10 @@ For ongoing codemod development, use the [migrations template](https://github.co
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="CLI" icon="terminal" href="/cli/cli-reference">
+  <Card title="CLI" icon="terminal" href="/cli">
     Learn more about Codemod CLI.
   </Card>
-  <Card title="Workflows" icon="diagram-project" href="/cli/packages/building-workflows">
+  <Card title="Workflows" icon="diagram-project" href="/workflows/building-workflows">
     Orchestrate complex multi-step migrations.
   </Card>
   <Card title="JSSG" icon="js" href="/jssg/quickstart">
