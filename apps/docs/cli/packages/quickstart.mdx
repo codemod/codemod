@@ -65,7 +65,7 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
   <Step title="Understand an example workflow">
     The generated <code>workflow.yaml</code> will differ depending on the codemod type you select:
 
-    ```yaml Comprehensive workflow including all step types: jssg, ai, yaml, registry, shell
+    ```yaml Comprehensive workflow with all 5 step types: jssg, ai, yaml, registry, shell
     version: "1"
     nodes:
       - id: migrate-analytics
@@ -79,31 +79,20 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
               args:
                 - "legacy-analytics"
                 - "analytics-v2"
-              env:
-                NODE_ENV: production
-              working_dir: "."
-              include:
-                - "**/*.{ts,tsx,js,jsx}"
-              exclude:
-                - "**/*.test.*"
-                - "**/*.spec.*"
 
           # 2) JS ast-grep (jssg): handle higher-signal project-specific patterns
           - name: "Project-specific TS codemod (wrappers + key normalization)"
             js-ast-grep:
               js_file: "scripts/codemods/migrate-analytics-wrappers.ts"
-              base_path: "."
               language: "typescript"
               include:
                 - "src/**/*.{ts,tsx}"
               exclude:
                 - "**/*.test.ts"
-                - "**/*.spec.ts"
 
           # 3) AI step: transform the hard cases the rules miss
           - name: "AI fixups: dynamic calls + edge cases -> analytics.track object form"
             ai:
-              mode: "transform"
               prompt: |
                 You are performing a code migration. Modify files directly.
 
@@ -116,11 +105,8 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
                   - Preserve semantics. event should become getName().
                 2) Non-object props: trackEvent("X", foo)
                   - Convert to properties: foo if foo is object-like, otherwise { value: foo }.
-                3) Spreads and merges: trackEvent("X", { ...a, b: 1 })
-                  - Keep spreads in properties.
-              
+
                 Constraints:
-                - Do not change runtime behavior.
                 - Keep formatting roughly intact (prettier will run later).
                 - If you are unsure about a transformation, add a TODO comment right above it explaining why.
 
@@ -128,12 +114,10 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
           - name: "Apply cleanup rules (YAML ast-grep)"
             ast-grep:
               config_file: "rules/analytics_cleanup.yml"
-              base_path: "."
               include:
                 - "src/**/*.{ts,tsx,js,jsx}"
               exclude:
                 - "**/*.test.*"
-                - "**/*.spec.*"
 
           # 5) Shell command: format after all transformations
           - name: "Format code"
