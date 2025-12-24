@@ -65,52 +65,79 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
   <Step title="Understand an example workflow">
     The generated <code>workflow.yaml</code> will differ depending on the codemod type you select:
 
-    ```yaml Combined (jssg + ai + yaml + registry + shell)
+    ```yaml Comprehensive workflow including all step types: jssg, ai, yaml, registry, shell
     version: "1"
     nodes:
-      - id: run-all
-        name: Combined Example
+      - id: migrate-analytics
+        name: Migrate legacy analytics to analytics.track({ event, properties })
         type: automatic
         steps:
-          # 1) JS ast-grep (jssg)
-          - name: "JS ast-grep codemod"
-            js-ast-grep:
-              js_file: "scripts/codemod.ts"
-              base_path: "."
-              language: "typescript"
-              include:
-                - "**/*.ts"
-                - "**/*.tsx"
-
-          # 2) AI step
-          - name: "AI review"
-            ai:
-              prompt: |
-                Summarize risky changes and suggest tests.
-
-          # 3) YAML ast-grep
-          - name: "Apply YAML ast-grep rules"
-            ast-grep:
-              config_file: "rules/config.yml"
-              base_path: "./src"
-              include:
-                - "**/*.ts"
-              exclude:
-                - "**/*.test.ts"
-
-          # 4) Codemod Registry
-          - name: "Run registry codemod"
+          # 1) Codemod Registry: do the broad, well-defined baseline migration first
+          - name: "Run registry codemod: legacy analytics -> analytics.track"
             codemod:
-              source: "@scope/package"
-              args: ["--flag", "value"]
+              source: "@codemod/migrate-analytics-v2"
+              args:
+                - "legacy-analytics"
+                - "analytics-v2"
               env:
                 NODE_ENV: production
               working_dir: "."
+              include:
+                - "**/*.{ts,tsx,js,jsx}"
+              exclude:
+                - "**/*.test.*"
+                - "**/*.spec.*"
 
-          # 5) Shell command
+          # 2) JS ast-grep (jssg): handle higher-signal project-specific patterns
+          - name: "Project-specific TS codemod (wrappers + key normalization)"
+            js-ast-grep:
+              js_file: "scripts/codemods/migrate-analytics-wrappers.ts"
+              base_path: "."
+              language: "typescript"
+              include:
+                - "src/**/*.{ts,tsx}"
+              exclude:
+                - "**/*.test.ts"
+                - "**/*.spec.ts"
+
+          # 3) AI step: transform the hard cases the rules miss
+          - name: "AI fixups: dynamic calls + edge cases -> analytics.track object form"
+            ai:
+              mode: "transform"
+              prompt: |
+                You are performing a code migration. Modify files directly.
+
+                Goal:
+                Convert any remaining legacy analytics calls into:
+                  analytics.track({ event: <string>, properties: <object> })
+
+                Handle these hard cases:
+                1) Dynamic event names: trackEvent(getName(), props)
+                  - Preserve semantics. event should become getName().
+                2) Non-object props: trackEvent("X", foo)
+                  - Convert to properties: foo if foo is object-like, otherwise { value: foo }.
+                3) Spreads and merges: trackEvent("X", { ...a, b: 1 })
+                  - Keep spreads in properties.
+              
+                Constraints:
+                - Do not change runtime behavior.
+                - Keep formatting roughly intact (prettier will run later).
+                - If you are unsure about a transformation, add a TODO comment right above it explaining why.
+
+          # 4) YAML ast-grep: clean up simple leftovers consistently (fast + deterministic)
+          - name: "Apply cleanup rules (YAML ast-grep)"
+            ast-grep:
+              config_file: "rules/analytics_cleanup.yml"
+              base_path: "."
+              include:
+                - "src/**/*.{ts,tsx,js,jsx}"
+              exclude:
+                - "**/*.test.*"
+                - "**/*.spec.*"
+
+          # 5) Shell command: format after all transformations
           - name: "Format code"
-            run: npx prettier --write "**/*.{ts,tsx,js,jsx}"
-
+            run: npx prettier --write "src/**/*.{ts,tsx,js,jsx}"
     ```
 
     Learn more about building workflows [here](/cli/packages/building-workflows).
