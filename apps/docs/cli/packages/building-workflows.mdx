@@ -345,36 +345,70 @@ nodes:
 
 Steps are the atomic actions inside a node. They run sequentially and each step performs one transformation or action using a specific engine:
 
-- [`js-ast-grep`](#jssg-js-ast-grep-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
+- [`js-ast-grep`](#jssg-step) - **Primary transformation engine**: JavaScript/TypeScript codemods using ast-grep
 - [`ast-grep`](#yaml-ast-grep-step) - Declarative pattern matching with ast-grep YAML rules
 - [`run`](#shell-command-step) - Run shell commands (e.g. setup, cleanup, invoking external tools)
 - [`ai`](#ai-step) - LLM-powered transformations and tasks (e.g. non-deterministic transformations, code reviews, summarization)
 - [`codemod`](#codemod-registry-step) - Run codemods from the Codemod Registry
 
-To use a jssg step:
+#### JSSG step
+
+Executes a JavaScript/TypeScript codemod using ast-grep for pattern matching and AST manipulation. JSSG is the primary transformation engine for Codemod, combining the speed of ast-grep with the flexibility of JavaScript.
+
+JSSG steps are useful for:
+
+- Complex transformations requiring conditional logic or loops
+- Cross-file coordination or context-aware changes
+- Custom AST manipulations beyond simple find/replace
+- Transforms that need access to workflow parameters or state
+
+To use a JSSG step:
 
 <Steps>
-  <Step title="Create a jssg codemod:">
-    Under `scripts/` folder, create a new jssg codemod.
+  <Step title="Create a JSSG codemod">
+    Create a JS/TS file under `scripts/` that exports a transform function. The function receives a parsed file (`SgRoot`) and returns modified code or `null` for no changes.
+    
     ```ts scripts/codemod.ts
-    export default function transform(root: SgRoot<TSX>, options) {
-      // Your transform logic here
-    }
+    import type { Transform } from "codemod:ast-grep";
+    import type TSX from "codemod:ast-grep/langs/tsx";
+
+    const transform: Transform<TSX> = (root) => {
+      const rootNode = root.root();
+
+      const matches = rootNode.findAll({
+        rule: { pattern: "console.log($$$ARGS)" }
+      });
+
+      if (matches.length === 0) return null;
+
+      const edits = matches.map((node) => {
+        const args = node.getMultipleMatches("ARGS")
+          .map(arg => arg.text())
+          .join(", ");
+        return node.replace(`logger.log(${args})`);
+      });
+
+      return rootNode.commitEdits(edits);
+    };
+
+    export default transform;
     ```
 
-    Learn more about how to write jssg codemods: [jssg documentation](/jssg/quickstart).
+    Learn more: [JSSG Quickstart](/jssg/quickstart) and [API Reference](/jssg/reference).
   </Step>
-  <Step title="Add a jssg step to your workflow:">
+  <Step title="Add a JSSG step to your workflow">
     ```yaml workflow.yaml
     steps:
-      - name: Run jssg codemod
+      - name: Replace console.log with logger
         js-ast-grep:
           js_file: "scripts/codemod.ts"
           base_path: "."
-          language: "typescript"
+          language: "tsx"
           include:
             - "**/*.ts"
             - "**/*.tsx"
+          exclude:
+            - "**/*.test.ts"
     ```
 
     <Accordion title="Available parameters">
@@ -389,7 +423,7 @@ To use a jssg step:
       - name: Transform only for specific shard
         if: params.shardingMethod == "directory"
         js-ast-grep:
-          js_file: "src/codemod.ts"
+          js_file: "scripts/codemod.ts"
           language: "tsx"
       ```
       
