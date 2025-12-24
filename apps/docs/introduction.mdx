@@ -3,78 +3,87 @@ title: Introduction
 sidebarTitle: 'Intro to Codemod'
 ---
 
-Codemod provides tools and infrastructure to automate repetitive or large-scale codebase remediation from end to end. You can deploy task-specific codemods or micro-agents—workflows that combine codemods and AI—to handle complex migrations and upgrades. Codemod supports every stage of the process: planning, reliable code transformations, orchestrating changes across teams, safe deployments across repositories, and tracking progress with leadership dashboards.
+Codemod provides tools and infrastructure to automate repetitive or large-scale code maintenance projects end-to-end, effectively making them invisible to software teams. 
 
+Some use cases include:
+
+<CardGroup cols={3}>
+  <Card title="Framework or library upgrades" icon="arrow-up">
+    React 18 to 19, Node.js end-of-life upgrades, Nuxt 3 to 4, ESLint 8 to 9, etc.
+  </Card>
+
+  <Card title="Compliance remediation" icon="shield">
+    Driving adoption of policy-by-design best practices for GDPR, SOC 2, and more.  
+  </Card>
+
+  <Card title="Design system migrations" icon="exchange">
+    Radix UI to Base UI, Tailwind CSS to shadcn/ui, Material UI v6 to v7, etc.
+  </Card>
+
+  <Card title="Internationalization (i18n)" icon="globe">
+    Replacing hard-coded strings with translation keys to support multiple languages.
+  </Card>
+
+  <Card title="Codebase sanitization after M&A or spin-off" icon="code-merge">
+    Unifying codebases after an M&A or sanitizing them after a spin-off.
+  </Card>
+
+  <Card title="Dependency management" icon="link">
+    Auditing, upgrading, and standardizing dependencies across hundreds of repos.  
+  </Card>
+</CardGroup>
+
+## Codemod complements your coding agents
+Codemod pairs compiler-aware code graphs with AI to complement your coding agents across the SDLC, from planning and large-scale code transformations to orchestration, safe rollouts, and leadership visibility.
+Its automations are fast, reliable, reusable, easy to deploy, and proven at enterprise scale.
 <img 
   className="block dark:hidden" 
-  src="/images/intro/intro-platform-light.png" 
+  src="/images/intro/vertical-vs-horizontal-light.png" 
   alt="Light mode interface"
 />
 
 <img 
   className="hidden dark:block" 
-  src="/images/intro/intro-platform-dark.png" 
+  src="/images/intro/vertical-vs-horizontal-dark.png" 
   alt="Dark mode interface"
 />
 
-## What Codemod Helps You Solve
+## Codemod platform core features
 
-Codemod Platform enables large engineering teams to automate and orchestrate code transformations at scale. Common use cases include:
-
-<CardGroup cols={2}>
-  <Card title="Framework & library upgrades" icon="arrow-up">
-    Automate upgrades to newer versions of frameworks (React, Next.js, Vue, etc.) across your entire codebase with Campaigns and track adoption with Insights.
+<CardGroup cols={3}>
+  <Card title="Insights" icon="chart-simple" href="/insights">
+    Plan & track projects with confidence.
   </Card>
 
-  <Card title="Security patches & compliance" icon="shield">
-    Apply security patches and compliance fixes across multiple repositories simultaneously, ensuring consistent updates organization-wide.
+  <Card title="Campaigns" icon="arrow-up-right-dots" href="/campaigns">
+    Orchestrate migrations across teams and repos.
   </Card>
 
-  <Card title="API migrations & deprecations" icon="exchange">
-    Migrate from deprecated APIs to new versions by tracking usage patterns with Insights, then applying changes with Campaigns.
+  <Card title="Registry" icon="globe" href="/registry">
+    Find public, private, or pro codemods.
   </Card>
 
-  <Card title="Internationalization (i18n)" icon="globe">
-    Implement i18n patterns across your codebase using multi-step workflows to extract strings, configure translations, and update code patterns.
+  <Card title="Studio" icon="wrench" href="/codemod-studio">
+    Generate codemods with AI.
   </Card>
 
-  <Card title="Tech unification after M&A" icon="code-merge">
-    Standardize code patterns, module systems (CommonJS → ESM), and coding standards across merged codebases.
+  <Card title="MCP" icon="screwdriver-wrench" href="/model-context-protocol">
+    Give your AI tools for codemod creation.
   </Card>
 
-  <Card title="Dependency consistency" icon="link">
-    Maintain consistency across repositories, apply lint fixes, and perform other sweeping codebase-wide maintenance tasks.
+  <Card title="CLI" icon="terminal" href="/cli">
+    [open-source] Scaffold or run codemods locally.
   </Card>
 </CardGroup>
+
 
 ## Who it's for
 
-<Card title="For Enterprise Engineering Teams" icon="people-group" href="/quickstart">
-  Orchestrate migrations at scale using Campaigns, Insights, and Pro codemods.
-  
-  <b>Best for:</b> Platform teams, I18n engineers
-  Security engineers, Tech leads, Engineering leaders and CTOs
+<Card title="Enterprise engineering teams" icon="people-group" href="/quickstart">
+  Platform engineers, security engineers, i18n engineers, or engineering leaders who want to automate code migrations at scale and with confidence.
 </Card>
 
-<Card title="For Framework Builders & OSS Community" icon="github-alt" href="/oss">
-  Build and publish codemods for your community using CLI, MCP, and the public registry.  
-  
-  <b>Best for:</b> Framework maintainers, open-source contributors, individual developers building migration tools.
+<Card title="Open-source maintainers" icon="github-alt" href="/oss">
+  Framework or library builders who want to create an exceptional upgrade experience for their users.
 </Card>
 
-## Quick Links
-
-<CardGroup cols={2}>
-  <Card title="Get started with CLI" icon="terminal" href="/cli/cli-reference">
-    Build and run Codemod packages locally.
-  </Card>
-  <Card title="Codemod Studio" icon="bolt" href="/codemod-studio">
-    Generate codemods with AI.
-  </Card>
-  <Card title="Launch a Campaign" icon="users-rays" href="/campaigns">
-    Orchestrate multi-repo migrations.
-  </Card>
-  <Card title="See Insights" icon="chart-line-up-down" href="/insights">
-    Track modernisation metrics over time.
-  </Card>
-</CardGroup>
