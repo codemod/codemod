@@ -733,27 +733,6 @@ impl Engine {
             .await
     }
 
-    /// Add a log message to a task
-    pub async fn add_task_log(&self, task_id: Uuid, log_message: String) -> Result<()> {
-        // Use a single lock for both get and save operations to minimize lock contention
-        let mut adapter = self.state_adapter.lock().await;
-        let mut current_task = adapter.get_task(task_id).await?;
-
-        // If the new log message starts with "Processing file:", check if the last log
-        // also starts with "Processing file:" and remove it to avoid spam
-        if log_message.starts_with("Processing file:") {
-            if let Some(last_log) = current_task.logs.last() {
-                if last_log.starts_with("Processing file:") {
-                    current_task.logs.pop();
-                }
-            }
-        }
-
-        current_task.logs.push(log_message);
-        adapter.save_task(&current_task).await?;
-        Ok(())
-    }
-
     /// Validate codemod dependencies to prevent infinite recursion cycles
     ///
     /// This method recursively checks all codemod dependencies in a workflow to ensure

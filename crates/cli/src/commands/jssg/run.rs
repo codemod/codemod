@@ -1,4 +1,4 @@
-use crate::engine::create_progress_callback_with_engine;
+use crate::engine::create_progress_callback;
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
@@ -130,7 +130,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let config = CodemodExecutionConfig {
         pre_run_callback: Some(pre_run_callback),
-        progress_callback: Arc::new(Some(create_progress_callback_with_engine(None))),
+        progress_callback: Arc::new(Some(create_progress_callback())),
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,

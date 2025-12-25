@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::{self, Read, Stdout, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -6,10 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use butterflow_core::engine::Engine;
-use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_models::{Task, TaskStatus, WorkflowRun, WorkflowStatus};
 use clap::Args;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::engine::create_engine;
 use crossterm::{
@@ -26,7 +23,6 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 /// Run workflow resume command in a PTY (pseudo-terminal) for full interactivity
@@ -155,50 +151,6 @@ fn run_resume_command_in_terminal(
 
     Ok(())
 }
-
-fn create_tui_capabilities_callback(
-    security_prompt_sender: SecurityPromptSender,
-) -> SecurityCallback {
-    let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
-    Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
-        let checked = checked_capabilities.lock().unwrap();
-        let need_to_check = config
-            .capabilities
-            .as_ref()
-            .unwrap_or(&HashSet::new())
-            .iter()
-            .filter(|c| !checked.contains(c))
-            .cloned()
-            .collect::<Vec<_>>();
-        drop(checked);
-        if need_to_check.is_empty() {
-            return Ok(());
-        }
-        let capabilities_str = need_to_check
-            .iter()
-            .map(|c| format!("{c:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut sender = security_prompt_sender.lock().unwrap();
-            *sender = Some((capabilities_str, tx));
-        }
-        let mut checked = checked_capabilities.lock().unwrap();
-        checked.extend(need_to_check);
-        drop(checked);
-        let response = rx.blocking_recv().unwrap_or(false);
-        {
-            let mut sender = security_prompt_sender.lock().unwrap();
-            *sender = None;
-        }
-        if !response {
-            return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
-        }
-        Ok(())
-    }))
-}
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Number of workflow runs to show
@@ -237,18 +189,10 @@ enum Popup {
     ConfirmCancel(Uuid),
     ConfirmTrigger(TriggerAction),
     ConfirmQuit,
-    SecurityPrompt(String, oneshot::Sender<bool>),
     StatusMessage(String, Instant),
     Error(String),
     Help,
 }
-
-/// Security callback type for codemod execution
-type SecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
-
-/// Security prompt sender type
-type SecurityPromptSender = Arc<Mutex<Option<(String, oneshot::Sender<bool>)>>>;
 
 /// Application state
 struct App {
@@ -288,9 +232,6 @@ struct App {
     // Track workflow run being monitored for completion
     monitoring_workflow: Option<Uuid>,
 
-    // Security prompt state
-    security_prompt_sender: Option<SecurityPromptSender>,
-
     // Terminal view state - task being shown in terminal
     terminal_task: Option<Uuid>,
 
@@ -328,7 +269,6 @@ impl App {
             terminal_scroll: 0,
             popup: Popup::None,
             should_quit: false,
-            security_prompt_sender: None,
             monitoring_task: None,
             monitoring_workflow: None,
             terminal_task: None,
@@ -862,21 +802,6 @@ impl App {
         match &mut self.popup {
             Popup::StatusMessage(_, _) | Popup::Help | Popup::Error(_) => {
                 self.popup = Popup::None;
-                return Ok(());
-            }
-            Popup::SecurityPrompt(_, response_sender) => {
-                let should_accept = matches!(key, KeyCode::Char('y') | KeyCode::Char('Y'));
-                let should_reject =
-                    matches!(key, KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc);
-                if should_accept || should_reject {
-                    let response = std::mem::replace(response_sender, {
-                        let (tx, _) = oneshot::channel();
-                        tx
-                    });
-                    let _ = response.send(should_accept);
-                    self.popup = Popup::None;
-                    self.security_prompt_sender = None;
-                }
                 return Ok(());
             }
             Popup::ConfirmCancel(run_id) => {
@@ -1814,7 +1739,6 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     // Styles
-    // accent_color removed as it was unused, using literal colors directly or label/value styles
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().add_modifier(Modifier::BOLD);
 
@@ -2296,47 +2220,6 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .alignment(ratatui::layout::Alignment::Center);
             f.render_widget(popup, popup_area);
         }
-        Popup::SecurityPrompt(capabilities, _) => {
-            let popup_area = centered_rect(70, 40, f.area());
-            f.render_widget(Clear, popup_area);
-
-            let text = vec![
-                Line::from(""),
-                Line::styled(
-                    "🛡️  Security Notice",
-                    Style::default().fg(Color::Red).bold(),
-                ),
-                Line::from(""),
-                Line::from(format!(
-                    "This action will grant access to `{}`, which may perform sensitive operations.",
-                    capabilities
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Are you sure you want to continue?",
-                    Style::default().fg(Color::Yellow),
-                )),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("y", Style::default().fg(Color::Green).bold()),
-                    Span::raw(": Yes, continue  "),
-                    Span::styled("n", Style::default().fg(Color::Red).bold()),
-                    Span::raw(": No, abort"),
-                ]),
-            ];
-
-            let popup = Paragraph::new(text)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .title(" Security Warning ")
-                        .border_style(Style::default().fg(Color::Red)),
-                )
-                .alignment(ratatui::layout::Alignment::Center)
-                .wrap(Wrap { trim: true });
-            f.render_widget(popup, popup_area);
-        }
         Popup::Error(msg) => {
             let popup_area = centered_rect(70, 40, f.area());
             f.render_widget(Clear, popup_area);
@@ -2511,17 +2394,6 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             app.refresh().await?;
         }
 
-        // Check for security prompt
-        if let Some(sender) = &app.security_prompt_sender {
-            if let Ok(mut guard) = sender.lock() {
-                if let Some((capabilities_str, response_tx)) = guard.take() {
-                    if let Popup::None = app.popup {
-                        app.popup = Popup::SecurityPrompt(capabilities_str, response_tx);
-                    }
-                }
-            }
-        }
-
         // Render
         terminal.draw(|f| ui(f, app))?;
 
@@ -2548,19 +2420,13 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 
 /// Initialize and run the TUI
 pub async fn handler(args: &Command) -> Result<()> {
-    let security_prompt_sender: SecurityPromptSender = Arc::new(Mutex::new(None));
-    let security_prompt_sender_clone = security_prompt_sender.clone();
-
-    let tui_callback = create_tui_capabilities_callback(security_prompt_sender_clone);
-
     // Create a minimal engine first - we'll recreate it with proper workflow path when needed
     // For now, use current directory as placeholder
     let workflow_file_path = std::env::current_dir()?;
     let target_path = std::env::current_dir()?;
 
     // Create engine using create_engine like resume.rs
-    // We'll use default values and override capabilities_security_callback
-    let (_, mut config) = create_engine(
+    let (_, config) = create_engine(
         workflow_file_path,
         target_path,
         false, // dry_run
@@ -2571,8 +2437,6 @@ pub async fn handler(args: &Command) -> Result<()> {
         false, // no_interactive - TUI is interactive
     )?;
 
-    // Override capabilities_security_callback with TUI callback
-    config.capabilities_security_callback = Some(tui_callback);
     let engine = Engine::with_workflow_run_config(config);
 
     let refresh_interval = if args.refresh_interval == 0 {
@@ -2582,7 +2446,6 @@ pub async fn handler(args: &Command) -> Result<()> {
     };
 
     let mut app = App::new(engine, args.limit, refresh_interval);
-    app.security_prompt_sender = Some(security_prompt_sender);
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
