@@ -13,6 +13,7 @@ use std::{
         Arc,
     },
 };
+use uuid::Uuid;
 
 type PreRunCallbackFn = Box<dyn Fn(&Path, bool, &CodemodExecutionConfig) + Send + Sync>;
 
@@ -71,11 +72,11 @@ impl CodemodExecutionConfig {
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
     {
-        self.execute_with_task_id("main", callback)
+        self.execute_with_task_id(&Uuid::new_v4(), callback)
     }
 
     /// Execute the codemod with a specific task ID for progress tracking
-    pub fn execute_with_task_id<F>(&self, task_id: &str, callback: F) -> Result<(), Box<dyn Error>>
+    pub fn execute_with_task_id<F>(&self, task_id: &Uuid, callback: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
     {
@@ -90,7 +91,13 @@ impl CodemodExecutionConfig {
         let total_files = self.count_files(&search_base, &globs)?;
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
-            (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
+            (progress_cb.callback)(
+                task_id.to_string().as_str(),
+                "start",
+                "counting",
+                Some(&total_files),
+                &0,
+            );
         }
 
         let num_threads = self.threads.unwrap_or_else(|| {
@@ -105,7 +112,7 @@ impl CodemodExecutionConfig {
             .build_parallel();
 
         let shared_context = Arc::new(SharedExecutionContext {
-            task_id: Arc::from(task_id),
+            task_id: Arc::from(task_id.to_string().as_str()),
             progress_callback: self.progress_callback.clone(),
             callback: Arc::new(callback),
             config: self,
@@ -157,7 +164,13 @@ impl CodemodExecutionConfig {
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             let final_count = shared_context.processed_count.load(Ordering::Relaxed);
-            (progress_cb.callback)(task_id, "", "finish", Some(&total_files), &final_count);
+            (progress_cb.callback)(
+                task_id.to_string().as_str(),
+                "",
+                "finish",
+                Some(&total_files),
+                &final_count,
+            );
         }
 
         Ok(())

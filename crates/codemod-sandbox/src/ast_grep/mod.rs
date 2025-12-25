@@ -214,8 +214,10 @@ fn jssg_transform_rjs<'js>(
         .map(|l| l.to_string())
         .unwrap_or_default();
 
-    let run_options = build_transform_options(&ctx, params, &lang_str, matrix_values, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
+    let run_options = build_transform_options(&ctx, params, &lang_str, matrix_values, None, None)
+        .map_err(|e| {
+        Exception::throw_message(&ctx, &format!("Failed to build options: {e}"))
+    })?;
 
     // Call the transform function
     let result_val: Value<'js> = transform_fn.call((sg_root, run_options))?;

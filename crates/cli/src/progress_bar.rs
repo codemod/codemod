@@ -60,8 +60,11 @@ pub struct ProgressUpdate {
 }
 
 pub type ProgressReporter = Arc<Box<dyn Fn(ProgressUpdate) + Send + Sync + 'static>>;
+pub type TaskLogCallback = Arc<Box<dyn Fn(String, String) + Send + Sync + 'static>>;
 
-pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
+pub fn create_multi_progress_reporter(
+    task_log_callback: Option<TaskLogCallback>,
+) -> (ProgressReporter, Instant) {
     let started = Instant::now();
 
     // Define styles for different progress bar states
@@ -82,10 +85,12 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
     // Enable stderr output
     multi_progress.set_draw_target(indicatif::ProgressDrawTarget::stderr());
 
+    let task_log_callback = task_log_callback.clone();
     let reporter: ProgressReporter = Arc::new(Box::new(move |update: ProgressUpdate| {
         let bars = Arc::clone(&progress_bars);
         let mp = Arc::clone(&multi_progress);
         let task_id = update.task_id.clone();
+        let task_log_callback = task_log_callback.clone();
 
         match update.action {
             ProgressAction::Start { total_files } => {
@@ -110,7 +115,17 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                     pb
                 };
 
-                bars_lock.insert(task_id, pb);
+                bars_lock.insert(task_id.clone(), pb);
+
+                // Log to task
+                if let Some(ref callback) = task_log_callback {
+                    let log_message = if let Some(total) = total_files {
+                        format!("Starting task: processing {} files ...", total)
+                    } else {
+                        "Starting task ...".to_string()
+                    };
+                    callback(task_id.clone(), log_message);
+                }
             }
 
             ProgressAction::Update { current_file } => {
@@ -136,8 +151,16 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
             ProgressAction::Finish { message } => {
                 let mut bars_lock = bars.lock().unwrap();
                 if let Some(pb) = bars_lock.remove(&task_id) {
-                    let finish_message = message.unwrap_or_else(|| "✅ Completed".to_string());
+                    let finish_message = message
+                        .clone()
+                        .unwrap_or_else(|| "✅ Completed".to_string());
                     pb.finish_with_message(style(finish_message).green().to_string());
+                }
+
+                // Log to task
+                if let Some(ref callback) = task_log_callback {
+                    let log_message = message.unwrap_or_else(|| "Task completed".to_string());
+                    callback(task_id.clone(), log_message);
                 }
             }
         }

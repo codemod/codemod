@@ -19,6 +19,7 @@ use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,9 @@ pub struct ModifiedResult {
     pub content: String,
     pub rename_to: Option<PathBuf>,
 }
+
+#[cfg(feature = "native")]
+use gag::BufferRedirect;
 
 /// Result of executing a codemod on a single file
 #[derive(Debug, Clone)]
@@ -158,6 +162,7 @@ pub struct JssgExecutionOptions<'a, R> {
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: Option<&'a Path>,
+    pub console_log_collector: Option<Box<dyn FnMut(String) + Send + Sync>>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -181,17 +186,31 @@ where
 
     let params: HashMap<String, serde_json::Value> = options.params.unwrap_or_default();
 
+    // Wrap console_log_collector in Arc<Mutex<...>> for use in closures
+    let console_log_collector = options
+        .console_log_collector
+        .map(|collector| Arc::new(Mutex::new(collector)));
+
     // Initialize QuickJS runtime and context
-    let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
-        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-            message: format!("Failed to create AsyncRuntime: {e}"),
-        },
+    let runtime = AsyncRuntime::new().map_err(|e| {
+        let error_msg = format!("Failed to create AsyncRuntime: {e}");
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: error_msg,
+            },
+        }
     })?;
 
     // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
 
     // Set up built-in modules
+    // Convert Arc<Mutex<...>> back to Option<Box<dyn FnMut(String) + Send + Sync>> for LlrtModuleBuilder
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
         for capability in capabilities {
@@ -297,24 +316,46 @@ where
             },
         })?;
 
+        let console_log_collector = console_log_collector.clone();
         let execution = async {
+            // Capture stdout during JSSG execution
+            // Note: This may fail in parallel execution contexts, so we handle it gracefully
+            #[cfg(feature = "native")]
+            let mut redirect = BufferRedirect::stdout().ok();
+
             let module = Module::declare(ctx.clone(), "__codemod_entry.js", js_code)
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: format!("Failed to declare module: {e}"),
-                    },
+                .map_err(|e| {
+                    let error_msg = format!("Failed to declare module: {e}");
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             // Evaluate module.
             let (evaluated, _) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to evaluate module: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
+                })?;
 
             while ctx.execute_pending_job() {}
 
@@ -322,10 +363,18 @@ where
             let namespace = evaluated
                 .namespace()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get namespace: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             let file_path_str = options.file_path.to_string_lossy().to_string();
@@ -335,10 +384,18 @@ where
                     Some(file_path_str.clone()),
                     options.semantic_provider.clone(),
                     Some(file_path_str), // Pass current file path for write() validation
-                ).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                ).map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to parse content: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             // Keep a reference to read rename_to after JS execution
@@ -346,10 +403,18 @@ where
 
             // Calculate matches inside the JS context
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
-                let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                let root_node = parsed_content.root(ctx.clone()).map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get root node: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
                 let ast_matches: Vec<_> = root_node.inner_node.dfs()
                     .filter_map(|node| selector_config.matcher.match_node(node))
@@ -370,40 +435,93 @@ where
 
             let language_str = options.language.to_string();
 
+            let console_log_collector_options = console_log_collector.clone();
             let run_options_qjs = build_transform_options(
                 &ctx,
                 params,
                 &language_str,
                 options.matrix_values,
                 matches,
+                console_log_collector_options
             )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get executeCodemod function: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             // Call it and return value.
             let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
+                let error_msg = e.to_string();
+                if let Some(ref collector) = console_log_collector {
+                    if let Ok(mut collector) = collector.lock() {
+                        collector(format!("ERROR: Failed to call executeCodemod: {}", error_msg));
+                    }
+                }
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
+                        message: error_msg,
                     },
                 }
             })?;
             let result_obj = maybe_promise(result_obj_promise)
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to resolve promise: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
+            // Flush stdout before reading captured output
+            #[cfg(feature = "native")]
+            if let Some(ref mut redirect) = redirect {
+                std::io::stdout().flush().ok();
+                
+                // Read captured stdout output
+                let mut captured = String::new();
+                if let Err(e) = redirect.read_to_string(&mut captured) {
+                    let error_msg = format!("Failed to read captured stdout: {e}");
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: {}", error_msg));
+                        }
+                    }
+                } else if !captured.is_empty() {
+                    // Pass captured stdout to console_log_collector line by line
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            for line in captured.lines() {
+                                collector(line.to_string());
+                            }
+                            // If captured ends with newline, also send empty line for last newline
+                            if captured.ends_with('\n') {
+                                collector(String::new());
+                            }
+                        }
+                    }
+                }
+            }
             let primary = process_transform_result(
                 &result_obj,
                 &sg_root_inner,
@@ -427,6 +545,7 @@ pub struct SimpleJsExecutionOptions<'a, R> {
     pub resolver: Arc<R>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    pub console_log_collector: Option<Box<dyn FnMut(String) + Send + Sync>>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -449,12 +568,27 @@ where
         script_name = script_name
     );
 
-    let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
-        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-            message: format!("Failed to create AsyncRuntime: {e}"),
-        },
+    // Wrap console_log_collector in Arc<Mutex<...>> for use in closures
+    let console_log_collector = options
+        .console_log_collector
+        .map(|collector| Arc::new(Mutex::new(collector)));
+
+    // Initialize QuickJS runtime and context
+    let runtime = AsyncRuntime::new().map_err(|e| {
+        let error_msg = format!("Failed to create AsyncRuntime: {e}");
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: error_msg,
+            },
+        }
     })?;
 
+    // Convert Arc<Mutex<...>> back to Option<Box<dyn FnMut(String) + Send + Sync>> for LlrtModuleBuilder
     let mut module_builder = LlrtModuleBuilder::build();
     module_builder.enable_fetch();
     module_builder.enable_fs();
@@ -479,32 +613,61 @@ where
         )
         .await;
 
-    let context = AsyncContext::full(&runtime)
-        .await
-        .map_err(|e| ExecutionError::Runtime {
+    let context = AsyncContext::full(&runtime).await.map_err(|e| {
+        let error_msg = format!("Failed to create AsyncContext: {e}");
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ContextCreationFailed {
-                message: format!("Failed to create AsyncContext: {e}"),
+                message: error_msg,
             },
-        })?;
+        }
+    })?;
+
+    // Clone Arc for use in closure
+    let console_log_collector_clone = console_log_collector.clone();
 
     let metrics_context = options.metrics_context.clone();
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
+let console_log_collector = console_log_collector_clone.clone();
+
         if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
+            ctx.store_userdata(metrics_ctx.clone()).map_err(|e|  {
+                let error_msg = format!("Failed to store MetricsContext: {:?}", e);
+                if let Some(ref collector) = console_log_collector {
+                    if let Ok(mut collector) = collector.lock() {
+                        collector(format!("ERROR: {}", error_msg));
+                    }
+                }
+    
+                ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: error_msg,
                 },
+            }
             })?;
         }
 
-        global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to attach global modules: {e}"),
-            },
+        global_attachment.attach(&ctx).map_err(|e| {
+            let error_msg = format!("Failed to attach global modules: {e}");
+            if let Some(ref collector) = console_log_collector {
+                if let Ok(mut collector) = collector.lock() {
+                    collector(format!("ERROR: {}", error_msg));
+                }
+            }
+            ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: error_msg,
+                },
+            }
         })?;
 
+        let console_log_collector = console_log_collector.clone();
         let execution = async {
             // Place the entry module in the same directory as the script for proper resolution
             let entry_module_path = options
@@ -518,20 +681,36 @@ where
 
             let module = Module::declare(ctx.clone(), entry_module_name, js_code)
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: format!("Failed to declare module: {e}"),
-                    },
+                .map_err(|e| {
+                    let error_msg = format!("Failed to declare module: {e}");
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             // Evaluate module
             let _ = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to evaluate module: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             while ctx.execute_pending_job() {}
@@ -623,6 +802,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -671,6 +851,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -719,6 +900,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -767,6 +949,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -807,6 +990,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -852,6 +1036,7 @@ function example() {
             metrics_context: None,
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -958,6 +1143,7 @@ function example() {
             metrics_context: Some(metrics_ctx.clone()),
             test_mode: false,
             target_directory: None,
+            console_log_collector: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;

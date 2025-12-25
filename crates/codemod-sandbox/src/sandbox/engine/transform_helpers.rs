@@ -5,7 +5,7 @@ use crate::sandbox::errors::ExecutionError;
 use rquickjs::{Ctx, IntoJs, Object, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// How to check whether content was modified
 pub enum ModificationCheck<'a> {
@@ -19,46 +19,74 @@ pub enum ModificationCheck<'a> {
 /// Build the JS `options` object passed to the transform function.
 ///
 /// Creates an object with: `{ params, language, matches, matrixValues }`
+type ConsoleLogCollectorType = Arc<Mutex<Box<dyn FnMut(String) + Send + Sync>>>;
 pub fn build_transform_options<'js>(
     ctx: &Ctx<'js>,
     params: HashMap<String, serde_json::Value>,
     language: &str,
     matrix_values: Option<HashMap<String, serde_json::Value>>,
     matches: Option<Vec<SgNodeRjs<'js>>>,
+    console_log_collector: Option<ConsoleLogCollectorType>,
 ) -> Result<Value<'js>, ExecutionError> {
-    let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-            message: e.to_string(),
-        },
+    let run_options = Object::new(ctx.clone()).map_err(|e| {
+        let error_msg = e.to_string();
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: error_msg,
+            },
+        }
     })?;
 
     let params_js = params
         .into_iter()
         .map(|(k, v)| (k, JsValue(v)))
         .collect::<HashMap<String, JsValue>>();
-    run_options
-        .set("params", params_js)
-        .map_err(|e| ExecutionError::Runtime {
+    run_options.set("params", params_js).map_err(|e| {
+        let error_msg = e.to_string();
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: Failed to set params: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
+                message: error_msg,
             },
-        })?;
+        }
+    })?;
 
-    run_options
-        .set("language", language)
-        .map_err(|e| ExecutionError::Runtime {
+    run_options.set("language", language).map_err(|e| {
+        let error_msg = e.to_string();
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: Failed to set language: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
+                message: error_msg,
             },
-        })?;
+        }
+    })?;
 
-    run_options
-        .set("matches", matches)
-        .map_err(|e| ExecutionError::Runtime {
+    run_options.set("matches", matches).map_err(|e| {
+        let error_msg = e.to_string();
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: Failed to set matches: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
+                message: error_msg,
             },
-        })?;
+        }
+    })?;
 
     let matrix_values_js = matrix_values.map(|input| {
         input
@@ -69,19 +97,33 @@ pub fn build_transform_options<'js>(
 
     run_options
         .set("matrixValues", matrix_values_js)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if let Some(ref collector) = console_log_collector {
+                if let Ok(mut collector) = collector.lock() {
+                    collector(format!("ERROR: Failed to set matrix values: {}", error_msg));
+                }
+            }
+            ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: error_msg,
+                },
+            }
         })?;
 
-    run_options
-        .into_js(ctx)
-        .map_err(|e| ExecutionError::Runtime {
+    run_options.into_js(ctx).map_err(|e| {
+        let error_msg = e.to_string();
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
+                message: error_msg,
             },
-        })
+        }
+    })
 }
 
 /// Process the result value returned by a transform function.
