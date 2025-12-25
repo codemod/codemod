@@ -504,7 +504,7 @@ async fn test_run_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -530,7 +530,7 @@ async fn test_get_workflow_status() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -552,7 +552,7 @@ async fn test_get_tasks() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow.clone(), params, None, None)
+        .run_workflow(workflow.clone(), params, None, None, None)
         .await
         .unwrap();
 
@@ -580,11 +580,11 @@ async fn test_list_workflow_runs() {
     let params = HashMap::new();
 
     let workflow_run_id1 = engine
-        .run_workflow(workflow.clone(), params.clone(), None, None)
+        .run_workflow(workflow.clone(), params.clone(), None, None, None)
         .await
         .unwrap();
     let workflow_run_id2 = engine
-        .run_workflow(workflow.clone(), params.clone(), None, None)
+        .run_workflow(workflow.clone(), params.clone(), None, None, None)
         .await
         .unwrap();
 
@@ -612,7 +612,7 @@ async fn test_cancel_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -636,7 +636,7 @@ async fn test_manual_trigger_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -685,7 +685,7 @@ async fn test_manual_node_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -735,7 +735,7 @@ async fn test_matrix_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -765,7 +765,7 @@ async fn test_template_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -804,7 +804,7 @@ async fn test_trigger_all() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -973,6 +973,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -1178,7 +1179,7 @@ async fn test_env_var_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1228,7 +1229,7 @@ async fn test_variable_resolution_workflow() {
     );
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1299,7 +1300,7 @@ async fn test_workflow_with_params() {
     params.insert("test_param".to_string(), json!("test_value"));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1320,7 +1321,7 @@ async fn test_codemod_environment_variables() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1476,7 +1477,7 @@ echo "env_vars_in_matrix=true""#
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1598,7 +1599,9 @@ async fn test_cyclic_dependency_workflow() {
     let params = HashMap::new();
 
     // Running this workflow should fail due to the cyclic dependency
-    let result = engine.run_workflow(workflow, params, None, None).await;
+    let result = engine
+        .run_workflow(workflow, params, None, None, None)
+        .await;
 
     // The result should be an error
     assert!(result.is_err());
@@ -1648,7 +1651,9 @@ async fn test_invalid_template_reference() {
     let params = HashMap::new();
 
     // Running this workflow should fail due to the invalid template reference
-    let result = engine.run_workflow(workflow, params, None, None).await;
+    let result = engine
+        .run_workflow(workflow, params, None, None, None)
+        .await;
 
     // The result should be an error
     assert!(result.is_err());
@@ -1767,7 +1772,7 @@ message: "Found var declaration"
     let engine = Engine::with_workflow_run_config(config);
     let result = engine
         .execute_ast_grep_step(
-            "test".to_string(),
+            "test-node".to_string(),
             &UseAstGrep {
                 include: Some(vec!["src/**/*.js".to_string()]),
                 exclude: None,
@@ -1776,6 +1781,7 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &_task,
         )
         .await;
 
@@ -1835,6 +1841,19 @@ message: "Found interface declaration"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1846,6 +1865,7 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1870,6 +1890,19 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1881,6 +1914,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1928,6 +1962,19 @@ message: "Found console.log statement"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1939,6 +1986,7 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1996,6 +2044,22 @@ function helper() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2017,6 +2081,7 @@ function helper() {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2083,6 +2148,22 @@ interface ApiResponse {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2104,6 +2185,7 @@ interface ApiResponse {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2148,6 +2230,22 @@ var count = 0;
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2169,6 +2267,7 @@ var count = 0;
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2193,6 +2292,22 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2214,6 +2329,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2266,6 +2382,22 @@ build/
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2287,6 +2419,7 @@ build/
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2297,6 +2430,20 @@ build/
     );
 
     // Test second execution
+    let task2 = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result_no_gitignore = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2318,6 +2465,7 @@ build/
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task2,
         )
         .await;
 
@@ -2358,6 +2506,22 @@ export default function transform(ast) {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2379,6 +2543,7 @@ export default function transform(ast) {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2414,6 +2579,22 @@ export default function transform(ast) {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
+
+    // Create a task for the test
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2435,6 +2616,7 @@ export default function transform(ast) {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2526,7 +2708,7 @@ export default function transform(ast) {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, Some(temp_path.to_path_buf()), None)
+        .run_workflow(workflow, params, Some(temp_path.to_path_buf()), None, None)
         .await
         .unwrap();
 
@@ -2688,7 +2870,7 @@ async fn test_realistic_state_write_and_matrix_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -2810,6 +2992,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -2973,6 +3156,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3217,6 +3401,7 @@ async fn test_empty_state_matrix_workflow() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3319,6 +3504,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3435,6 +3621,7 @@ async fn test_matrix_hash_based_deduplication() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3749,7 +3936,7 @@ async fn test_workflow_condition_with_params_true() {
     params.insert("my_cond".to_string(), serde_json::Value::Bool(true));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3800,7 +3987,7 @@ async fn test_workflow_condition_with_params_false() {
     params.insert("my_cond".to_string(), serde_json::Value::Bool(false));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3851,7 +4038,7 @@ async fn test_workflow_condition_with_params_missing() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3900,7 +4087,7 @@ async fn test_expression_resolution_nonexistent_variable() {
     let params = HashMap::new(); // No parameters provided
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 

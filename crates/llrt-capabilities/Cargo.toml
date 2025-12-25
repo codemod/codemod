@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-llrt_modules = { git = "https://github.com/mohebifar/llrt.git", package = "llrt_modules", default-features = false, features = [
+llrt_modules = { git = "https://github.com/mohebifar/llrt", package = "llrt_modules", default-features = false, features = [
   "console",
   "abort",
   "assert",

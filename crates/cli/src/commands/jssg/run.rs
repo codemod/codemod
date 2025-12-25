@@ -1,4 +1,4 @@
-use crate::engine::create_progress_callback;
+use crate::engine::create_progress_callback_with_engine;
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
@@ -130,7 +130,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let config = CodemodExecutionConfig {
         pre_run_callback: Some(pre_run_callback),
-        progress_callback: Arc::new(Some(create_progress_callback())),
+        progress_callback: Arc::new(Some(create_progress_callback_with_engine(None))),
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,
@@ -205,6 +205,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
+                console_log_collector: None,
             };
 
             // Execute the codemod on this file

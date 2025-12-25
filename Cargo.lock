@@ -1076,6 +1076,7 @@ dependencies = [
  "oauth2",
  "open",
  "percent-encoding",
+ "portable-pty",
  "posthog-rs",
  "rand 0.8.5",
  "ratatui",
@@ -1102,6 +1103,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "vt100",
  "walkdir",
 ]
 
@@ -1167,6 +1169,7 @@ dependencies = [
  "ast-grep-language",
  "bytes",
  "codemod-llrt-capabilities",
+ "gag",
  "ignore",
  "js-sys",
  "language-core",
@@ -2001,6 +2004,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "downcast-rs"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+
+[[package]]
 name = "dragonbox_ecma"
 version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2245,6 +2254,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
+name = "filedescriptor"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e40758ed24c9b2eeb76c35fb0aebc66c626084edd827e07e1552279814c6682d"
+dependencies = [
+ "libc",
+ "thiserror 1.0.69",
+ "winapi",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2466,6 +2486,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "gag"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a713bee13966e9fbffdf7193af71d54a6b35a0bb34997cd6c9519ebeb5005972"
+dependencies = [
+ "filedescriptor",
+ "tempfile",
 ]
 
 [[package]]
@@ -3302,7 +3332,7 @@ version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "189d0897e4cbe8c75efedf3502c18c887b05046e59d28404d4d8e46cbc4d1e86"
 dependencies = [
- "memoffset",
+ "memoffset 0.9.1",
 ]
 
 [[package]]
@@ -3322,6 +3352,15 @@ checksum = "046fa2d4d00aea763528b4950358d0ead425372445dc8ff86312b3c69ff7727b"
 dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "ioctl-rs"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7970510895cee30b3e9128319f2cefd4bde883a39f38baa279567ba3a7eb97d"
+dependencies = [
  "libc",
 ]
 
@@ -3661,7 +3700,7 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 [[package]]
 name = "llrt_abort"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_async_hooks",
  "llrt_events",
@@ -3674,7 +3713,7 @@ dependencies = [
 [[package]]
 name = "llrt_assert"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3683,7 +3722,7 @@ dependencies = [
 [[package]]
 name = "llrt_async_hooks"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_hooking",
  "llrt_utils",
@@ -3694,7 +3733,7 @@ dependencies = [
 [[package]]
 name = "llrt_buffer"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_encoding",
@@ -3706,7 +3745,7 @@ dependencies = [
 [[package]]
 name = "llrt_build"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "rustc_version",
 ]
@@ -3714,7 +3753,7 @@ dependencies = [
 [[package]]
 name = "llrt_child_process"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "libc",
@@ -3730,7 +3769,7 @@ dependencies = [
 [[package]]
 name = "llrt_compression"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "brotlic",
  "flate2",
@@ -3740,7 +3779,7 @@ dependencies = [
 [[package]]
 name = "llrt_console"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_logging",
  "llrt_utils",
@@ -3750,7 +3789,7 @@ dependencies = [
 [[package]]
 name = "llrt_context"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_build",
  "llrt_utils",
@@ -3762,7 +3801,7 @@ dependencies = [
 [[package]]
 name = "llrt_crypto"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3797,7 +3836,7 @@ dependencies = [
 [[package]]
 name = "llrt_dns_cache"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "hyper-util",
  "llrt_context",
@@ -3811,7 +3850,7 @@ dependencies = [
 [[package]]
 name = "llrt_encoding"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "base64-simd",
  "hex-simd",
@@ -3823,7 +3862,7 @@ dependencies = [
 [[package]]
 name = "llrt_events"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3833,7 +3872,7 @@ dependencies = [
 [[package]]
 name = "llrt_exceptions"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3842,7 +3881,7 @@ dependencies = [
 [[package]]
 name = "llrt_fetch"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "bytes",
  "either",
@@ -3870,7 +3909,7 @@ dependencies = [
 [[package]]
 name = "llrt_fs"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "either",
  "llrt_buffer",
@@ -3885,7 +3924,7 @@ dependencies = [
 [[package]]
 name = "llrt_hooking"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "once_cell",
@@ -3895,7 +3934,7 @@ dependencies = [
 [[package]]
 name = "llrt_http"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -3913,7 +3952,7 @@ dependencies = [
 [[package]]
 name = "llrt_json"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_build",
@@ -3926,7 +3965,7 @@ dependencies = [
 [[package]]
 name = "llrt_logging"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_context",
@@ -3941,7 +3980,7 @@ dependencies = [
 [[package]]
 name = "llrt_modules"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_abort",
  "llrt_assert",
@@ -3971,7 +4010,7 @@ dependencies = [
 [[package]]
 name = "llrt_numbers"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_utils",
@@ -3982,7 +4021,7 @@ dependencies = [
 [[package]]
 name = "llrt_os"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "home",
  "libc",
@@ -4000,7 +4039,7 @@ dependencies = [
 [[package]]
 name = "llrt_path"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "memchr",
@@ -4010,7 +4049,7 @@ dependencies = [
 [[package]]
 name = "llrt_perf_hooks"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -4019,7 +4058,7 @@ dependencies = [
 [[package]]
 name = "llrt_process"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "libc",
  "llrt_utils",
@@ -4029,7 +4068,7 @@ dependencies = [
 [[package]]
 name = "llrt_stream"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_context",
@@ -4042,7 +4081,7 @@ dependencies = [
 [[package]]
 name = "llrt_stream_web"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_abort",
  "llrt_utils",
@@ -4052,7 +4091,7 @@ dependencies = [
 [[package]]
 name = "llrt_string_decoder"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_encoding",
@@ -4063,7 +4102,7 @@ dependencies = [
 [[package]]
 name = "llrt_timers"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_context",
  "llrt_hooking",
@@ -4076,7 +4115,7 @@ dependencies = [
 [[package]]
 name = "llrt_tls"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "once_cell",
  "rustls 0.23.31",
@@ -4086,7 +4125,7 @@ dependencies = [
 [[package]]
 name = "llrt_tty"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "libc",
  "llrt_utils",
@@ -4096,7 +4135,7 @@ dependencies = [
 [[package]]
 name = "llrt_url"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -4106,7 +4145,7 @@ dependencies = [
 [[package]]
 name = "llrt_util"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_context",
  "llrt_encoding",
@@ -4118,7 +4157,7 @@ dependencies = [
 [[package]]
 name = "llrt_utils"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_build",
  "rquickjs",
@@ -4129,7 +4168,7 @@ dependencies = [
 [[package]]
 name = "llrt_zlib"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_compression",
@@ -4237,6 +4276,15 @@ name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
+
+[[package]]
+name = "memoffset"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "memoffset"
@@ -4365,6 +4413,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
  "smallvec",
+]
+
+[[package]]
+name = "nix"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f346ff70e7dbfd675fe90590b92d59ef2de15a8779ae305ebcbfd3f0caf59be4"
+dependencies = [
+ "autocfg",
+ "bitflags 1.3.2",
+ "cfg-if",
+ "libc",
+ "memoffset 0.6.5",
+ "pin-utils",
 ]
 
 [[package]]
@@ -5866,6 +5928,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "portable-pty"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "806ee80c2a03dbe1a9fb9534f8d19e4c0546b790cde8fd1fea9d6390644cb0be"
+dependencies = [
+ "anyhow",
+ "bitflags 1.3.2",
+ "downcast-rs",
+ "filedescriptor",
+ "lazy_static",
+ "libc",
+ "log",
+ "nix",
+ "serial",
+ "shared_library",
+ "shell-words",
+ "winapi",
+ "winreg 0.10.1",
+]
+
+[[package]]
 name = "posthog-rs"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6371,7 +6454,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys 0.3.77 (registry+https://github.com/rust-lang/crates.io-index)",
  "webpki-roots 0.25.4",
- "winreg",
+ "winreg 0.50.0",
 ]
 
 [[package]]
@@ -7790,6 +7873,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1237a96570fc377c13baa1b88c7589ab66edced652e43ffb17088f003db3e86"
+dependencies = [
+ "serial-core",
+ "serial-unix",
+ "serial-windows",
+]
+
+[[package]]
+name = "serial-core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f46209b345401737ae2125fe5b19a77acce90cd53e1658cda928e4fe9a64581"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "serial-unix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f03fbca4c9d866e24a459cbca71283f545a37f8e3e002ad8c70593871453cab7"
+dependencies = [
+ "ioctl-rs",
+ "libc",
+ "serial-core",
+ "termios",
+]
+
+[[package]]
+name = "serial-windows"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15c6d3b776267a75d31bbdfd5d36c0ca051251caafc285827052bc53bcdc8162"
+dependencies = [
+ "libc",
+ "serial-core",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7830,6 +7955,22 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shared_library"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9e7e0f2bfae24d8a5b5a66c5b257a83c7412304311512a0c054cd5e619da11"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shellexpand"
@@ -9231,6 +9372,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "termios"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5d9cf598a6d7ce700a4e6a9199da127e6819a61e64b68609683cc9a01b5683a"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "test-case"
 version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10470,6 +10620,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
+name = "vt100"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84cd863bf0db7e392ba3bd04994be3473491b31e66340672af5d11943c6274de"
+dependencies = [
+ "itoa",
+ "log",
+ "unicode-width 0.1.14",
+ "vte",
+]
+
+[[package]]
+name = "vte"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
+dependencies = [
+ "arrayvec",
+ "utf8parse",
+ "vte_generate_state_changes",
+]
+
+[[package]]
+name = "vte_generate_state_changes"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e369bee1b05d510a7b4ed645f5faa90619e05437111783ea5848f28d97d3c2e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11231,6 +11414,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21a0236b59786fed61e2a80582dd500fe61f18b5dca67a4a067d0bc9039339cf"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winreg"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
+dependencies = [
+ "winapi",
 ]
 
 [[package]]

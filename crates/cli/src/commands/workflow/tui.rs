@@ -1,30 +1,203 @@
 use std::collections::HashSet;
-use std::io::{self, Stdout};
+use std::io::{self, Read, Stdout, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use butterflow_core::engine::Engine;
+use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_models::{Task, TaskStatus, WorkflowRun, WorkflowStatus};
 use clap::Args;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
+
+use crate::engine::create_engine;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState,
-        Wrap,
-    },
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::engine::create_engine;
+/// Run workflow resume command in a PTY (pseudo-terminal) for full interactivity
+///
+/// This spawns the command in a real PTY, allowing:
+/// - Programs to detect they're running in a terminal
+/// - Full color and formatting support
+/// - Interactive prompts and user input
+/// - Proper signal handling (Ctrl+C, etc.)
+fn run_resume_command_in_terminal(
+    app: &mut App,
+    workflow_path: &Path,
+    run_id: Uuid,
+    task_ids: Option<Vec<Uuid>>,
+    trigger_all: bool,
+    target_path: Option<&Path>,
+) -> Result<()> {
+    // Get the current executable path
+    let exe_path = std::env::current_exe().context("Failed to get current executable path")?;
+
+    // Create PTY system
+    let pty_system = NativePtySystem::default();
+
+    // Get terminal size from app state
+    let (rows, cols) = app.terminal_size;
+
+    // Create PTY pair
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("Failed to open PTY")?;
+
+    // Build command using portable-pty's CommandBuilder
+    let mut cmd = CommandBuilder::new(&exe_path);
+    cmd.arg("workflow");
+    cmd.arg("resume");
+    cmd.arg("--workflow");
+    cmd.arg(workflow_path.to_string_lossy().as_ref());
+    cmd.arg("--id");
+    cmd.arg(run_id.to_string());
+    // Note: We don't use --allow-dirty or --no-interactive so that prompts are shown
+
+    // Add target path if available
+    if let Some(target) = target_path {
+        cmd.arg("--target");
+        cmd.arg(target.to_string_lossy().as_ref());
+    }
+
+    if trigger_all {
+        cmd.arg("--trigger-all");
+    } else if let Some(ids) = task_ids {
+        for task_id in ids {
+            cmd.arg("--tasks_ids");
+            cmd.arg(task_id.to_string());
+        }
+    }
+
+    // Spawn child process in the PTY
+    let _child = pair
+        .slave
+        .spawn_command(cmd)
+        .context("Failed to spawn command in PTY")?;
+
+    // Get writer for sending input to the PTY
+    let writer = pair
+        .master
+        .take_writer()
+        .context("Failed to get PTY writer")?;
+
+    // Get reader for reading output from the PTY
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .context("Failed to get PTY reader")?;
+
+    // Store the writer for input
+    app.pty_writer = Some(writer);
+
+    // Reset the terminal parser for fresh output
+    {
+        let mut parser = app.terminal_parser.write().unwrap();
+        *parser = vt100::Parser::new(rows, cols, 1000); // 1000 lines scrollback
+    }
+
+    // Mark PTY as running
+    {
+        let mut running = app.pty_running.lock().unwrap();
+        *running = true;
+    }
+
+    // Spawn a background thread to read PTY output and feed it to the parser
+    // We use std::thread instead of tokio because portable-pty uses blocking I/O
+    let parser_clone = app.terminal_parser.clone();
+    let running_clone = app.pty_running.clone();
+
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    // EOF - process exited
+                    let mut running = running_clone.lock().unwrap();
+                    *running = false;
+                    break;
+                }
+                Ok(n) => {
+                    // Feed the raw bytes to the VT100 parser
+                    // This handles all escape sequences, colors, cursor positioning, etc.
+                    let mut parser = parser_clone.write().unwrap();
+                    parser.process(&buf[..n]);
+                }
+                Err(e) => {
+                    // Error reading - log and exit
+                    eprintln!("PTY read error: {}", e);
+                    let mut running = running_clone.lock().unwrap();
+                    *running = false;
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn create_tui_capabilities_callback(
+    security_prompt_sender: SecurityPromptSender,
+) -> SecurityCallback {
+    let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
+    Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
+        let checked = checked_capabilities.lock().unwrap();
+        let need_to_check = config
+            .capabilities
+            .as_ref()
+            .unwrap_or(&HashSet::new())
+            .iter()
+            .filter(|c| !checked.contains(c))
+            .cloned()
+            .collect::<Vec<_>>();
+        drop(checked);
+        if need_to_check.is_empty() {
+            return Ok(());
+        }
+        let capabilities_str = need_to_check
+            .iter()
+            .map(|c| format!("{c:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut sender = security_prompt_sender.lock().unwrap();
+            *sender = Some((capabilities_str, tx));
+        }
+        let mut checked = checked_capabilities.lock().unwrap();
+        checked.extend(need_to_check);
+        drop(checked);
+        let response = rx.blocking_recv().unwrap_or(false);
+        {
+            let mut sender = security_prompt_sender.lock().unwrap();
+            *sender = None;
+        }
+        if !response {
+            return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
+        }
+        Ok(())
+    }))
+}
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -37,31 +210,26 @@ pub struct Command {
     refresh_interval: u64,
 }
 
-/// Focus panel in the grid layout
+/// Current screen in the step-by-step flow
 #[derive(Debug, Clone, PartialEq, Copy)]
-enum FocusPanel {
-    Runs,
+enum Screen {
+    /// Step 1: List of workflow runs
+    Workflows,
+    /// Step 2: Tasks/Nodes for selected workflow
     Tasks,
-    Triggers,
-    Details,
+    /// Step 3: Actions (triggers, logs, details) for selected task
+    Actions,
+    /// Terminal view for running task execution
+    Terminal,
 }
 
-impl FocusPanel {
-    fn next(self) -> Self {
+impl Screen {
+    fn step_number(self) -> u8 {
         match self {
-            FocusPanel::Runs => FocusPanel::Tasks,
-            FocusPanel::Tasks => FocusPanel::Triggers,
-            FocusPanel::Triggers => FocusPanel::Details,
-            FocusPanel::Details => FocusPanel::Runs,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            FocusPanel::Runs => FocusPanel::Details,
-            FocusPanel::Tasks => FocusPanel::Runs,
-            FocusPanel::Triggers => FocusPanel::Tasks,
-            FocusPanel::Details => FocusPanel::Triggers,
+            Screen::Workflows => 1,
+            Screen::Tasks => 2,
+            Screen::Actions => 3,
+            Screen::Terminal => 4,
         }
     }
 }
@@ -70,18 +238,28 @@ impl FocusPanel {
 #[derive(Debug, Clone)]
 enum TriggerAction {
     All,
-    Selected(Vec<Uuid>),
+    Single(Uuid),
 }
 
 /// Popup dialog type
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum Popup {
     None,
     ConfirmCancel(Uuid),
     ConfirmTrigger(TriggerAction),
+    ConfirmQuit,
+    SecurityPrompt(String, oneshot::Sender<bool>),
     StatusMessage(String, Instant),
+    Error(String),
     Help,
 }
+
+/// Security callback type for codemod execution
+type SecurityCallback =
+    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+
+/// Security prompt sender type
+type SecurityPromptSender = Arc<Mutex<Option<(String, oneshot::Sender<bool>)>>>;
 
 /// Application state
 struct App {
@@ -90,8 +268,8 @@ struct App {
     refresh_interval: Duration,
     last_refresh: Instant,
 
-    // Focus state
-    focus: FocusPanel,
+    // Current screen
+    screen: Screen,
 
     // Runs list state
     runs: Vec<WorkflowRun>,
@@ -101,17 +279,43 @@ struct App {
     selected_run: Option<WorkflowRun>,
     tasks: Vec<Task>,
     tasks_state: TableState,
-    triggers_state: ListState,
-    selected_triggers: HashSet<Uuid>,
 
-    // Logs/output (simulated from task logs)
-    logs: Vec<String>,
+    // Selected task for actions screen
+    selected_task: Option<Task>,
+
+    // Logs scroll
     log_scroll: usize,
+
+    // Terminal scroll for terminal view
+    terminal_scroll: usize,
 
     // UI state
     popup: Popup,
-    error_message: Option<String>,
     should_quit: bool,
+
+    // Track triggered task to monitor its execution
+    monitoring_task: Option<Uuid>,
+
+    // Track workflow run being monitored for completion
+    monitoring_workflow: Option<Uuid>,
+
+    // Security prompt state
+    security_prompt_sender: Option<SecurityPromptSender>,
+
+    // Terminal view state - task being shown in terminal
+    terminal_task: Option<Uuid>,
+
+    // PTY-based terminal state
+    /// VT100 parser for terminal emulation (handles escape sequences, cursor, colors, etc.)
+    terminal_parser: Arc<RwLock<vt100::Parser>>,
+    /// Writer to send input to the PTY
+    pty_writer: Option<Box<dyn Write + Send>>,
+    /// Current terminal size (rows, cols)
+    terminal_size: (u16, u16),
+    /// Flag indicating if PTY process is still running
+    pty_running: Arc<Mutex<bool>>,
+    /// Insert mode flag for terminal - when true, all keystrokes go to PTY
+    insert_mode: bool,
 }
 
 impl App {
@@ -124,19 +328,27 @@ impl App {
             limit,
             refresh_interval,
             last_refresh: Instant::now() - refresh_interval,
-            focus: FocusPanel::Runs,
+            screen: Screen::Workflows,
             runs: Vec::new(),
             runs_state,
             selected_run: None,
             tasks: Vec::new(),
             tasks_state: TableState::default(),
-            triggers_state: ListState::default(),
-            selected_triggers: HashSet::new(),
-            logs: Vec::new(),
+            selected_task: None,
             log_scroll: 0,
+            terminal_scroll: 0,
             popup: Popup::None,
-            error_message: None,
             should_quit: false,
+            security_prompt_sender: None,
+            monitoring_task: None,
+            monitoring_workflow: None,
+            terminal_task: None,
+            // Initialize PTY state with default terminal size
+            terminal_parser: Arc::new(RwLock::new(vt100::Parser::new(24, 80, 1000))),
+            pty_writer: None,
+            terminal_size: (24, 80),
+            pty_running: Arc::new(Mutex::new(false)),
+            insert_mode: false,
         }
     }
 
@@ -148,71 +360,291 @@ impl App {
         self.last_refresh.elapsed() >= self.refresh_interval
     }
 
-    /// Refresh all data
+    /// Refresh data based on current screen
     async fn refresh(&mut self) -> Result<()> {
-        self.error_message = None;
+        // Don't clear error popup on refresh, let user dismiss it
 
-        // Refresh runs list
-        match self.engine.list_workflow_runs(self.limit).await {
-            Ok(runs) => {
-                self.runs = runs;
-                // Ensure selection is valid
-                if !self.runs.is_empty() {
-                    let max_idx = self.runs.len().saturating_sub(1);
-                    if self.runs_state.selected().unwrap_or(0) > max_idx {
-                        self.runs_state.select(Some(max_idx));
+        match self.screen {
+            Screen::Workflows => {
+                self.refresh_runs().await?;
+            }
+            Screen::Tasks => {
+                self.refresh_runs().await?;
+                self.refresh_tasks().await?;
+            }
+            Screen::Terminal => {
+                self.refresh_runs().await?;
+                self.refresh_tasks().await?;
+                // PTY output is handled by the vt100 parser - no manual scrolling needed
+            }
+            Screen::Actions => {
+                self.refresh_runs().await?;
+                self.refresh_tasks().await?;
+
+                // Check workflow status if monitoring
+                if let Some(workflow_id) = self.monitoring_workflow {
+                    if let Ok(status) = self.engine.get_workflow_status(workflow_id).await {
+                        match status {
+                            WorkflowStatus::Completed => {
+                                self.monitoring_workflow = None;
+                                self.monitoring_task = None;
+                                self.show_status("✅ Workflow completed successfully".to_string());
+                            }
+                            WorkflowStatus::Failed => {
+                                self.monitoring_workflow = None;
+                                self.monitoring_task = None;
+                                self.show_status("❌ Workflow failed".to_string());
+                            }
+                            WorkflowStatus::Canceled => {
+                                self.monitoring_workflow = None;
+                                self.monitoring_task = None;
+                                self.show_status("❌ Workflow was canceled".to_string());
+                            }
+                            WorkflowStatus::AwaitingTrigger => {
+                                // Check if there are still tasks awaiting trigger
+                                if let Ok(tasks) = self.engine.get_tasks(workflow_id).await {
+                                    let awaiting_count = tasks
+                                        .iter()
+                                        .filter(|t| t.status == TaskStatus::AwaitingTrigger)
+                                        .count();
+                                    if awaiting_count > 0 {
+                                        self.monitoring_workflow = None;
+                                        self.monitoring_task = None;
+                                        self.show_status(format!(
+                                            "⏸️ Workflow paused: {} task(s) awaiting manual trigger",
+                                            awaiting_count
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Still running, continue monitoring
+                            }
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to list runs: {e}"));
-            }
-        }
 
-        // Refresh selected run details
-        if let Some(idx) = self.runs_state.selected() {
-            if let Some(run) = self.runs.get(idx) {
-                let run_id = run.id;
+                if let Some(selected) = &self.selected_task {
+                    let task_id = selected.id;
+                    let old_status = selected.status;
+                    let old_logs_count = selected.logs.len();
+                    let monitoring_id = self.monitoring_task;
 
-                match self.engine.get_workflow_run(run_id).await {
-                    Ok(run) => {
-                        self.selected_run = Some(run);
-                    }
-                    Err(e) => {
-                        if self.error_message.is_none() {
-                            self.error_message = Some(format!("Failed to get run: {e}"));
+                    if let Some(task) = self.tasks.iter().find(|t| t.id == task_id) {
+                        self.selected_task = Some(task.clone());
+
+                        // Check if we're monitoring this task
+                        if let Some(mon_id) = monitoring_id {
+                            if mon_id == task_id {
+                                let new_logs_count = task.logs.len();
+                                let new_status = task.status;
+
+                                // Check if status changed to terminal state
+                                if old_status != new_status
+                                    && (new_status == TaskStatus::Completed
+                                        || new_status == TaskStatus::Failed)
+                                {
+                                    // Don't clear monitoring_task here, let workflow monitoring handle it
+                                    let status_msg = if new_status == TaskStatus::Completed {
+                                        "Task completed successfully".to_string()
+                                    } else {
+                                        "Task failed".to_string()
+                                    };
+                                    // Auto-scroll to bottom of logs to see latest output
+                                    self.log_scroll = new_logs_count.saturating_sub(1);
+                                    // Only show status if workflow is not being monitored
+                                    if self.monitoring_workflow.is_none() {
+                                        self.show_status(status_msg);
+                                    }
+                                } else if new_logs_count > old_logs_count {
+                                    // Auto-scroll to bottom if new logs appeared
+                                    self.log_scroll = new_logs_count.saturating_sub(1);
+                                }
+                            }
                         }
-                    }
-                }
-
-                match self.engine.get_tasks(run_id).await {
-                    Ok(tasks) => {
-                        // Collect logs from tasks
-                        self.logs = tasks
-                            .iter()
-                            .flat_map(|t| {
-                                t.logs
-                                    .iter()
-                                    .map(|log| format!("[{}] {}", truncate(&t.node_id, 12), log))
-                            })
-                            .collect();
-
-                        self.tasks = tasks;
-                        // Ensure selection is valid
-                        if !self.tasks.is_empty() && self.tasks_state.selected().is_none() {
-                            self.tasks_state.select(Some(0));
-                        }
-                    }
-                    Err(e) => {
-                        if self.error_message.is_none() {
-                            self.error_message = Some(format!("Failed to get tasks: {e}"));
-                        }
+                    } else {
+                        self.selected_task = None;
                     }
                 }
             }
         }
 
         self.last_refresh = Instant::now();
+        Ok(())
+    }
+
+    async fn refresh_runs(&mut self) -> Result<()> {
+        let selected_id = self
+            .runs_state
+            .selected()
+            .and_then(|idx| self.runs.get(idx).map(|r| r.id));
+
+        match self.engine.list_workflow_runs(self.limit).await {
+            Ok(mut runs) => {
+                runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+                self.runs = runs;
+
+                if !self.runs.is_empty() {
+                    let new_idx = if let Some(id) = selected_id {
+                        self.runs.iter().position(|r| r.id == id).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    self.runs_state.select(Some(new_idx));
+                } else {
+                    self.runs_state.select(None);
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to list runs: {}", e);
+                self.popup = Popup::Error(error_msg);
+            }
+        }
+        Ok(())
+    }
+
+    async fn refresh_tasks(&mut self) -> Result<()> {
+        if let Some(idx) = self.runs_state.selected() {
+            if let Some(run) = self.runs.get(idx) {
+                let run_id = run.id;
+                let selected_task_id = self
+                    .tasks_state
+                    .selected()
+                    .and_then(|idx| self.tasks.get(idx).map(|t| t.id));
+
+                match self.engine.get_workflow_run(run_id).await {
+                    Ok(run) => {
+                        self.selected_run = Some(run);
+                    }
+                    Err(e) => {
+                        if let Popup::None = self.popup {
+                            let error_msg = format!("Failed to get run: {}", e);
+                            self.popup = Popup::Error(error_msg);
+                        }
+                    }
+                }
+
+                match self.engine.get_tasks(run_id).await {
+                    Ok(mut tasks) => {
+                        tasks.sort_by(|a, b| {
+                            let status_order = |s: TaskStatus| match s {
+                                TaskStatus::Running => 0,
+                                TaskStatus::Pending => 1,
+                                TaskStatus::AwaitingTrigger => 2,
+                                TaskStatus::Blocked => 3,
+                                TaskStatus::Completed => 4,
+                                TaskStatus::Failed => 5,
+                                TaskStatus::WontDo => 6,
+                            };
+                            let matrix_cmp = |a: &Option<
+                                std::collections::HashMap<String, serde_json::Value>,
+                            >,
+                                              b: &Option<
+                                std::collections::HashMap<String, serde_json::Value>,
+                            >| {
+                                match (a, b) {
+                                    (None, None) => std::cmp::Ordering::Equal,
+                                    (None, Some(_)) => std::cmp::Ordering::Less,
+                                    (Some(_), None) => std::cmp::Ordering::Greater,
+                                    (Some(a_map), Some(b_map)) => {
+                                        let mut a_vec: Vec<_> = a_map.iter().collect();
+                                        let mut b_vec: Vec<_> = b_map.iter().collect();
+
+                                        a_vec.sort_by(|(k1, v1), (k2, v2)| {
+                                            k1.cmp(k2).then_with(|| {
+                                                serde_json::to_string(v1).unwrap_or_default().cmp(
+                                                    &serde_json::to_string(v2).unwrap_or_default(),
+                                                )
+                                            })
+                                        });
+                                        b_vec.sort_by(|(k1, v1), (k2, v2)| {
+                                            k1.cmp(k2).then_with(|| {
+                                                serde_json::to_string(v1).unwrap_or_default().cmp(
+                                                    &serde_json::to_string(v2).unwrap_or_default(),
+                                                )
+                                            })
+                                        });
+
+                                        for ((ak, av), (bk, bv)) in a_vec.iter().zip(b_vec.iter()) {
+                                            match ak.cmp(bk) {
+                                                std::cmp::Ordering::Equal => {
+                                                    let a_str = serde_json::to_string(av)
+                                                        .unwrap_or_default();
+                                                    let b_str = serde_json::to_string(bv)
+                                                        .unwrap_or_default();
+                                                    match a_str.cmp(&b_str) {
+                                                        std::cmp::Ordering::Equal => continue,
+                                                        other => return other,
+                                                    }
+                                                }
+                                                other => return other,
+                                            }
+                                        }
+                                        a_vec.len().cmp(&b_vec.len())
+                                    }
+                                }
+                            };
+                            status_order(a.status)
+                                .cmp(&status_order(b.status))
+                                .then_with(|| {
+                                    (a.is_master, b.is_master).cmp(&(false, false)).reverse()
+                                })
+                                .then_with(|| match (a.master_task_id, b.master_task_id) {
+                                    (Some(a_master), Some(b_master)) => a_master.cmp(&b_master),
+                                    (Some(_), None) => std::cmp::Ordering::Less,
+                                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                                    (None, None) => std::cmp::Ordering::Equal,
+                                })
+                                .then_with(|| matrix_cmp(&a.matrix_values, &b.matrix_values))
+                                .then_with(|| a.node_id.cmp(&b.node_id))
+                                .then_with(|| a.id.cmp(&b.id))
+                        });
+                        self.tasks = tasks;
+
+                        if !self.tasks.is_empty() {
+                            let new_idx = if let Some(id) = selected_task_id {
+                                self.tasks.iter().position(|t| t.id == id)
+                            } else {
+                                None
+                            };
+
+                            if let Some(idx) = new_idx {
+                                let max_idx = self.tasks.len().saturating_sub(1);
+                                self.tasks_state.select(Some(idx.min(max_idx)));
+                                // Update selected_task with the latest task data
+                                if let Some(task) = self.tasks.get(idx) {
+                                    self.selected_task = Some(task.clone());
+                                }
+                            } else if self.tasks_state.selected().is_some() {
+                                let old_idx = self.tasks_state.selected().unwrap_or(0);
+                                let max_idx = self.tasks.len().saturating_sub(1);
+                                let selected_idx = old_idx.min(max_idx);
+                                self.tasks_state.select(Some(selected_idx));
+                                // Update selected_task with the latest task data
+                                if let Some(task) = self.tasks.get(selected_idx) {
+                                    self.selected_task = Some(task.clone());
+                                }
+                            } else {
+                                self.tasks_state.select(Some(0));
+                                // Update selected_task with the latest task data
+                                if let Some(task) = self.tasks.first() {
+                                    self.selected_task = Some(task.clone());
+                                }
+                            }
+                        } else {
+                            self.tasks_state.select(None);
+                            self.selected_task = None;
+                        }
+                    }
+                    Err(e) => {
+                        if let Popup::None = self.popup {
+                            let error_msg = format!("Failed to get tasks: {}", e);
+                            self.popup = Popup::Error(error_msg);
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -229,7 +661,70 @@ impl App {
         self.popup = Popup::StatusMessage(msg, Instant::now());
     }
 
-    /// Show confirmation for triggering all awaiting tasks
+    /// Navigate to next screen
+    async fn go_forward(&mut self) -> Result<()> {
+        match self.screen {
+            Screen::Workflows => {
+                if self.runs_state.selected().is_some() && !self.runs.is_empty() {
+                    self.screen = Screen::Tasks;
+                    self.tasks_state = TableState::default();
+                    self.tasks_state.select(Some(0));
+                    // Force refresh for tasks
+                    self.last_refresh =
+                        Instant::now() - self.refresh_interval - Duration::from_secs(1);
+                }
+            }
+            Screen::Tasks => {
+                if let Some(idx) = self.tasks_state.selected() {
+                    if let Some(task) = self.tasks.get(idx) {
+                        self.selected_task = Some(task.clone());
+                        self.screen = Screen::Actions;
+                        self.log_scroll = 0;
+                    }
+                }
+            }
+            Screen::Actions => {
+                // Can navigate to terminal if task is being monitored
+                if self.monitoring_task.is_some() {
+                    if let Some(task) = &self.selected_task {
+                        self.terminal_task = Some(task.id);
+                        self.screen = Screen::Terminal;
+                        self.terminal_scroll = task.logs.len().saturating_sub(1);
+                    }
+                }
+            }
+            Screen::Terminal => {
+                // Already at terminal, no action
+            }
+        }
+        Ok(())
+    }
+
+    /// Navigate to previous screen
+    fn go_back(&mut self) {
+        match self.screen {
+            Screen::Workflows => {
+                // Already at first screen, quit or do nothing
+            }
+            Screen::Tasks => {
+                self.screen = Screen::Workflows;
+                self.selected_run = None;
+                self.tasks.clear();
+                self.tasks_state = TableState::default();
+            }
+            Screen::Actions => {
+                self.screen = Screen::Tasks;
+                self.selected_task = None;
+            }
+            Screen::Terminal => {
+                self.screen = Screen::Actions;
+                self.terminal_task = None;
+                self.terminal_scroll = 0;
+            }
+        }
+    }
+
+    /// Trigger all awaiting tasks
     fn trigger_all(&mut self) {
         let awaiting = self.get_awaiting_tasks();
         if awaiting.is_empty() {
@@ -239,79 +734,160 @@ impl App {
         self.popup = Popup::ConfirmTrigger(TriggerAction::All);
     }
 
-    /// Actually trigger all awaiting tasks (after confirmation)
+    /// Trigger the currently selected task
+    fn trigger_current_task(&mut self) {
+        if let Some(task) = &self.selected_task {
+            if task.status == TaskStatus::AwaitingTrigger {
+                self.popup = Popup::ConfirmTrigger(TriggerAction::Single(task.id));
+            } else {
+                self.show_status("Task is not awaiting trigger".to_string());
+            }
+        }
+    }
+
     async fn do_trigger_all(&mut self) -> Result<()> {
         if let Some(run) = &self.selected_run {
-            match self.engine.trigger_all(run.id).await {
-                Ok(triggered) => {
-                    if triggered {
-                        self.show_status("Triggered all awaiting tasks".to_string());
+            let run_id = run.id;
+            let run_clone = run.clone();
+
+            // Get workflow path
+            let bundle_path = run_clone.bundle_path.as_ref();
+            let workflow_file_path = bundle_path
+                .map(|p| {
+                    let workflow_yaml = p.join("workflow.yaml");
+                    if workflow_yaml.exists() {
+                        workflow_yaml
                     } else {
-                        self.show_status("No tasks awaiting trigger".to_string());
+                        let butterflow_yaml = p.join("butterflow.yaml");
+                        if butterflow_yaml.exists() {
+                            butterflow_yaml
+                        } else {
+                            p.join("workflow.yaml")
+                        }
                     }
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to trigger: {e}"));
-                }
-            }
-            // Force refresh
-            self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
-        }
-        Ok(())
-    }
+                })
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    /// Show confirmation for triggering selected tasks
-    fn trigger_selected(&mut self) {
-        if self.selected_triggers.is_empty() {
-            self.show_status("No tasks selected".to_string());
-            return;
-        }
-        let task_ids: Vec<Uuid> = self.selected_triggers.iter().copied().collect();
-        self.popup = Popup::ConfirmTrigger(TriggerAction::Selected(task_ids));
-    }
+            // Switch to terminal screen and run command
+            self.terminal_task = None;
+            self.screen = Screen::Terminal;
+            self.terminal_scroll = 0;
 
-    /// Actually trigger selected tasks (after confirmation)
-    async fn do_trigger_selected(&mut self, task_ids: Vec<Uuid>) -> Result<()> {
-        if let Some(run) = &self.selected_run {
-            let count = task_ids.len();
-
-            match self.engine.resume_workflow(run.id, task_ids).await {
+            // Run workflow resume command in background
+            let target_path = run_clone.target_path.as_deref();
+            match run_resume_command_in_terminal(
+                self,
+                &workflow_file_path,
+                run_id,
+                None,
+                true,
+                target_path,
+            ) {
                 Ok(()) => {
-                    self.show_status(format!("Triggered {count} task(s)"));
-                    self.selected_triggers.clear();
+                    self.monitoring_workflow = Some(run_id);
+                    self.last_refresh = Instant::now() - self.refresh_interval;
                 }
                 Err(e) => {
-                    self.error_message = Some(format!("Failed to trigger: {e}"));
+                    let error_msg = format!("Failed to run command: {}", e);
+                    self.popup = Popup::Error(error_msg);
                 }
             }
-            // Force refresh
-            self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
+        } else {
+            self.show_status("No workflow run selected".to_string());
         }
         Ok(())
     }
 
-    /// Cancel a workflow run
+    async fn do_trigger_single(&mut self, task_id: Uuid) -> Result<()> {
+        if let Some(run) = &self.selected_run {
+            let run_id = run.id;
+            let run_clone = run.clone();
+
+            // Get workflow path
+            let bundle_path = run_clone.bundle_path.as_ref();
+            let workflow_file_path = bundle_path
+                .map(|p| {
+                    let workflow_yaml = p.join("workflow.yaml");
+                    if workflow_yaml.exists() {
+                        workflow_yaml
+                    } else {
+                        let butterflow_yaml = p.join("butterflow.yaml");
+                        if butterflow_yaml.exists() {
+                            butterflow_yaml
+                        } else {
+                            p.join("workflow.yaml")
+                        }
+                    }
+                })
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+            // Switch to terminal screen and run command
+            self.terminal_task = Some(task_id);
+            self.screen = Screen::Terminal;
+            self.terminal_scroll = 0;
+
+            // Run workflow resume command in background
+            let target_path = run_clone.target_path.as_deref();
+            match run_resume_command_in_terminal(
+                self,
+                &workflow_file_path,
+                run_id,
+                Some(vec![task_id]),
+                false,
+                target_path,
+            ) {
+                Ok(()) => {
+                    self.monitoring_task = Some(task_id);
+                    self.monitoring_workflow = Some(run_id);
+                    self.last_refresh = Instant::now() - self.refresh_interval;
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to run command: {}", e);
+                    self.popup = Popup::Error(error_msg);
+                }
+            }
+        } else {
+            self.show_status("No workflow run selected".to_string());
+        }
+        Ok(())
+    }
+
     async fn cancel_workflow(&mut self, run_id: Uuid) -> Result<()> {
         match self.engine.cancel_workflow(run_id).await {
             Ok(()) => {
                 self.show_status("Workflow canceled".to_string());
             }
             Err(e) => {
-                self.error_message = Some(format!("Failed to cancel: {e}"));
+                let error_msg = format!("Failed to cancel workflow: {}", e);
+                self.popup = Popup::Error(error_msg);
             }
         }
         self.popup = Popup::None;
-        // Force refresh
         self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
         Ok(())
     }
 
     /// Handle keyboard input
     async fn handle_input(&mut self, key: KeyCode, modifiers: KeyModifiers) -> Result<()> {
-        // Handle popup dismissal
-        match &self.popup {
-            Popup::StatusMessage(_, _) | Popup::Help => {
+        // Handle popup dismissal first
+        match &mut self.popup {
+            Popup::StatusMessage(_, _) | Popup::Help | Popup::Error(_) => {
                 self.popup = Popup::None;
+                return Ok(());
+            }
+            Popup::SecurityPrompt(_, response_sender) => {
+                let should_accept = matches!(key, KeyCode::Char('y') | KeyCode::Char('Y'));
+                let should_reject =
+                    matches!(key, KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc);
+                if should_accept || should_reject {
+                    let response = std::mem::replace(response_sender, {
+                        let (tx, _) = oneshot::channel();
+                        tx
+                    });
+                    let _ = response.send(should_accept);
+                    self.popup = Popup::None;
+                    self.security_prompt_sender = None;
+                }
                 return Ok(());
             }
             Popup::ConfirmCancel(run_id) => {
@@ -327,7 +903,6 @@ impl App {
                 }
                 return Ok(());
             }
-
             Popup::ConfirmTrigger(action) => {
                 let action = action.clone();
                 match key {
@@ -337,10 +912,23 @@ impl App {
                             TriggerAction::All => {
                                 self.do_trigger_all().await?;
                             }
-                            TriggerAction::Selected(task_ids) => {
-                                self.do_trigger_selected(task_ids).await?;
+                            TriggerAction::Single(task_id) => {
+                                self.do_trigger_single(task_id).await?;
                             }
                         }
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        self.popup = Popup::None;
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+            Popup::ConfirmQuit => {
+                match key {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        self.should_quit = true;
+                        self.popup = Popup::None;
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                         self.popup = Popup::None;
@@ -352,49 +940,112 @@ impl App {
             Popup::None => {}
         }
 
-        // Global keys
-        match key {
-            KeyCode::Char('q') => {
-                self.should_quit = true;
+        // If in insert mode on Terminal screen, forward all keys to PTY (except Esc to exit)
+        if self.screen == Screen::Terminal && self.insert_mode {
+            if key == KeyCode::Esc {
+                // Exit insert mode
+                self.insert_mode = false;
                 return Ok(());
             }
+            // Forward everything else to the terminal (including Enter, Ctrl+C, etc.)
+            self.handle_terminal_input(key, modifiers);
+            return Ok(());
+        }
+
+        // Global keys (only when not in insert mode)
+        match key {
+            KeyCode::Char('q') => {
+                // Don't quit if in terminal screen - user might want to type 'q'
+                if self.screen != Screen::Terminal {
+                    // Check if task or workflow is running
+                    if self.monitoring_task.is_some() || self.monitoring_workflow.is_some() {
+                        self.popup = Popup::ConfirmQuit;
+                    } else {
+                        self.should_quit = true;
+                    }
+                    return Ok(());
+                }
+            }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
+                // Ctrl+C: if on terminal screen with PTY, send to PTY
+                if self.screen == Screen::Terminal && self.pty_writer.is_some() {
+                    self.handle_terminal_input(key, modifiers);
+                    return Ok(());
+                }
+                // Otherwise, confirm quit if running
+                if self.monitoring_task.is_some() || self.monitoring_workflow.is_some() {
+                    self.popup = Popup::ConfirmQuit;
+                } else {
+                    self.should_quit = true;
+                }
                 return Ok(());
             }
             KeyCode::Char('r') => {
-                // Force refresh
-                self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
-                return Ok(());
+                if self.screen != Screen::Terminal {
+                    self.last_refresh =
+                        Instant::now() - self.refresh_interval - Duration::from_secs(1);
+                    return Ok(());
+                }
             }
             KeyCode::Char('?') => {
-                self.popup = Popup::Help;
+                if self.screen != Screen::Terminal {
+                    self.popup = Popup::Help;
+                    return Ok(());
+                }
+            }
+            KeyCode::Char('i') => {
+                // Enter insert mode on Terminal screen
+                if self.screen == Screen::Terminal && self.pty_writer.is_some() {
+                    self.insert_mode = true;
+                    return Ok(());
+                }
+            }
+            KeyCode::Esc | KeyCode::Backspace => {
+                // On terminal screen, Backspace should go to terminal in insert mode (handled above)
+                // Esc exits insert mode (handled above) or goes back
+                if self.screen != Screen::Workflows {
+                    self.go_back();
+                    return Ok(());
+                }
+            }
+            KeyCode::Char('v') => {
+                // Open terminal view if monitoring a task
+                if self.monitoring_task.is_some() {
+                    if let Some(task_id) = self.monitoring_task {
+                        self.terminal_task = Some(task_id);
+                        self.screen = Screen::Terminal;
+                        if let Some(task) = self.tasks.iter().find(|t| t.id == task_id) {
+                            self.terminal_scroll = task.logs.len().saturating_sub(1);
+                        }
+                    }
+                }
                 return Ok(());
             }
-            KeyCode::Tab => {
-                self.focus = self.focus.next();
-                return Ok(());
-            }
-            KeyCode::BackTab => {
-                self.focus = self.focus.prev();
-                return Ok(());
+            KeyCode::Enter => {
+                // On Terminal screen, don't navigate - wait for insert mode
+                if self.screen != Screen::Terminal {
+                    self.go_forward().await?;
+                    return Ok(());
+                }
             }
             _ => {}
         }
 
-        // Panel-specific keys
-        match self.focus {
-            FocusPanel::Runs => self.handle_runs_input(key).await?,
-            FocusPanel::Tasks => self.handle_tasks_input(key),
-            FocusPanel::Triggers => self.handle_triggers_input(key),
-            FocusPanel::Details => self.handle_details_input(key),
+        // Screen-specific keys
+        match self.screen {
+            Screen::Workflows => self.handle_workflows_input(key).await?,
+            Screen::Tasks => self.handle_tasks_input(key),
+            Screen::Actions => self.handle_actions_input(key, modifiers),
+            Screen::Terminal => {
+                // In normal mode, only navigation keys work
+                // 'i' to enter insert mode is handled above
+            }
         }
 
         Ok(())
     }
 
-    /// Handle input in runs panel
-    async fn handle_runs_input(&mut self, key: KeyCode) -> Result<()> {
+    async fn handle_workflows_input(&mut self, key: KeyCode) -> Result<()> {
         let len = self.runs.len();
         if len == 0 {
             return Ok(());
@@ -404,25 +1055,12 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 let i = self.runs_state.selected().unwrap_or(0);
                 self.runs_state.select(Some(i.saturating_sub(1)));
-                // Reset tasks selection when changing run
-                self.tasks_state = TableState::default();
-                self.triggers_state = ListState::default();
-                self.selected_triggers.clear();
-                // Force refresh for new run
-                self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let i = self.runs_state.selected().unwrap_or(0);
                 self.runs_state.select(Some((i + 1).min(len - 1)));
-                // Reset tasks selection when changing run
-                self.tasks_state = TableState::default();
-                self.triggers_state = ListState::default();
-                self.selected_triggers.clear();
-                // Force refresh for new run
-                self.last_refresh = Instant::now() - self.refresh_interval - Duration::from_secs(1);
             }
             KeyCode::Char('c') => {
-                // Cancel selected workflow
                 if let Some(i) = self.runs_state.selected() {
                     if let Some(run) = self.runs.get(i) {
                         if run.status == WorkflowStatus::Running
@@ -437,12 +1075,17 @@ impl App {
                     }
                 }
             }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.runs_state.select(Some(0));
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.runs_state.select(Some(len.saturating_sub(1)));
+            }
             _ => {}
         }
         Ok(())
     }
 
-    /// Handle input in tasks panel
     fn handle_tasks_input(&mut self, key: KeyCode) {
         let len = self.tasks.len();
         if len == 0 {
@@ -458,70 +1101,143 @@ impl App {
                 let i = self.tasks_state.selected().unwrap_or(0);
                 self.tasks_state.select(Some((i + 1).min(len - 1)));
             }
-            _ => {}
-        }
-    }
-
-    /// Handle input in triggers panel
-    fn handle_triggers_input(&mut self, key: KeyCode) {
-        let awaiting = self.get_awaiting_tasks();
-        let len = awaiting.len();
-
-        match key {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if len > 0 {
-                    let i = self.triggers_state.selected().unwrap_or(0);
-                    self.triggers_state.select(Some(i.saturating_sub(1)));
-                }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.tasks_state.select(Some(0));
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if len > 0 {
-                    let i = self.triggers_state.selected().unwrap_or(0);
-                    self.triggers_state.select(Some((i + 1).min(len - 1)));
-                }
-            }
-            KeyCode::Char(' ') => {
-                // Toggle selection
-                if let Some(i) = self.triggers_state.selected() {
-                    if let Some(task) = awaiting.get(i) {
-                        let task_id = task.id;
-                        if self.selected_triggers.contains(&task_id) {
-                            self.selected_triggers.remove(&task_id);
-                        } else {
-                            self.selected_triggers.insert(task_id);
-                        }
-                    }
-                }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.tasks_state.select(Some(len.saturating_sub(1)));
             }
             KeyCode::Char('a') => {
                 self.trigger_all();
             }
-            KeyCode::Char('t') | KeyCode::Enter => {
-                self.trigger_selected();
-            }
             _ => {}
         }
     }
 
-    /// Handle input in details panel (scroll logs)
-    fn handle_details_input(&mut self, key: KeyCode) {
+    fn handle_actions_input(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Handle Ctrl+key combinations first
+        if modifiers.contains(KeyModifiers::CONTROL) {
+            match key {
+                KeyCode::Char('d') => {
+                    // Half-page down
+                    if let Some(task) = &self.selected_task {
+                        let max_scroll = task.logs.len().saturating_sub(1);
+                        let half_page = 10; // Approximate half-page size
+                        self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
+                    }
+                    return;
+                }
+                KeyCode::Char('u') => {
+                    // Half-page up
+                    let half_page = 10; // Approximate half-page size
+                    self.log_scroll = self.log_scroll.saturating_sub(half_page);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match key {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.log_scroll = self.log_scroll.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.log_scroll < self.logs.len().saturating_sub(1) {
-                    self.log_scroll += 1;
+                if let Some(task) = &self.selected_task {
+                    let max_scroll = task.logs.len().saturating_sub(1);
+                    if self.log_scroll < max_scroll {
+                        self.log_scroll += 1;
+                    }
                 }
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.log_scroll = 0;
             }
             KeyCode::End | KeyCode::Char('G') => {
-                self.log_scroll = self.logs.len().saturating_sub(1);
+                if let Some(task) = &self.selected_task {
+                    self.log_scroll = task.logs.len().saturating_sub(1);
+                }
+            }
+            KeyCode::Char('t') => {
+                self.trigger_current_task();
+            }
+            KeyCode::Char('a') => {
+                self.trigger_all();
             }
             _ => {}
         }
+    }
+
+    fn handle_terminal_input(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Send input directly to PTY if we have a writer
+        // This provides true terminal interactivity
+        if let Some(ref mut writer) = self.pty_writer {
+            // Convert key to terminal escape sequence bytes
+            let bytes: Option<Vec<u8>> = match key {
+                KeyCode::Char(c) => {
+                    if modifiers.contains(KeyModifiers::CONTROL) {
+                        // Convert Ctrl+key to control character (e.g., Ctrl+C = 0x03)
+                        let ctrl_char = (c.to_ascii_lowercase() as u8)
+                            .wrapping_sub(b'a')
+                            .wrapping_add(1);
+                        if ctrl_char <= 26 {
+                            Some(vec![ctrl_char])
+                        } else {
+                            Some(c.to_string().into_bytes())
+                        }
+                    } else if modifiers.contains(KeyModifiers::ALT) {
+                        // Alt+key sends ESC followed by the character
+                        let mut seq = vec![0x1b];
+                        seq.extend(c.to_string().bytes());
+                        Some(seq)
+                    } else {
+                        Some(c.to_string().into_bytes())
+                    }
+                }
+                KeyCode::Enter => Some(b"\r".to_vec()), // Carriage return
+                KeyCode::Backspace => Some(b"\x7f".to_vec()), // DEL character
+                KeyCode::Tab => Some(b"\t".to_vec()),
+                KeyCode::Esc => Some(b"\x1b".to_vec()),
+                KeyCode::Up => Some(b"\x1b[A".to_vec()),
+                KeyCode::Down => Some(b"\x1b[B".to_vec()),
+                KeyCode::Right => Some(b"\x1b[C".to_vec()),
+                KeyCode::Left => Some(b"\x1b[D".to_vec()),
+                KeyCode::Home => Some(b"\x1b[H".to_vec()),
+                KeyCode::End => Some(b"\x1b[F".to_vec()),
+                KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
+                KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
+                KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
+                KeyCode::Insert => Some(b"\x1b[2~".to_vec()),
+                KeyCode::F(n) => {
+                    // F1-F4 use different codes than F5-F12
+                    let seq = match n {
+                        1 => b"\x1bOP".to_vec(),
+                        2 => b"\x1bOQ".to_vec(),
+                        3 => b"\x1bOR".to_vec(),
+                        4 => b"\x1bOS".to_vec(),
+                        5 => b"\x1b[15~".to_vec(),
+                        6 => b"\x1b[17~".to_vec(),
+                        7 => b"\x1b[18~".to_vec(),
+                        8 => b"\x1b[19~".to_vec(),
+                        9 => b"\x1b[20~".to_vec(),
+                        10 => b"\x1b[21~".to_vec(),
+                        11 => b"\x1b[23~".to_vec(),
+                        12 => b"\x1b[24~".to_vec(),
+                        _ => return,
+                    };
+                    Some(seq)
+                }
+                _ => None,
+            };
+
+            // Write to PTY
+            if let Some(bytes) = bytes {
+                let _ = writer.write_all(&bytes);
+                let _ = writer.flush();
+            }
+        }
+
+        // If no PTY or unhandled key, navigation is disabled when PTY is active
+        // (All keys go to the terminal when it's running)
     }
 }
 
@@ -574,18 +1290,174 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Get block style based on focus
-fn block_style(focused: bool) -> Style {
-    if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
+/// Clean log line by removing timestamps and logging prefixes
+fn clean_log_line(log: &str) -> String {
+    let mut cleaned = log.trim();
+
+    // Remove timestamp patterns like [2025-12-22T21:16:43Z]
+    if let Some(pos) = cleaned.find(']') {
+        if cleaned[..pos].contains('T') && cleaned[..pos].chars().any(|c| c.is_ascii_digit()) {
+            cleaned = &cleaned[pos + 1..];
+        }
+    }
+
+    // Remove logging level prefixes like [ERROR], [WARN], etc.
+    for prefix in &["[ERROR]", "[WARN]", "[INFO]", "[DEBUG]", "[TRACE]"] {
+        if cleaned.starts_with(prefix) {
+            cleaned = &cleaned[prefix.len()..];
+            break;
+        }
+    }
+
+    // Remove "ERROR" word if it appears at the start
+    if cleaned.starts_with("ERROR") {
+        cleaned = &cleaned[5..];
+    }
+
+    // Remove module paths like butterflow_core::engine::
+    if let Some(pos) = cleaned.find("::") {
+        if let Some(pos2) = cleaned[pos + 2..].find("::") {
+            if let Some(pos3) = cleaned[pos + 2 + pos2 + 2..].find(' ') {
+                cleaned = &cleaned[pos + 2 + pos2 + 2 + pos3 + 1..];
+            }
+        }
+    }
+
+    // Remove "Task ... step ... failed:" prefix
+    if let Some(pos) = cleaned.find("step ") {
+        if let Some(pos2) = cleaned[pos..].find(" failed") {
+            if let Some(pos3) = cleaned[pos + pos2 + 7..].find(':') {
+                cleaned = &cleaned[pos + pos2 + 7 + pos3 + 1..];
+            }
+        }
+    }
+
+    // Remove "execution failed:" prefix
+    if let Some(pos) = cleaned.find("execution failed:") {
+        cleaned = &cleaned[pos + 17..];
+    }
+
+    // Trim whitespace
+    cleaned.trim().to_string()
+}
+
+/// Get status symbol
+fn status_symbol(status: WorkflowStatus) -> &'static str {
+    match status {
+        WorkflowStatus::Running => "●",
+        WorkflowStatus::Completed => "✓",
+        WorkflowStatus::Failed => "✗",
+        WorkflowStatus::AwaitingTrigger => "◎",
+        WorkflowStatus::Canceled => "○",
+        WorkflowStatus::Pending => "◌",
     }
 }
 
-/// Render the runs list panel (top-left)
-fn render_runs_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let header_cells = ["ID", "Status", "Name"]
+/// Get task status symbol
+fn task_status_symbol(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Running => "●",
+        TaskStatus::Completed => "✓",
+        TaskStatus::Failed => "✗",
+        TaskStatus::AwaitingTrigger => "◎",
+        TaskStatus::Blocked => "◇",
+        TaskStatus::WontDo => "○",
+        TaskStatus::Pending => "◌",
+    }
+}
+
+/// Render breadcrumb navigation
+fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
+    let mut spans = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!(" {} ", app.screen.step_number()),
+            Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
+        ),
+        Span::styled(" ", Style::default()),
+    ];
+
+    // Build breadcrumb path
+    let mut path_parts: Vec<Span> = vec![];
+
+    path_parts.push(Span::styled(
+        "Workflows",
+        if app.screen == Screen::Workflows {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::DarkGray)
+        },
+    ));
+
+    if app.screen != Screen::Workflows {
+        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
+
+        let run_name = app
+            .selected_run
+            .as_ref()
+            .and_then(|r| r.workflow.nodes.first())
+            .map(|n| truncate(&n.name, 20))
+            .unwrap_or_else(|| "Tasks".to_string());
+
+        path_parts.push(Span::styled(
+            run_name,
+            if app.screen == Screen::Tasks {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ));
+    }
+
+    if app.screen == Screen::Actions || app.screen == Screen::Terminal {
+        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
+
+        let task_name = if app.screen == Screen::Terminal {
+            app.terminal_task
+                .and_then(|id| app.tasks.iter().find(|t| t.id == id))
+                .map(|t| truncate(&t.node_id, 20))
+                .unwrap_or_else(|| "Terminal".to_string())
+        } else {
+            app.selected_task
+                .as_ref()
+                .map(|t| truncate(&t.node_id, 20))
+                .unwrap_or_else(|| "Actions".to_string())
+        };
+
+        path_parts.push(Span::styled(
+            task_name,
+            if app.screen == Screen::Actions {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::Green).bold()
+            },
+        ));
+    }
+
+    if app.screen == Screen::Terminal {
+        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
+        path_parts.push(Span::styled(
+            "Terminal",
+            Style::default().fg(Color::Green).bold(),
+        ));
+    }
+
+    spans.extend(path_parts);
+
+    let breadcrumb = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
+
+    f.render_widget(breadcrumb, area);
+}
+
+/// Render the Workflows screen (Step 1)
+fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    // Left: Workflows list
+    let header_cells = ["ID", "Status", "Name", "Started"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
     let header_row = Row::new(header_cells).height(1);
@@ -595,22 +1467,17 @@ fn render_runs_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             .workflow
             .nodes
             .first()
-            .map(|n| truncate(&n.name, 15))
+            .map(|n| truncate(&n.name, 25))
             .unwrap_or_else(|| "unknown".to_string());
 
-        let status_str = match run.status {
-            WorkflowStatus::Running => "●",
-            WorkflowStatus::Completed => "✓",
-            WorkflowStatus::Failed => "✗",
-            WorkflowStatus::AwaitingTrigger => "◎",
-            WorkflowStatus::Canceled => "○",
-            WorkflowStatus::Pending => "◌",
-        };
+        let started = run.started_at.format("%m-%d %H:%M").to_string();
 
         Row::new(vec![
             Cell::from(truncate(&run.id.to_string(), 8)),
-            Cell::from(status_str).style(Style::default().fg(status_color(run.status))),
+            Cell::from(status_symbol(run.status))
+                .style(Style::default().fg(status_color(run.status))),
             Cell::from(name),
+            Cell::from(started),
         ])
     });
 
@@ -618,8 +1485,9 @@ fn render_runs_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         rows,
         [
             Constraint::Length(10),
-            Constraint::Length(3),
-            Constraint::Min(10),
+            Constraint::Length(4),
+            Constraint::Min(20),
+            Constraint::Length(12),
         ],
     )
     .header(header_row)
@@ -627,238 +1495,575 @@ fn render_runs_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" Workflow Runs ({}) ", app.runs.len()))
-            .border_style(block_style(focused)),
+            .border_style(Style::default().fg(Color::Cyan)),
     )
     .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     .highlight_symbol("▶ ");
 
-    f.render_stateful_widget(table, area, &mut app.runs_state);
+    f.render_stateful_widget(table, chunks[0], &mut app.runs_state);
+
+    // Right: Preview of selected workflow
+    let preview_content: Vec<Line> = if let Some(idx) = app.runs_state.selected() {
+        if let Some(run) = app.runs.get(idx) {
+            let name = run
+                .workflow
+                .nodes
+                .first()
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let duration = run
+                .ended_at
+                .map(|end| end.signed_duration_since(run.started_at).num_seconds())
+                .unwrap_or_else(|| {
+                    chrono::Utc::now()
+                        .signed_duration_since(run.started_at)
+                        .num_seconds()
+                });
+
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Name: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(name),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(run.id.to_string()),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{} {:?}", status_symbol(run.status), run.status),
+                        Style::default().fg(status_color(run.status)).bold(),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Duration: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format_duration(duration)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Started: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(run.started_at.format("%Y-%m-%d %H:%M:%S").to_string()),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Nodes: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format!("{}", run.workflow.nodes.len())),
+                ]),
+                Line::from(""),
+                Line::from(""),
+                Line::styled(
+                    "  Press Enter to view tasks →",
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]
+        } else {
+            vec![Line::styled(
+                "  No workflow selected",
+                Style::default().fg(Color::DarkGray),
+            )]
+        }
+    } else {
+        vec![Line::styled(
+            "  No workflow selected",
+            Style::default().fg(Color::DarkGray),
+        )]
+    };
+
+    let preview = Paragraph::new(preview_content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Preview ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+
+    f.render_widget(preview, chunks[1]);
 }
 
-/// Render the tasks panel (top-right)
-fn render_tasks_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let header_cells = ["Node", "Status"]
+/// Render the Tasks screen (Step 2)
+fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(area);
+
+    // Left: Tasks list
+    let header_cells = ["Node ID", "Status", "Matrix"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
     let header_row = Row::new(header_cells).height(1);
 
     let rows = app.tasks.iter().map(|task| {
-        let status_str = match task.status {
-            TaskStatus::Running => "●",
-            TaskStatus::Completed => "✓",
-            TaskStatus::Failed => "✗",
-            TaskStatus::AwaitingTrigger => "◎",
-            TaskStatus::Blocked => "◇",
-            TaskStatus::WontDo => "○",
-            TaskStatus::Pending => "◌",
-        };
+        let matrix_info = task
+            .matrix_values
+            .as_ref()
+            .map(|m| {
+                let mut entries: Vec<_> = m.iter().collect();
+                entries.sort_by(|(k1, v1), (k2, v2)| {
+                    k1.cmp(k2).then_with(|| {
+                        serde_json::to_string(v1)
+                            .unwrap_or_default()
+                            .cmp(&serde_json::to_string(v2).unwrap_or_default())
+                    })
+                });
+                entries
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| "-".to_string());
 
         Row::new(vec![
             Cell::from(truncate(&task.node_id, 20)),
-            Cell::from(status_str).style(Style::default().fg(task_status_color(task.status))),
+            Cell::from(task_status_symbol(task.status))
+                .style(Style::default().fg(task_status_color(task.status))),
+            Cell::from(truncate(&matrix_info, 20)),
         ])
     });
 
-    let title = if let Some(run) = &app.selected_run {
-        format!(
-            " Tasks ({}) - {} ",
-            app.tasks.len(),
-            truncate(&run.id.to_string(), 8)
-        )
+    let run_name = app
+        .selected_run
+        .as_ref()
+        .and_then(|r| r.workflow.nodes.first())
+        .map(|n| truncate(&n.name, 15))
+        .unwrap_or_else(|| "?".to_string());
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(15),
+            Constraint::Length(4),
+            Constraint::Min(15),
+        ],
+    )
+    .header(header_row)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Tasks ({}) - {} ", app.tasks.len(), run_name))
+            .border_style(Style::default().fg(Color::Cyan)),
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(table, chunks[0], &mut app.tasks_state);
+
+    // Right: Task preview
+    let preview_content: Vec<Line> = if let Some(idx) = app.tasks_state.selected() {
+        if let Some(task) = app.tasks.get(idx) {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Node: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(task.node_id.clone()),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{} {:?}", task_status_symbol(task.status), task.status),
+                        Style::default().fg(task_status_color(task.status)).bold(),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(truncate(&task.id.to_string(), 30)),
+                ]),
+            ];
+
+            if let Some(matrix) = &task.matrix_values {
+                lines.push(Line::from(""));
+                lines.push(Line::styled(
+                    "  Matrix Values:",
+                    Style::default().fg(Color::DarkGray),
+                ));
+                let mut matrix_entries: Vec<_> = matrix.iter().collect();
+                matrix_entries.sort_by(|(k1, v1), (k2, v2)| {
+                    k1.cmp(k2).then_with(|| {
+                        serde_json::to_string(v1)
+                            .unwrap_or_default()
+                            .cmp(&serde_json::to_string(v2).unwrap_or_default())
+                    })
+                });
+                for (k, v) in matrix_entries {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(k, Style::default().fg(Color::Yellow)),
+                        Span::raw(": "),
+                        Span::raw(v.to_string()),
+                    ]));
+                }
+            }
+
+            if !task.logs.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::styled(
+                    format!("  Logs: {} entries", task.logs.len()),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "  Press Enter to view details →",
+                Style::default().fg(Color::Cyan),
+            ));
+
+            lines
+        } else {
+            vec![Line::styled(
+                "  No task selected",
+                Style::default().fg(Color::DarkGray),
+            )]
+        }
     } else {
-        " Tasks ".to_string()
+        vec![Line::styled(
+            "  No task selected",
+            Style::default().fg(Color::DarkGray),
+        )]
     };
 
-    let table = Table::new(rows, [Constraint::Min(15), Constraint::Length(3)])
-        .header(header_row)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(block_style(focused)),
-        )
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▶ ");
+    let preview = Paragraph::new(preview_content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Task Preview ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
 
-    f.render_stateful_widget(table, area, &mut app.tasks_state);
+    f.render_widget(preview, chunks[1]);
 }
 
-/// Render the triggers panel (bottom-left)
-fn render_triggers_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let awaiting_tasks = app.get_awaiting_tasks();
+/// Render the Actions screen (Step 3)
+fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
 
-    if awaiting_tasks.is_empty() {
-        let no_triggers = Paragraph::new("No tasks awaiting trigger")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Manual Triggers ")
-                    .border_style(block_style(focused)),
-            );
-        f.render_widget(no_triggers, area);
-    } else {
-        let trigger_items: Vec<ListItem> = awaiting_tasks
-            .iter()
-            .map(|task| {
-                let is_selected = app.selected_triggers.contains(&task.id);
-                let checkbox = if is_selected { "[✓]" } else { "[ ]" };
-
-                let matrix_info = task
-                    .matrix_values
-                    .as_ref()
-                    .map(|m| {
-                        m.iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default();
-
-                let content = if matrix_info.is_empty() {
-                    format!("{} {}", checkbox, task.node_id)
-                } else {
-                    format!(
-                        "{} {} ({})",
-                        checkbox,
-                        task.node_id,
-                        truncate(&matrix_info, 15)
-                    )
-                };
-
-                let style = if is_selected {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
-
-                ListItem::new(content).style(style)
-            })
-            .collect();
-
-        let triggers_list = List::new(trigger_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(
-                        " Triggers ({}) [a:all t:selected] ",
-                        awaiting_tasks.len()
-                    ))
-                    .border_style(block_style(focused)),
-            )
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .highlight_symbol("▶ ");
-
-        f.render_stateful_widget(triggers_list, area, &mut app.triggers_state);
-    }
-}
-
-/// Render the details/logs panel (bottom-right)
-fn render_details_panel(f: &mut Frame, app: &App, area: Rect, focused: bool) {
-    let inner_height = area.height.saturating_sub(2) as usize;
-
-    let content: Vec<Line> = if let Some(run) = &app.selected_run {
-        let name = run
-            .workflow
-            .nodes
-            .first()
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let duration = run
-            .ended_at
-            .map(|end| end.signed_duration_since(run.started_at).num_seconds())
-            .unwrap_or_else(|| {
-                chrono::Utc::now()
-                    .signed_duration_since(run.started_at)
-                    .num_seconds()
-            });
-
+    // Left: Task details and actions
+    let details_content: Vec<Line> = if let Some(task) = &app.selected_task {
         let mut lines = vec![
+            Line::from(""),
+            Line::styled(
+                " ═══ Task Details ═══",
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Line::from(""),
             Line::from(vec![
-                Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(name.clone()),
-            ]),
-            Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:?}", run.status),
-                    Style::default().fg(status_color(run.status)).bold(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Duration: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(format_duration(duration)),
-            ]),
-            Line::from(vec![
-                Span::styled("Started: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(run.started_at.format("%Y-%m-%d %H:%M:%S").to_string()),
+                Span::styled("  Node: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(task.node_id.clone(), Style::default().bold()),
             ]),
             Line::from(""),
-            Line::styled("─── Logs ───", Style::default().fg(Color::DarkGray)),
+            Line::from(vec![
+                Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} {:?}", task_status_symbol(task.status), task.status),
+                    Style::default().fg(task_status_color(task.status)).bold(),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(task.id.to_string()),
+            ]),
         ];
 
-        // Add logs with scrolling
-        let log_start = app.log_scroll.min(app.logs.len().saturating_sub(1));
-        for log in app
-            .logs
-            .iter()
-            .skip(log_start)
-            .take(inner_height.saturating_sub(6))
-        {
-            lines.push(Line::from(Span::styled(
-                truncate(log, area.width.saturating_sub(4) as usize),
-                Style::default().fg(Color::White),
-            )));
+        if let Some(matrix) = &task.matrix_values {
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                " ═══ Matrix Values ═══",
+                Style::default().fg(Color::Cyan).bold(),
+            ));
+            let mut matrix_entries: Vec<_> = matrix.iter().collect();
+            matrix_entries.sort_by(|(k1, v1), (k2, v2)| {
+                k1.cmp(k2).then_with(|| {
+                    serde_json::to_string(v1)
+                        .unwrap_or_default()
+                        .cmp(&serde_json::to_string(v2).unwrap_or_default())
+                })
+            });
+            for (k, v) in matrix_entries {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(k, Style::default().fg(Color::Yellow)),
+                    Span::raw(": "),
+                    Span::raw(v.to_string()),
+                ]));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            " ═══ Actions ═══",
+            Style::default().fg(Color::Cyan).bold(),
+        ));
+        lines.push(Line::from(""));
+
+        if task.status == TaskStatus::AwaitingTrigger {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("[t]", Style::default().fg(Color::Green).bold()),
+                Span::raw(" Trigger this task"),
+            ]));
+        } else {
+            lines.push(Line::styled(
+                "  (No actions available)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        let awaiting_count = app.get_awaiting_tasks().len();
+        if awaiting_count > 0 {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("[a]", Style::default().fg(Color::Yellow).bold()),
+                Span::raw(format!(" Trigger all awaiting ({})", awaiting_count)),
+            ]));
         }
 
         lines
     } else {
-        vec![Line::from(Span::styled(
-            "Select a workflow run",
+        vec![Line::styled(
+            "  No task selected",
             Style::default().fg(Color::DarkGray),
-        ))]
+        )]
     };
 
-    let details = Paragraph::new(content)
+    let details = Paragraph::new(details_content)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Details & Logs ")
-                .border_style(block_style(focused)),
+                .title(" Details & Actions ")
+                .border_style(Style::default().fg(Color::Cyan)),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
 
-    f.render_widget(details, area);
+    f.render_widget(details, chunks[0]);
+
+    // Right: Logs
+    let logs_content: Vec<Line> = if let Some(task) = &app.selected_task {
+        if task.logs.is_empty() {
+            vec![
+                Line::from(""),
+                Line::styled("  No logs available", Style::default().fg(Color::DarkGray)),
+            ]
+        } else {
+            let mut lines = vec![Line::from("")];
+            let mut last_log: Option<String> = None;
+            for (i, log) in task.logs.iter().enumerate() {
+                let cleaned_log = clean_log_line(log);
+
+                if let Some(ref last) = last_log {
+                    if cleaned_log == *last {
+                        continue;
+                    }
+                }
+                last_log = Some(cleaned_log.clone());
+
+                let (style, prefix) = if cleaned_log.contains("ERROR")
+                    || cleaned_log.contains("error:")
+                    || cleaned_log.contains("failed")
+                {
+                    (Style::default().fg(Color::Red), "  ✗ ")
+                } else if cleaned_log.contains("WARN") || cleaned_log.contains("warning:") {
+                    (Style::default().fg(Color::Yellow), "  ⚠ ")
+                } else if cleaned_log.contains("INFO") || cleaned_log.contains("info:") {
+                    (Style::default().fg(Color::Cyan), "  ℹ ")
+                } else {
+                    (Style::default(), "     ")
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  [{:>3}]", i + 1),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(prefix),
+                    Span::styled(cleaned_log, style),
+                ]));
+                lines.push(Line::from(""));
+            }
+            lines
+        }
+    } else {
+        vec![Line::styled(
+            "  No logs",
+            Style::default().fg(Color::DarkGray),
+        )]
+    };
+
+    let logs = Paragraph::new(logs_content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(
+                    " Logs ({}) [↑↓ scroll] ",
+                    app.selected_task
+                        .as_ref()
+                        .map(|t| t.logs.len())
+                        .unwrap_or(0)
+                ))
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .scroll((app.log_scroll as u16, 0))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(logs, chunks[1]);
 }
 
-/// Render error bar if there's an error
-fn render_error_bar(f: &mut Frame, app: &App, area: Rect) {
-    if let Some(err) = &app.error_message {
-        let error_bar = Paragraph::new(err.as_str())
-            .style(Style::default().fg(Color::White).bg(Color::Red))
-            .wrap(Wrap { trim: true });
-        f.render_widget(error_bar, area);
+/// Render the Terminal screen
+fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    // Update terminal size if the area changed
+    let new_rows = area.height.saturating_sub(2);
+    let new_cols = area.width.saturating_sub(2);
+    if app.terminal_size != (new_rows, new_cols) && new_rows > 0 && new_cols > 0 {
+        app.terminal_size = (new_rows, new_cols);
+        // Resize the parser to match
+        let mut parser = app.terminal_parser.write().unwrap();
+        parser.set_size(new_rows, new_cols);
     }
+
+    // Get content from the vt100 parser
+    let parser = app.terminal_parser.read().unwrap();
+    let screen = parser.screen();
+
+    // Build terminal content from the screen
+    let mut terminal_content: Vec<Line> = Vec::new();
+
+    for row in 0..screen.size().0 {
+        let mut spans: Vec<Span> = Vec::new();
+
+        for col in 0..screen.size().1 {
+            let cell = screen.cell(row, col).unwrap();
+            let ch = cell.contents();
+
+            // Convert vt100 color to ratatui color
+            let fg_color = match cell.fgcolor() {
+                vt100::Color::Default => Color::White,
+                vt100::Color::Idx(0) => Color::Black,
+                vt100::Color::Idx(1) => Color::Red,
+                vt100::Color::Idx(2) => Color::Green,
+                vt100::Color::Idx(3) => Color::Yellow,
+                vt100::Color::Idx(4) => Color::Blue,
+                vt100::Color::Idx(5) => Color::Magenta,
+                vt100::Color::Idx(6) => Color::Cyan,
+                vt100::Color::Idx(7) => Color::White,
+                vt100::Color::Idx(8) => Color::DarkGray,
+                vt100::Color::Idx(9) => Color::LightRed,
+                vt100::Color::Idx(10) => Color::LightGreen,
+                vt100::Color::Idx(11) => Color::LightYellow,
+                vt100::Color::Idx(12) => Color::LightBlue,
+                vt100::Color::Idx(13) => Color::LightMagenta,
+                vt100::Color::Idx(14) => Color::LightCyan,
+                vt100::Color::Idx(15) => Color::White,
+                vt100::Color::Idx(idx) => Color::Indexed(idx),
+                vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+            };
+
+            let bg_color = match cell.bgcolor() {
+                vt100::Color::Default => Color::Reset,
+                vt100::Color::Idx(0) => Color::Black,
+                vt100::Color::Idx(1) => Color::Red,
+                vt100::Color::Idx(2) => Color::Green,
+                vt100::Color::Idx(3) => Color::Yellow,
+                vt100::Color::Idx(4) => Color::Blue,
+                vt100::Color::Idx(5) => Color::Magenta,
+                vt100::Color::Idx(6) => Color::Cyan,
+                vt100::Color::Idx(7) => Color::White,
+                vt100::Color::Idx(8) => Color::DarkGray,
+                vt100::Color::Idx(idx) => Color::Indexed(idx),
+                vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+            };
+
+            let mut style = Style::default().fg(fg_color).bg(bg_color);
+
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if cell.inverse() {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+
+            // Use the character or a space if empty
+            let display_char = if ch.is_empty() {
+                " ".to_string()
+            } else {
+                ch.to_string()
+            };
+            spans.push(Span::styled(display_char, style));
+        }
+
+        terminal_content.push(Line::from(spans));
+    }
+
+    // Check if PTY is still running
+    let pty_running = {
+        let running = app.pty_running.lock().unwrap();
+        *running
+    };
+
+    let title = if app.insert_mode {
+        " Terminal [-- INSERT --] ".to_string()
+    } else if pty_running {
+        " Terminal [PTY Active - Press 'i' for Insert Mode] ".to_string()
+    } else if app.pty_writer.is_some() {
+        " Terminal [Process Exited] ".to_string()
+    } else {
+        " Terminal [Idle] ".to_string()
+    };
+
+    let terminal = Paragraph::new(terminal_content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(if pty_running {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            }),
+    );
+
+    f.render_widget(terminal, area);
 }
 
 /// Render footer with keybindings
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
-    let focus_indicator = match app.focus {
-        FocusPanel::Runs => "Runs",
-        FocusPanel::Tasks => "Tasks",
-        FocusPanel::Triggers => "Triggers",
-        FocusPanel::Details => "Logs",
+    let hints = match app.screen {
+        Screen::Workflows => "↑↓:Navigate │ Enter:Select │ c:Cancel │ r:Refresh │ ?:Help │ q:Quit",
+        Screen::Tasks => {
+            "↑↓:Navigate │ Enter:Select │ a:Trigger All │ Esc:Back │ r:Refresh │ ?:Help │ q:Quit"
+        }
+        Screen::Actions => {
+            "↑↓:Scroll │ g/G:Top/Bottom │ Ctrl+u/d:Half-Page │ t:Trigger │ a:Trigger All │ v:Terminal │ Esc:Back │ r:Refresh │ ?:Help │ q:Quit"
+        }
+        Screen::Terminal => {
+            if app.insert_mode {
+                "-- INSERT MODE -- │ Type to send input │ Enter:Submit │ Ctrl+C:Interrupt │ Esc:Exit Insert Mode"
+            } else {
+                "i:Insert Mode │ Ctrl+C:Interrupt │ Esc:Back │ q:Quit"
+            }
+        }
     };
 
-    let text = format!(
-        " [{}] Tab:Switch │ ↑↓/jk:Navigate │ c:Cancel │ r:Refresh │ ?:Help │ q:Quit ",
-        focus_indicator
-    );
-
-    let footer = Paragraph::new(text)
+    let footer = Paragraph::new(hints)
         .style(Style::default().fg(Color::Cyan).bg(Color::Black))
         .alignment(ratatui::layout::Alignment::Center);
+
     f.render_widget(footer, area);
 }
 
@@ -900,6 +2105,29 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .alignment(ratatui::layout::Alignment::Center);
             f.render_widget(popup, popup_area);
         }
+        Popup::ConfirmQuit => {
+            let popup_area = centered_rect(50, 25, f.area());
+            f.render_widget(Clear, popup_area);
+            let text = vec![
+                Line::from(""),
+                Line::from("  A task or workflow is currently running."),
+                Line::from(""),
+                Line::from("  Are you sure you want to quit?"),
+                Line::from(""),
+                Line::from("  Press 'y' to quit, 'n' to cancel"),
+                Line::from(""),
+            ];
+            let popup = Paragraph::new(text)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                        .title("Confirm Quit"),
+                )
+                .alignment(ratatui::layout::Alignment::Left)
+                .wrap(Wrap { trim: false });
+            f.render_widget(popup, popup_area);
+        }
         Popup::ConfirmTrigger(action) => {
             let popup_area = centered_rect(55, 35, f.area());
             f.render_widget(Clear, popup_area);
@@ -912,9 +2140,9 @@ fn render_popup(f: &mut Frame, app: &App) {
                         format!("Trigger all {} awaiting task(s)?", count),
                     )
                 }
-                TriggerAction::Selected(ids) => (
-                    " Trigger Selected ",
-                    format!("Trigger {} selected task(s)?", ids.len()),
+                TriggerAction::Single(task_id) => (
+                    " Trigger Task ",
+                    format!("Trigger task {}?", truncate(&task_id.to_string(), 12)),
                 ),
             };
 
@@ -943,6 +2171,73 @@ fn render_popup(f: &mut Frame, app: &App) {
                         .border_style(Style::default().fg(Color::Green)),
                 )
                 .alignment(ratatui::layout::Alignment::Center);
+            f.render_widget(popup, popup_area);
+        }
+        Popup::SecurityPrompt(capabilities, _) => {
+            let popup_area = centered_rect(70, 40, f.area());
+            f.render_widget(Clear, popup_area);
+
+            let text = vec![
+                Line::from(""),
+                Line::styled(
+                    "🛡️  Security Notice",
+                    Style::default().fg(Color::Red).bold(),
+                ),
+                Line::from(""),
+                Line::from(format!(
+                    "This action will grant access to `{}`, which may perform sensitive operations.",
+                    capabilities
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Are you sure you want to continue?",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("y", Style::default().fg(Color::Green).bold()),
+                    Span::raw(": Yes, continue  "),
+                    Span::styled("n", Style::default().fg(Color::Red).bold()),
+                    Span::raw(": No, abort"),
+                ]),
+            ];
+
+            let popup = Paragraph::new(text)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Security Warning ")
+                        .border_style(Style::default().fg(Color::Red)),
+                )
+                .alignment(ratatui::layout::Alignment::Center)
+                .wrap(Wrap { trim: true });
+            f.render_widget(popup, popup_area);
+        }
+        Popup::Error(msg) => {
+            let popup_area = centered_rect(70, 40, f.area());
+            f.render_widget(Clear, popup_area);
+
+            let text = vec![
+                Line::from(""),
+                Line::styled(" ✗ Error", Style::default().fg(Color::Red).bold()),
+                Line::from(""),
+                Line::from(msg.as_str()),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press any key to close",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let popup = Paragraph::new(text)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Error ")
+                        .border_style(Style::default().fg(Color::Red)),
+                )
+                .alignment(ratatui::layout::Alignment::Center)
+                .wrap(Wrap { trim: true });
             f.render_widget(popup, popup_area);
         }
         Popup::StatusMessage(msg, _) => {
@@ -976,15 +2271,18 @@ fn render_popup(f: &mut Frame, app: &App) {
             let text = vec![
                 Line::from(""),
                 Line::styled(" Navigation ", Style::default().bold().fg(Color::Yellow)),
-                Line::from("  Tab / Shift+Tab  Switch between panels"),
-                Line::from("  ↑/k ↓/j          Navigate within panel"),
+                Line::from("  ↑/k ↓/j          Navigate / Scroll"),
+                Line::from("  Enter            Go to next step"),
+                Line::from("  Esc / Backspace  Go back"),
+                Line::from("  g / G            Go to first / last"),
+                Line::from("  Ctrl+u / Ctrl+d  Half-page up / down (logs)"),
                 Line::from(""),
                 Line::styled(" Actions ", Style::default().bold().fg(Color::Yellow)),
-                Line::from("  c                Cancel selected workflow"),
-                Line::from("  r                Force refresh"),
-                Line::from("  Space            Toggle trigger selection"),
+                Line::from("  c                Cancel workflow (Step 1)"),
+                Line::from("  t                Trigger current task (Step 3)"),
                 Line::from("  a                Trigger all awaiting"),
-                Line::from("  t / Enter        Trigger selected"),
+                Line::from("  v                Open terminal view (when monitoring)"),
+                Line::from("  r                Force refresh"),
                 Line::from(""),
                 Line::styled(" General ", Style::default().bold().fg(Color::Yellow)),
                 Line::from("  ?                Show this help"),
@@ -1028,64 +2326,37 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-/// Render the UI in a grid layout
+/// Main UI render function
 fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
-    // Main layout: content + footer + optional error bar
-    let main_chunks = if app.error_message.is_some() {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(10),   // Main grid
-                Constraint::Length(1), // Footer
-                Constraint::Length(1), // Error bar
-            ])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(10),   // Main grid
-                Constraint::Length(1), // Footer
-            ])
-            .split(area)
-    };
-
-    let content_area = main_chunks[0];
-    let footer_area = main_chunks[1];
-
-    // Split content into top and bottom rows
-    let rows = Layout::default()
+    // Main layout: breadcrumb + content + footer
+    let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(content_area);
+        .constraints([
+            Constraint::Length(1), // Breadcrumb
+            Constraint::Min(10),   // Content
+            Constraint::Length(1), // Footer
+        ])
+        .split(area);
 
-    // Split top row: Runs (left) | Tasks (right)
-    let top_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(rows[0]);
+    let breadcrumb_area = main_chunks[0];
+    let content_area = main_chunks[1];
+    let footer_area = main_chunks[2];
 
-    // Split bottom row: Triggers (left) | Details (right)
-    let bottom_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(rows[1]);
+    // Render breadcrumb
+    render_breadcrumb(f, app, breadcrumb_area);
 
-    // Render all panels
-    render_runs_panel(f, app, top_cols[0], app.focus == FocusPanel::Runs);
-    render_tasks_panel(f, app, top_cols[1], app.focus == FocusPanel::Tasks);
-    render_triggers_panel(f, app, bottom_cols[0], app.focus == FocusPanel::Triggers);
-    render_details_panel(f, app, bottom_cols[1], app.focus == FocusPanel::Details);
+    // Render current screen
+    match app.screen {
+        Screen::Workflows => render_workflows_screen(f, app, content_area),
+        Screen::Tasks => render_tasks_screen(f, app, content_area),
+        Screen::Actions => render_actions_screen(f, app, content_area),
+        Screen::Terminal => render_terminal_screen(f, app, content_area),
+    }
 
     // Render footer
     render_footer(f, app, footer_area);
-
-    // Render error bar if present
-    if app.error_message.is_some() && main_chunks.len() > 2 {
-        render_error_bar(f, app, main_chunks[2]);
-    }
 
     // Render popup if any
     render_popup(f, app);
@@ -1099,10 +2370,28 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             app.refresh().await?;
         }
 
-        // Auto-dismiss status messages after 2 seconds
+        // Auto-dismiss status messages after 2 seconds (unless monitoring)
         if let Popup::StatusMessage(_, instant) = &app.popup {
-            if instant.elapsed() > Duration::from_secs(2) {
+            if instant.elapsed() > Duration::from_secs(2) && app.monitoring_task.is_none() {
                 app.popup = Popup::None;
+            }
+        }
+
+        // If monitoring a task or workflow, refresh more frequently to see logs and status
+        if (app.monitoring_task.is_some() || app.monitoring_workflow.is_some())
+            && app.last_refresh.elapsed() >= Duration::from_millis(200)
+        {
+            app.refresh().await?;
+        }
+
+        // Check for security prompt
+        if let Some(sender) = &app.security_prompt_sender {
+            if let Ok(mut guard) = sender.lock() {
+                if let Some((capabilities_str, response_tx)) = guard.take() {
+                    if let Popup::None = app.popup {
+                        app.popup = Popup::SecurityPrompt(capabilities_str, response_tx);
+                    }
+                }
             }
         }
 
@@ -1132,17 +2421,32 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 
 /// Initialize and run the TUI
 pub async fn handler(args: &Command) -> Result<()> {
-    // Create engine for read-only operations
-    let (engine, _) = create_engine(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
+    let security_prompt_sender: SecurityPromptSender = Arc::new(Mutex::new(None));
+    let security_prompt_sender_clone = security_prompt_sender.clone();
+
+    let tui_callback = create_tui_capabilities_callback(security_prompt_sender_clone);
+
+    // Create a minimal engine first - we'll recreate it with proper workflow path when needed
+    // For now, use current directory as placeholder
+    let workflow_file_path = std::env::current_dir()?;
+    let target_path = std::env::current_dir()?;
+
+    // Create engine using create_engine like resume.rs
+    // We'll use default values and override capabilities_security_callback
+    let (_, mut config) = create_engine(
+        workflow_file_path,
+        target_path,
+        false, // dry_run
+        false, // allow_dirty - respect git checks
+        std::collections::HashMap::new(),
         None,
-        None,
-        false,
+        None,  // capabilities - will be resolved from workflow run when needed
+        false, // no_interactive - TUI is interactive
     )?;
+
+    // Override capabilities_security_callback with TUI callback
+    config.capabilities_security_callback = Some(tui_callback);
+    let engine = Engine::with_workflow_run_config(config);
 
     let refresh_interval = if args.refresh_interval == 0 {
         Duration::ZERO
@@ -1151,6 +2455,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     };
 
     let mut app = App::new(engine, args.limit, refresh_interval);
+    app.security_prompt_sender = Some(security_prompt_sender);
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;

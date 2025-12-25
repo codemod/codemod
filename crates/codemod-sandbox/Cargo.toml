@@ -47,6 +47,7 @@ codemod-llrt-capabilities = { workspace = true, optional = true, features = ["na
 language-core = { workspace = true, optional = true }
 language-javascript = { workspace = true, optional = true }
 language-python = { workspace = true, optional = true }
+gag = { version = "1.0", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -80,6 +81,7 @@ native = [
   "language-core",
   "language-javascript",
   "language-python",
+  "gag",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

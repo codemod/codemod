@@ -10,13 +10,46 @@ use butterflow_core::registry::{RegistryClient, RegistryConfig};
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use uuid::Uuid;
 
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
 use crate::{dirty_git_check, progress_bar};
 
-pub fn create_progress_callback() -> ProgressCallback {
-    let (progress_reporter, _) = progress_bar::create_multi_progress_reporter();
+pub fn create_progress_callback_with_engine(engine: Option<Arc<Engine>>) -> ProgressCallback {
+    // Clone engine for use in closure (needed because closure is Fn, not FnOnce)
+    let engine_clone = engine.clone();
+    // Create task log callback
+    // Use a channel to queue log messages and process them asynchronously
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Uuid, String)>();
+    let tx_for_callback = tx.clone();
+
+    // Spawn a background task to process log messages with batching for better performance
+    if let Some(engine) = engine_clone.clone() {
+        let engine_for_logger = Arc::clone(&engine);
+        // Try to get current runtime handle to spawn the logger task
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                while let Some((task_id, log_message)) = rx.recv().await {
+                    if let Err(e) = engine_for_logger.add_task_log(task_id, log_message).await {
+                        log::error!("Failed to add task log: {}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    let task_log_callback: progress_bar::TaskLogCallback =
+        Arc::new(Box::new(move |task_id_str: String, log_message: String| {
+            // Try to parse task_id as Uuid
+            if let Ok(task_id) = Uuid::parse_str(&task_id_str) {
+                // Send to channel (non-blocking, won't fail even if receiver is dropped)
+                let _ = tx_for_callback.send((task_id, log_message));
+            }
+        }));
+
+    let (progress_reporter, _) =
+        progress_bar::create_multi_progress_reporter(Some(task_log_callback));
     ProgressCallback {
         callback: Arc::new(Box::new(
             move |task_id: &str, path: &str, status: &str, count: Option<&u64>, index: &u64| {
@@ -100,14 +133,14 @@ pub fn create_engine(
         }
     });
 
-    let progress_callback = create_progress_callback();
-
     let registry_client = create_registry_client(registry)?;
 
     let capabilities_security_callback = capabilities_security_callback(no_interactive);
-    let config = WorkflowRunConfig {
+
+    // Create a temporary config without progress_callback first
+    let mut config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
-        progress_callback: Arc::new(Some(progress_callback)),
+        progress_callback: Arc::new(None), // Will be set after engine creation
         dry_run,
         target_path,
         workflow_file_path,
@@ -120,7 +153,7 @@ pub fn create_engine(
     };
 
     // Check for environment variables first
-    if let (Some(backend), Some(endpoint), auth_token) = (
+    let engine = if let (Some(backend), Some(endpoint), auth_token) = (
         std::env::var("BUTTERFLOW_STATE_BACKEND").ok(),
         std::env::var("BUTTERFLOW_API_ENDPOINT").ok(),
         std::env::var("BUTTERFLOW_API_AUTH_TOKEN")
@@ -130,14 +163,23 @@ pub fn create_engine(
         if backend == "cloud" {
             // Create API state adapter
             let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
-            return Ok((
-                Engine::with_state_adapter(state_adapter, config.clone()),
-                config.clone(),
-            ));
+            Engine::with_state_adapter(state_adapter, config.clone())
+        } else {
+            Engine::with_workflow_run_config(config.clone())
         }
-    }
+    } else {
+        Engine::with_workflow_run_config(config.clone())
+    };
 
-    Ok((Engine::with_workflow_run_config(config.clone()), config))
+    // Now create progress callback with engine reference
+    let engine_arc = Arc::new(engine);
+    let progress_callback = create_progress_callback_with_engine(Some(Arc::clone(&engine_arc)));
+    config.progress_callback = Arc::new(Some(progress_callback));
+
+    // Clone the engine to return it (shares the same state_adapter via Arc)
+    // The progress_callback will use the Arc<Engine> to update task logs
+    let final_engine = (*engine_arc).clone();
+    Ok((final_engine, config))
 }
 
 pub fn create_registry_client(registry: Option<String>) -> Result<RegistryClient> {
