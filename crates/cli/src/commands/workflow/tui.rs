@@ -23,7 +23,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
 use tokio::sync::oneshot;
@@ -221,17 +221,6 @@ enum Screen {
     Actions,
     /// Terminal view for running task execution
     Terminal,
-}
-
-impl Screen {
-    fn step_number(self) -> u8 {
-        match self {
-            Screen::Workflows => 1,
-            Screen::Tasks => 2,
-            Screen::Actions => 3,
-            Screen::Terminal => 4,
-        }
-    }
 }
 
 /// Trigger action type
@@ -1367,30 +1356,49 @@ fn task_status_symbol(status: TaskStatus) -> &'static str {
 }
 
 /// Render breadcrumb navigation
+/// Render the top navigation bar
+/// Render the top navigation bar with a premium look
 fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
+    // Theme colors
+    let brand_bg = Color::Rgb(214, 255, 98); // Codemod Green #d6ff62
+    let brand_fg = Color::Black;
+    let bg_color = Color::Rgb(20, 20, 25); // Dark background
+    let text_color = Color::Rgb(170, 170, 180);
+    let active_color = Color::Rgb(214, 255, 98); // Matches brand color
+    let step_bg_active = Color::Rgb(40, 50, 40); // Subtle green tint for active background
+
     let mut spans = vec![
-        Span::styled("  ", Style::default()),
+        // Brand Logo Area
         Span::styled(
-            format!(" {} ", app.screen.step_number()),
-            Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
+            " ⚡ CODEMOD ",
+            Style::default().fg(brand_fg).bg(brand_bg).bold(),
         ),
-        Span::styled(" ", Style::default()),
+        Span::styled("", Style::default().fg(brand_bg).bg(bg_color)),
+        Span::styled(" ", Style::default().bg(bg_color)),
     ];
 
-    // Build breadcrumb path
-    let mut path_parts: Vec<Span> = vec![];
+    // Build breadcrumb path with chevron dividers
+    let sep = Span::styled("  ", Style::default().fg(Color::DarkGray).bg(bg_color));
 
-    path_parts.push(Span::styled(
-        "Workflows",
+    // WORKFLOWS
+    let workflows_style = if app.screen == Screen::Workflows {
+        Style::default().fg(active_color).bg(step_bg_active).bold()
+    } else {
+        Style::default().fg(text_color).bg(bg_color)
+    };
+
+    // Icon for workflows
+    spans.push(Span::styled(
         if app.screen == Screen::Workflows {
-            Style::default().fg(Color::Cyan).bold()
+            "  Workflows "
         } else {
-            Style::default().fg(Color::DarkGray)
+            " Workflows "
         },
+        workflows_style,
     ));
 
     if app.screen != Screen::Workflows {
-        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
+        spans.push(sep.clone());
 
         let run_name = app
             .selected_run
@@ -1399,18 +1407,17 @@ fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
             .map(|n| truncate(&n.name, 20))
             .unwrap_or_else(|| "Tasks".to_string());
 
-        path_parts.push(Span::styled(
-            run_name,
-            if app.screen == Screen::Tasks {
-                Style::default().fg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::DarkGray)
-            },
-        ));
+        let tasks_style = if app.screen == Screen::Tasks {
+            Style::default().fg(active_color).bg(step_bg_active).bold()
+        } else {
+            Style::default().fg(text_color).bg(bg_color)
+        };
+
+        spans.push(Span::styled(format!(" {} ", run_name), tasks_style));
     }
 
     if app.screen == Screen::Actions || app.screen == Screen::Terminal {
-        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
+        spans.push(sep.clone());
 
         let task_name = if app.screen == Screen::Terminal {
             app.terminal_task
@@ -1424,31 +1431,30 @@ fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| "Actions".to_string())
         };
 
-        path_parts.push(Span::styled(
-            task_name,
-            if app.screen == Screen::Actions {
-                Style::default().fg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::Green).bold()
-            },
-        ));
+        let action_style = if app.screen == Screen::Actions {
+            Style::default().fg(active_color).bg(step_bg_active).bold()
+        } else {
+            Style::default().fg(text_color).bg(bg_color)
+        };
+
+        spans.push(Span::styled(format!(" {} ", task_name), action_style));
     }
 
     if app.screen == Screen::Terminal {
-        path_parts.push(Span::styled(" › ", Style::default().fg(Color::DarkGray)));
-        path_parts.push(Span::styled(
-            "Terminal",
-            Style::default().fg(Color::Green).bold(),
+        spans.push(sep);
+        spans.push(Span::styled(
+            "  Terminal ",
+            Style::default().fg(active_color).bg(step_bg_active).bold(),
         ));
     }
 
-    spans.extend(path_parts);
-
-    let breadcrumb = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
+    // Fill the rest with background color
+    let breadcrumb = Paragraph::new(Line::from(spans)).style(Style::default().bg(bg_color));
 
     f.render_widget(breadcrumb, area);
 }
 
+/// Render the Workflows screen (Step 1)
 /// Render the Workflows screen (Step 1)
 fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
@@ -1457,10 +1463,19 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     // Left: Workflows list
+    let header_style = Style::default().fg(Color::Rgb(214, 255, 98)).bold(); // Brand green for headers
+    let selected_style = Style::default()
+        .bg(Color::Rgb(40, 50, 40)) // Subtle green bg
+        .fg(Color::Rgb(214, 255, 98)) // Brand green text
+        .add_modifier(Modifier::BOLD);
+
     let header_cells = ["ID", "Status", "Name", "Started"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
-    let header_row = Row::new(header_cells).height(1);
+        .map(|h| Cell::from(format!(" {} ", h)).style(header_style));
+    let header_row = Row::new(header_cells)
+        .height(1)
+        .bottom_margin(1)
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows = app.runs.iter().map(|run| {
         let name = run
@@ -1472,13 +1487,20 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
         let started = run.started_at.format("%m-%d %H:%M").to_string();
 
+        // Pad cells
         Row::new(vec![
-            Cell::from(truncate(&run.id.to_string(), 8)),
-            Cell::from(status_symbol(run.status))
-                .style(Style::default().fg(status_color(run.status))),
-            Cell::from(name),
-            Cell::from(started),
+            Cell::from(format!(" {} ", truncate(&run.id.to_string(), 8))),
+            Cell::from(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    status_symbol(run.status),
+                    Style::default().fg(status_color(run.status)),
+                ),
+            ])),
+            Cell::from(format!(" {} ", name)),
+            Cell::from(format!(" {} ", started)),
         ])
+        .height(1)
     });
 
     let table = Table::new(
@@ -1494,15 +1516,26 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Workflow Runs ({}) ", app.runs.len()))
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                format!("  Workflow Runs ({}) ", app.runs.len()),
+                Style::default().bold(),
+            )),
     )
-    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-    .highlight_symbol("▶ ");
+    .row_highlight_style(selected_style)
+    .highlight_symbol("▎"); // Modern thick bar indicator
 
     f.render_stateful_widget(table, chunks[0], &mut app.runs_state);
 
     // Right: Preview of selected workflow
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" Details ", Style::default().bold()))
+        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
+
     let preview_content: Vec<Line> = if let Some(idx) = app.runs_state.selected() {
         if let Some(run) = app.runs.get(idx) {
             let name = run
@@ -1522,69 +1555,73 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 });
 
             vec![
+                Line::from(vec![Span::styled(
+                    "Name ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::styled(
+                    format!("  {}", name),
+                    Style::default().bold(),
+                )]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Name: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(name),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Run ID ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::raw(format!("  {}", run.id))]),
                 Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Status ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
                 Line::from(vec![
-                    Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(run.id.to_string()),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw("  "),
                     Span::styled(
                         format!("{} {:?}", status_symbol(run.status), run.status),
                         Style::default().fg(status_color(run.status)).bold(),
                     ),
                 ]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Duration: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(format_duration(duration)),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Duration ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::raw(format!("  {}", format_duration(duration)))]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Started: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(run.started_at.format("%Y-%m-%d %H:%M:%S").to_string()),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Nodes: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(format!("{}", run.workflow.nodes.len())),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Started ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::raw(format!(
+                    "  {}",
+                    run.started_at.format("%Y-%m-%d %H:%M:%S")
+                ))]),
                 Line::from(""),
                 Line::from(""),
                 Line::styled(
-                    "  Press Enter to view tasks →",
-                    Style::default().fg(Color::Cyan),
+                    "Press Enter to view tasks",
+                    Style::default().fg(Color::Rgb(100, 180, 255)).italic(),
                 ),
             ]
         } else {
             vec![Line::styled(
-                "  No workflow selected",
+                "No workflow selected",
                 Style::default().fg(Color::DarkGray),
             )]
         }
     } else {
         vec![Line::styled(
-            "  No workflow selected",
+            "No workflow selected",
             Style::default().fg(Color::DarkGray),
         )]
     };
 
-    let preview = Paragraph::new(preview_content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Preview ")
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    let preview = Paragraph::new(preview_content).block(preview_block);
 
     f.render_widget(preview, chunks[1]);
 }
 
+/// Render the Tasks screen (Step 2)
 /// Render the Tasks screen (Step 2)
 fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
@@ -1593,10 +1630,19 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     // Left: Tasks list
+    let header_style = Style::default().fg(Color::Rgb(214, 255, 98)).bold(); // Brand green
+    let selected_style = Style::default()
+        .bg(Color::Rgb(40, 50, 40)) // Subtle green bg
+        .fg(Color::Rgb(214, 255, 98)) // Brand green text
+        .add_modifier(Modifier::BOLD);
+
     let header_cells = ["Node ID", "Status", "Matrix"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
-    let header_row = Row::new(header_cells).height(1);
+        .map(|h| Cell::from(*h).style(header_style));
+    let header_row = Row::new(header_cells)
+        .height(1)
+        .bottom_margin(1)
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows = app.tasks.iter().map(|task| {
         let matrix_info = task
@@ -1625,6 +1671,7 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 .style(Style::default().fg(task_status_color(task.status))),
             Cell::from(truncate(&matrix_info, 20)),
         ])
+        .height(1)
     });
 
     let run_name = app
@@ -1646,42 +1693,64 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Tasks ({}) - {} ", app.tasks.len(), run_name))
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                format!(" Tasks ({}) - {} ", app.tasks.len(), run_name),
+                Style::default().bold(),
+            )),
     )
-    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-    .highlight_symbol("▶ ");
+    .row_highlight_style(selected_style)
+    .highlight_symbol("│ ");
 
     f.render_stateful_widget(table, chunks[0], &mut app.tasks_state);
 
     // Right: Task preview
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" Task Details ", Style::default().bold()))
+        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
+
     let preview_content: Vec<Line> = if let Some(idx) = app.tasks_state.selected() {
         if let Some(task) = app.tasks.get(idx) {
             let mut lines = vec![
+                Line::from(vec![Span::styled(
+                    "Node ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::styled(
+                    format!("  {}", task.node_id),
+                    Style::default().bold(),
+                )]),
                 Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Status ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
                 Line::from(vec![
-                    Span::styled("  Node: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(task.node_id.clone()),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw("  "),
                     Span::styled(
                         format!("{} {:?}", task_status_symbol(task.status), task.status),
                         Style::default().fg(task_status_color(task.status)).bold(),
                     ),
                 ]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(truncate(&task.id.to_string(), 30)),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Task ID ",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::raw(format!(
+                    "  {}",
+                    truncate(&task.id.to_string(), 30)
+                ))]),
             ];
 
             if let Some(matrix) = &task.matrix_values {
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
-                    "  Matrix Values:",
+                    "Matrix Values:",
                     Style::default().fg(Color::DarkGray),
                 ));
                 let mut matrix_entries: Vec<_> = matrix.iter().collect();
@@ -1694,8 +1763,8 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 });
                 for (k, v) in matrix_entries {
                     lines.push(Line::from(vec![
-                        Span::raw("    "),
-                        Span::styled(k, Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(k, Style::default().fg(Color::Rgb(250, 180, 100))),
                         Span::raw(": "),
                         Span::raw(v.to_string()),
                     ]));
@@ -1705,82 +1774,84 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
             if !task.logs.is_empty() {
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
-                    format!("  Logs: {} entries", task.logs.len()),
+                    format!("Logs: {} entries", task.logs.len()),
                     Style::default().fg(Color::DarkGray),
                 ));
             }
 
             lines.push(Line::from(""));
-            lines.push(Line::from(""));
             lines.push(Line::styled(
-                "  Press Enter to view details →",
-                Style::default().fg(Color::Cyan),
+                "Press Enter to view details",
+                Style::default().fg(Color::Rgb(100, 180, 255)).italic(),
             ));
 
             lines
         } else {
             vec![Line::styled(
-                "  No task selected",
+                "No task selected",
                 Style::default().fg(Color::DarkGray),
             )]
         }
     } else {
         vec![Line::styled(
-            "  No task selected",
+            "No task selected",
             Style::default().fg(Color::DarkGray),
         )]
     };
 
-    let preview = Paragraph::new(preview_content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Task Preview ")
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    let preview = Paragraph::new(preview_content).block(preview_block);
 
     f.render_widget(preview, chunks[1]);
 }
 
 /// Render the Actions screen (Step 3)
+/// Render the Actions screen (Step 3)
 fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    // Layout
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
+    // Styles
+    // accent_color removed as it was unused, using literal colors directly or label/value styles
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().add_modifier(Modifier::BOLD);
+
     // Left: Task details and actions
+    let details_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" Task Control ", Style::default().bold()))
+        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
+
     let details_content: Vec<Line> = if let Some(task) = &app.selected_task {
         let mut lines = vec![
-            Line::from(""),
-            Line::styled(
-                " ═══ Task Details ═══",
-                Style::default().fg(Color::Cyan).bold(),
-            ),
+            Line::styled("DETAILS", Style::default().fg(Color::DarkGray).bold()),
             Line::from(""),
             Line::from(vec![
-                Span::styled("  Node: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(task.node_id.clone(), Style::default().bold()),
+                Span::styled("Node: ", label_style),
+                Span::styled(task.node_id.clone(), value_style),
             ]),
-            Line::from(""),
             Line::from(vec![
-                Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Status: ", label_style),
                 Span::styled(
                     format!("{} {:?}", task_status_symbol(task.status), task.status),
                     Style::default().fg(task_status_color(task.status)).bold(),
                 ),
             ]),
-            Line::from(""),
             Line::from(vec![
-                Span::styled("  ID: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(task.id.to_string()),
+                Span::styled("ID: ", label_style),
+                Span::raw(truncate(&task.id.to_string(), 12)),
             ]),
         ];
 
         if let Some(matrix) = &task.matrix_values {
             lines.push(Line::from(""));
             lines.push(Line::styled(
-                " ═══ Matrix Values ═══",
-                Style::default().fg(Color::Cyan).bold(),
+                "MATRIX",
+                Style::default().fg(Color::DarkGray).bold(),
             ));
             let mut matrix_entries: Vec<_> = matrix.iter().collect();
             matrix_entries.sort_by(|(k1, v1), (k2, v2)| {
@@ -1793,7 +1864,7 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
             for (k, v) in matrix_entries {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(k, Style::default().fg(Color::Yellow)),
+                    Span::styled(k, Style::default().fg(Color::Rgb(250, 180, 100))),
                     Span::raw(": "),
                     Span::raw(v.to_string()),
                 ]));
@@ -1801,21 +1872,24 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         lines.push(Line::from(""));
+        lines.push(Line::from(""));
         lines.push(Line::styled(
-            " ═══ Actions ═══",
-            Style::default().fg(Color::Cyan).bold(),
+            "ACTIONS",
+            Style::default().fg(Color::DarkGray).bold(),
         ));
         lines.push(Line::from(""));
 
         if task.status == TaskStatus::AwaitingTrigger {
             lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("[t]", Style::default().fg(Color::Green).bold()),
+                Span::styled(
+                    " t ",
+                    Style::default().bg(Color::Green).fg(Color::Black).bold(),
+                ),
                 Span::raw(" Trigger this task"),
             ]));
         } else {
             lines.push(Line::styled(
-                "  (No actions available)",
+                " (No actions available)",
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -1824,8 +1898,10 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
         if awaiting_count > 0 {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("[a]", Style::default().fg(Color::Yellow).bold()),
+                Span::styled(
+                    " a ",
+                    Style::default().bg(Color::Yellow).fg(Color::Black).bold(),
+                ),
                 Span::raw(format!(" Trigger all awaiting ({})", awaiting_count)),
             ]));
         }
@@ -1833,28 +1909,38 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
         lines
     } else {
         vec![Line::styled(
-            "  No task selected",
+            "No task selected",
             Style::default().fg(Color::DarkGray),
         )]
     };
 
     let details = Paragraph::new(details_content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Details & Actions ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
+        .block(details_block)
         .wrap(Wrap { trim: false });
 
     f.render_widget(details, chunks[0]);
 
     // Right: Logs
+    let logs_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            format!(
+                " Logs ({}) ",
+                app.selected_task
+                    .as_ref()
+                    .map(|t| t.logs.len())
+                    .unwrap_or(0)
+            ),
+            Style::default().bold(),
+        ));
+
     let logs_content: Vec<Line> = if let Some(task) = &app.selected_task {
         if task.logs.is_empty() {
             vec![
                 Line::from(""),
-                Line::styled("  No logs available", Style::default().fg(Color::DarkGray)),
+                Line::styled("No logs available", Style::default().fg(Color::DarkGray)),
             ]
         } else {
             let mut lines = vec![Line::from("")];
@@ -1873,47 +1959,43 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
                     || cleaned_log.contains("error:")
                     || cleaned_log.contains("failed")
                 {
-                    (Style::default().fg(Color::Red), "  ✗ ")
+                    (Style::default().fg(Color::Red), " ✗ ")
                 } else if cleaned_log.contains("WARN") || cleaned_log.contains("warning:") {
-                    (Style::default().fg(Color::Yellow), "  ⚠ ")
+                    (Style::default().fg(Color::Yellow), " ⚠ ")
                 } else if cleaned_log.contains("INFO") || cleaned_log.contains("info:") {
-                    (Style::default().fg(Color::Cyan), "  ℹ ")
+                    (Style::default().fg(Color::Cyan), " ℹ ")
                 } else {
-                    (Style::default(), "     ")
+                    (Style::default().fg(Color::DarkGray), "   ")
+                };
+
+                // Apply syntax highlighting if possible (simple heuristic)
+                let styled_log = if cleaned_log.starts_with(">") || cleaned_log.starts_with("$") {
+                    // Command
+                    Span::styled(cleaned_log, Style::default().fg(Color::Green))
+                } else {
+                    Span::styled(cleaned_log, style)
                 };
 
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("  [{:>3}]", i + 1),
-                        Style::default().fg(Color::DarkGray),
+                        format!("{:>3} ", i + 1),
+                        Style::default().fg(Color::Rgb(60, 60, 60)),
                     ),
                     Span::raw(prefix),
-                    Span::styled(cleaned_log, style),
+                    styled_log,
                 ]));
-                lines.push(Line::from(""));
             }
             lines
         }
     } else {
         vec![Line::styled(
-            "  No logs",
+            "No logs",
             Style::default().fg(Color::DarkGray),
         )]
     };
 
     let logs = Paragraph::new(logs_content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " Logs ({}) [↑↓ scroll] ",
-                    app.selected_task
-                        .as_ref()
-                        .map(|t| t.logs.len())
-                        .unwrap_or(0)
-                ))
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
+        .block(logs_block)
         .scroll((app.log_scroll as u16, 0))
         .wrap(Wrap { trim: false });
 
@@ -1921,10 +2003,45 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render the Terminal screen
+/// Render the Terminal screen
 fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
+    // Check if PTY is still running
+    let pty_running = {
+        let running = app.pty_running.lock().unwrap();
+        *running
+    };
+
+    let title = if app.insert_mode {
+        " Terminal [-- INSERT --] "
+    } else if pty_running {
+        " Terminal "
+    } else if app.pty_writer.is_some() {
+        " Terminal [Process Exited] "
+    } else {
+        " Terminal [Idle] "
+    };
+
+    let border_color = if app.insert_mode {
+        Color::Red
+    } else if pty_running {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(title, Style::default().bold()))
+        .border_style(Style::default().fg(border_color));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
     // Update terminal size if the area changed
-    let new_rows = area.height.saturating_sub(2);
-    let new_cols = area.width.saturating_sub(2);
+    let new_rows = inner_area.height;
+    let new_cols = inner_area.width;
+
     if app.terminal_size != (new_rows, new_cols) && new_rows > 0 && new_cols > 0 {
         app.terminal_size = (new_rows, new_cols);
         // Resize the parser to match
@@ -1948,7 +2065,7 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
             // Convert vt100 color to ratatui color
             let fg_color = match cell.fgcolor() {
-                vt100::Color::Default => Color::White,
+                vt100::Color::Default => Color::Reset, // Use Reset instead of White for better blending
                 vt100::Color::Idx(0) => Color::Black,
                 vt100::Color::Idx(1) => Color::Red,
                 vt100::Color::Idx(2) => Color::Green,
@@ -1956,7 +2073,7 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 vt100::Color::Idx(4) => Color::Blue,
                 vt100::Color::Idx(5) => Color::Magenta,
                 vt100::Color::Idx(6) => Color::Cyan,
-                vt100::Color::Idx(7) => Color::White,
+                vt100::Color::Idx(7) => Color::Gray,
                 vt100::Color::Idx(8) => Color::DarkGray,
                 vt100::Color::Idx(9) => Color::LightRed,
                 vt100::Color::Idx(10) => Color::LightGreen,
@@ -1978,7 +2095,7 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 vt100::Color::Idx(4) => Color::Blue,
                 vt100::Color::Idx(5) => Color::Magenta,
                 vt100::Color::Idx(6) => Color::Cyan,
-                vt100::Color::Idx(7) => Color::White,
+                vt100::Color::Idx(7) => Color::Gray,
                 vt100::Color::Idx(8) => Color::DarkGray,
                 vt100::Color::Idx(idx) => Color::Indexed(idx),
                 vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
@@ -2011,62 +2128,65 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
         terminal_content.push(Line::from(spans));
     }
 
-    // Check if PTY is still running
-    let pty_running = {
-        let running = app.pty_running.lock().unwrap();
-        *running
-    };
-
-    let title = if app.insert_mode {
-        " Terminal [-- INSERT --] ".to_string()
-    } else if pty_running {
-        " Terminal [PTY Active - Press 'i' for Insert Mode] ".to_string()
-    } else if app.pty_writer.is_some() {
-        " Terminal [Process Exited] ".to_string()
-    } else {
-        " Terminal [Idle] ".to_string()
-    };
-
-    let terminal = Paragraph::new(terminal_content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(if pty_running {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            }),
-    );
-
-    f.render_widget(terminal, area);
+    let terminal = Paragraph::new(terminal_content);
+    f.render_widget(terminal, inner_area);
 }
 
 /// Render footer with keybindings
+/// Render footer with keybindings
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
+    let mode = match app.screen {
+        Screen::Terminal if app.insert_mode => " INSERT ",
+        Screen::Terminal => " TERMINAL ",
+        _ => " NORMAL ",
+    };
+
+    let mode_bg = match mode {
+        " INSERT " => Color::Rgb(200, 80, 80),     // Soft red
+        " TERMINAL " => Color::Rgb(100, 200, 100), // Soft green (different from brand)
+        _ => Color::Rgb(214, 255, 98),             // Brand green #d6ff62
+    };
+
+    let mode_fg = match mode {
+        " INSERT " => Color::Black,
+        " TERMINAL " => Color::Black,
+        _ => Color::Black, // Black text on brand green is key for this specific color
+    };
+
     let hints = match app.screen {
-        Screen::Workflows => "↑↓:Navigate │ Enter:Select │ c:Cancel │ r:Refresh │ ?:Help │ q:Quit",
-        Screen::Tasks => {
-            "↑↓:Navigate │ Enter:Select │ a:Trigger All │ Esc:Back │ r:Refresh │ ?:Help │ q:Quit"
-        }
+        Screen::Workflows => " ▲/▼ Navigate • Enter Select • c Cancel • r Refresh • ? Help • q Quit ",
+        Screen::Tasks => " ▲/▼ Navigate • Enter Select • a Trigger All • Esc Back • r Refresh • ? Help • q Quit ",
         Screen::Actions => {
-            "↑↓:Scroll │ g/G:Top/Bottom │ Ctrl+u/d:Half-Page │ t:Trigger │ a:Trigger All │ v:Terminal │ Esc:Back │ r:Refresh │ ?:Help │ q:Quit"
+            " ▲/▼ Scroll • t Trigger • a Trigger All • v Terminal • Esc Back • r Refresh • ? Help • q Quit "
         }
         Screen::Terminal => {
             if app.insert_mode {
-                "-- INSERT MODE -- │ Type to send input │ Enter:Submit │ Ctrl+C:Interrupt │ Esc:Exit Insert Mode"
+                " Type to input • Enter Submit • Ctrl+C Interrupt • Esc Exit Insert Mode "
             } else {
-                "i:Insert Mode │ Ctrl+C:Interrupt │ Esc:Back │ q:Quit"
+                " i Insert • Ctrl+C Interrupt • Esc Back • q Quit "
             }
         }
     };
 
-    let footer = Paragraph::new(hints)
-        .style(Style::default().fg(Color::Cyan).bg(Color::Black))
-        .alignment(ratatui::layout::Alignment::Center);
+    let spans = vec![
+        Span::styled(mode, Style::default().bg(mode_bg).fg(mode_fg).bold()),
+        Span::styled("", Style::default().fg(mode_bg).bg(Color::Rgb(30, 30, 35))),
+        Span::styled(
+            hints,
+            Style::default()
+                .fg(Color::Rgb(180, 180, 190))
+                .bg(Color::Rgb(30, 30, 35)),
+        ),
+    ];
+
+    let footer = Paragraph::new(Line::from(spans))
+        .alignment(ratatui::layout::Alignment::Left)
+        .block(Block::default().style(Style::default().bg(Color::Rgb(30, 30, 35))));
 
     f.render_widget(footer, area);
 }
 
+/// Render popup dialogs
 /// Render popup dialogs
 fn render_popup(f: &mut Frame, app: &App) {
     match &app.popup {
@@ -2099,6 +2219,7 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Confirm Cancel ")
                         .border_style(Style::default().fg(Color::Yellow)),
                 )
@@ -2121,8 +2242,9 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(Color::Yellow))
-                        .title("Confirm Quit"),
+                        .title(" Confirm Quit "),
                 )
                 .alignment(ratatui::layout::Alignment::Left)
                 .wrap(Wrap { trim: false });
@@ -2167,6 +2289,7 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(title)
                         .border_style(Style::default().fg(Color::Green)),
                 )
@@ -2206,6 +2329,7 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Security Warning ")
                         .border_style(Style::default().fg(Color::Red)),
                 )
@@ -2233,6 +2357,7 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Error ")
                         .border_style(Style::default().fg(Color::Red)),
                 )
@@ -2258,6 +2383,7 @@ fn render_popup(f: &mut Frame, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Status ")
                         .border_style(Style::default().fg(Color::Cyan)),
                 )
@@ -2297,6 +2423,7 @@ fn render_popup(f: &mut Frame, app: &App) {
             let popup = Paragraph::new(text).block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .title(" Help ")
                     .border_style(Style::default().fg(Color::Cyan)),
             );
