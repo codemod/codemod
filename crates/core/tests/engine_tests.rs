@@ -1781,7 +1781,6 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &_task,
         )
         .await;
 
@@ -1841,19 +1840,6 @@ message: "Found interface declaration"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let task = Task {
-        id: Uuid::new_v4(),
-        workflow_run_id: Uuid::new_v4(),
-        node_id: "test-node".to_string(),
-        status: TaskStatus::Pending,
-        is_master: false,
-        master_task_id: None,
-        matrix_values: None,
-        started_at: None,
-        ended_at: None,
-        logs: vec![],
-        error: None,
-    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1865,7 +1851,6 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &task,
         )
         .await;
 
@@ -1890,19 +1875,6 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let task = Task {
-        id: Uuid::new_v4(),
-        workflow_run_id: Uuid::new_v4(),
-        node_id: "test-node".to_string(),
-        status: TaskStatus::Pending,
-        is_master: false,
-        master_task_id: None,
-        matrix_values: None,
-        started_at: None,
-        ended_at: None,
-        logs: vec![],
-        error: None,
-    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1914,7 +1886,6 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &task,
         )
         .await;
 
@@ -1962,19 +1933,6 @@ message: "Found console.log statement"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let task = Task {
-        id: Uuid::new_v4(),
-        workflow_run_id: Uuid::new_v4(),
-        node_id: "test-node".to_string(),
-        status: TaskStatus::Pending,
-        is_master: false,
-        master_task_id: None,
-        matrix_values: None,
-        started_at: None,
-        ended_at: None,
-        logs: vec![],
-        error: None,
-    };
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1986,7 +1944,6 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &task,
         )
         .await;
 
@@ -2039,12 +1996,6 @@ function helper() {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2059,6 +2010,17 @@ function helper() {
         logs: vec![],
         error: None,
     };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path and populated state adapter
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
@@ -2144,12 +2106,6 @@ interface ApiResponse {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2164,6 +2120,17 @@ interface ApiResponse {
         logs: vec![],
         error: None,
     };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
@@ -2227,12 +2194,6 @@ var count = 0;
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2247,6 +2208,17 @@ var count = 0;
         logs: vec![],
         error: None,
     };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
@@ -2290,12 +2262,6 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     create_test_file(temp_path, "test.js", "console.log('test');");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2310,6 +2276,17 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
         logs: vec![],
         error: None,
     };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
@@ -2381,12 +2358,6 @@ build/
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2401,6 +2372,32 @@ build/
         logs: vec![],
         error: None,
     };
+
+    let task2 = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+    state_adapter.save_task(&task2).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
@@ -2435,19 +2432,6 @@ build/
     );
 
     // Test second execution
-    let task2 = Task {
-        id: Uuid::new_v4(),
-        workflow_run_id: Uuid::new_v4(),
-        node_id: "test-node".to_string(),
-        status: TaskStatus::Pending,
-        is_master: false,
-        master_task_id: None,
-        matrix_values: None,
-        started_at: None,
-        ended_at: None,
-        logs: vec![],
-        error: None,
-    };
 
     let result_no_gitignore = engine
         .execute_js_ast_grep_step(
@@ -2507,12 +2491,6 @@ export default function transform(ast) {
     create_test_file(temp_path, "regular.js", "const normal = 'visible';");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
     // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
@@ -2527,6 +2505,17 @@ export default function transform(ast) {
         logs: vec![],
         error: None,
     };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
 
     let result = engine
         .execute_js_ast_grep_step(
