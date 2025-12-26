@@ -83,6 +83,19 @@ fn run_resume_command_in_terminal(
             cmd.arg(task_id.to_string());
         }
     }
+    if app.allow_fs {
+        cmd.arg("--allow-fs");
+    }
+    if app.allow_fetch {
+        cmd.arg("--allow-fetch");
+    }
+    if app.allow_child_process {
+        cmd.arg("--allow-child-process");
+    }
+
+    if app.dry_run {
+        cmd.arg("--dry-run");
+    }
 
     // Spawn child process in the PTY
     let _child = pair
@@ -160,6 +173,22 @@ pub struct Command {
     /// Auto-refresh interval in seconds (0 to disable)
     #[arg(long, default_value = "1")]
     refresh_interval: u64,
+
+    /// Dry run mode - don't make actual changes
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Allow fs access
+    #[arg(long)]
+    allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    allow_child_process: bool,
 }
 
 /// Current screen in the step-by-step flow
@@ -246,10 +275,28 @@ struct App {
     pty_running: Arc<Mutex<bool>>,
     /// Insert mode flag for terminal - when true, all keystrokes go to PTY
     insert_mode: bool,
+
+    // Command-line flags
+    /// Dry run mode - don't make actual changes
+    dry_run: bool,
+    /// Allow fs access
+    allow_fs: bool,
+    /// Allow fetch access
+    allow_fetch: bool,
+    /// Allow child process access
+    allow_child_process: bool,
 }
 
 impl App {
-    fn new(engine: Engine, limit: usize, refresh_interval: Duration) -> Self {
+    fn new(
+        engine: Engine,
+        limit: usize,
+        refresh_interval: Duration,
+        dry_run: bool,
+        allow_fs: bool,
+        allow_fetch: bool,
+        allow_child_process: bool,
+    ) -> Self {
         let mut runs_state = TableState::default();
         runs_state.select(Some(0));
 
@@ -278,6 +325,10 @@ impl App {
             terminal_size: (24, 80),
             pty_running: Arc::new(Mutex::new(false)),
             insert_mode: false,
+            dry_run,
+            allow_fs,
+            allow_fetch,
+            allow_child_process,
         }
     }
 
@@ -2445,7 +2496,15 @@ pub async fn handler(args: &Command) -> Result<()> {
         Duration::from_secs(args.refresh_interval)
     };
 
-    let mut app = App::new(engine, args.limit, refresh_interval);
+    let mut app = App::new(
+        engine,
+        args.limit,
+        refresh_interval,
+        args.dry_run,
+        args.allow_fs,
+        args.allow_fetch,
+        args.allow_child_process,
+    );
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
