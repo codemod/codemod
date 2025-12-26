@@ -291,7 +291,6 @@ where
             #[cfg(feature = "native")]
             if let Some(ref mut redirect) = redirect {
                 std::io::stdout().flush().ok();
-                
                 // Read captured stdout output
                 let mut captured = String::new();
                 if let Err(e) = redirect.read_to_string(&mut captured) {

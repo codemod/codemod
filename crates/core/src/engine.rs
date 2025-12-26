@@ -1564,8 +1564,7 @@ impl Engine {
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep, task)
-                    .await
+                self.execute_ast_grep_step(node.id.clone(), ast_grep).await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
@@ -1609,12 +1608,7 @@ impl Engine {
         }
     }
 
-    pub async fn execute_ast_grep_step(
-        &self,
-        id: String,
-        ast_grep: &UseAstGrep,
-        task: &Task,
-    ) -> Result<()> {
+    pub async fn execute_ast_grep_step(&self, id: String, ast_grep: &UseAstGrep) -> Result<()> {
         let bundle_path = self.workflow_run_config.bundle_path.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
@@ -1657,7 +1651,7 @@ impl Engine {
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
 
-                let _ = execution_config.execute_with_task_id(&task.id, |path, config| {
+                let _ = execution_config.execute(|path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
@@ -1941,7 +1935,7 @@ impl Engine {
 
         // Execute the codemod on each file using the config's multi-threading
         config
-            .execute_with_task_id(&task.id, move |file_path, config| {
+            .execute(move |file_path, config| {
                 // Only process files
                 if !file_path.is_file() {
                     return;
