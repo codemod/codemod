@@ -14,7 +14,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -117,6 +117,8 @@ fn run_resume_command_in_terminal(
 
     // Store the writer for input
     app.pty_writer = Some(writer);
+    // Store the master for resizing
+    app.pty_master = Some(pair.master);
 
     // Reset the terminal parser for fresh output
     {
@@ -269,12 +271,21 @@ struct App {
     terminal_parser: Arc<RwLock<vt100::Parser>>,
     /// Writer to send input to the PTY
     pty_writer: Option<Box<dyn Write + Send>>,
+    /// Master PTY handle for resizing
+    pty_master: Option<Box<dyn MasterPty + Send>>,
     /// Current terminal size (rows, cols)
     terminal_size: (u16, u16),
+    /// Total visual lines in logs
+    total_log_lines: usize,
+    /// Height of logs view
+    log_height: u16,
     /// Flag indicating if PTY process is still running
     pty_running: Arc<Mutex<bool>>,
     /// Insert mode flag for terminal - when true, all keystrokes go to PTY
     insert_mode: bool,
+
+    /// Start time for animations
+    start_time: Instant,
 
     // Command-line flags
     /// Dry run mode - don't make actual changes
@@ -322,9 +333,13 @@ impl App {
             // Initialize PTY state with default terminal size
             terminal_parser: Arc::new(RwLock::new(vt100::Parser::new(24, 80, 1000))),
             pty_writer: None,
+            pty_master: None,
             terminal_size: (24, 80),
+            total_log_lines: 0,
+            log_height: 20, // Default estimate
             pty_running: Arc::new(Mutex::new(false)),
             insert_mode: false,
+            start_time: Instant::now(),
             dry_run,
             allow_fs,
             allow_fetch,
@@ -1080,22 +1095,23 @@ impl App {
     }
 
     fn handle_actions_input(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Calculate max scroll for proper clamping (prevent overscroll)
+        // Ensure at least one page of content is visible if possible
+        // max_scroll = total_lines - page_height. If total < height, max_scroll is 0.
+        let page_height = self.log_height.saturating_sub(2) as usize; // Subtract borders
+        let max_scroll = self.total_log_lines.saturating_sub(page_height).max(0);
+
         // Handle Ctrl+key combinations first
         if modifiers.contains(KeyModifiers::CONTROL) {
             match key {
                 KeyCode::Char('d') => {
-                    // Half-page down
-                    if let Some(task) = &self.selected_task {
-                        let max_scroll = task.logs.len().saturating_sub(1);
-                        let half_page = 10; // Approximate half-page size
-                        self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
-                    }
+                    // Page down
+                    self.log_scroll = (self.log_scroll + page_height).min(max_scroll);
                     return;
                 }
                 KeyCode::Char('u') => {
-                    // Half-page up
-                    let half_page = 10; // Approximate half-page size
-                    self.log_scroll = self.log_scroll.saturating_sub(half_page);
+                    // Page up
+                    self.log_scroll = self.log_scroll.saturating_sub(page_height);
                     return;
                 }
                 _ => {}
@@ -1107,20 +1123,19 @@ impl App {
                 self.log_scroll = self.log_scroll.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(task) = &self.selected_task {
-                    let max_scroll = task.logs.len().saturating_sub(1);
-                    if self.log_scroll < max_scroll {
-                        self.log_scroll += 1;
-                    }
-                }
+                self.log_scroll = (self.log_scroll + 1).min(max_scroll);
+            }
+            KeyCode::PageDown => {
+                self.log_scroll = (self.log_scroll + page_height).min(max_scroll);
+            }
+            KeyCode::PageUp => {
+                self.log_scroll = self.log_scroll.saturating_sub(page_height);
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.log_scroll = 0;
             }
             KeyCode::End | KeyCode::Char('G') => {
-                if let Some(task) = &self.selected_task {
-                    self.log_scroll = task.logs.len().saturating_sub(1);
-                }
+                self.log_scroll = max_scroll;
             }
             KeyCode::Char('t') => {
                 self.trigger_current_task();
@@ -1255,9 +1270,39 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Strip ANSI escape codes from a string
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // Start of ANSI escape sequence
+            // Look for '[' which starts CSI sequence
+            if let Some('[') = chars.next() {
+                // Skip until we find a letter (the command)
+                for next_ch in chars.by_ref() {
+                    if next_ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 /// Clean log line by removing timestamps and logging prefixes
 fn clean_log_line(log: &str) -> String {
     let mut cleaned = log.trim();
+
+    // Handle carriage returns - only keep text after the last \r
+    if let Some(pos) = cleaned.rfind('\r') {
+        cleaned = &cleaned[pos + 1..];
+    }
 
     // Remove timestamp patterns like [2025-12-22T21:16:43Z]
     if let Some(pos) = cleaned.find(']') {
@@ -1301,33 +1346,105 @@ fn clean_log_line(log: &str) -> String {
     if let Some(pos) = cleaned.find("execution failed:") {
         cleaned = &cleaned[pos + 17..];
     }
-
     // Trim whitespace
     cleaned.trim().to_string()
 }
 
-/// Get status symbol
-fn status_symbol(status: WorkflowStatus) -> &'static str {
+/// Helper to render a premium wave of squares with color gradients
+fn render_status_wave(
+    elapsed_ms: u128,
+    count: usize,
+    period_ms: u128,
+    is_selected: bool,
+    target_rgb: (u8, u8, u8),
+) -> Line<'static> {
+    // Professional character set with a smaller, more subtle scale
+    let frames = ["·", "⬞", "▫", "▪", "■"];
+    let (dg_r, dg_g, dg_b) = (80, 80, 90); // Dimmed Gray
+    let (peak_r, peak_g, peak_b) = if is_selected {
+        (255, 255, 255) // Peak at White when selected for high contrast on green bg
+    } else {
+        target_rgb
+    };
+
+    let mut spans = Vec::with_capacity(count);
+    for i in 0..count {
+        // Use a sine wave to calculate the frame index and color for each block
+        let phase = i as f64 / count as f64;
+        let time_factor = (elapsed_ms % period_ms) as f64 / period_ms as f64;
+
+        // Sine wave offset by phase to create the wave motion
+        let angle = 2.0 * std::f64::consts::PI * (time_factor - phase);
+        let sine_val = (angle.sin() + 1.0) / 2.0; // Normalized to 0.0 - 1.0
+
+        // Character selection
+        let frame_idx = (sine_val * (frames.len() - 1) as f64).round() as usize;
+
+        // Color interpolation (Gray to Target/White)
+        let r = (dg_r as f64 + (peak_r as f64 - dg_r as f64) * sine_val) as u8;
+        let g = (dg_g as f64 + (peak_g as f64 - dg_g as f64) * sine_val) as u8;
+        let b = (dg_b as f64 + (peak_b as f64 - dg_b as f64) * sine_val) as u8;
+
+        spans.push(Span::styled(
+            frames[frame_idx],
+            Style::default().fg(Color::Rgb(r, g, b)),
+        ));
+    }
+
+    Line::from(spans)
+}
+
+/// Get status symbol (animated for active states)
+fn status_symbol(status: WorkflowStatus, elapsed_ms: u128, is_selected: bool) -> Line<'static> {
     match status {
-        WorkflowStatus::Running => "●",
-        WorkflowStatus::Completed => "✓",
-        WorkflowStatus::Failed => "✗",
-        WorkflowStatus::AwaitingTrigger => "◎",
-        WorkflowStatus::Canceled => "○",
-        WorkflowStatus::Pending => "◌",
+        WorkflowStatus::Running => {
+            render_status_wave(elapsed_ms, 6, 1200, is_selected, (214, 255, 98))
+        }
+        WorkflowStatus::Completed => {
+            Line::from(Span::styled("✓", Style::default().fg(status_color(status))))
+        }
+        WorkflowStatus::Failed => {
+            Line::from(Span::styled("✗", Style::default().fg(status_color(status))))
+        }
+        WorkflowStatus::AwaitingTrigger => {
+            render_status_wave(elapsed_ms, 6, 2000, is_selected, (255, 220, 100))
+        }
+        WorkflowStatus::Canceled => {
+            Line::from(Span::styled("○", Style::default().fg(status_color(status))))
+        }
+        WorkflowStatus::Pending => {
+            Line::from(Span::styled("◌", Style::default().fg(status_color(status))))
+        }
     }
 }
 
-/// Get task status symbol
-fn task_status_symbol(status: TaskStatus) -> &'static str {
+/// Get task status symbol (animated for active states)
+fn task_status_symbol(status: TaskStatus, elapsed_ms: u128, is_selected: bool) -> Line<'static> {
     match status {
-        TaskStatus::Running => "●",
-        TaskStatus::Completed => "✓",
-        TaskStatus::Failed => "✗",
-        TaskStatus::AwaitingTrigger => "◎",
-        TaskStatus::Blocked => "◇",
-        TaskStatus::WontDo => "○",
-        TaskStatus::Pending => "◌",
+        TaskStatus::Running => render_status_wave(elapsed_ms, 6, 1200, is_selected, (214, 255, 98)),
+        TaskStatus::Completed => Line::from(Span::styled(
+            "✓",
+            Style::default().fg(task_status_color(status)),
+        )),
+        TaskStatus::Failed => Line::from(Span::styled(
+            "✗",
+            Style::default().fg(task_status_color(status)),
+        )),
+        TaskStatus::AwaitingTrigger => {
+            render_status_wave(elapsed_ms, 6, 2000, is_selected, (255, 220, 100))
+        }
+        TaskStatus::Blocked => Line::from(Span::styled(
+            "◇",
+            Style::default().fg(task_status_color(status)),
+        )),
+        TaskStatus::WontDo => Line::from(Span::styled(
+            "○",
+            Style::default().fg(task_status_color(status)),
+        )),
+        TaskStatus::Pending => Line::from(Span::styled(
+            "◌",
+            Style::default().fg(task_status_color(status)),
+        )),
     }
 }
 
@@ -1336,42 +1453,29 @@ fn task_status_symbol(status: TaskStatus) -> &'static str {
 /// Render the top navigation bar with a premium look
 fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
     // Theme colors
-    let brand_bg = Color::Rgb(214, 255, 98); // Codemod Green #d6ff62
-    let brand_fg = Color::Black;
+    let brand_green = Color::Rgb(214, 255, 98); // Codemod Green #d6ff62
     let bg_color = Color::Rgb(20, 20, 25); // Dark background
     let text_color = Color::Rgb(170, 170, 180);
-    let active_color = Color::Rgb(214, 255, 98); // Matches brand color
-    let step_bg_active = Color::Rgb(40, 50, 40); // Subtle green tint for active background
+    let dimmed_color = Color::Rgb(80, 80, 90);
 
     let mut spans = vec![
-        // Brand Logo Area
-        Span::styled(
-            " ⚡ CODEMOD ",
-            Style::default().fg(brand_fg).bg(brand_bg).bold(),
-        ),
-        Span::styled("", Style::default().fg(brand_bg).bg(bg_color)),
-        Span::styled(" ", Style::default().bg(bg_color)),
+        // Brand Logo Area - minimalist
+        Span::styled(" ⚡", Style::default().fg(brand_green).bold()),
+        Span::styled(" CODEMOD ", Style::default().fg(Color::White).bold()),
     ];
 
-    // Build breadcrumb path with chevron dividers
-    let sep = Span::styled("  ", Style::default().fg(Color::DarkGray).bg(bg_color));
+    // Build breadcrumb path with minimalist dividers
+    let sep = Span::styled(" › ", Style::default().fg(dimmed_color));
 
     // WORKFLOWS
     let workflows_style = if app.screen == Screen::Workflows {
-        Style::default().fg(active_color).bg(step_bg_active).bold()
+        Style::default().fg(brand_green).bold()
     } else {
-        Style::default().fg(text_color).bg(bg_color)
+        Style::default().fg(text_color)
     };
 
-    // Icon for workflows
-    spans.push(Span::styled(
-        if app.screen == Screen::Workflows {
-            "  Workflows "
-        } else {
-            " Workflows "
-        },
-        workflows_style,
-    ));
+    spans.push(sep.clone());
+    spans.push(Span::styled("Workflows", workflows_style));
 
     if app.screen != Screen::Workflows {
         spans.push(sep.clone());
@@ -1384,12 +1488,12 @@ fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
             .unwrap_or_else(|| "Tasks".to_string());
 
         let tasks_style = if app.screen == Screen::Tasks {
-            Style::default().fg(active_color).bg(step_bg_active).bold()
+            Style::default().fg(brand_green).bold()
         } else {
-            Style::default().fg(text_color).bg(bg_color)
+            Style::default().fg(text_color)
         };
 
-        spans.push(Span::styled(format!(" {} ", run_name), tasks_style));
+        spans.push(Span::styled(run_name, tasks_style));
     }
 
     if app.screen == Screen::Actions || app.screen == Screen::Terminal {
@@ -1408,31 +1512,29 @@ fn render_breadcrumb(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let action_style = if app.screen == Screen::Actions {
-            Style::default().fg(active_color).bg(step_bg_active).bold()
+            Style::default().fg(brand_green).bold()
         } else {
-            Style::default().fg(text_color).bg(bg_color)
+            Style::default().fg(text_color)
         };
 
-        spans.push(Span::styled(format!(" {} ", task_name), action_style));
+        spans.push(Span::styled(task_name, action_style));
     }
 
     if app.screen == Screen::Terminal {
         spans.push(sep);
         spans.push(Span::styled(
-            "  Terminal ",
-            Style::default().fg(active_color).bg(step_bg_active).bold(),
+            "Terminal",
+            Style::default().fg(brand_green).bold(),
         ));
     }
 
-    // Fill the rest with background color
     let breadcrumb = Paragraph::new(Line::from(spans)).style(Style::default().bg(bg_color));
 
     f.render_widget(breadcrumb, area);
 }
 
 /// Render the Workflows screen (Step 1)
-/// Render the Workflows screen (Step 1)
-fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect, elapsed_ms: u128) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -1440,12 +1542,8 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Left: Workflows list
     let header_style = Style::default().fg(Color::Rgb(214, 255, 98)).bold(); // Brand green for headers
-    let selected_style = Style::default()
-        .bg(Color::Rgb(40, 50, 40)) // Subtle green bg
-        .fg(Color::Rgb(214, 255, 98)) // Brand green text
-        .add_modifier(Modifier::BOLD);
 
-    let header_cells = ["ID", "Status", "Name", "Started"]
+    let header_cells = ["", "ID", "Status", "Name", "Started"]
         .iter()
         .map(|h| Cell::from(format!(" {} ", h)).style(header_style));
     let header_row = Row::new(header_cells)
@@ -1453,28 +1551,41 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
         .bottom_margin(1)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows = app.runs.iter().map(|run| {
+    let rows = app.runs.iter().enumerate().map(|(i, run)| {
         let name = run
             .workflow
             .nodes
             .first()
-            .map(|n| truncate(&n.name, 25))
+            .map(|n| n.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
+        let started = run.started_at.format("%Y-%m-%d %H:%M").to_string();
+        let is_selected = app.runs_state.selected() == Some(i);
 
-        let started = run.started_at.format("%m-%d %H:%M").to_string();
+        // Cells without extra manual padding
+        let mut status_line_spans = vec![];
+        status_line_spans.extend(status_symbol(run.status, elapsed_ms, is_selected).spans);
 
-        // Pad cells
+        // Brand green color for selected row
+        let brand_green = Color::Rgb(214, 255, 98);
+        let row_style = if is_selected {
+            Style::default().fg(brand_green)
+        } else {
+            Style::default()
+        };
+
+        // Add ">" symbol for selected row
+        let indicator = if is_selected {
+            Cell::from(">").style(Style::default().fg(brand_green).bold())
+        } else {
+            Cell::from(" ")
+        };
+
         Row::new(vec![
-            Cell::from(format!(" {} ", truncate(&run.id.to_string(), 8))),
-            Cell::from(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    status_symbol(run.status),
-                    Style::default().fg(status_color(run.status)),
-                ),
-            ])),
-            Cell::from(format!(" {} ", name)),
-            Cell::from(format!(" {} ", started)),
+            indicator,
+            Cell::from(truncate(&run.id.to_string(), 16)).style(row_style),
+            Cell::from(Line::from(status_line_spans)),
+            Cell::from(name).style(row_style),
+            Cell::from(started).style(row_style),
         ])
         .height(1)
     });
@@ -1482,35 +1593,30 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(10),
-            Constraint::Length(4),
-            Constraint::Min(20),
-            Constraint::Length(12),
+            Constraint::Length(1), // Indicator column
+            Constraint::Length(20),
+            Constraint::Length(7), // Premium wave is 6 chars + padding
+            Constraint::Min(40),
+            Constraint::Length(18),
         ],
     )
     .header(header_row)
     .block(
         Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                format!("  Workflow Runs ({}) ", app.runs.len()),
-                Style::default().bold(),
-            )),
+            .borders(Borders::NONE)
+            .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)),
     )
-    .row_highlight_style(selected_style)
-    .highlight_symbol("▎"); // Modern thick bar indicator
+    .row_highlight_style(Style::default()) // No color change on selection
+    .highlight_symbol("");
 
     f.render_stateful_widget(table, chunks[0], &mut app.runs_state);
 
-    // Right: Preview of selected workflow
+    // Right: Preview of selected workflow - Minimalist with background
+    let detail_bg = Color::Rgb(25, 25, 30);
     let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" Details ", Style::default().bold()))
-        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
+        .borders(Borders::NONE)
+        .style(Style::default().bg(detail_bg))
+        .padding(ratatui::widgets::Padding::new(3, 2, 2, 1));
 
     let preview_content: Vec<Line> = if let Some(idx) = app.runs_state.selected() {
         if let Some(run) = app.runs.get(idx) {
@@ -1529,6 +1635,13 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
                         .signed_duration_since(run.started_at)
                         .num_seconds()
                 });
+
+            let mut status_line_spans = vec![Span::styled("  ", Style::default())];
+            status_line_spans.extend(status_symbol(run.status, elapsed_ms, false).spans);
+            status_line_spans.push(Span::styled(
+                format!(" {:?}", run.status),
+                Style::default().fg(status_color(run.status)).bold(),
+            ));
 
             vec![
                 Line::from(vec![Span::styled(
@@ -1550,13 +1663,15 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
                     "Status ",
                     Style::default().fg(Color::DarkGray),
                 )]),
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{} {:?}", status_symbol(run.status), run.status),
+                {
+                    let mut spans = vec![Span::raw("  ")];
+                    spans.extend(status_symbol(run.status, elapsed_ms, false).spans);
+                    spans.push(Span::styled(
+                        format!(" {:?}", run.status),
                         Style::default().fg(status_color(run.status)).bold(),
-                    ),
-                ]),
+                    ));
+                    Line::from(spans)
+                },
                 Line::from(""),
                 Line::from(vec![Span::styled(
                     "Duration ",
@@ -1598,8 +1713,7 @@ fn render_workflows_screen(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render the Tasks screen (Step 2)
-/// Render the Tasks screen (Step 2)
-fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect, elapsed_ms: u128) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -1607,12 +1721,8 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Left: Tasks list
     let header_style = Style::default().fg(Color::Rgb(214, 255, 98)).bold(); // Brand green
-    let selected_style = Style::default()
-        .bg(Color::Rgb(40, 50, 40)) // Subtle green bg
-        .fg(Color::Rgb(214, 255, 98)) // Brand green text
-        .add_modifier(Modifier::BOLD);
 
-    let header_cells = ["Node ID", "Status", "Matrix"]
+    let header_cells = ["", "Node ID", "Status", "Matrix"]
         .iter()
         .map(|h| Cell::from(*h).style(header_style));
     let header_row = Row::new(header_cells)
@@ -1620,7 +1730,7 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
         .bottom_margin(1)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows = app.tasks.iter().map(|task| {
+    let rows = app.tasks.iter().enumerate().map(|(i, task)| {
         let matrix_info = task
             .matrix_values
             .as_ref()
@@ -1640,54 +1750,58 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
                     .join(", ")
             })
             .unwrap_or_else(|| "-".to_string());
+        let is_selected = app.tasks_state.selected() == Some(i);
+
+        // Brand green color for selected row
+        let brand_green = Color::Rgb(214, 255, 98);
+        let row_style = if is_selected {
+            Style::default().fg(brand_green)
+        } else {
+            Style::default()
+        };
+
+        // Add ">" symbol for selected row
+        let indicator = if is_selected {
+            Cell::from(">").style(Style::default().fg(brand_green).bold())
+        } else {
+            Cell::from(" ")
+        };
 
         Row::new(vec![
-            Cell::from(truncate(&task.node_id, 20)),
-            Cell::from(task_status_symbol(task.status))
-                .style(Style::default().fg(task_status_color(task.status))),
-            Cell::from(truncate(&matrix_info, 20)),
+            indicator,
+            Cell::from(truncate(&task.node_id, 20)).style(row_style),
+            Cell::from(task_status_symbol(task.status, elapsed_ms, is_selected)),
+            Cell::from(truncate(&matrix_info, 20)).style(row_style),
         ])
         .height(1)
     });
 
-    let run_name = app
-        .selected_run
-        .as_ref()
-        .and_then(|r| r.workflow.nodes.first())
-        .map(|n| truncate(&n.name, 15))
-        .unwrap_or_else(|| "?".to_string());
-
     let table = Table::new(
         rows,
         [
+            Constraint::Length(1), // Indicator column
             Constraint::Min(15),
-            Constraint::Length(4),
+            Constraint::Length(7), // Tightened for premium wave (6 chars)
             Constraint::Min(15),
         ],
     )
     .header(header_row)
     .block(
         Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                format!(" Tasks ({}) - {} ", app.tasks.len(), run_name),
-                Style::default().bold(),
-            )),
+            .borders(Borders::NONE)
+            .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)),
     )
-    .row_highlight_style(selected_style)
-    .highlight_symbol("│ ");
+    .row_highlight_style(Style::default()) // No color change on selection
+    .highlight_symbol("");
 
     f.render_stateful_widget(table, chunks[0], &mut app.tasks_state);
 
-    // Right: Task preview
+    // Right: Task preview - Minimalist with background
+    let detail_bg = Color::Rgb(25, 25, 30);
     let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" Task Details ", Style::default().bold()))
-        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
+        .borders(Borders::NONE)
+        .style(Style::default().bg(detail_bg))
+        .padding(ratatui::widgets::Padding::new(3, 2, 2, 1));
 
     let preview_content: Vec<Line> = if let Some(idx) = app.tasks_state.selected() {
         if let Some(task) = app.tasks.get(idx) {
@@ -1705,13 +1819,15 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
                     "Status ",
                     Style::default().fg(Color::DarkGray),
                 )]),
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{} {:?}", task_status_symbol(task.status), task.status),
+                {
+                    let mut spans = vec![Span::raw("  ")];
+                    spans.extend(task_status_symbol(task.status, elapsed_ms, false).spans);
+                    spans.push(Span::styled(
+                        format!(" {:?}", task.status),
                         Style::default().fg(task_status_color(task.status)).bold(),
-                    ),
-                ]),
+                    ));
+                    Line::from(spans)
+                },
                 Line::from(""),
                 Line::from(vec![Span::styled(
                     "Task ID ",
@@ -1781,8 +1897,7 @@ fn render_tasks_screen(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render the Actions screen (Step 3)
-/// Render the Actions screen (Step 3)
-fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect, elapsed_ms: u128) {
     // Layout
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -1795,10 +1910,7 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Left: Task details and actions
     let details_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" Task Control ", Style::default().bold()))
+        .borders(Borders::NONE)
         .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
 
     let details_content: Vec<Line> = if let Some(task) = &app.selected_task {
@@ -1809,13 +1921,15 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("Node: ", label_style),
                 Span::styled(task.node_id.clone(), value_style),
             ]),
-            Line::from(vec![
-                Span::styled("Status: ", label_style),
-                Span::styled(
-                    format!("{} {:?}", task_status_symbol(task.status), task.status),
+            Line::from({
+                let mut spans = vec![Span::styled("Status: ", label_style)];
+                spans.extend(task_status_symbol(task.status, elapsed_ms, false).spans);
+                spans.push(Span::styled(
+                    format!(" {:?}", task.status),
                     Style::default().fg(task_status_color(task.status)).bold(),
-                ),
-            ]),
+                ));
+                spans
+            }),
             Line::from(vec![
                 Span::styled("ID: ", label_style),
                 Span::raw(truncate(&task.id.to_string(), 12)),
@@ -1895,21 +2009,12 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
 
     f.render_widget(details, chunks[0]);
 
-    // Right: Logs
+    // Right: Logs - Minimalist with background
+    let logs_bg = Color::Rgb(25, 25, 30);
     let logs_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            format!(
-                " Logs ({}) ",
-                app.selected_task
-                    .as_ref()
-                    .map(|t| t.logs.len())
-                    .unwrap_or(0)
-            ),
-            Style::default().bold(),
-        ));
+        .borders(Borders::NONE)
+        .style(Style::default().bg(logs_bg))
+        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1));
 
     let logs_content: Vec<Line> = if let Some(task) = &app.selected_task {
         if task.logs.is_empty() {
@@ -1920,61 +2025,91 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             let mut lines = vec![Line::from("")];
             let mut last_log: Option<String> = None;
-            for (i, log) in task.logs.iter().enumerate() {
-                let cleaned_log = clean_log_line(log);
+            let mut line_number = 0;
 
-                if let Some(ref last) = last_log {
-                    if cleaned_log == *last {
+            for log in task.logs.iter() {
+                // Split on newlines to handle multi-line log entries
+                for raw_line in log.lines() {
+                    let cleaned_log = clean_log_line(raw_line);
+                    let cleaned_log = strip_ansi_codes(&cleaned_log);
+
+                    // Skip empty lines
+                    if cleaned_log.is_empty() {
                         continue;
                     }
+
+                    if let Some(ref last) = last_log {
+                        if cleaned_log == *last {
+                            continue;
+                        }
+                    }
+                    last_log = Some(cleaned_log.clone());
+
+                    line_number += 1;
+
+                    let (style, prefix) = if cleaned_log.contains("ERROR")
+                        || cleaned_log.contains("error:")
+                        || cleaned_log.contains("failed")
+                    {
+                        (Style::default().fg(Color::Red), " ✗ ")
+                    } else if cleaned_log.contains("WARN") || cleaned_log.contains("warning:") {
+                        (Style::default().fg(Color::Yellow), " ⚠ ")
+                    } else if cleaned_log.contains("INFO") || cleaned_log.contains("info:") {
+                        (Style::default().fg(Color::Cyan), " ℹ ")
+                    } else {
+                        (Style::default().fg(Color::DarkGray), "   ")
+                    };
+
+                    // Apply syntax highlighting if possible (simple heuristic)
+                    let styled_log = if cleaned_log.starts_with(">") || cleaned_log.starts_with("$")
+                    {
+                        // Command
+                        Span::styled(cleaned_log, Style::default().fg(Color::Green))
+                    } else {
+                        Span::styled(cleaned_log, style)
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{:>3} ", line_number),
+                            Style::default().fg(Color::Rgb(60, 60, 60)),
+                        ),
+                        Span::raw(prefix),
+                        styled_log,
+                    ]));
                 }
-                last_log = Some(cleaned_log.clone());
-
-                let (style, prefix) = if cleaned_log.contains("ERROR")
-                    || cleaned_log.contains("error:")
-                    || cleaned_log.contains("failed")
-                {
-                    (Style::default().fg(Color::Red), " ✗ ")
-                } else if cleaned_log.contains("WARN") || cleaned_log.contains("warning:") {
-                    (Style::default().fg(Color::Yellow), " ⚠ ")
-                } else if cleaned_log.contains("INFO") || cleaned_log.contains("info:") {
-                    (Style::default().fg(Color::Cyan), " ℹ ")
-                } else {
-                    (Style::default().fg(Color::DarkGray), "   ")
-                };
-
-                // Apply syntax highlighting if possible (simple heuristic)
-                let styled_log = if cleaned_log.starts_with(">") || cleaned_log.starts_with("$") {
-                    // Command
-                    Span::styled(cleaned_log, Style::default().fg(Color::Green))
-                } else {
-                    Span::styled(cleaned_log, style)
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{:>3} ", i + 1),
-                        Style::default().fg(Color::Rgb(60, 60, 60)),
-                    ),
-                    Span::raw(prefix),
-                    styled_log,
-                ]));
             }
+
+            // Store total counted lines
+            app.total_log_lines = lines.len();
             lines
         }
     } else {
+        app.total_log_lines = 1;
         vec![Line::styled(
             "No logs",
             Style::default().fg(Color::DarkGray),
         )]
     };
 
+    // Correctly apply scroll clamping during render just in case input handler missed it (e.g. resize)
+    let logs_area = chunks[1]; // Correct reference to the chunk
+    app.log_height = logs_block.inner(logs_area).height;
+
+    let max_scroll = app
+        .total_log_lines
+        .saturating_sub(app.log_height.saturating_sub(2) as usize)
+        .max(0); // Safely calc max scroll
+    if app.log_scroll > max_scroll {
+        app.log_scroll = max_scroll;
+    }
+
     let logs = Paragraph::new(logs_content)
         .block(logs_block)
         .scroll((app.log_scroll as u16, 0))
         .wrap(Wrap { trim: false });
 
-    f.render_widget(logs, chunks[1]);
+    f.render_widget(logs, logs_area);
 }
 
 /// Render the Terminal screen
@@ -2022,6 +2157,16 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
         // Resize the parser to match
         let mut parser = app.terminal_parser.write().unwrap();
         parser.set_size(new_rows, new_cols);
+
+        // Resize the PTY
+        if let Some(master) = &mut app.pty_master {
+            let _ = master.resize(PtySize {
+                rows: new_rows,
+                cols: new_cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
     }
 
     // Get content from the vt100 parser
@@ -2108,24 +2253,22 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render footer with keybindings
-/// Render footer with keybindings
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
-    let mode = match app.screen {
-        Screen::Terminal if app.insert_mode => " INSERT ",
-        Screen::Terminal => " TERMINAL ",
-        _ => " NORMAL ",
+    let mode_bg = if app.insert_mode && app.screen == Screen::Terminal {
+        Color::Rgb(214, 255, 98) // Brand green for insert mode
+    } else {
+        Color::Rgb(60, 60, 70) // Darker gray for normal mode
+    };
+    let mode_fg = if app.insert_mode && app.screen == Screen::Terminal {
+        Color::Black
+    } else {
+        Color::White
     };
 
-    let mode_bg = match mode {
-        " INSERT " => Color::Rgb(200, 80, 80),     // Soft red
-        " TERMINAL " => Color::Rgb(100, 200, 100), // Soft green (different from brand)
-        _ => Color::Rgb(214, 255, 98),             // Brand green #d6ff62
-    };
-
-    let mode_fg = match mode {
-        " INSERT " => Color::Black,
-        " TERMINAL " => Color::Black,
-        _ => Color::Black, // Black text on brand green is key for this specific color
+    let mode = if app.insert_mode && app.screen == Screen::Terminal {
+        " INSERT "
+    } else {
+        " NORMAL "
     };
 
     let hints = match app.screen {
@@ -2145,11 +2288,11 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let spans = vec![
         Span::styled(mode, Style::default().bg(mode_bg).fg(mode_fg).bold()),
-        Span::styled("", Style::default().fg(mode_bg).bg(Color::Rgb(30, 30, 35))),
+        Span::styled(" ", Style::default().bg(Color::Rgb(30, 30, 35))),
         Span::styled(
             hints,
             Style::default()
-                .fg(Color::Rgb(180, 180, 190))
+                .fg(Color::Rgb(140, 140, 150))
                 .bg(Color::Rgb(30, 30, 35)),
         ),
     ];
@@ -2328,29 +2471,30 @@ fn render_popup(f: &mut Frame, app: &App) {
             let popup_area = centered_rect(70, 70, f.area());
             f.render_widget(Clear, popup_area);
 
+            let brand_green = Color::Rgb(214, 255, 98);
             let text = vec![
                 Line::from(""),
-                Line::styled(" Navigation ", Style::default().bold().fg(Color::Yellow)),
+                Line::styled(" Navigation ", Style::default().bold().fg(brand_green)),
                 Line::from("  ↑/k ↓/j          Navigate / Scroll"),
                 Line::from("  Enter            Go to next step"),
                 Line::from("  Esc / Backspace  Go back"),
                 Line::from("  g / G            Go to first / last"),
                 Line::from("  Ctrl+u / Ctrl+d  Half-page up / down (logs)"),
                 Line::from(""),
-                Line::styled(" Actions ", Style::default().bold().fg(Color::Yellow)),
+                Line::styled(" Actions ", Style::default().bold().fg(brand_green)),
                 Line::from("  c                Cancel workflow (Step 1)"),
                 Line::from("  t                Trigger current task (Step 3)"),
                 Line::from("  a                Trigger all awaiting"),
-                Line::from("  v                Open terminal view (when monitoring)"),
+                Line::from("  v                Open terminal view"),
                 Line::from("  r                Force refresh"),
                 Line::from(""),
-                Line::styled(" General ", Style::default().bold().fg(Color::Yellow)),
+                Line::styled(" General ", Style::default().bold().fg(brand_green)),
                 Line::from("  ?                Show this help"),
                 Line::from("  q / Ctrl+C       Quit"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press any key to close",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Rgb(100, 100, 110)),
                 )),
             ];
 
@@ -2358,8 +2502,11 @@ fn render_popup(f: &mut Frame, app: &App) {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title(" Help ")
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .title(Span::styled(
+                        " Help ",
+                        Style::default().bold().fg(Color::Rgb(170, 170, 180)),
+                    ))
+                    .border_style(Style::default().fg(Color::Rgb(60, 60, 70))),
             );
             f.render_widget(popup, popup_area);
         }
@@ -2389,6 +2536,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 /// Main UI render function
 fn ui(f: &mut Frame, app: &mut App) {
+    let elapsed_ms = app.start_time.elapsed().as_millis();
     let area = f.area();
 
     // Main layout: breadcrumb + content + footer
@@ -2410,9 +2558,9 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render current screen
     match app.screen {
-        Screen::Workflows => render_workflows_screen(f, app, content_area),
-        Screen::Tasks => render_tasks_screen(f, app, content_area),
-        Screen::Actions => render_actions_screen(f, app, content_area),
+        Screen::Workflows => render_workflows_screen(f, app, content_area, elapsed_ms),
+        Screen::Tasks => render_tasks_screen(f, app, content_area, elapsed_ms),
+        Screen::Actions => render_actions_screen(f, app, content_area, elapsed_ms),
         Screen::Terminal => render_terminal_screen(f, app, content_area),
     }
 
@@ -2445,14 +2593,16 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             app.refresh().await?;
         }
 
+        terminal.hide_cursor().context("Failed to hide cursor")?;
+
         // Render
         terminal.draw(|f| ui(f, app))?;
 
         // Handle events with timeout for periodic refresh
         let timeout = if app.refresh_interval.is_zero() {
-            Duration::from_millis(100)
+            Duration::from_millis(33) // ~30 FPS for smooth animations
         } else {
-            Duration::from_millis(100).min(app.refresh_interval)
+            Duration::from_millis(33).min(app.refresh_interval)
         };
 
         if event::poll(timeout)? {

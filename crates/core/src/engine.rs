@@ -1363,6 +1363,7 @@ impl Engine {
                     &step.action,
                     &step.env,
                     &step.id,
+                    &step.name,
                     node,
                     &task,
                     &resolved_params,
@@ -1496,6 +1497,7 @@ impl Engine {
         action: &StepAction,
         step_env: &Option<HashMap<String, String>>,
         step_id: &Option<String>,
+        step_name: &str,
         node: &Node,
         task: &Task,
         params: &HashMap<String, serde_json::Value>,
@@ -1566,6 +1568,7 @@ impl Engine {
                         &template_step.action,
                         &template_step.env,
                         &template_step.id,
+                        &template_step.name,
                         node,
                         task,
                         &combined_params,
@@ -1580,12 +1583,14 @@ impl Engine {
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep).await
+                self.execute_ast_grep_step(node.id.clone(), step_name, ast_grep, task)
+                    .await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     step_id.clone().unwrap_or_default(),
+                    step_name,
                     js_ast_grep,
                     Some(params.clone()),
                     task.matrix_values.clone(),
@@ -1625,7 +1630,13 @@ impl Engine {
         }
     }
 
-    pub async fn execute_ast_grep_step(&self, id: String, ast_grep: &UseAstGrep) -> Result<()> {
+    pub async fn execute_ast_grep_step(
+        &self,
+        id: String,
+        step_name: &str,
+        ast_grep: &UseAstGrep,
+        task: &Task,
+    ) -> Result<()> {
         let bundle_path = self.workflow_run_config.bundle_path.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
@@ -1641,6 +1652,19 @@ impl Engine {
                 self.workflow_run_config.dry_run,
             );
         }
+
+        // Format execution summary
+        let execution_summary = format!(
+            "\x1b[32mStep {} completed\x1b[0m:\n\r{}",
+            step_name, self.execution_stats
+        );
+        let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+        current_task.logs.push(execution_summary);
+        self.state_adapter
+            .lock()
+            .await
+            .save_task(&current_task)
+            .await?;
 
         let config_path_clone = config_path.clone();
 
@@ -1745,6 +1769,7 @@ impl Engine {
         &self,
         id: String,
         step_id: String,
+        step_name: &str,
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
@@ -2143,7 +2168,10 @@ impl Engine {
         }
 
         // Format execution summary
-        let execution_summary = format!("{}", self.execution_stats);
+        let execution_summary = format!(
+            "\x1b[32mStep {} completed\x1b[0m:\n\r{}",
+            step_name, self.execution_stats
+        );
         current_task.logs.push(execution_summary);
 
         // Save the updated task
@@ -2529,6 +2557,7 @@ impl Engine {
                     &step.action,
                     &step.env,
                     &step.id,
+                    &step.name,
                     node,
                     task, // Use the current task context
                     params,

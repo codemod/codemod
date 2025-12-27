@@ -3721,7 +3721,7 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 [[package]]
 name = "llrt_abort"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_async_hooks",
  "llrt_events",
@@ -3734,7 +3734,7 @@ dependencies = [
 [[package]]
 name = "llrt_assert"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3743,7 +3743,7 @@ dependencies = [
 [[package]]
 name = "llrt_async_hooks"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_hooking",
  "llrt_utils",
@@ -3754,7 +3754,7 @@ dependencies = [
 [[package]]
 name = "llrt_buffer"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_encoding",
@@ -3766,7 +3766,7 @@ dependencies = [
 [[package]]
 name = "llrt_build"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "rustc_version",
 ]
@@ -3774,7 +3774,7 @@ dependencies = [
 [[package]]
 name = "llrt_child_process"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "libc",
@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "llrt_compression"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "brotlic",
  "flate2",
@@ -3800,7 +3800,7 @@ dependencies = [
 [[package]]
 name = "llrt_console"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_logging",
  "llrt_utils",
@@ -3810,7 +3810,7 @@ dependencies = [
 [[package]]
 name = "llrt_context"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_build",
  "llrt_utils",
@@ -3822,7 +3822,7 @@ dependencies = [
 [[package]]
 name = "llrt_crypto"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3857,7 +3857,7 @@ dependencies = [
 [[package]]
 name = "llrt_dns_cache"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "hyper-util",
  "llrt_context",
@@ -3871,7 +3871,7 @@ dependencies = [
 [[package]]
 name = "llrt_encoding"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "base64-simd",
  "hex-simd",
@@ -3883,7 +3883,7 @@ dependencies = [
 [[package]]
 name = "llrt_events"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3893,7 +3893,7 @@ dependencies = [
 [[package]]
 name = "llrt_exceptions"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -3902,7 +3902,7 @@ dependencies = [
 [[package]]
 name = "llrt_fetch"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "bytes",
  "either",
@@ -3930,7 +3930,7 @@ dependencies = [
 [[package]]
 name = "llrt_fs"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "either",
  "llrt_buffer",
@@ -3945,7 +3945,7 @@ dependencies = [
 [[package]]
 name = "llrt_hooking"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "once_cell",
@@ -3955,7 +3955,7 @@ dependencies = [
 [[package]]
 name = "llrt_http"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -3973,7 +3973,7 @@ dependencies = [
 [[package]]
 name = "llrt_json"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_build",
@@ -3986,7 +3986,7 @@ dependencies = [
 [[package]]
 name = "llrt_logging"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_context",
@@ -4001,7 +4001,7 @@ dependencies = [
 [[package]]
 name = "llrt_modules"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_abort",
  "llrt_assert",
@@ -4031,7 +4031,7 @@ dependencies = [
 [[package]]
 name = "llrt_numbers"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "itoa",
  "llrt_utils",
@@ -4042,7 +4042,7 @@ dependencies = [
 [[package]]
 name = "llrt_os"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "home",
  "libc",
@@ -4060,7 +4060,7 @@ dependencies = [
 [[package]]
 name = "llrt_path"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "memchr",
@@ -4070,7 +4070,7 @@ dependencies = [
 [[package]]
 name = "llrt_perf_hooks"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -4079,7 +4079,7 @@ dependencies = [
 [[package]]
 name = "llrt_process"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "libc",
  "llrt_utils",
@@ -4089,7 +4089,7 @@ dependencies = [
 [[package]]
 name = "llrt_stream"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_context",
@@ -4102,7 +4102,7 @@ dependencies = [
 [[package]]
 name = "llrt_stream_web"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_abort",
  "llrt_utils",
@@ -4112,7 +4112,7 @@ dependencies = [
 [[package]]
 name = "llrt_string_decoder"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_encoding",
@@ -4123,7 +4123,7 @@ dependencies = [
 [[package]]
 name = "llrt_timers"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_context",
  "llrt_hooking",
@@ -4136,7 +4136,7 @@ dependencies = [
 [[package]]
 name = "llrt_tls"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "once_cell",
  "rustls 0.23.31",
@@ -4146,7 +4146,7 @@ dependencies = [
 [[package]]
 name = "llrt_tty"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "libc",
  "llrt_utils",
@@ -4156,7 +4156,7 @@ dependencies = [
 [[package]]
 name = "llrt_url"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_utils",
  "rquickjs",
@@ -4166,7 +4166,7 @@ dependencies = [
 [[package]]
 name = "llrt_util"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_context",
  "llrt_encoding",
@@ -4178,7 +4178,7 @@ dependencies = [
 [[package]]
 name = "llrt_utils"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_build",
  "rquickjs",
@@ -4189,7 +4189,7 @@ dependencies = [
 [[package]]
 name = "llrt_zlib"
 version = "0.7.0-beta"
-source = "git+https://github.com/mohebifar/llrt#01c39c711d8a393292d21fb49e186b7775ae8114"
+source = "git+https://github.com/mohebifar/llrt.git#01c39c711d8a393292d21fb49e186b7775ae8114"
 dependencies = [
  "llrt_buffer",
  "llrt_compression",
