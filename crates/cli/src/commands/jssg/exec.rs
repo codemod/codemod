@@ -38,6 +38,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     let options = SimpleJsExecutionOptions {
         script_path: &absolute_js_file_path,
         resolver,
+        console_log_collector: None,
     };
 
     execute_js_with_quickjs(options).await?;

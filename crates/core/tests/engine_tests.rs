@@ -504,7 +504,7 @@ async fn test_run_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -530,7 +530,7 @@ async fn test_get_workflow_status() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -552,7 +552,7 @@ async fn test_get_tasks() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow.clone(), params, None, None)
+        .run_workflow(workflow.clone(), params, None, None, None)
         .await
         .unwrap();
 
@@ -580,11 +580,11 @@ async fn test_list_workflow_runs() {
     let params = HashMap::new();
 
     let workflow_run_id1 = engine
-        .run_workflow(workflow.clone(), params.clone(), None, None)
+        .run_workflow(workflow.clone(), params.clone(), None, None, None)
         .await
         .unwrap();
     let workflow_run_id2 = engine
-        .run_workflow(workflow.clone(), params.clone(), None, None)
+        .run_workflow(workflow.clone(), params.clone(), None, None, None)
         .await
         .unwrap();
 
@@ -612,7 +612,7 @@ async fn test_cancel_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -636,7 +636,7 @@ async fn test_manual_trigger_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -685,7 +685,7 @@ async fn test_manual_node_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -735,7 +735,7 @@ async fn test_matrix_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -765,7 +765,7 @@ async fn test_template_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -804,7 +804,7 @@ async fn test_trigger_all() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -973,6 +973,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -1178,7 +1179,7 @@ async fn test_env_var_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1228,7 +1229,7 @@ async fn test_variable_resolution_workflow() {
     );
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1299,7 +1300,7 @@ async fn test_workflow_with_params() {
     params.insert("test_param".to_string(), json!("test_value"));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1320,7 +1321,7 @@ async fn test_codemod_environment_variables() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1476,7 +1477,7 @@ echo "env_vars_in_matrix=true""#
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -1598,7 +1599,9 @@ async fn test_cyclic_dependency_workflow() {
     let params = HashMap::new();
 
     // Running this workflow should fail due to the cyclic dependency
-    let result = engine.run_workflow(workflow, params, None, None).await;
+    let result = engine
+        .run_workflow(workflow, params, None, None, None)
+        .await;
 
     // The result should be an error
     assert!(result.is_err());
@@ -1648,7 +1651,9 @@ async fn test_invalid_template_reference() {
     let params = HashMap::new();
 
     // Running this workflow should fail due to the invalid template reference
-    let result = engine.run_workflow(workflow, params, None, None).await;
+    let result = engine
+        .run_workflow(workflow, params, None, None, None)
+        .await;
 
     // The result should be an error
     assert!(result.is_err());
@@ -1745,7 +1750,7 @@ message: "Found var declaration"
     };
 
     // Create a dummy task
-    let _task = Task {
+    let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
         node_id: "test-node".to_string(),
@@ -1759,15 +1764,21 @@ message: "Found var declaration"
         error: None,
     };
 
-    // Create engine with correct bundle path
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path and populated state adapter
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
-            "test".to_string(),
+            "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["src/**/*.js".to_string()]),
                 exclude: None,
@@ -1776,6 +1787,7 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1829,15 +1841,35 @@ message: "Found interface declaration"
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["src/**/*.ts".to_string()]),
                 exclude: None,
@@ -1846,6 +1878,7 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1864,15 +1897,35 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
     // Create test file but no config
     create_test_file(temp_path, "test.js", "console.log('test');");
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["test.js".to_string()]),
                 exclude: None,
@@ -1881,6 +1934,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1897,7 +1951,7 @@ async fn test_execute_ast_grep_step_no_matches() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
 
-    // Create test file with no console.log
+    // Create test file with no matching content
     create_test_file(
         temp_path,
         "test.js",
@@ -1905,7 +1959,6 @@ async fn test_execute_ast_grep_step_no_matches() {
 function add(a, b) {
     return a + b;
 }
-
 let result = add(1, 2);
 "#,
     );
@@ -1922,15 +1975,35 @@ message: "Found console.log statement"
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["test.js".to_string()]),
                 exclude: None,
@@ -1939,14 +2012,12 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
-    // Should succeed even with no matches
-    assert!(
-        result.is_ok(),
-        "Should succeed even with no matches: {result:?}"
-    );
+    // Should execute successfully but yield no matches
+    assert!(result.is_ok(), "Step should execute even with no matches");
 }
 
 #[tokio::test]
@@ -1990,16 +2061,36 @@ function helper() {
 "#,
     );
 
-    // Create engine with correct bundle path
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path and populated state adapter
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -2017,6 +2108,7 @@ function helper() {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2077,16 +2169,36 @@ interface ApiResponse {
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "ts-codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -2104,6 +2216,7 @@ interface ApiResponse {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2142,16 +2255,36 @@ var count = 0;
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "dry-run-codemod.js".to_string(),
                 base_path: None, // Use current directory
@@ -2169,6 +2302,7 @@ var count = 0;
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2187,16 +2321,36 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     // Create test file but no codemod
     create_test_file(temp_path, "test.js", "console.log('test');");
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "nonexistent-codemod.js".to_string(),
                 base_path: None,
@@ -2214,6 +2368,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2260,16 +2415,51 @@ build/
         "console.log('dependency');",
     );
 
+    let task1 = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    let task2 = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save tasks
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task1).await.unwrap();
+    state_adapter.save_task(&task2).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2287,6 +2477,7 @@ build/
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task1,
         )
         .await;
 
@@ -2301,6 +2492,7 @@ build/
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2318,6 +2510,7 @@ build/
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task2,
         )
         .await;
 
@@ -2352,16 +2545,36 @@ export default function transform(ast) {
     // Create regular file
     create_test_file(temp_path, "regular.js", "const normal = 'visible';");
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-hidden-files",
             &UseJSAstGrep {
                 js_file: "hidden-codemod.js".to_string(),
                 base_path: None,
@@ -2379,6 +2592,7 @@ export default function transform(ast) {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2408,16 +2622,36 @@ export default function transform(ast) {
     // Create test file
     create_test_file(temp_path, "test.js", "console.log('test');");
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: None,
@@ -2435,6 +2669,7 @@ export default function transform(ast) {
                 capabilities: None,
                 capabilities_security_callback: None,
             },
+            &task,
         )
         .await;
 
@@ -2514,8 +2749,8 @@ export default function transform(ast) {
 
     create_test_file(temp_path, "src/app.js", "console.log('Hello, World!');");
 
-    // Create engine with workflow
-    let state_adapter = Box::new(MockStateAdapter::new());
+    // Create engine with correct bundle path and a clean state adapter
+    let state_adapter = Box::new(LocalStateAdapter::new());
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -2526,41 +2761,32 @@ export default function transform(ast) {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, Some(temp_path.to_path_buf()), None)
+        .run_workflow(workflow, params, Some(temp_path.to_path_buf()), None, None)
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    // Robust wait for the task to be processed
+    let mut js_ast_grep_task = None;
+    for _ in 0..20 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        if let Some(task) = tasks.iter().find(|t| t.node_id == "js-ast-grep-node") {
+            if task.status != TaskStatus::Pending {
+                js_ast_grep_task = Some(task.clone());
+                break;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
 
-    // Get the workflow run
-    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
-
-    // Check that the workflow run is running, completed, or failed (test focuses on task creation)
-    println!("JS AST grep workflow status: {:?}", workflow_run.status);
-    assert!(
-        workflow_run.status == WorkflowStatus::Running
-            || workflow_run.status == WorkflowStatus::Completed
-            || workflow_run.status == WorkflowStatus::Failed
-    );
-
-    // Get the tasks
-    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // There should be at least 1 task
-    assert!(!tasks.is_empty());
-
-    // Check that the task for the JS AST grep node exists
-    let js_ast_grep_task = tasks
-        .iter()
-        .find(|t| t.node_id == "js-ast-grep-node")
-        .unwrap();
+    let js_ast_grep_task = js_ast_grep_task.expect("Task should have been created and processed");
 
     // Check that the task status is valid
     assert!(
         js_ast_grep_task.status == TaskStatus::Running
             || js_ast_grep_task.status == TaskStatus::Completed
-            || js_ast_grep_task.status == TaskStatus::Failed
+            || js_ast_grep_task.status == TaskStatus::Failed,
+        "Task status should be Running, Completed, or Failed, but was {:?}",
+        js_ast_grep_task.status
     );
 }
 
@@ -2688,7 +2914,7 @@ async fn test_realistic_state_write_and_matrix_workflow() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -2810,6 +3036,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -2973,6 +3200,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3217,6 +3445,7 @@ async fn test_empty_state_matrix_workflow() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3319,6 +3548,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3435,6 +3665,7 @@ async fn test_matrix_hash_based_deduplication() {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     };
 
@@ -3749,7 +3980,7 @@ async fn test_workflow_condition_with_params_true() {
     params.insert("my_cond".to_string(), serde_json::Value::Bool(true));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3800,7 +4031,7 @@ async fn test_workflow_condition_with_params_false() {
     params.insert("my_cond".to_string(), serde_json::Value::Bool(false));
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3851,7 +4082,7 @@ async fn test_workflow_condition_with_params_missing() {
     let params = HashMap::new();
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
@@ -3900,7 +4131,7 @@ async fn test_expression_resolution_nonexistent_variable() {
     let params = HashMap::new(); // No parameters provided
 
     let workflow_run_id = engine
-        .run_workflow(workflow, params, None, None)
+        .run_workflow(workflow, params, None, None, None)
         .await
         .unwrap();
 
