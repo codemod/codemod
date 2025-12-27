@@ -1750,7 +1750,7 @@ message: "Found var declaration"
     };
 
     // Create a dummy task
-    let _task = Task {
+    let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
         node_id: "test-node".to_string(),
@@ -1764,15 +1764,21 @@ message: "Found var declaration"
         error: None,
     };
 
-    // Create engine with correct bundle path
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path and populated state adapter
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["src/**/*.js".to_string()]),
                 exclude: None,
@@ -1781,6 +1787,7 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1834,15 +1841,35 @@ message: "Found interface declaration"
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["src/**/*.ts".to_string()]),
                 exclude: None,
@@ -1851,6 +1878,7 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1869,15 +1897,35 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
     // Create test file but no config
     create_test_file(temp_path, "test.js", "console.log('test');");
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["test.js".to_string()]),
                 exclude: None,
@@ -1886,6 +1934,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
@@ -1902,7 +1951,7 @@ async fn test_execute_ast_grep_step_no_matches() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
 
-    // Create test file with no console.log
+    // Create test file with no matching content
     create_test_file(
         temp_path,
         "test.js",
@@ -1910,7 +1959,6 @@ async fn test_execute_ast_grep_step_no_matches() {
 function add(a, b) {
     return a + b;
 }
-
 let result = add(1, 2);
 "#,
     );
@@ -1927,15 +1975,35 @@ message: "Found console.log statement"
 "#,
     );
 
+    let task = Task {
+        id: Uuid::new_v4(),
+        workflow_run_id: Uuid::new_v4(),
+        node_id: "test-node".to_string(),
+        status: TaskStatus::Pending,
+        is_master: false,
+        master_task_id: None,
+        matrix_values: None,
+        started_at: None,
+        ended_at: None,
+        logs: vec![],
+        error: None,
+    };
+
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
     // Create engine with correct bundle path
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
-    let engine = Engine::with_workflow_run_config(config);
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
+            "test-step",
             &UseAstGrep {
                 include: Some(vec!["test.js".to_string()]),
                 exclude: None,
@@ -1944,14 +2012,12 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &task,
         )
         .await;
 
-    // Should succeed even with no matches
-    assert!(
-        result.is_ok(),
-        "Should succeed even with no matches: {result:?}"
-    );
+    // Should execute successfully but yield no matches
+    assert!(result.is_ok(), "Step should execute even with no matches");
 }
 
 #[tokio::test]
@@ -1995,8 +2061,6 @@ function helper() {
 "#,
     );
 
-    // Create engine with correct bundle path
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2026,6 +2090,7 @@ function helper() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -2104,8 +2169,6 @@ interface ApiResponse {
 "#,
     );
 
-    // Create engine with correct bundle path
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2135,6 +2198,7 @@ interface ApiResponse {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "ts-codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -2191,8 +2255,6 @@ var count = 0;
 "#,
     );
 
-    // Create engine with correct bundle path
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2222,6 +2284,7 @@ var count = 0;
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "dry-run-codemod.js".to_string(),
                 base_path: None, // Use current directory
@@ -2258,8 +2321,6 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     // Create test file but no codemod
     create_test_file(temp_path, "test.js", "console.log('test');");
 
-    // Create engine with correct bundle path
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2289,6 +2350,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step",
             &UseJSAstGrep {
                 js_file: "nonexistent-codemod.js".to_string(),
                 base_path: None,
@@ -2353,9 +2415,7 @@ build/
         "console.log('dependency');",
     );
 
-    // Create engine with correct bundle path
-    // Create a task for the test
-    let task = Task {
+    let task1 = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
         node_id: "test-node".to_string(),
@@ -2383,9 +2443,9 @@ build/
         error: None,
     };
 
-    // Create state adapter and save task
+    // Create state adapter and save tasks
     let mut state_adapter = Box::new(LocalStateAdapter::new());
-    state_adapter.save_task(&task).await.unwrap();
+    state_adapter.save_task(&task1).await.unwrap();
     state_adapter.save_task(&task2).await.unwrap();
 
     // Create engine with correct bundle path
@@ -2399,6 +2459,7 @@ build/
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2416,7 +2477,7 @@ build/
                 capabilities: None,
                 capabilities_security_callback: None,
             },
-            &task,
+            &task1,
         )
         .await;
 
@@ -2427,11 +2488,11 @@ build/
     );
 
     // Test second execution
-
     let result_no_gitignore = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -2484,8 +2545,6 @@ export default function transform(ast) {
     // Create regular file
     create_test_file(temp_path, "regular.js", "const normal = 'visible';");
 
-    // Create engine with correct bundle path
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2515,6 +2574,7 @@ export default function transform(ast) {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-hidden-files",
             &UseJSAstGrep {
                 js_file: "hidden-codemod.js".to_string(),
                 base_path: None,
@@ -2562,14 +2622,6 @@ export default function transform(ast) {
     // Create test file
     create_test_file(temp_path, "test.js", "console.log('test');");
 
-    // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-
-    // Create a task for the test
     let task = Task {
         id: Uuid::new_v4(),
         workflow_run_id: Uuid::new_v4(),
@@ -2584,10 +2636,22 @@ export default function transform(ast) {
         error: None,
     };
 
+    // Create state adapter and save task
+    let mut state_adapter = Box::new(LocalStateAdapter::new());
+    state_adapter.save_task(&task).await.unwrap();
+
+    // Create engine with correct bundle path
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step-with-gitignore",
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: None,
@@ -2685,8 +2749,8 @@ export default function transform(ast) {
 
     create_test_file(temp_path, "src/app.js", "console.log('Hello, World!');");
 
-    // Create engine with workflow
-    let state_adapter = Box::new(MockStateAdapter::new());
+    // Create engine with correct bundle path and a clean state adapter
+    let state_adapter = Box::new(LocalStateAdapter::new());
     let config = WorkflowRunConfig {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -2701,37 +2765,28 @@ export default function transform(ast) {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    // Robust wait for the task to be processed
+    let mut js_ast_grep_task = None;
+    for _ in 0..20 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        if let Some(task) = tasks.iter().find(|t| t.node_id == "js-ast-grep-node") {
+            if task.status != TaskStatus::Pending {
+                js_ast_grep_task = Some(task.clone());
+                break;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
 
-    // Get the workflow run
-    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
-
-    // Check that the workflow run is running, completed, or failed (test focuses on task creation)
-    println!("JS AST grep workflow status: {:?}", workflow_run.status);
-    assert!(
-        workflow_run.status == WorkflowStatus::Running
-            || workflow_run.status == WorkflowStatus::Completed
-            || workflow_run.status == WorkflowStatus::Failed
-    );
-
-    // Get the tasks
-    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // There should be at least 1 task
-    assert!(!tasks.is_empty());
-
-    // Check that the task for the JS AST grep node exists
-    let js_ast_grep_task = tasks
-        .iter()
-        .find(|t| t.node_id == "js-ast-grep-node")
-        .unwrap();
+    let js_ast_grep_task = js_ast_grep_task.expect("Task should have been created and processed");
 
     // Check that the task status is valid
     assert!(
         js_ast_grep_task.status == TaskStatus::Running
             || js_ast_grep_task.status == TaskStatus::Completed
-            || js_ast_grep_task.status == TaskStatus::Failed
+            || js_ast_grep_task.status == TaskStatus::Failed,
+        "Task status should be Running, Completed, or Failed, but was {:?}",
+        js_ast_grep_task.status
     );
 }
 
