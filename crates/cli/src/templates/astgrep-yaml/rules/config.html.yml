@@ -1,0 +1,24 @@
+# Modernize HTML4 to HTML5
+id: migrate-center-tags
+language: html
+rule:
+  pattern: "<center>$CONTENT</center>"
+fix: "<div style=\"text-align: center\">$CONTENT</div>"
+---
+id: migrate-font-tags
+language: html
+rule:
+  pattern: "<font color=\"$COLOR\">$CONTENT</font>"
+fix: "<span style=\"color: $COLOR\">$CONTENT</span>"
+---
+id: migrate-frameset-tags
+language: html
+rule:
+  pattern: "<frameset $$$>$$$CONTENT</frameset>"
+fix: "<div class=\"frameset-container\">\n  $$$CONTENT</div>"
+---
+id: migrate-align-attribute
+language: html
+rule:
+  pattern: "<$T align=\"$ALIGN\">"
+fix: "<$T style=\"text-align: $ALIGN\">"
