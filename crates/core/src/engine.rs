@@ -1534,6 +1534,7 @@ impl Engine {
                             .as_ref()
                             .map(|callback| Arc::new(callback.clone())),
                     },
+                    bundle_path,
                 )
                 .await
             }
@@ -1673,6 +1674,7 @@ impl Engine {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_js_ast_grep_step(
         &self,
         id: String,
@@ -1681,11 +1683,13 @@ impl Engine {
         params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
         capabilities_data: &CapabilitiesData,
+        bundle_path: &Option<PathBuf>,
     ) -> Result<()> {
-        let js_file_path = self
-            .workflow_run_config
-            .bundle_path
-            .join(&js_ast_grep.js_file);
+        // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
+        let effective_bundle_path = bundle_path
+            .as_ref()
+            .unwrap_or(&self.workflow_run_config.bundle_path);
+        let js_file_path = effective_bundle_path.join(&js_ast_grep.js_file);
 
         // Combine target_path with base_path if base_path is specified
         let target_path = if let Some(base_path) = &js_ast_grep.base_path {
