@@ -3,20 +3,164 @@ title: "Codemod for OSS Maintainers"
 sidebarTitle: 'OSS Maintainers'
 ---
 
-Codemod provides infrastructure for framework and library maintainers to build, test, and distribute automated migrations. When you ship breaking changes, codemods help your users upgrade by eliminating the repetitive, mechanical parts of migration, reducing the effort that keeps them stuck on old versions.
+Codemod provides open source toolkits that help framework and library maintainers create, publish, and maintain official codemods for their users.
 
-Users on outdated versions create ongoing costs:
-- security vulnerabilities go unpatched
-- bug reports duplicate issues already fixed upstream
-- community support fragments across versions
+With Codemod, maintainers can confidently ship new releases without worrying about long-term backward compatibility or keeping old versions alive. Codemods give users a safe, automated path to upgrade and stay current with the latest APIs and features.
 
-Codemods address this by making upgrades less painful.
+Codemod is already used by popular projects like React, Node.js, ESLint, Express, Nuxt, and others to power migrations in their official upgrade guides.
 
-## What Codemod enables
+<CardGroup cols={4}>
+  <Card title="Node.js">
+  <a href="https://github.com/nodejs/userland-migrations" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="./images/logos/nodejs-light-mode.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
 
-- **Eliminate repetitive migration work** - Codemods handle mechanical changes like renaming APIs, updating imports, and refactoring patterns. Your users focus on the parts that require human judgment.
-- **Handle real-world complexity** - Migrations aren't always simple. [Workflows](/workflows/building-workflows) supports [multiple step types](/workflows/building-workflows#steps), [manual approval gates](/workflows/building-workflows#manual-trigger) for human intervention, and [AI-assisted steps](/workflows/building-workflows#ai-step) for non-deterministic tasks.
-- **Distribute through a central registry** - Publish codemods to the [Codemod Registry](/platform/registry) where users discover and run them via CLI or Codemod platform.
+  <Card title="React">
+  <a href="https://react.dev/blog/2024/04/25/react-19-upgrade-guide#codemods" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+
+  <Card title="ESLint">
+  <a href="https://github.com/eslint/codemods" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+
+  <Card title="Webpack">
+  <a href="https://webpack.js.org/migrate/5/#codemods" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+  <Card title="Nuxt">
+  <a href="https://nuxt.com/docs/4.x/getting-started/upgrade#migrating-using-codemods" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+
+  <Card title="pnpm">
+  <a href="https://github.com/pnpm/codemod?tab=readme-ov-file" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+
+  <Card title="MSW">
+  <a href="https://github.com/mswjs/codemods" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>
+
+  <Card title="React Router">
+  <a href="https://reactrouter.com/upgrading/remix#2-update-dependencies" target="_blank">
+    <!-- Light mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo light mode"
+      className="block dark:hidden" 
+      noZoom
+    />
+    <!-- Dark mode image -->
+    <img 
+      src="/images/logo.png" 
+      alt="React logo dark mode"
+      className="hidden dark:block" 
+      noZoom
+    />
+  </a>
+  </Card>  
+</CardGroup>
 
 ## How it works
 
@@ -24,30 +168,8 @@ Codemods address this by making upgrades less painful.
 2. **[Publish to the registry](/publishing)** under your framework's namespace using the CLI or CI/CD
 3. **Users run them** with a single [CLI](/cli) command or through [Codemod platform](/platform/campaigns)
 
-## Examples
 
-See how other frameworks use Codemod to help their communities upgrade:
 
-<CardGroup cols={2}>
-  <Card title="Node.js" icon="node-js" href="https://github.com/nodejs/userland-migrations">
-    Node.js API deprecation and upgrade codemods.
-  </Card>
-  <Card title="React" icon="react" href="https://github.com/reactjs/react-codemod">
-    Automated migrations for React version upgrades.
-  </Card>
-  <Card title="Nuxt" icon="vuejs" href="https://nuxt.com/docs/4.x/getting-started/upgrade#migrating-using-codemods">
-    Codemods for Nuxt framework migrations.
-  </Card>
-  <Card title="pnpm" icon="box" href="https://github.com/pnpm/codemod?tab=readme-ov-file">
-    Tooling migrations for pnpm package manager.
-  </Card>
-  <Card title="MSW" icon="server" href="https://github.com/mswjs/codemods">
-    Mock Service Worker v1 to v2 migration.
-  </Card>
-  <Card title="Fastify" icon="bolt" href="https://fastify.dev/docs/latest/Guides/Migration-Guide-V4/#codemods">
-    Fastify framework upgrade automation.
-  </Card>
-</CardGroup>
 
 <Info>
   Want to add your framework? [Ping us on Slack](https://go.codemod.com/community) or start building below.
