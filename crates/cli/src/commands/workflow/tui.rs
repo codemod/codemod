@@ -12,7 +12,9 @@ use crate::engine::create_engine;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
@@ -24,6 +26,27 @@ use ratatui::{
     Frame, Terminal,
 };
 use uuid::Uuid;
+
+fn resize_pty_and_parser(app: &mut App, rows: u16, cols: u16) {
+    if app.terminal_size != (rows, cols) && rows > 0 && cols > 0 {
+        app.terminal_size = (rows, cols);
+        // Handle lock poisoning gracefully - if lock is poisoned, recover from it
+        let mut parser = app
+            .terminal_parser
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        parser.set_size(rows, cols);
+
+        if let Some(master) = &mut app.pty_master {
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+    }
+}
 
 /// Run workflow resume command in a PTY (pseudo-terminal) for full interactivity
 ///
@@ -46,8 +69,10 @@ fn run_resume_command_in_terminal(
     // Create PTY system
     let pty_system = NativePtySystem::default();
 
-    // Get terminal size from app state
-    let (rows, cols) = app.terminal_size;
+    // Get actual terminal size (fallback to app state if unavailable)
+    let (rows, cols) = size().unwrap_or(app.terminal_size);
+    // Update app state with actual size
+    app.terminal_size = (rows, cols);
 
     // Create PTY pair
     let pair = pty_system
@@ -122,13 +147,19 @@ fn run_resume_command_in_terminal(
 
     // Reset the terminal parser for fresh output
     {
-        let mut parser = app.terminal_parser.write().unwrap();
+        let mut parser = app
+            .terminal_parser
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *parser = vt100::Parser::new(rows, cols, 1000); // 1000 lines scrollback
     }
 
     // Mark PTY as running
     {
-        let mut running = app.pty_running.lock().unwrap();
+        let mut running = app
+            .pty_running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *running = true;
     }
 
@@ -143,20 +174,26 @@ fn run_resume_command_in_terminal(
             match reader.read(&mut buf) {
                 Ok(0) => {
                     // EOF - process exited
-                    let mut running = running_clone.lock().unwrap();
+                    let mut running = running_clone
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *running = false;
                     break;
                 }
                 Ok(n) => {
                     // Feed the raw bytes to the VT100 parser
                     // This handles all escape sequences, colors, cursor positioning, etc.
-                    let mut parser = parser_clone.write().unwrap();
+                    let mut parser = parser_clone
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     parser.process(&buf[..n]);
                 }
                 Err(e) => {
                     // Error reading - log and exit
                     eprintln!("PTY read error: {}", e);
-                    let mut running = running_clone.lock().unwrap();
+                    let mut running = running_clone
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *running = false;
                     break;
                 }
@@ -761,7 +798,12 @@ impl App {
                         }
                     }
                 })
-                .unwrap_or_else(|| std::env::current_dir().unwrap());
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| {
+                        // Fallback to /tmp if current directory is unavailable
+                        std::path::PathBuf::from("/tmp")
+                    })
+                });
 
             // Switch to terminal screen and run command
             self.terminal_task = None;
@@ -814,7 +856,12 @@ impl App {
                         }
                     }
                 })
-                .unwrap_or_else(|| std::env::current_dir().unwrap());
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| {
+                        // Fallback to /tmp if current directory is unavailable
+                        std::path::PathBuf::from("/tmp")
+                    })
+                });
 
             // Switch to terminal screen and run command
             self.terminal_task = Some(task_id);
@@ -2117,7 +2164,10 @@ fn render_actions_screen(f: &mut Frame, app: &mut App, area: Rect, elapsed_ms: u
 fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
     // Check if PTY is still running
     let pty_running = {
-        let running = app.pty_running.lock().unwrap();
+        let running = app
+            .pty_running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *running
     };
 
@@ -2151,26 +2201,13 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
     // Update terminal size if the area changed
     let new_rows = inner_area.height;
     let new_cols = inner_area.width;
-
-    if app.terminal_size != (new_rows, new_cols) && new_rows > 0 && new_cols > 0 {
-        app.terminal_size = (new_rows, new_cols);
-        // Resize the parser to match
-        let mut parser = app.terminal_parser.write().unwrap();
-        parser.set_size(new_rows, new_cols);
-
-        // Resize the PTY
-        if let Some(master) = &mut app.pty_master {
-            let _ = master.resize(PtySize {
-                rows: new_rows,
-                cols: new_cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
-    }
+    resize_pty_and_parser(app, new_rows, new_cols);
 
     // Get content from the vt100 parser
-    let parser = app.terminal_parser.read().unwrap();
+    let parser = app
+        .terminal_parser
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let screen = parser.screen();
 
     // Build terminal content from the screen
@@ -2180,7 +2217,15 @@ fn render_terminal_screen(f: &mut Frame, app: &mut App, area: Rect) {
         let mut spans: Vec<Span> = Vec::new();
 
         for col in 0..screen.size().1 {
-            let cell = screen.cell(row, col).unwrap();
+            // Defensive: handle potential cell access failure gracefully
+            let cell = match screen.cell(row, col) {
+                Some(cell) => cell,
+                None => {
+                    // If cell is unavailable, use a default empty cell
+                    spans.push(Span::raw(" "));
+                    continue;
+                }
+            };
             let ch = cell.contents();
 
             // Convert vt100 color to ratatui color
@@ -2606,8 +2651,15 @@ async fn run_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         };
 
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                app.handle_input(key.code, key.modifiers).await?;
+            match event::read()? {
+                Event::Key(key) => {
+                    app.handle_input(key.code, key.modifiers).await?;
+                }
+                Event::Resize(cols, rows) => {
+                    // Handle terminal resize events immediately
+                    resize_pty_and_parser(app, rows, cols);
+                }
+                _ => {}
             }
         }
 
