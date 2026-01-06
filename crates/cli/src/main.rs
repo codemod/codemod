@@ -19,6 +19,8 @@ use codemod_telemetry::{
     send_null::NullSender,
 };
 
+mod tui;
+
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
