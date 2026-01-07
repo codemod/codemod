@@ -209,6 +209,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                     matrix_values: None,
                     capabilities,
                     semantic_provider,
+                    console_log_collector: None,
                 };
                 let execution_output = execute_codemod_with_quickjs(options).await?;
 
