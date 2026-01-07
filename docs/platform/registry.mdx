@@ -45,9 +45,25 @@ Packages with `private` access are only accessible to the owner or organization 
 - Packages can be scoped to your organization (e.g., `@your-org/internal-codemod`)
 - Configured through organization settings in the [Codemod app](https://app.codemod.com)
 
-<Info>
-To use a scoped package name, first reserve the scope by installing the [Codemod GitHub App](https://github.com/apps/codemod) on a repository in your GitHub organization. Only organization admins can publish codemods under that scope.
-</Info>
+### Reserving an Organization Scope
+
+To publish packages under your organization's scope (e.g., `@your-org/my-codemod`), you need to link your GitHub organization to Codemod:
+
+<Steps>
+  <Step title="Install the Codemod GitHub App">
+    1. Go to [github.com/apps/codemod](https://github.com/apps/codemod)
+    2. Click **Install** and select your GitHub organization
+    3. Grant access to at least one repository (this links your org to Codemod)
+    
+    <Note>You must be a GitHub organization **admin** to install the app.</Note>
+  </Step>
+  
+  <Step title="Sign in to Codemod">
+    Sign in at [codemod.com](https://codemod.com) with your GitHub account. Your organization scope will be automatically reserved.
+  </Step>
+</Steps>
+
+Once linked, anyone who can trigger GitHub Actions in your organization's repositories can publish codemods under your scope using [trusted publishers](/publishing#trusted-publishers).
 
 ## Discovering Packages
 
