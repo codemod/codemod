@@ -2,189 +2,177 @@
 title: "Codemod for OSS Maintainers"
 sidebarTitle: 'OSS Maintainers'
 ---
+Framework, library, and SDK builders use codemods to move users to new releases without carrying long-term backward compatibility.
 
-Codemod provides open source toolkits that help framework and library maintainers create, publish, and maintain official codemods for their users.
+Building and maintaining codemods is hard. It does not scale well, adoption is hard to measure, and feedback is limited.
 
-With Codemod, maintainers can confidently ship new releases without worrying about long-term backward compatibility or keeping old versions alive. Codemods give users a safe, automated path to upgrade and stay current with the latest APIs and features.
+Codemod gives maintainers an easy way to publish official codemods with each release, accept community contributions, and see how codemods are actually used.
 
-Codemod is already used by popular projects like React, Node.js, ESLint, Express, Nuxt, and others to power migrations in their official upgrade guides.
+Codemod is already used by projects like React, Node.js, ESLint, Express, Nuxt, and many more.
 
-<CardGroup cols={5}>
-  <Card title="Node.js">
-  <a href="https://github.com/nodejs/userland-migrations" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/nodejs-light-mode.png" 
-      alt="Node.js logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/nodejs-dark-mode.png" 
-      alt="Node.js logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+<CardGroup cols={4}>
+  <Card 
+    href="https://github.com/nodejs/userland-migrations"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/nodejs-dark.svg" 
+          alt="Node.js logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/nodejs-light.svg" 
+          alt="Node.js logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-
-  <Card title="React">
-  <a href="https://react.dev/blog/2024/04/25/react-19-upgrade-guide#codemods" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/react-light-mode.png" 
-      alt="React logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/react-dark-mode.png" 
-      alt="React logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card href="https://react.dev/blog/2024/04/25/react-19-upgrade-guide#codemods">
+  <div className="relative w-full pb-[100%]">
+    <div className="absolute inset-0 flex items-center justify-center">
+      <img 
+        src="./images/logos/react.svg" 
+        alt="React logo"
+        className="block opacity-100 dark:opacity-0" 
+        noZoom
+      />
+      <img 
+        src="./images/logos/react.svg" 
+        alt="React logo"
+        className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+        noZoom
+      />
+    </div>
+  </div>
   </Card>
-
-  <Card title="ESLint">
-  <a href="https://github.com/eslint/codemods" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/eslint-light-mode.png" 
-      alt="ESLint logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/eslint-dark-mode.png" 
-      alt="ESLint logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card 
+    href="https://github.com/eslint/codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/eslint-dark.svg" 
+          alt="ESLint logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/eslint-light.svg" 
+          alt="ESLint logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-
-  <Card title="Webpack">
-  <a href="https://webpack.js.org/migrate/5/#codemods" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/webpack-light-mode.png" 
-      alt="Webpack logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/webpack-dark-mode.png" 
-      alt="Webpack logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card 
+    href="https://webpack.js.org/migrate/5/#codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/webpack-dark.svg" 
+          alt="Webpack logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/webpack-light.svg" 
+          alt="Webpack logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-  <Card title="Nuxt">
-  <a href="https://nuxt.com/docs/4.x/getting-started/upgrade#migrating-using-codemods" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/nuxt-light-mode.png" 
-      alt="Nuxt logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/nuxt-dark-mode.png" 
-      alt="Nuxt logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card 
+    href="https://nuxt.com/docs/4.x/getting-started/upgrade#migrating-using-codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/nuxt-dark.svg" 
+          alt="Nuxt logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/nuxt-light.svg" 
+          alt="Nuxt logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-
-  <Card title="pnpm">
-  <a href="https://github.com/pnpm/codemod?tab=readme-ov-file" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/pnpm-light-mode.png" 
-      alt="pnpm logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/pnpm-dark-mode.png" 
-      alt="pnpm logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card 
+    href="https://github.com/pnpm/codemod?tab=readme-ov-file"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/pnpm-dark.svg" 
+          alt="pnpm logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/pnpm-light.svg" 
+          alt="pnpm logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-
-  <Card title="MSW">
-  <a href="https://github.com/mswjs/codemods" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/msw-light-mode.png" 
-      alt="MSW logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/msw-dark-mode.png" 
-      alt="MSW logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
+  <Card 
+    href="https://github.com/mswjs/codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/msw-dark.svg" 
+          alt="MSW logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/msw-light.svg" 
+          alt="MSW logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
   </Card>
-
-  <Card title="React Router">
-  <a href="https://reactrouter.com/upgrading/remix#2-update-dependencies" target="_blank">
-    {/* Light mode image */}
-    <img 
-      src="./images/logos/react-router-light-mode.png" 
-      alt="React Router logo light mode"
-      className="block dark:hidden" 
-      noZoom
-    />
-    {/* Dark mode image */}
-    <img 
-      src="./images/logos/react-router-dark-mode.png" 
-      alt="React Router logo dark mode"
-      className="hidden dark:block" 
-      noZoom
-    />
-  </a>
-  </Card>  
+  <Card 
+    href="https://reactrouter.com/upgrading/remix#2-update-dependencies"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="./images/logos/react-router-dark.svg" 
+          alt="React Router logo"
+          className="block opacity-100 dark:opacity-0" 
+          noZoom
+        />
+        <img 
+          src="./images/logos/react-router-light.svg" 
+          alt="React Router logo"
+          className="absolute inset-0 m-auto block opacity-0 dark:opacity-100" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
 </CardGroup>
 
-## How it works
 
-1. **[Write codemods](/workflows/quickstart)** that automate breaking changes using jssg, YAML rules, or multi-step workflows
-2. **[Publish to the registry](/publishing)** under your framework's namespace using the CLI or CI/CD
-3. **Users run them** with a single [CLI](/cli) command or through [Codemod platform](/platform/campaigns)
-
-
-
-
-<Info>
-  Want to add your framework? [Ping us on Slack](https://go.codemod.com/community) or start building below.
-</Info>
-
-## Getting started
-
-Codemods can be built using:
-- **[CLI](/cli)** - Scaffold and build locally with `npx codemod init`
-- **[MCP](/model-context-protocol)** - AI-assisted creation in your IDE
-- **[Studio](/platform/codemod-studio)** - Web-based prototyping with Codemod AI
-
-This guide uses the CLI. The workflow is the same regardless of how you create the codemod.
-
-### Build your first codemod
+## Get started
 
 import { MigrationsTemplateDemo } from "/snippets/migrations-template-demo.mdx";
 
@@ -193,149 +181,38 @@ import { MigrationsTemplateDemo } from "/snippets/migrations-template-demo.mdx";
 </Frame>
 
 <Steps>
-  <Step title="Scaffold a new package">
-    ```bash
-    npx codemod init
-    ```
-
-    The CLI walks you through setup:
-    - **Codemod type** - jssg (simple transforms) or multi-step workflow (complex migrations)
-    - **Target language** - TypeScript, JavaScript, Python, etc.
-    - **Package name** - Use `@your-framework/codemod-name` for scoped packages
-
-    This creates a folder with the required structure:
-
-    ```plaintext
-    my-codemod/
-    ├── codemod.yaml        # Package metadata
-    ├── workflow.yaml       # Workflow definition
-    └── scripts/
-        └── codemod.ts      # Your transformation logic
-    ```
+  <Step title="Create a dedicated repo to host your codemods">
+    - We recommend creating a dedicated repository under your project’s GitHub org to host codemods using this [repo template](https://github.com/codemod/migrations-template). 
+    - Using the included GitHub action, you can easily publish official codemods under your org scope, collaborate with trusted community members without giving access to your main repo, and keep migration logic cleanly separated from product code. 
+    - See the [ESLint codemods repo](https://github.com/eslint/codemods) for an example.
   </Step>
-
-  <Step title="Write your transformation">
-    Open `scripts/codemod.ts` and write your transformation. Here's a minimal example that replaces `console.log` with `logger.log`:
-
-    ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
-    import type TSX from "codemod:ast-grep/langs/tsx";
-
-    const transform: Transform<TSX> = (root) => {
-      const node = root.root();
-      const matches = node.findAll({ pattern: "console.log($$$ARGS)" });
-
-      if (matches.length === 0) return null;
-
-      const edits = matches.map((match) => {
-        const args = match.getMultipleMatches("ARGS").map(a => a.text()).join(", ");
-        return match.replace(`logger.log(${args})`);
-      });
-
-      return node.commitEdits(edits);
-    };
-
-    export default transform;
-    ```
-
-    See the [jssg quickstart](/jssg/quickstart) for patterns and API details.
+  <Step title="Secure your official scope">
+    - Create a free Codemod account and sign in.
+    - Add your GitHub organization.
+    - Install the Codemod GitHub App on your codemod repo.
+      - This enables trusted publishing under your org scope from GitHub Actions with no API keys or secrets to manage. See the [Node.js official codemods filtered via scope:nodejs in the registry](https://app.codemod.com/registry?q=scope%3Anodejs) for an example.
+      
   </Step>
-
-  <Step title="Test locally">
-    Run your codemod against a target directory:
-
-    ```bash
-    npx codemod workflow run -w ./my-codemod/ -t ./path/to/test-repo 
-    ```
-
-    For automated testing, create input/expected fixtures:
-
-    ```plaintext
-    tests/
-      basic-case/
-        input.ts       # Before
-        expected.ts    # After
-    ```
-
-    Then run:
-
-    ```bash
-    npx codemod jssg test ./scripts/codemod.ts -l tsx
-    ```
-
-    See [testing documentation](/jssg/testing) for more options.
-  </Step>
-</Steps>
-
-### Publish to the registry
-
-Once your codemod works locally, publish it so your users can run it.
-
-<Steps>
-  <Step title="Login">
-    ```bash
-    npx codemod login
-    ```
-
-    This opens a browser for authentication. You can sign in with GitHub, GitLab, or SSO.
-  </Step>
-
-  <Step title="Publish">
-    ```bash
-    npx codemod publish
-    ```
-
-    Your codemod is now live in the [Codemod Registry](https://go.codemod.com/registry). Users can run it with:
-
-    ```bash
-    npx codemod @your-framework/codemod-name
-    ```
+  <Step title="Build and publish codemods">
+    At this point, your repo is fully set up for collaboration and publishing.
+      - You or your community can open PRs to add or improve codemods.
+      - Once merged, through the GitHub Action you can publish the codemod to the registry under your org scope Make sure the codemod names start with your scope (`@your-github-org-name/codemod-name`, e.g. `@eslint/v8-to-v9-config`)
   </Step>
 </Steps>
 
 <Tip>
-  Use [scoped package names](/platform/registry#package-naming) (e.g., `@nuxt/v3-to-v4`) to group codemods under your framework's namespace.
-</Tip>
+If you do not know how to build or publish codemods yet check out the following guides: 
+  - Building codemods with [Codemod MCP](/model-context-protocol#building-codemod-packages-with-mcp)
+  - Use [Codemod Studio](/platform/codemod-studio) for:
+    * A live codemod runner
+    * An AST viewer
+    * Shareable links with test fixtures for review and debugging
+  - [Publishing codemods](/publishing) to the registry.
+  </Tip> 
 
-### CI/CD and automation
 
-For ongoing codemod development, use the [migrations template](https://github.com/codemod/migrations-template) to get a ready-to-use repository with GitHub Actions for validation and publishing.
 
-<Steps>
-  <Step title="Create your codemods repository">
-    Fork or use the [migrations template](https://github.com/codemod/migrations-template) in your GitHub organization.
-  </Step>
 
-  <Step title="Link your organization">
-    1. [Sign in](https://app.codemod.com) to Codemod
-    2. [Create an organization](https://app.codemod.com/global/organizations/create) matching your GitHub org name
-    3. Install the [Codemod GitHub App](https://github.com/apps/codemod)
-    
-    This enables [trusted publishing](/publishing#trusted-publishers)—passwordless publishing from GitHub Actions with no API keys to manage.
-  </Step>
-
-  <Step title="Configure your workflow">
-    For trusted publishing, ensure your workflow has OIDC permissions:
-    
-    ```yaml
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: codemod/publish-action@v1
-    ```
-    
-    <Tip>
-      Prefer API keys instead? [Create one](https://app.codemod.com/api-keys) and add it as a repository secret named `CODEMOD_API_KEY`. See [publishing](/publishing) for all options.
-    </Tip>
-  </Step>
-
-  <Step title="Push and publish">
-    Add codemods to your repository. The GitHub Action validates on PR and publishes on release.
-  </Step>
-</Steps>
 
 ## Getting help
 
