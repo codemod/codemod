@@ -332,3 +332,87 @@ jobs:
         run: |
           cd crates/cli/npm
           npm publish --tag ${{ steps.version.outputs.npm_tag }} --provenance
+
+  sync_migrations_template:
+      name: Synchronize Migrations Template
+      needs: [build]
+      runs-on: ubuntu-22.04
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      permissions:
+        contents: write
+        pull-requests: write
+      steps:
+        - name: Checkout codemod repo
+          uses: actions/checkout@v4
+          with:
+            submodules: recursive
+
+        - name: Install Rust
+          uses: dtolnay/rust-toolchain@stable
+          with:
+            toolchain: 1.89.0
+            components: rustfmt, clippy
+
+        - name: Cache Cargo
+          uses: Swatinem/rust-cache@v2
+
+        - name: Checkout migrations-template repo
+          uses: actions/checkout@v4
+          with:
+            repository: codemod/migrations-template
+            path: migrations-template
+            fetch-depth: 1
+            token: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Remove all files except .git
+          working-directory: migrations-template
+          run: |
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+        - name: Run xtask cli-create
+          run: |
+            cargo run --release --bin xtask -- cli-create ${{ github.workspace }}/migrations-template
+
+        - name: Configure Git
+          working-directory: migrations-template
+          run: |
+            git config user.name "Codemod GitHub App"
+            git config user.email "codemod[bot]@users.noreply.github.com"
+
+        - name: Extract version from tag
+          id: version
+          run: |
+            VERSION=$(echo "${{ github.ref_name }}" | sed 's/codemod-cli@//')
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Version: $VERSION"
+
+        - name: Check for changes
+          id: check_changes
+          working-directory: migrations-template
+          run: |
+            git add -A
+            if git diff --cached --quiet; then
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              echo "No changes detected"
+            else
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+              echo "Changes detected"
+            fi
+
+        - name: Create Pull Request
+          if: steps.check_changes.outputs.has_changes == 'true'
+          working-directory: migrations-template
+          uses: peter-evans/create-pull-request@v5
+          with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+            commit-message: "chore: Sync with codemod CLI v${{ steps.version.outputs.version }}"
+            title: "Sync with codemod CLI v${{ steps.version.outputs.version }}"
+            body: |
+              This PR synchronizes the migrations-template repository with the latest codemod CLI release (v${{ steps.version.outputs.version }}).
+              Changes include:
+              - Updated template files from codemod CLI
+              - Synchronized with release tag: ${{ github.ref_name }}
+            branch: sync-codemod-cli-v${{ steps.version.outputs.version }}
+            base: main
+            delete-branch: true
+            path: migrations-template

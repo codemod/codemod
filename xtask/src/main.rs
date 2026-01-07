@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use serde_json::to_writer_pretty;
 use ts_export::export_recursive;
 
+mod cli_create;
 mod tree_sitter_compress;
 mod ts_export;
 
@@ -28,6 +29,12 @@ enum Commands {
     Ts,
     /// Compress tree-sitter grammar node types to AI-friendly format.
     CompressTreeSitter,
+    /// Create a new codemod project using codemod init.
+    CliCreate {
+        /// Target directory for the codemod project (defaults to current directory)
+        #[arg(value_name = "DIR")]
+        target_dir: Option<std::path::PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +84,12 @@ async fn main() {
         Commands::CompressTreeSitter => {
             if let Err(e) = tree_sitter_compress::compress_tree_sitter_grammar().await {
                 eprintln!("Error compressing tree-sitter grammar: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::CliCreate { target_dir } => {
+            if let Err(e) = cli_create::create_codemod(target_dir).await {
+                eprintln!("Error creating codemod: {e}");
                 std::process::exit(1);
             }
         }
