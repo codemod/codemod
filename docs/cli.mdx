@@ -4,48 +4,9 @@ sidebarTitle: 'CLI'
 description: "Scaffold, publish, and run codemod projects, recipes, or packages from your terminal using Codemod's open-source CLI."
 ---
 
-import { CLIDemo } from "/snippets/cli-demo.mdx";
-
-## Quick Start
-
-<Frame>
-  <CLIDemo />
-</Frame>
-
-<Steps>
-  <Step title="Initialize a new codemod project">
-    ```bash
-    npx codemod init
-    ```
-
-    This scaffolds a new codemod project in the current directory.
-  </Step>
-  <Step title="Run and test your codemod">
-    ```bash
-    cd /path/to/project-to-migrate
-
-    npx codemod workflow run -w /path/to/my-codemod/workflow.yaml
-    ```
-
-    This runs your local Codemod package on your codebase to test it before publishing.
-  </Step>
-  <Step title="Publish your codemod">
-    ```bash
-    npx codemod publish
-    ```
-
-    This publishes your codemod to the registry (you may need to <a href="#codemod-login">login</a> first).
-  </Step>
-  <Step title="Run the published codemod">
-    ```bash
-    npx codemod @codemod/my-test-pkg
-    ```
-
-    Run your published codemod directly from the [Codemod Registry](https://app.codemod.com/registry).
-  </Step>
-</Steps>
-
-For more details on building and running Codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  New to Codemod? Follow the step-by-step guide to scaffold, test, and publish your first codemod.
+</Card>
 
 ---
 

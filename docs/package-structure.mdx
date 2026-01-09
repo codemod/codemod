@@ -15,6 +15,12 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
 
 ## Directory Layout
 
+Scaffold a new package with:
+
+```bash
+npx codemod init
+```
+
 <Tree>
   <Tree.Folder name="my-codemod-package" defaultOpen>
     <Tree.File name="codemod.yaml" />
@@ -45,44 +51,6 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
 <Info>
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
 </Info>
-
-## Creating a Package
-
-Scaffold a new package with the CLI:
-
-```bash
-npx codemod init
-```
-
-You'll be prompted for:
-- **Project directory**
-- **Codemod type:** JavaScript ast-grep (jssg) or multi-step workflow
-- **Target language**
-- **Project name, description, author**
-- **License and visibility settings**
-
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  End-to-end guide to building your first codemod.
-</Card>
-
-## Running a Package
-
-```bash
-# Run from a package directory
-npx codemod workflow run -w ./my-codemod-package/
-
-# Run a specific workflow file
-npx codemod workflow run -w workflow.yaml
-
-# Validate before running
-npx codemod workflow validate -w workflow.yaml
-```
-
-<Card title="CLI Reference" icon="terminal" href="/cli#codemod-workflow">
-  All workflow commands and options.
-</Card>
-
----
 
 ## Package Metadata (codemod.yaml)
 
