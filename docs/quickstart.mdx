@@ -1,0 +1,129 @@
+---
+title: "Quickstart"
+sidebarTitle: "Quickstart"
+---
+
+This guide takes you from zero to a published codemod. Each step includes just enough to get started, with links to deeper documentation.
+
+## Building codemods
+
+Codemods can be built using:
+- **[MCP](/model-context-protocol)** — AI-assisted creation in your IDE (recommended for getting started)
+- **[Studio](/platform/codemod-studio)** — Web-based prototyping with live runner and AST viewer
+- **[Manually](/workflows/quickstart)** — Scaffold and build locally with `npx codemod init`
+
+This guide walks through MCP. Once you have a codemod package, validation, running, and publishing work the same way regardless of how you built it.
+
+## 1. Generate a codemod
+
+Make sure you have [MCP installed](/model-context-protocol#quick-setup), then ask your AI assistant to create a codemod. Be specific about what you want to transform:
+
+````
+Create a jssg codemod that replaces React.Fragment tags with shorthand <> syntax.
+
+Before:
+```tsx
+<React.Fragment>
+  <Header />
+  <Main />
+</React.Fragment>
+```
+
+After:
+```tsx
+<>
+  <Header />
+  <Main />
+</>
+```
+
+Requirements:
+- Only transform fragments with no props (skip if key prop exists)
+- Target .tsx files
+- Include test cases
+````
+
+For more on writing effective prompts, see [MCP best practices](/model-context-protocol#best-practices).
+
+You'll get a complete package structure:
+
+```
+my-codemod/
+├── codemod.yaml        # Package metadata
+├── workflow.yaml       # Workflow definition
+├── scripts/
+│   └── codemod.ts      # Your jssg transformation
+└── tests/
+    └── basic-transform/
+        ├── input.tsx
+        └── expected.tsx
+```
+
+For more on package structure, see [Building Workflows](/workflows/building-workflows).
+
+### Need the live runner or AST viewer?
+
+If you need tools like the live runner, AST viewer, or shareable links, you can bring your codemod into [Codemod Studio](https://go.codemod.com/studio) and continue development there. See [Codemod Studio guide](/platform/codemod-studio) for more.
+
+## 2. Validate your codemod
+
+Run tests to ensure your codemod works correctly:
+
+```bash
+npx codemod jssg test ./scripts/codemod.ts --language tsx
+```
+
+For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+
+## 3. Run your codemod
+
+Run your codemod on a target codebase:
+
+```bash
+npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+```
+
+For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
+
+## 4. Publish your codemod
+
+Share your codemod with your team or the community:
+
+```bash
+npx codemod login
+npx codemod publish
+```
+
+Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
+
+For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
+
+---
+
+## Getting help
+
+<CardGroup cols={2}>
+  <Card title="Join the community" icon="slack" href="https://go.codemod.com/community">
+    Ask questions, get help, and connect with other framework maintainers on Slack.
+  </Card>
+  <Card title="Book a call" icon="calendar" href="https://cal.com/alexbit">
+    Schedule a demo or get hands-on help from the Codemod team.
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/cli/cli-reference">
+    Learn more about Codemod CLI.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/cli/packages/building-workflows">
+    Orchestrate complex multi-step migrations.
+  </Card>
+  <Card title="JSSG" icon="js" href="/jssg/quickstart">
+    Learn the transformation engine in depth.
+  </Card>
+  <Card title="Publishing" icon="upload" href="/publishing">
+    Authentication methods and CI/CD setup.
+  </Card>
+</CardGroup>

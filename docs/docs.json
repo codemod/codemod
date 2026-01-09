@@ -53,6 +53,7 @@
           {
             "group": "Community",
             "pages": [
+              "quickstart",
               "cli",
               {
                 "group": "Workflows",
