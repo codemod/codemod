@@ -14,89 +14,82 @@ Codemods can be built using:
 
 This guide walks through MCP. Once you have a codemod package, validation, running, and publishing work the same way regardless of how you built it.
 
-## 1. Generate a codemod
+<Steps>
+  <Step title="Generate a codemod">
+    Make sure you have [MCP installed](/model-context-protocol#quick-setup), then ask your AI assistant to create a codemod. Be specific about what you want to transform:
 
-Make sure you have [MCP installed](/model-context-protocol#quick-setup), then ask your AI assistant to create a codemod. Be specific about what you want to transform:
+    ````
+    Create a jssg codemod that converts all console.log statements to console.info in TypeScript files. 
 
-````
-Create a jssg codemod that replaces React.Fragment tags with shorthand <> syntax.
+    The codemod should:
+    - Target .ts and .tsx files
+    - Only transform console.log calls (not console.error, console.warn, etc.)
+    - Preserve all arguments and formatting
+    - Include test cases for the transformation
+    ````
 
-Before:
-```tsx
-<React.Fragment>
-  <Header />
-  <Main />
-</React.Fragment>
-```
+    <Card title="MCP best practices" icon="lightbulb" href="/model-context-protocol#best-practices">
+      Tips for writing effective prompts and getting the most out of your AI assistant.
+    </Card>
 
-After:
-```tsx
-<>
-  <Header />
-  <Main />
-</>
-```
+    You'll get a complete package structure:
 
-Requirements:
-- Only transform fragments with no props (skip if key prop exists)
-- Target .tsx files
-- Include test cases
-````
+    <Tree>
+      <Tree.Folder name="my-codemod" defaultOpen>
+        <Tree.File name="codemod.yaml" />
+        <Tree.File name="workflow.yaml" />
+        <Tree.Folder name="scripts" defaultOpen>
+          <Tree.File name="codemod.ts" />
+        </Tree.Folder>
+        <Tree.Folder name="tests" defaultOpen>
+          <Tree.Folder name="basic-transform" defaultOpen>
+            <Tree.File name="input.tsx" />
+            <Tree.File name="expected.tsx" />
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree>
 
-For more on writing effective prompts, see [MCP best practices](/model-context-protocol#best-practices).
+    For more on package structure, see [Codemod Workflows](/workflows/building-workflows).
 
-You'll get a complete package structure:
+    **Need the live runner or AST viewer?**
+    
+    If you need tools like the live runner, AST viewer, or shareable links, you can bring your codemod into [Codemod Studio](https://go.codemod.com/studio) and continue development there. See [Codemod Studio guide](/platform/codemod-studio) for more.
+  </Step>
 
-```
-my-codemod/
-├── codemod.yaml        # Package metadata
-├── workflow.yaml       # Workflow definition
-├── scripts/
-│   └── codemod.ts      # Your jssg transformation
-└── tests/
-    └── basic-transform/
-        ├── input.tsx
-        └── expected.tsx
-```
+  <Step title="Validate your codemod">
+    Run tests to ensure your codemod works correctly:
 
-For more on package structure, see [Building Workflows](/workflows/building-workflows).
+    ```bash
+    npx codemod jssg test ./scripts/codemod.ts --language tsx
+    ```
 
-### Need the live runner or AST viewer?
+    For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+  </Step>
 
-If you need tools like the live runner, AST viewer, or shareable links, you can bring your codemod into [Codemod Studio](https://go.codemod.com/studio) and continue development there. See [Codemod Studio guide](/platform/codemod-studio) for more.
+  <Step title="Run your codemod">
+    Run your codemod on a target codebase:
 
-## 2. Validate your codemod
+    ```bash
+    npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+    ```
 
-Run tests to ensure your codemod works correctly:
+    For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
+  </Step>
 
-```bash
-npx codemod jssg test ./scripts/codemod.ts --language tsx
-```
+  <Step title="Publish your codemod">
+    Share your codemod with your team or the community:
 
-For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+    ```bash
+    npx codemod login
+    npx codemod publish
+    ```
 
-## 3. Run your codemod
+    Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
 
-Run your codemod on a target codebase:
-
-```bash
-npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
-```
-
-For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
-
-## 4. Publish your codemod
-
-Share your codemod with your team or the community:
-
-```bash
-npx codemod login
-npx codemod publish
-```
-
-Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
-
-For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
+    For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
+  </Step>
+</Steps>
 
 ---
 

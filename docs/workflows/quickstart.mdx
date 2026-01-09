@@ -43,17 +43,20 @@ import { PackagesDemo } from "/snippets/packages-demo.mdx";
   <Step title="Explore the generated project">
     An example Codemod package:
 
-    ```plaintext
-    example-codemod/
-    ├── .gitignore
-    ├── README.md
-    ├── codemod.yaml        #  manifest and metadata
-    ├── workflow.yaml       # Workflow definition for running the codemod
-    ├── scripts/            # JS/TS codemods and shell scripts
-    │   └── codemod.ts      # JS ast-grep codemod entry point
-    └── rules/              # YAML ast-grep rule definitions
-        └── config.yml
-    ```
+    <Tree>
+      <Tree.Folder name="example-codemod" defaultOpen>
+        <Tree.File name=".gitignore" />
+        <Tree.File name="README.md" />
+        <Tree.File name="codemod.yaml" />
+        <Tree.File name="workflow.yaml" />
+        <Tree.Folder name="scripts" defaultOpen>
+          <Tree.File name="codemod.ts" />
+        </Tree.Folder>
+        <Tree.Folder name="rules" defaultOpen>
+          <Tree.File name="config.yml" />
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree>
 
     <Info>
       You can combine different codemod types in a single package. The <code>scripts/</code> and <code>rules/</code> folders are conventional, not required—use any paths you prefer as long as you reference them correctly from <code>workflow.yaml</code>.

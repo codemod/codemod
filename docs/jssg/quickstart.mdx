@@ -48,13 +48,15 @@ Pick `JavaScript ast-grep (JSSG) codemod` when prompted.
 
 This will scaffold a new folder with the required files and structure.
 
-```plaintext
-<your-codemod>/
-├── codemod.yaml
-├── workflow.yaml       # references scripts/codemod.ts in a js-ast-grep step
-└── scripts/
-    └── codemod.ts      # write your JSSG transform here
-```
+<Tree>
+  <Tree.Folder name="your-codemod" defaultOpen>
+    <Tree.File name="codemod.yaml" />
+    <Tree.File name="workflow.yaml" />
+    <Tree.Folder name="scripts" defaultOpen>
+      <Tree.File name="codemod.ts" />
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
 
   </Step>
 

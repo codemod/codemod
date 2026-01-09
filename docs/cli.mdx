@@ -284,19 +284,24 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
   <Step title="Test your codemod">
     Organize your tests as follows:
 
-    ```
-    tests/
-    ├── simple-transform/
-    │   ├── input.js
-    │   └── expected.js
-    └── multi-file-case/
-        ├── input/
-        │   ├── file1.js
-        │   └── file2.js
-        └── expected/
-            ├── file1.js
-            └── file2.js
-    ```
+    <Tree>
+      <Tree.Folder name="tests" defaultOpen>
+        <Tree.Folder name="simple-transform" defaultOpen>
+          <Tree.File name="input.js" />
+          <Tree.File name="expected.js" />
+        </Tree.Folder>
+        <Tree.Folder name="multi-file-case" defaultOpen>
+          <Tree.Folder name="input" defaultOpen>
+            <Tree.File name="file1.js" />
+            <Tree.File name="file2.js" />
+          </Tree.Folder>
+          <Tree.Folder name="expected" defaultOpen>
+            <Tree.File name="file1.js" />
+            <Tree.File name="file2.js" />
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree>
 
     Then run:
 

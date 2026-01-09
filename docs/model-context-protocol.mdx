@@ -86,14 +86,16 @@ The Codemod MCP server provides these tools for AI assistants:
   <Step title="Understand and run the output package">
     The MCP will create a complete Codemod package structure:
     
-    ```
-    my-codemod/
-    ├── codemod.yaml        # Package metadata
-    ├── workflow.yaml       # Workflow definition
-    ├── scripts/
-    │   └── codemod.ts      # Your jssg transformation
-    └── tests/              # Test cases
-    ```
+    <Tree>
+      <Tree.Folder name="my-codemod" defaultOpen>
+        <Tree.File name="codemod.yaml" />
+        <Tree.File name="workflow.yaml" />
+        <Tree.Folder name="scripts" defaultOpen>
+          <Tree.File name="codemod.ts" />
+        </Tree.Folder>
+        <Tree.Folder name="tests" defaultOpen />
+      </Tree.Folder>
+    </Tree>
     
     Run your codemod:
     ```bash
