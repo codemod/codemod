@@ -53,7 +53,7 @@
           {
             "group": "Community",
             "pages": [
-              "quickstart",
+              "oss-quickstart",
               "cli",
               "package-structure",
               {
@@ -272,6 +272,18 @@
     {
       "source": "/quickstart-oss",
       "destination": "/oss"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/oss-quickstart"
+    },
+    {
+      "source": "/cli/cli-reference",
+      "destination": "/cli"
+    },
+    {
+      "source": "/cli/packages/building-workflows",
+      "destination": "/workflows/reference"
     }
   ],
   "contextual": {
