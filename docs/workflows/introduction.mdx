@@ -1,0 +1,79 @@
+---
+title: "Introduction"
+sidebarTitle: "Introduction"
+---
+
+**Codemod Workflows** is a declarative execution engine that orchestrates automated code transformations at scale. It schedules, runs, and coordinates codemods across files, repositories, and teams.
+
+## How workflows work
+
+A workflow is defined in `workflow.yaml` and consists of **nodes** that execute in a dependency-aware order. Each node contains **steps**—atomic actions that perform transformations or run commands.
+
+The engine handles:
+- **Scheduling**: Determines execution order based on node dependencies
+- **Parallelization**: Runs independent nodes concurrently via matrix strategies
+- **State management**: Persists progress for resumable, interruptible migrations
+- **Coordination**: Synchronizes work across shards, teams, or repositories
+
+## Core concepts
+
+### Nodes
+
+Nodes are the primary execution units. They can depend on other nodes, run automatically or require manual approval, and fan out across matrix dimensions.
+
+### Steps
+
+Steps are the atomic actions within a node. Different transformation challenges require different tools: some patterns are best expressed as AST queries, others need shell scripts for setup/teardown, and ambiguous cases may benefit from LLM assistance.
+
+By composing multiple step types in a single workflow, teams can tackle complex refactors while decreasing reliance on manual intervention or multiple disconnected scripts.
+
+| Step Type | Purpose |
+|-----------|---------|
+| `js-ast-grep` | JavaScript/TypeScript codemods using [JSSG](/jssg) |
+| `ast-grep` | Declarative YAML pattern matching |
+| `run` | Shell commands for setup, cleanup, or external tools |
+| `ai` | LLM-powered transformations for complex or ambiguous cases |
+| `codemod` | Run codemods from [Codemod Registry](https://go.codemod.com/registry) |
+
+### Matrix strategies
+
+Matrix strategies fan out a single node into multiple parallel tasks. Use them for:
+- Sharding work by team or directory
+- Running transforms across multiple configurations
+- Distributing load across repositories
+
+### State
+
+Workflows can declare shared state that persists across runs. This enables:
+- Resuming interrupted migrations
+- Coordinating work across repositories
+- Tracking progress for large-scale refactors
+
+### Parameters
+
+Parameters make workflows configurable and reusable. Define a schema in your workflow, then pass values at runtime or configure them visually in the Codemod app.
+
+## Package structure
+
+A Codemod package bundles everything needed to run a workflow: metadata, workflow definition, transformation scripts, and test fixtures.
+
+<Card title="Package Structure" icon="folder-tree" href="/package-structure">
+  Directory layout, codemod.yaml reference, and package metadata.
+</Card>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Create a Package" icon="plus" href="/quickstart">
+    Build your first codemod with MCP, Studio, or manually.
+  </Card>
+  <Card title="Workflow Reference" icon="book" href="/workflows/reference">
+    Complete workflow.yaml specification with all options.
+  </Card>
+  <Card title="JSSG Quickstart" icon="code" href="/jssg/quickstart">
+    Write JavaScript/TypeScript transformations.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli#codemod-workflow">
+    Validate and run workflows from the command line.
+  </Card>
+</CardGroup>

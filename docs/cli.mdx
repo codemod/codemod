@@ -97,7 +97,7 @@ Codemod CLI is accessible using the `npx codemod` command. The following command
 
 ### `codemod workflow`
 
-Manage and execute [Codemod packages](/workflows/quickstart).
+Manage and execute [Codemod packages](/package-structure).
 
 A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
 
@@ -107,7 +107,7 @@ A Codemod package is a directory containing `workflow.yaml` and transformation s
 - ✅ Multi-repo orchestration
 - ✅ State management and resumption
 
-**Learn more**: [Building Workflows](/workflows/building-workflows)
+**Learn more**: [Workflow Reference](/workflows/reference)
 
 **`workflow run`**
 
@@ -267,7 +267,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 - ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Building Workflows: JS ast-grep step](/workflows/building-workflows#js-ast-grep-step).
+  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Workflow Reference: JSSG Step](/workflows/reference#jssg-step).
 </Tip>
 
 **Learn more**: [jssg documentation](/jssg/quickstart)
@@ -568,7 +568,7 @@ npx codemod publish [PATH]
 </ResponseField>
 
 <Info>
-  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Building Workflows](/workflows/building-workflows#package-metadata-codemod-yaml) for configuration options.
+  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Package Structure](/package-structure#package-metadata-codemodyaml) for configuration options.
 </Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">

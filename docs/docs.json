@@ -55,11 +55,12 @@
             "pages": [
               "quickstart",
               "cli",
+              "package-structure",
               {
                 "group": "Workflows",
                 "pages": [
-                  "workflows/quickstart",
-                  "workflows/building-workflows"
+                  "workflows/introduction",
+                  "workflows/reference"
                 ]
               },
               {
@@ -190,15 +191,23 @@
     },
     {
       "source": "/cli/packages/quickstart",
-      "destination": "/workflows/quickstart"
+      "destination": "/workflows/introduction"
     },
     {
       "source": "/cli/packages/building-workflows",
-      "destination": "/workflows/building-workflows"
+      "destination": "/workflows/reference"
     },
     {
       "source": "/cli/packages/package-structure",
-      "destination": "/workflows/building-workflows"
+      "destination": "/package-structure"
+    },
+    {
+      "source": "/workflows/quickstart",
+      "destination": "/workflows/introduction"
+    },
+    {
+      "source": "/workflows/building-workflows",
+      "destination": "/workflows/reference"
     },
     {
       "source": "/platform/plan",
@@ -218,19 +227,19 @@
     },
     {
       "source": "/cli/workflows/quickstart",
-      "destination": "/workflows/quickstart"
+      "destination": "/workflows/introduction"
     },
     {
       "source": "/cli/workflows/package-structure",
-      "destination": "/workflows/building-workflows"
+      "destination": "/package-structure"
     },
     {
       "source": "/cli/workflows/building-workflows",
-      "destination": "/workflows/building-workflows"
+      "destination": "/workflows/reference"
     },
     {
       "source": "/cli/workflows",
-      "destination": "/workflows/quickstart"
+      "destination": "/workflows/introduction"
     },
     {
       "source": "/cli/mcp",
@@ -242,11 +251,11 @@
     },
     {
       "source": "/building-codemods/package-requirements",
-      "destination": "/workflows/building-workflows"
+      "destination": "/package-structure"
     },
     {
       "source": "/building-codemods/codemod2",
-      "destination": "/workflows/quickstart"
+      "destination": "/workflows/introduction"
     },
     {
       "source": "/scanner",
