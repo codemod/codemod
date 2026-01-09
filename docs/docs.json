@@ -280,10 +280,6 @@
     {
       "source": "/cli/cli-reference",
       "destination": "/cli"
-    },
-    {
-      "source": "/cli/packages/building-workflows",
-      "destination": "/workflows/reference"
     }
   ],
   "contextual": {
