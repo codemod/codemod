@@ -440,6 +440,15 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
+When you run `codemod init` in interactive mode, you'll be prompted to create a GitHub Actions workflow for publishing. This creates `.github/workflows/publish.yml` with:
+
+- **Single codemod repository**: Triggers on `v*` tags (e.g., `v1.0.0`)
+- **Monorepo setup**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name from the tag
+
+Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing.
+
+[See the publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
+
 <ResponseField name="[PATH]" type="string">
   Project directory name.
 </ResponseField>
@@ -484,15 +493,6 @@ npx codemod init [PATH] [options]
 <ResponseField name="--no-interactive" type="boolean">
   Use defaults without prompts.
 </ResponseField>
-
-#### Generated GitHub Actions Workflow
-
-When you run `codemod init`, you'll be prompted to create a GitHub Actions workflow for publishing. If you accept, it creates `.github/workflows/publish.yml` with:
-
-- **Single codemod repository**: Triggers on `v*` tags (e.g., `v1.0.0`)
-- **Monorepo setup**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name from the tag
-
-Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing. See the [Publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
 
 ### `codemod login`
 

@@ -16,7 +16,7 @@ Codemod supports three authentication methods for publishing:
 | [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
 | [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | None for org scopes* |
 
-<sub>* If your GitHub organization name matches your package scope, trusted publishing works automatically with zero configuration. See [Organization Scopes](#organization-scopes-zero-configuration).</sub>
+<sub>* If your GitHub organization name matches your package scope, trusted publishing works automatically with zero configuration. See [Organization Scopes](#organization-scopes).</sub>
 
 ## Interactive Login
 
@@ -111,10 +111,10 @@ Trusted publishers enable **passwordless publishing** from GitHub Actions using 
 
 ### Benefits
 
-- **No secrets to manage** – No API keys to create, rotate, or accidentally leak
-- **Cryptographically secure** – Tokens are signed by GitHub and verified by Codemod
-- **Fine-grained control** – Restrict by repository, workflow, environment, or git ref
-- **Short-lived tokens** – Tokens expire in ~5 minutes, limiting exposure
+- **No secrets to manage**: No API keys to create, rotate, or accidentally leak
+- **Cryptographically secure**: Tokens are signed by GitHub and verified by Codemod
+- **Fine-grained control**: Restrict publishing by repository, workflow, environment, or git ref
+- **Short-lived tokens**: Tokens expire in ~5 minutes, limiting exposure
 
 ### Organization Scopes (Zero Configuration)
 
@@ -125,9 +125,9 @@ Trusted publishers enable **passwordless publishing** from GitHub Actions using 
 For packages under an organization scope (e.g., `@my-org/my-codemod`), trusted publishers work **automatically** when:
 
 1. Your GitHub organization name matches the package scope (e.g., GitHub org `my-org` → scope `@my-org`)
-2. You've linked your GitHub organization to your Codemod organization (see [setup steps](#linking-your-github-organization) below)
+2. You've linked your GitHub organization (see [setup steps](#linking-your-github-organization) below)
 
-That's it. Any repository in your GitHub organization can publish packages under your scope—both new packages and updates to existing ones.
+Any repository in your GitHub organization can then publish packages under your scope, including new packages and updates to existing ones.
 
 #### Linking Your GitHub Organization
 
@@ -135,31 +135,16 @@ To enable automatic trusted publishing for your organization scope, you need to 
 
 <Steps>
   <Step title="Install the Codemod GitHub App">
-    1. Go to [github.com/apps/codemod](https://github.com/apps/codemod)
-    2. Click **Install**
-    3. Select your GitHub organization
-    4. Choose which repositories to grant access to (at least one repository is required)
-    5. Click **Install**
-    
-    <Warning>
-      You must be a GitHub organization **admin** to install the app. The app needs to be installed on at least one repository in your organization to link the org.
-    </Warning>
+    1. Install the [Codemod GitHub App](https://github.com/apps/codemod) and select your GitHub organization (requires org admin permissions)
+    2. Grant access to at least one repository
   </Step>
   
   <Step title="Sign in to Codemod">
-    1. Go to [codemod.com](https://codemod.com) and sign in with GitHub
-    2. Your GitHub organization will be automatically linked to your Codemod account
-    3. You can verify the link at [codemod.com/organizations](https://go.codemod.com/organizations)
-  </Step>
-  
-  <Step title="Verify the Setup">
-    Once linked, you can publish packages under your organization's scope (e.g., `@your-org/codemod-name`) from any repository in that GitHub organization using GitHub Actions OIDC.
+    Go to [Codemod platform](https://app.codemod.com) and sign in with GitHub. Your organization will be automatically linked.
   </Step>
 </Steps>
 
-<Info>
-  **Who can publish?** Anyone who can trigger GitHub Actions workflows (e.g., via push, release, or `workflow_dispatch`) in any repository within the linked GitHub organization can publish codemods under that organization's scope. The publisher identity in Codemod's system is the user who originally installed the GitHub App and linked the organization.
-</Info>
+Once linked, anyone who can trigger GitHub Actions workflows (e.g., via push, release, or `workflow_dispatch`) in your organization's repositories can publish codemods under that scope. The publisher identity in Codemod's system is tied to the user who installed the GitHub App.
 
 #### Complete GitHub Actions Workflow
 
@@ -186,7 +171,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Publish codemod
-        uses: codemod-com/publish-action@v1
+        uses: codemod/publish-action@v1
 ```
 
 **For a monorepo with multiple codemods:**
@@ -219,36 +204,23 @@ jobs:
           echo "codemod_name=$CODEMOD_NAME" >> $GITHUB_OUTPUT
 
       - name: Publish codemod
-        uses: codemod-com/publish-action@v1
+        uses: codemod/publish-action@v1
         with:
           path: codemods/${{ steps.extract.outputs.codemod_name }}
 ```
 
-<Tip>
-  **Using `codemod init`:** When you run `npx codemod init` and answer "Yes" to creating a GitHub Actions workflow, it will generate the appropriate `publish.yml` file for you. The generated workflow uses the single-codemod format by default, or the monorepo format if you're initializing within an existing monorepo structure.
-</Tip>
-
-**Example:** If your GitHub organization is `acme-corp` and you've linked it to your Codemod organization with scope `@acme-corp`:
-
-This workflow can publish `@acme-corp/any-codemod` from any repository in the `acme-corp` GitHub organization.
+You can also run `npx codemod init` to generate this workflow automatically. It creates the single-codemod or monorepo format based on your project structure.
 
 ### Individual Packages (Manual Configuration)
 
-<Warning>
-  **Most users don't need this section.** If your GitHub organization name matches your package scope (e.g., GitHub org `acme` publishing `@acme/my-codemod`), use the [Organization Scopes](#organization-scopes-zero-configuration) approach above—no manual configuration required.
-</Warning>
-
-For packages that don't match an organization scope (unscoped packages or packages where the GitHub org doesn't match), you need to configure a trusted publisher manually in the UI:
+For unscoped packages or cases where the GitHub org doesn't match the package scope, configure a trusted publisher manually:
 
 <Steps>
   <Step title="Configure Trusted Publisher in UI">
     1. Go to [codemod.com/api-keys](https://go.codemod.com/api-keys)
     2. Scroll to **Trusted Publishers**
     3. Click **Add Trusted Publisher**
-    4. Fill in the required fields:
-       - **Package**: The exact package name you want to publish (e.g., `my-codemod`)
-       - **Repository Owner**: Your GitHub username or organization name
-       - **Repository Name**: The repository that will publish this package
+    4. Select your package and enter the GitHub repository details
     5. (Optional) Add restrictions for extra security
   </Step>
 
@@ -270,7 +242,7 @@ For packages that don't match an organization scope (unscoped packages or packag
         runs-on: ubuntu-latest
         steps:
           - uses: actions/checkout@v4
-          - uses: codemod-com/publish-action@v1
+          - uses: codemod/publish-action@v1
     ```
   </Step>
 </Steps>
@@ -311,7 +283,7 @@ jobs:
     environment: production  # Matches "Environment" restriction
     steps:
       - uses: actions/checkout@v4
-      - uses: codemod-com/publish-action@v1
+      - uses: codemod/publish-action@v1
 ```
 
 ### Manual OIDC Setup
@@ -380,23 +352,6 @@ jobs:
 
   <Accordion title="Token audience mismatch">
     The OIDC token audience must be `https://codemod.com`. If using a custom registry, configure `GITHUB_OIDC_AUDIENCE` on the server.
-  </Accordion>
-  
-  <Accordion title="GitHub organization not linked">
-    To use automatic organization scope publishing:
-    1. Install the [Codemod GitHub App](https://github.com/apps/codemod) on your organization (requires admin permissions)
-    2. Grant access to at least one repository
-    3. Sign in to [codemod.com](https://codemod.com) with GitHub
-    4. Verify the link at [codemod.com/organizations](https://go.codemod.com/organizations)
-  </Accordion>
-  
-  <Accordion title="Workflow generated by `codemod init` looks different from docs">
-    The `codemod init` command generates different workflows depending on your setup:
-    
-    - **Single codemod repo**: Generates a workflow triggered by `v*` tags
-    - **Monorepo**: Generates a workflow triggered by `*@v*` tags (e.g., `my-codemod@v1.0.0`) with an extraction step to determine which codemod to publish
-    
-    Both use the same underlying `codemod-com/publish-action` and are functionally equivalent—just optimized for different project structures.
   </Accordion>
 </AccordionGroup>
 
