@@ -272,14 +272,6 @@
     {
       "source": "/quickstart-oss",
       "destination": "/oss"
-    },
-    {
-      "source": "/quickstart",
-      "destination": "/oss-quickstart"
-    },
-    {
-      "source": "/cli/cli-reference",
-      "destination": "/cli"
     }
   ],
   "contextual": {
