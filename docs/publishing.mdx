@@ -42,65 +42,6 @@ npx codemod publish
 - Quick one-off publishes
 - When you prefer browser-based authentication
 
-## API Keys
-
-API keys allow non-interactive authentication, perfect for CI/CD pipelines and automation.
-
-### Creating an API Key
-
-1. Go to [codemod.com/api-keys](https://go.codemod.com/api-keys)
-2. Click **Create API Key**
-3. Give it a descriptive name (e.g., "GitHub Actions - my-repo")
-4. Select the permissions (typically "Publish Packages")
-5. Copy the key (it won't be shown again)
-
-### Using API Keys
-
-**Option 1: Login with API key**
-
-```bash
-npx codemod login --api-key $CODEMOD_API_KEY
-npx codemod publish
-```
-
-**Option 2: Environment variable**
-
-```bash
-CODEMOD_AUTH_TOKEN=$CODEMOD_API_KEY npx codemod publish
-```
-
-### GitHub Actions Example
-
-```yaml
-name: Publish Codemod
-on:
-  release:
-    types: [published]
-
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to Codemod Registry
-        run: npx codemod login --api-key ${{ secrets.CODEMOD_API_KEY }}
-
-      - name: Publish codemod
-        run: npx codemod publish
-```
-
-<Warning>
-  Store your API key as a repository secret. Never commit API keys to your repository.
-</Warning>
-
-### When to Use
-
-- CI/CD pipelines without GitHub Actions OIDC
-- GitLab CI, CircleCI, Jenkins, etc.
-- Automated publishing from any environment
-- When you need explicit control over credentials
-
 ## Trusted Publishers
 
 Trusted publishers enable **passwordless publishing** from GitHub Actions using OpenID Connect (OIDC). No secrets to manage or rotate.
@@ -355,6 +296,65 @@ jobs:
   </Accordion>
 </AccordionGroup>
 
+## API Keys
+
+API keys allow non-interactive authentication, perfect for CI/CD pipelines and automation.
+
+### Creating an API Key
+
+1. Go to [codemod.com/api-keys](https://go.codemod.com/api-keys)
+2. Click **Create API Key**
+3. Give it a descriptive name (e.g., "GitHub Actions - my-repo")
+4. Select the permissions (typically "Publish Packages")
+5. Copy the key (it won't be shown again)
+
+### Using API Keys
+
+**Option 1: Login with API key**
+
+```bash
+npx codemod login --api-key $CODEMOD_API_KEY
+npx codemod publish
+```
+
+**Option 2: Environment variable**
+
+```bash
+CODEMOD_AUTH_TOKEN=$CODEMOD_API_KEY npx codemod publish
+```
+
+### GitHub Actions Example
+
+```yaml
+name: Publish Codemod
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Codemod Registry
+        run: npx codemod login --api-key ${{ secrets.CODEMOD_API_KEY }}
+
+      - name: Publish codemod
+        run: npx codemod publish
+```
+
+<Warning>
+  Store your API key as a repository secret. Never commit API keys to your repository.
+</Warning>
+
+### When to Use
+
+- CI/CD pipelines without GitHub Actions OIDC
+- GitLab CI, CircleCI, Jenkins, etc.
+- Automated publishing from any environment
+- When you need explicit control over credentials
+
 ## Comparison
 
 | Feature | Interactive Login | API Keys | Trusted Publishers |
@@ -369,7 +369,7 @@ jobs:
 
 <sub>* Trusted publishers can publish new packages when using a matching organization scope.</sub>
 
-<sub>** Organization scopes that match your GitHub org name require no configuration in app.codemod.com. Individual packages require adding a trusted publisher in the UI.</sub>
+<sub>** Organization scopes that match your GitHub org name require no configuration in Codemod platform. Individual packages require adding a trusted publisher in the UI.</sub>
 
 ## Best Practices
 
