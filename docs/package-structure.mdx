@@ -1,0 +1,262 @@
+---
+title: "Package Structure"
+sidebarTitle: "Package Structure"
+---
+
+A **Codemod package** is a directory containing everything needed to run an automated code transformation: metadata, workflow definition, transformation scripts, and test fixtures.
+
+Packages are fully portable—run them locally, in CI, or share them via the [Codemod Registry](https://go.codemod.com/registry).
+
+import { PackagesDemo } from "/snippets/packages-demo.mdx";
+
+<Frame>
+    <PackagesDemo />
+</Frame>
+
+## Directory Layout
+
+Scaffold a new package with:
+
+```bash
+npx codemod init
+```
+
+<Tree>
+  <Tree.Folder name="my-codemod-package" defaultOpen>
+    <Tree.File name="codemod.yaml" />
+    <Tree.File name="workflow.yaml" />
+    <Tree.Folder name="scripts" defaultOpen>
+      <Tree.File name="codemod.ts" />
+    </Tree.Folder>
+    <Tree.Folder name="rules" defaultOpen>
+      <Tree.File name="config.yml" />
+    </Tree.Folder>
+    <Tree.Folder name="tests" defaultOpen>
+      <Tree.Folder name="basic-transform" defaultOpen>
+        <Tree.File name="input.tsx" />
+        <Tree.File name="expected.tsx" />
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+| File/Folder | Purpose |
+|-------------|---------|
+| `codemod.yaml` | Package metadata (name, version, author, etc.) |
+| `workflow.yaml` | [Workflow definition](/workflows/reference) with nodes and steps |
+| `scripts/` | JavaScript/TypeScript codemods ([JSSG](/jssg/quickstart)) |
+| `rules/` | YAML ast-grep rule definitions |
+| `tests/` | Test fixtures with input/expected pairs |
+
+<Info>
+The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
+</Info>
+
+## Package Metadata (codemod.yaml)
+
+The `codemod.yaml` file defines your package's metadata and configuration.
+
+```yaml codemod.yaml
+schema_version: "1.0"
+
+name: "my-awesome-codemod"
+version: "0.1.0"
+description: "Transform legacy patterns to modern syntax"
+author: "Your Name <you@example.com>"
+license: "MIT"
+workflow: "workflow.yaml"
+category: "migration"
+
+targets:
+  languages: ["typescript"]
+
+keywords: ["upgrade", "breaking-change", "react", "v17-to-v18"]
+
+registry:
+  access: "public"
+  visibility: "public"
+```
+
+**Available fields:**
+
+<ParamField path="schema_version" type="string" required default="1.0">
+Codemod workflow schema version.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+Codemod package name (unique within scope).
+
+**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+
+**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+
+Valid examples:
+- <code>remove-console-logs</code>
+- <code>@scope/remove-console-logs</code> (using `@organization-or-project-scope/name` provides better discoverability in the [Codemod Registry](https://go.codemod.com/registry))
+</ParamField>
+
+<ParamField path="version" type="string" required default="0.1.0">
+Semantic version of the package.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+Brief description of what the codemod does.
+</ParamField>
+
+<ParamField path="author" type="string" required>
+Author name and email, e.g., `Jane Doe <jane@example.com>`.
+</ParamField>
+
+<ParamField path="license" type="string" required default="MIT">
+License identifier (SPDX), e.g., <code>MIT</code>.
+</ParamField>
+
+<ParamField path="workflow" type="string" required default="workflow.yaml">
+Relative path to your workflow file.
+</ParamField>
+
+<ParamField path="category" type="string" default="migration">
+Category for the codemod.
+</ParamField>
+
+<ParamField path="targets.languages" type="string[]">
+Languages targeted by this codemod (selected language during `codemod init`; editable later).
+</ParamField>
+
+<ParamField path="keywords" type="string[]">
+Keyword tags are an optional feature helping developers quickly identify the purpose, scope, and relevance of a codemod. They also enable better search, filtering, and reporting when managing many codemods across frameworks and projects.
+
+Example: `keywords: ["react", "v18-to-v19", "migration"]`
+
+<Accordion title="Best practices and conventions">
+
+  - Keep tags concise (1–2 words).
+  - Use lowercase for consistency.
+  - Don't overload with tags — 2–4 per codemod is ideal.
+  - Prioritize **transformation type + framework/library + version (if relevant)**.
+
+  ---
+
+  **1. Transformation Type Tags**
+
+  Consider these categories when describing **why** the codemod exists:
+
+  - **`upgrade`** – helps upgrade code to newer versions (encompasses both breaking changes and feature adoption).
+    You may also consider adding **one** of the following tags:
+    - **`breaking-change`** – adapts code to framework/library breaking API changes.
+    - **`feature-adoption`** – helps adoption of new optional or incremental features.
+  - **`security`** – addresses known vulnerabilities or unsafe patterns.
+  - **`cross-migration`** – replaces one library/framework with another.
+  - **`i18n`** – internationalization migrations or improvements.
+  - **`a11y`** – accessibility improvements and compliance.
+  - **`standardization`** – unifies patterns, conventions, or APIs across a codebase.
+  - **`code-mining`** – identifies, flags, or extracts patterns without transforming. Use if codemod is for *detection-only*.
+
+  **Rule of thumb**: Pick one primary type tag per codemod. Avoid mixing `breaking-change` and `feature-adoption` in the same codemod.
+
+  ---
+
+  **2. Target Version Tags**
+
+  Use these to indicate the **framework/library version** the codemod prepares for.
+
+  - Format: `vX` or `vX-to-vY` (for upgrades).
+  - Examples:
+      - `v17-to-v18` (React 17 → 18)
+      - `v5-to-v6` (React Router 5 → 6)
+      - `v16` (Angular 16 breaking changes)
+
+  **Rule of thumb**: If the codemod is version-specific, always tag it.
+
+  ---
+
+  **3. Framework / Library / SDK Tags**
+
+  Always add the **ecosystem name** to improve discoverability.
+
+  - Examples:
+      - `react`
+      - `nextjs`
+      - `nodejs`
+      - `angular`
+      - `msw`
+      - `i18next`
+
+  **Rule of thumb**: Use the official, common name of the framework/library.
+
+  ---
+
+  **4. Example Tag Sets**
+
+  Here are some examples to illustrate how tags combine:
+
+  - **React Root API Upgrade (17 → 18)**
+      - Tags: `upgrade`, `breaking-change`, `v17-to-v18`, `react`
+  - **Adopt React Hooks**
+      - Tags: `upgrade`, `feature-adoption`, `react`
+  - **Migrate from Moment.js to Day.js**
+      - Tags: `cross-migration`, `momentjs`, `dayjs`
+  - **Remove Hardcoded Strings for i18n**
+      - Tags: `i18n`, `i18next`
+  - **Add ARIA labels for accessibility**
+      - Tags: `a11y`, `react`
+  - **Detect Insecure crypto API usage**
+      - Tags: `security`, `nodejs`, `crypto`
+
+</Accordion>
+</ParamField>
+
+<ParamField path="registry.access" type="string" default="public">
+Access controls who can run/use the codemod (once they can see it).
+
+- <strong>public</strong>: Anyone can run the codemod.
+- <strong>private</strong>: Only the owner can run the codemod.
+- <strong>pro</strong>: Only Pro plan users can run the codemod.
+
+<Tip>
+Access applies on top of visibility. For example, <code>visibility: public</code> with <code>access: pro</code> shows the package publicly, but only Pro users can run it.
+</Tip>
+</ParamField>
+
+<ParamField path="registry.visibility" type="string" default="public">
+Visibility controls who can see the package in the Registry (search, listings, and UI).
+
+- <strong>public</strong>: Everyone can see the package in the Registry.
+- <strong>private</strong>: Only the owner can see the package.
+- <strong>org</strong>: Members of the package's organization scope can see the package.
+- <strong>user</strong>: Visible only to the publishing user (user-scoped visibility).
+
+<Info>
+During scaffolding, the CLI sets <code>public</code>/<code>private</code> based on <code>--private</code>. You can change to any supported value above when publishing.
+</Info>
+</ParamField>
+
+<ParamField path="capabilities" type="string[]" default="[]">
+Array of capabilities required by this codemod for accessing sensitive operations.
+
+**Available capabilities:**
+- `fs` - File system access (`fs`, `fs/promises`)
+- `fetch` - Network requests (global `fetch`)
+- `child_process` - Process spawning (`child_process`)
+
+<Warning>
+Only enable capabilities your codemod actually needs. Each capability increases security risk for untrusted codemods.
+</Warning>
+
+<Tip>
+See <a href="/jssg/security">Security & Capabilities</a> for detailed information about the security model and usage examples.
+</Tip>
+</ParamField>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Workflows" icon="diagram-project" href="/workflows">
+    Get started with building Codemod Workflows.
+  </Card>
+  <Card title="JSSG" icon="code" href="/jssg">
+    Write JavaScript/TypeScript transformations.
+  </Card>
+</CardGroup>

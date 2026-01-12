@@ -4,48 +4,9 @@ sidebarTitle: 'CLI'
 description: "Scaffold, publish, and run codemod projects, recipes, or packages from your terminal using Codemod's open-source CLI."
 ---
 
-import { CLIDemo } from "/snippets/cli-demo.mdx";
-
-## Quick Start
-
-<Frame>
-  <CLIDemo />
-</Frame>
-
-<Steps>
-  <Step title="Initialize a new codemod project">
-    ```bash
-    npx codemod init
-    ```
-
-    This scaffolds a new codemod project in the current directory.
-  </Step>
-  <Step title="Run and test your codemod">
-    ```bash
-    cd /path/to/project-to-migrate
-
-    npx codemod workflow run -w /path/to/my-codemod/workflow.yaml
-    ```
-
-    This runs your local Codemod package on your codebase to test it before publishing.
-  </Step>
-  <Step title="Publish your codemod">
-    ```bash
-    npx codemod publish
-    ```
-
-    This publishes your codemod to the registry (you may need to <a href="#codemod-login">login</a> first).
-  </Step>
-  <Step title="Run the published codemod">
-    ```bash
-    npx codemod @codemod/my-test-pkg
-    ```
-
-    Run your published codemod directly from the [Codemod Registry](https://app.codemod.com/registry).
-  </Step>
-</Steps>
-
-For more details on building and running Codemod packages, see the [Codemod Packages documentation](#cli-command-reference).
+<Card title="Quickstart" icon="rocket" href="/oss-quickstart">
+  New to Codemod? Follow the step-by-step guide to scaffold, test, and publish your first codemod.
+</Card>
 
 ---
 
@@ -97,7 +58,7 @@ Codemod CLI is accessible using the `npx codemod` command. The following command
 
 ### `codemod workflow`
 
-Manage and execute [Codemod packages](/workflows/quickstart).
+Manage and execute [Codemod packages](/package-structure).
 
 A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
 
@@ -107,7 +68,7 @@ A Codemod package is a directory containing `workflow.yaml` and transformation s
 - ✅ Multi-repo orchestration
 - ✅ State management and resumption
 
-**Learn more**: [Building Workflows](/workflows/building-workflows)
+**Learn more**: [Workflow Reference](/workflows/reference)
 
 **`workflow run`**
 
@@ -267,7 +228,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 - ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Building Workflows: JS ast-grep step](/workflows/building-workflows#js-ast-grep-step).
+  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Workflow Reference: JSSG Step](/workflows/reference#jssg-step).
 </Tip>
 
 **Learn more**: [jssg documentation](/jssg/quickstart)
@@ -284,19 +245,24 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
   <Step title="Test your codemod">
     Organize your tests as follows:
 
-    ```
-    tests/
-    ├── simple-transform/
-    │   ├── input.js
-    │   └── expected.js
-    └── multi-file-case/
-        ├── input/
-        │   ├── file1.js
-        │   └── file2.js
-        └── expected/
-            ├── file1.js
-            └── file2.js
-    ```
+    <Tree>
+      <Tree.Folder name="tests" defaultOpen>
+        <Tree.Folder name="simple-transform" defaultOpen>
+          <Tree.File name="input.js" />
+          <Tree.File name="expected.js" />
+        </Tree.Folder>
+        <Tree.Folder name="multi-file-case" defaultOpen>
+          <Tree.Folder name="input" defaultOpen>
+            <Tree.File name="file1.js" />
+            <Tree.File name="file2.js" />
+          </Tree.Folder>
+          <Tree.Folder name="expected" defaultOpen>
+            <Tree.File name="file1.js" />
+            <Tree.File name="file2.js" />
+          </Tree.Folder>
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree>
 
     Then run:
 
@@ -440,6 +406,15 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
+When you run `codemod init` in interactive mode, you'll be prompted to create a GitHub Actions workflow for publishing. This creates `.github/workflows/publish.yml` with:
+
+- **Single codemod repository**: Triggers on `v*` tags (e.g., `v1.0.0`)
+- **Monorepo setup**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name from the tag
+
+Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing.
+
+[See the publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
+
 <ResponseField name="[PATH]" type="string">
   Project directory name.
 </ResponseField>
@@ -554,7 +529,7 @@ npx codemod publish [PATH]
 </ResponseField>
 
 <Info>
-  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Building Workflows](/workflows/building-workflows#package-metadata-codemod-yaml) for configuration options.
+  Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Package Structure](/package-structure#package-metadata-codemod-yaml) for configuration options.
 </Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">

@@ -4,7 +4,7 @@ sidebarTitle: 'Registry'
 icon: 'globe'
 ---
 
-The **Codemod Registry** is a centralized repository for discovering, consuming, and distributing [Codemod packages](/workflows/quickstart). It enables the community to share reusable code transformation tools and allows organizations to maintain private codemods for their internal use. It provides:
+The **Codemod Registry** is a centralized repository for discovering, consuming, and distributing [Codemod packages](/package-structure). It enables the community to share reusable code transformation tools and allows organizations to maintain private codemods for their internal use. It provides:
 
 - **Package discovery** – Search and browse codemods by language, framework, category, and keywords
 - **Version management** – Semantic versioning with support for version pinning
@@ -45,9 +45,9 @@ Packages with `private` access are only accessible to the owner or organization 
 - Packages can be scoped to your organization (e.g., `@your-org/internal-codemod`)
 - Configured through organization settings in the [Codemod app](https://app.codemod.com)
 
-<Info>
-To use a scoped package name, first reserve the scope by installing the [Codemod GitHub App](https://github.com/apps/codemod) on a repository in your GitHub organization. Only organization admins can publish codemods under that scope.
-</Info>
+## Reserving an Organization Scope
+
+To publish packages under your organization's scope (e.g., `@your-org/my-codemod`), you need to link your GitHub organization to Codemod platform. See [Linking Your GitHub Organization](/publishing#linking-your-github-organization) for step-by-step setup instructions.
 
 ## Discovering Packages
 
@@ -140,7 +140,7 @@ registry:
   Access and visibility work together. For example, `visibility: public` with `access: private` shows the package publicly, but only the owner can run it.
 </Tip>
 
-Learn more about [configuring packages](/workflows/building-workflows#package-metadata-codemod-yaml).
+Learn more about [configuring packages](/package-structure#package-metadata-codemod-yaml).
 
 ## Using Packages in Workflows
 
@@ -153,7 +153,7 @@ steps:
       source: "@nodejs/create-require-from-path@1.1.0"
 ```
 
-Learn more about [using Codemod packages in workflows](/workflows/building-workflows#codemod-registry-step).
+Learn more about [using Codemod packages in workflows](/workflows/reference#codemod-registry-step).
 
 ## Best Practices
 
@@ -201,7 +201,7 @@ For individual developers or one-off codemods, unscoped package names are usuall
     Complete command reference for registry operations.
   </Card>
   
-  <Card title="Building Workflows" icon="diagram-project" href="/workflows/building-workflows">
+  <Card title="Package Structure" icon="folder-tree" href="/package-structure">
     Learn how to create and configure Codemod packages.
   </Card>
 </CardGroup>

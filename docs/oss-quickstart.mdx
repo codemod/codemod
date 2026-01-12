@@ -1,0 +1,249 @@
+---
+title: "Quickstart"
+sidebarTitle: "Quickstart"
+---
+
+This guide takes you from zero to a published codemod. Each step includes just enough to get started, with links to deeper documentation.
+
+## Building codemods
+
+Codemods can be built using:
+- **MCP** — AI-assisted creation in your IDE (recommended for getting started)
+- **CLI** — Scaffold and build locally with `npx codemod init`
+- **Studio** — Web-based prototyping with live runner and AST viewer
+
+Once you have a codemod package, validation, running, and publishing work the same way regardless of how you built it.
+
+<Tabs>
+  <Tab title="MCP (AI-assisted)">
+    <Steps>
+      <Step title="Generate a codemod">
+        Make sure you have [MCP installed](/model-context-protocol#quick-setup), then ask your AI assistant to create a codemod. Be specific about what you want to transform:
+
+        ````
+        Create a jssg codemod that converts all console.log statements to console.info in TypeScript files. 
+
+        The codemod should:
+        - Target .ts and .tsx files
+        - Only transform console.log calls (not console.error, console.warn, etc.)
+        - Preserve all arguments and formatting
+        - Include test cases for the transformation
+        ````
+
+        <Card title="MCP best practices" icon="lightbulb" href="/model-context-protocol#best-practices">
+          Tips for writing effective prompts and getting the most out of your AI assistant.
+        </Card>
+
+        You'll get a complete package structure:
+
+        <Tree>
+          <Tree.Folder name="my-codemod" defaultOpen>
+            <Tree.File name="README.md" />
+            <Tree.File name="codemod.yaml" />
+            <Tree.File name="workflow.yaml" />
+            <Tree.Folder name="scripts" defaultOpen>
+              <Tree.File name="codemod.ts" />
+            </Tree.Folder>
+            <Tree.Folder name="tests" defaultOpen>
+              <Tree.Folder name="fixtures" defaultOpen>
+                <Tree.File name="input.tsx" />
+                <Tree.File name="expected.tsx" />
+              </Tree.Folder>
+            </Tree.Folder>
+          </Tree.Folder>
+        </Tree>
+
+        For more on package structure, see [Package Structure](/package-structure).
+
+        **Need the live runner or AST viewer?** If you need tools like the live runner, AST viewer, or shareable links, you can bring your codemod into [Codemod Studio](/platform/codemod-studio) and continue development there.
+      </Step>
+
+      <Step title="Validate your codemod">
+        Run tests to ensure your codemod works correctly:
+
+        ```bash
+        npx codemod jssg test ./scripts/codemod.ts --language tsx
+        ```
+
+        For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+      </Step>
+
+      <Step title="Run your codemod">
+        Run your codemod on a target codebase:
+
+        ```bash
+        npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+        ```
+
+        For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
+      </Step>
+
+      <Step title="Publish your codemod">
+        Share your codemod with your team or the community:
+
+        ```bash
+        npx codemod login
+        npx codemod publish
+        ```
+
+        Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
+
+        For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="CLI (Manual)">
+    <Steps>
+      <Step title="Scaffold a new codemod">
+        ```bash
+        npx codemod init
+        ```
+
+        You'll be prompted for:
+        - **Codemod type**: JSSG (most use cases) or multi-step workflow
+        - **Target language**: JavaScript/TypeScript, Python, etc.
+        - **Project details**: name, description, author, license
+        - **Package options**: manager (npm/pnpm/yarn), private/public, monorepo structure
+        - **CI setup**: optionally generate GitHub Actions workflow for publishing
+
+        This creates a complete package structure:
+
+        <Tree>
+          <Tree.Folder name="my-codemod" defaultOpen>
+            <Tree.File name="README.md" />
+            <Tree.File name="codemod.yaml" />
+            <Tree.File name="workflow.yaml" />
+            <Tree.Folder name="scripts" defaultOpen>
+              <Tree.File name="codemod.ts" />
+            </Tree.Folder>
+            <Tree.Folder name="tests" defaultOpen>
+              <Tree.Folder name="fixtures" defaultOpen>
+                <Tree.File name="input.tsx" />
+                <Tree.File name="expected.tsx" />
+              </Tree.Folder>
+            </Tree.Folder>
+          </Tree.Folder>
+        </Tree>
+
+        For more on package structure, see [package structure](/package-structure).
+      </Step>
+
+      <Step title="Write your transform">
+        Edit `scripts/codemod.ts` to define your transformation logic. Here's a simple example that converts `console.log` to `logger.log`:
+
+        ```ts scripts/codemod.ts
+        import type { Transform } from "codemod:ast-grep";
+        import type TSX from "codemod:ast-grep/langs/tsx";
+
+        const transform: Transform<TSX> = (root) => {
+          const rootNode = root.root();
+          const consoleCalls = rootNode.findAll({
+            rule: { pattern: "console.log($$$ARGS)" },
+          });
+
+          if (consoleCalls.length === 0) return null;
+
+          const edits = consoleCalls.map((node) => {
+            const args = node.getMultipleMatches("ARGS")
+              .map(arg => arg.text())
+              .join(", ");
+            return node.replace(`logger.log(${args})`);
+          });
+
+          return rootNode.commitEdits(edits);
+        };
+
+        export default transform;
+        ```
+
+        For the full JSSG API, see [JSSG Quickstart](/jssg/quickstart).
+      </Step>
+
+      <Step title="Test your codemod">
+        Run tests to ensure your codemod works correctly:
+
+        ```bash
+        npx codemod jssg test ./scripts/codemod.ts --language tsx
+        ```
+
+        For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+      </Step>
+
+      <Step title="Run on a target codebase">
+        ```bash
+        npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+        ```
+
+        For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
+      </Step>
+
+      <Step title="Publish your codemod">
+        Share your codemod with your team or the community:
+
+        ```bash
+        npx codemod login
+        npx codemod publish
+        ```
+
+        Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
+
+        For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Studio (Web)">
+    <Steps>
+      <Step title="Open Codemod Studio">
+        Go to [studio.codemod.com](https://studio.codemod.com) and sign in with your GitHub account.
+      </Step>
+
+      <Step title="Build your transform">
+        Use the visual interface to:
+        - Write and test patterns in the **live runner**
+        - Explore the **AST viewer** to understand code structure
+        - Iterate with instant feedback on sample inputs
+
+        For a detailed walkthrough, see [Codemod Studio docs](/platform/codemod-studio).
+      </Step>
+
+      <Step title="Export your codemod">
+        Once your transform works, click **Export** to download a complete package structure ready for local use or publishing.
+      </Step>
+
+      <Step title="Publish your codemod">
+        Share your codemod with your team or the community using Codemod Studio's built-in [share](/platform/codemod-studio#sharing-codemods) feature.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Getting help
+
+<CardGroup cols={2}>
+  <Card title="Join the community" icon="slack" href="https://go.codemod.com/community">
+    Ask questions, get help, and connect with other framework maintainers on Slack.
+  </Card>
+  <Card title="Book a call" icon="calendar" href="https://cal.com/alexbit">
+    Schedule a demo or get hands-on help from the Codemod team.
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/cli">
+    Learn more about Codemod CLI.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/workflows/reference">
+    Orchestrate complex multi-step migrations.
+  </Card>
+  <Card title="JSSG" icon="js" href="/jssg/quickstart">
+    Learn the transformation engine in depth.
+  </Card>
+  <Card title="Publishing" icon="upload" href="/publishing">
+    Authentication methods and CI/CD setup.
+  </Card>
+</CardGroup>

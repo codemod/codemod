@@ -1,0 +1,688 @@
+---
+title: "Workflow Reference"
+sidebarTitle: "Reference"
+---
+
+This reference documents the complete `workflow.yaml` specification for Codemod Workflows.
+
+## Complete Example
+
+This example demonstrates all five step types working together in a migration workflow:
+
+```yaml workflow.yaml
+version: "1"
+
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Target library for migration"
+      type: string
+      default: "analytics-v2"
+
+state:
+  schema:
+    - name: shards
+      type: array
+      items:
+        type: object
+        properties:
+          team: { type: string }
+          shardId: { type: string }
+
+nodes:
+  - id: migrate-analytics
+    name: Migrate legacy analytics to analytics.track({ event, properties })
+    type: automatic
+    steps:
+      # 1) Codemod Registry: run well-defined baseline migration first
+      - name: "Run registry codemod: legacy analytics -> analytics.track"
+        codemod:
+          source: "@codemod/migrate-analytics-v2"
+          args:
+            - "legacy-analytics"
+            - "analytics-v2"
+
+      # 2) JSSG: handle project-specific patterns with programmatic logic
+      - name: "Project-specific TS codemod (wrappers + key normalization)"
+        js-ast-grep:
+          js_file: "scripts/codemods/migrate-analytics-wrappers.ts"
+          language: "typescript"
+          include:
+            - "src/**/*.{ts,tsx}"
+          exclude:
+            - "**/*.test.ts"
+
+      # 3) AI: transform hard cases the rules miss
+      - name: "AI fixups: dynamic calls + edge cases -> analytics.track object form"
+        ai:
+          prompt: |
+            You are performing a code migration. Modify files directly.
+
+            Goal:
+            Convert any remaining legacy analytics calls into:
+              analytics.track({ event: <string>, properties: <object> })
+
+            Handle these hard cases:
+            1) Dynamic event names: trackEvent(getName(), props)
+              - Preserve semantics. event should become getName().
+            2) Non-object props: trackEvent("X", foo)
+              - Convert to properties: foo if foo is object-like, otherwise { value: foo }.
+
+            Constraints:
+            - Keep formatting roughly intact (prettier will run later).
+            - If unsure about a transformation, add a TODO comment explaining why.
+
+      # 4) YAML ast-grep: clean up simple leftovers (fast + deterministic)
+      - name: "Apply cleanup rules (YAML ast-grep)"
+        ast-grep:
+          config_file: "rules/analytics_cleanup.yml"
+          include:
+            - "src/**/*.{ts,tsx,js,jsx}"
+          exclude:
+            - "**/*.test.*"
+
+      # 5) Shell: format after all transformations
+      - name: "Format code"
+        run: npx prettier --write "src/**/*.{ts,tsx,js,jsx}"
+```
+
+---
+
+## Workflow Structure
+
+A workflow has four top-level keys:
+
+```yaml workflow.yaml
+version: "1"
+state:
+  schema: []
+params:
+  schema: {}
+templates: []
+nodes: []
+```
+
+| Key | Required | Purpose |
+|-----|----------|---------|
+| `version` | Yes | Workflow schema version (currently `"1"`) |
+| [`nodes`](#nodes) | Yes | Executable DAG of transformation nodes |
+| [`state`](#shared-state) | No | Declares shared-state schema for persistence |
+| [`params`](#parameters) | No | Configurable parameters with schema |
+| [`templates`](#templates) | No | Reusable step blocks |
+
+---
+
+## Nodes
+
+Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (matrix), trigger, runtime, env, and an ordered list of steps.
+
+```yaml
+version: "1"
+nodes:
+  - id: build
+    name: Build
+    type: automatic
+    steps:
+      - name: npm install
+        run: npm ci
+```
+
+<ParamField path="id" type="string" required>
+  Unique identifier within the workflow.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Display name shown in logs and UI.
+</ParamField>
+
+<ParamField path="type" type="string" default="automatic">
+  `automatic` or `manual`.
+</ParamField>
+
+<ParamField path="depends_on" type="string[]">
+  Upstream node IDs that must complete before this node runs. See [Cyclic Dependencies](#cyclic-dependencies).
+</ParamField>
+
+<ParamField path="trigger" type="object">
+  `{ type: manual }` creates an approval gate. See [Manual Triggers](#manual-triggers).
+</ParamField>
+
+<ParamField path="strategy" type="object">
+  Matrix configuration for parallel fan-out. See [Matrix Strategy](#matrix-strategy).
+</ParamField>
+
+<ParamField path="steps" type="array" required>
+  Ordered list of [steps](#steps) to execute.
+</ParamField>
+
+<ParamField path="env" type="object">
+  Environment variables for all steps in this node.
+</ParamField>
+
+---
+
+## Steps
+
+Steps are atomic actions inside a node. They run sequentially and each step performs one transformation or action.
+
+### JSSG Step
+
+Executes a JavaScript/TypeScript codemod using ast-grep for pattern matching and AST manipulation.
+
+```yaml
+steps:
+  - name: Replace console.log with logger
+    js-ast-grep:
+      js_file: "scripts/codemod.ts"
+      language: "tsx"
+      include:
+        - "**/*.ts"
+        - "**/*.tsx"
+      exclude:
+        - "**/*.test.ts"
+```
+
+**JSSG Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="js-ast-grep.js_file" type="string" required>
+  Path to the JS/TS file that implements the codemod.
+</ParamField>
+
+<ParamField path="js-ast-grep.language" type="string">
+  Target language (e.g., `typescript`, `tsx`, `javascript`, `jsx`).
+</ParamField>
+
+<ParamField path="js-ast-grep.include" type="string[]">
+  Include glob patterns.
+</ParamField>
+
+<ParamField path="js-ast-grep.exclude" type="string[]">
+  Exclude glob patterns.
+</ParamField>
+
+<ParamField path="js-ast-grep.base_path" type="string">
+  Base path for resolving globs.
+</ParamField>
+
+<ParamField path="js-ast-grep.max_threads" type="number">
+  Maximum concurrent threads.
+</ParamField>
+
+<ParamField path="js-ast-grep.dry_run" type="boolean" default="false">
+  Perform a dry run without applying changes.
+</ParamField>
+
+<Card title="JSSG Documentation" icon="code" href="/jssg/quickstart">
+  Learn how to write JavaScript/TypeScript codemods.
+</Card>
+
+### AI Step
+
+Calls an AI agent with a prompt for LLM-powered transformations.
+
+```yaml
+steps:
+  - name: Review diffs with AI
+    ai:
+      prompt: |
+        Summarize risky changes and suggest tests.
+      model: "gpt-4o"
+```
+
+**AI Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="ai.prompt" type="string" required>
+  Prompt to send to the AI agent.
+</ParamField>
+
+<ParamField path="ai.model" type="string" default="gpt-4o">
+  Model identifier. Overrides `LLM_MODEL` if set.
+</ParamField>
+
+<ParamField path="ai.system_prompt" type="string">
+  System prompt to scope the AI agent's behavior.
+</ParamField>
+
+<ParamField path="ai.max_steps" type="number" default="30">
+  Maximum number of agent steps before stopping.
+</ParamField>
+
+<ParamField path="ai.llm_protocol" type="string" default="openai">
+  LLM provider/protocol. Supported: `openai`, `anthropic`, `azure_openai`.
+</ParamField>
+
+<ParamField path="ai.endpoint" type="string">
+  LLM base URL. Defaults to the provider's standard endpoint.
+</ParamField>
+
+<ParamField path="ai.api_key" type="string">
+  API key for LLM access.
+
+  ```bash Environment variables for AI steps
+  LLM_API_KEY=YOUR_KEY
+  LLM_PROVIDER=openai  # or anthropic, azure_openai
+  LLM_MODEL=gpt-4o
+  LLM_BASE_URL=https://api.openai.com/v1  # optional
+  ```
+</ParamField>
+
+
+
+### YAML ast-grep Step
+
+Executes ast-grep using declarative YAML rules for simple, fast pattern matching.
+
+```yaml
+steps:
+  - name: "Apply cleanup rules"
+    ast-grep:
+      config_file: "rules/config.yml"
+      include:
+        - "**/*.js"
+      exclude:
+        - "**/*.test.js"
+```
+
+<Tip>
+When to use YAML ast-grep vs JSSG
+
+- **YAML ast-grep**: Simple find/replace, no conditional logic, fastest to write
+- **JSSG**: Conditional logic, complex AST manipulations, cross-file coordination
+</Tip>
+
+**YAML ast-grep Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="ast-grep.config_file" type="string" required>
+  Path to the ast-grep configuration file (.yaml).
+</ParamField>
+
+<ParamField path="ast-grep.include" type="string[]">
+  Include glob patterns.
+</ParamField>
+
+<ParamField path="ast-grep.exclude" type="string[]">
+  Exclude glob patterns.
+</ParamField>
+
+<ParamField path="ast-grep.base_path" type="string">
+  Base path for resolving globs.
+</ParamField>
+
+<ParamField path="ast-grep.max_threads" type="number">
+  Maximum concurrent threads.
+</ParamField>
+
+### Codemod Registry Step
+
+Runs another codemod by package name or local path.
+
+```yaml
+steps:
+  - name: Run registry codemod
+    codemod:
+      source: "@scope/package"
+      args: ["--flag", "value"]
+```
+
+**Codemod Registry Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="codemod.source" type="string" required>
+  Codemod source (registry package or local path). Supports version pinning: `@scope/pkg@1.2.3`.
+</ParamField>
+
+<ParamField path="codemod.args" type="string[]">
+  CLI arguments passed to the codemod.
+</ParamField>
+
+<ParamField path="codemod.env" type="object">
+  Environment variables used during execution.
+</ParamField>
+
+<ParamField path="codemod.working_dir" type="string">
+  Working directory for execution.
+</ParamField>
+
+<Info>
+You can aggregate multiple codemods by adding multiple `codemod` steps in the same node. Steps run sequentially from top to bottom.
+</Info>
+
+### Shell Command Step
+
+Runs shell commands on the host for setup, cleanup, or external tools.
+
+```yaml
+steps:
+  - name: Install dependencies
+    run: |
+      npm install
+      npm run build
+```
+
+**Shell Command Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="run" type="string" required>
+  Inline shell command to execute.
+</ParamField>
+
+<ParamField path="env" type="object">
+  Step-level environment variables applied to the process environment.
+</ParamField>
+
+---
+
+## Matrix Strategy
+
+Matrix strategies fan out a node into multiple parallel tasks. Use them to shard work by team, directory, or configuration.
+
+```yaml
+nodes:
+  - id: matrix-codemod
+    name: Matrix Codemod
+    strategy:
+      type: matrix
+      from_state: shards
+    steps:
+      - name: Codemod
+        run: node codemod.js --team=$team --shard=$shardId
+```
+
+The `from_state` field references an array in your workflow's [state schema](#shared-state). Each array item spawns a parallel task.
+
+**Accessing Matrix Values**:
+
+In JSSG transforms via `options.matrixValues`:
+```ts
+const transform: Transform<TSX> = async (root, options) => {
+  const team = options.matrixValues?.team;
+  const shardId = options.matrixValues?.shardId;
+};
+```
+
+In shell steps as environment variables:
+```yaml
+- name: Process shard
+  run: |
+    echo "Team: $team"
+    echo "Shard: $shardId"
+```
+
+**Dynamic Matrix Task Recompilation**:
+
+When the array referenced by `from_state` changes:
+1. New tasks are created for new items
+2. Tasks are marked `WontDo` if their item is removed
+3. Existing tasks remain untouched if their item persists
+
+Matrix nodes have a **master task** that tracks all generated tasks.
+
+---
+
+## Manual Triggers
+
+Add approval gates to pause execution until manual intervention:
+
+```yaml
+nodes:
+  - id: manual-approval
+    name: Manual Approval
+    trigger:
+      type: manual
+    steps:
+      - name: Deploy
+        run: ./deploy.sh
+```
+
+Resume paused tasks:
+```bash
+# Resume all paused tasks
+npx codemod workflow resume -i <run-id> --trigger-all
+
+# Resume a specific task
+npx codemod workflow resume -i <run-id> -t <task-uuid>
+```
+
+---
+
+## Shared State
+
+State enables workflows to persist data across runs and coordinate work:
+
+```yaml
+version: "1"
+state:
+  schema:
+    - name: shards
+      type: array
+      items:
+        type: object
+        properties:
+          team: { type: string }
+          shardId: { type: string }
+nodes: []
+```
+
+You can also use object map syntax:
+
+```yaml
+state:
+  schema:
+    shards:
+      type: array
+      items:
+        type: object
+        properties:
+          team: { type: string }
+          shardId: { type: string }
+```
+
+### State Updates
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `KEY=VAL` | Set state key to value | `count=10` |
+| `KEY@=VAL` | Append value to array | `shards@={"team":"core","shardId":"1"}` |
+| Dot notation | Set nested fields | `config.retries=5` |
+| JSON values | Use valid JSON | `user={"name":"Alice","id":123}` |
+
+<Info>
+State updates must be valid JSON if not primitive. Updates are applied only if the task exits successfully.
+</Info>
+
+---
+
+## Parameters
+
+Parameters make workflows configurable and reusable:
+
+```yaml
+version: "1"
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Internationalization library to use"
+      type: string
+      default: "next-intl"
+    prSize:
+      name: "PR Size"
+      type: string
+      default: "50"
+nodes: []
+```
+
+### Accessing Parameters
+
+**In JSSG transforms** via `options.params`:
+```ts
+export default function transform(root, options) {
+  const library = options.params?.library || "next-intl";
+}
+```
+
+**In shell steps** as `PARAM_` prefixed environment variables:
+```yaml
+- name: Run script
+  run: echo "Library: $PARAM_LIBRARY"
+```
+
+**In codemod steps** forwarded with `env_` prefix:
+```yaml
+- name: Run nested codemod
+  codemod:
+    source: "@org/package"
+  env:
+    LIBRARY: ${{ params.library }}
+```
+
+<Card title="Advanced Parameter Usage" icon="gear" href="/jssg/advanced#accessing-parameters">
+  Complete parameter patterns and examples in JSSG.
+</Card>
+
+---
+
+## Variable Resolution
+
+Variables can be interpolated in step configurations:
+
+| Syntax | Source | Example |
+|--------|--------|---------|
+| `${{ params.x }}` | Runtime parameters | `${{ params.branch }}` |
+| `${{ env.x }}` | Host environment | `${{ env.CI }}` |
+| `${{ state.x }}` | Shared state | `${{ state.counter }}` |
+
+<Tip>
+In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`). Inside steps, matrix variables are unprefixed.
+</Tip>
+
+Operators supported in `if` conditions: `==`, `!=`, `>`, `<`, `&&`, `||`
+
+```yaml
+- name: Run only for TypeScript
+  if: params.language == "typescript"
+  js-ast-grep:
+    js_file: "scripts/codemod.ts"
+```
+
+---
+
+## Task Statuses
+
+| Status | Description |
+|--------|-------------|
+| `Pending` | Queued; waiting for runner |
+| `Running` | Currently executing |
+| `Completed` | Succeeded; diff applied |
+| `Failed` | Script exited non-zero; diff discarded |
+| `AwaitingTrigger` | Waiting for manual approval |
+| `Blocked` | Dependencies not finished |
+| `WontDo` | Matrix item removed; task skipped |
+
+---
+
+## Cyclic Dependencies
+
+Workflows cannot have circular dependencies:
+
+```yaml
+nodes:
+  - id: a
+    depends_on: [b]
+    steps:
+      - run: echo "A"
+  - id: b
+    depends_on: [a]
+    steps:
+      - run: echo "B"
+```
+
+This produces an error:
+```
+Error: Cyclic dependency detected: a → b → a
+```
+
+---
+
+## Templates
+
+Templates define reusable step blocks (planned feature):
+
+```yaml
+templates:
+  - id: format
+    steps:
+      - name: Format
+        run: npx prettier --write .
+```
+
+---
+
+## Roadmap
+
+<Steps>
+  <Step title="Container runtime support" icon="flag-pennant">
+    Support for `runtime: docker` and other container runtimes.
+  </Step>
+  <Step title="Nested matrix strategies" icon="flag-pennant">
+    Matrix strategies within matrix strategies for complex fan-out.
+  </Step>
+</Steps>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Package Structure" icon="folder-tree" href="/package-structure">
+    Directory layout and codemod.yaml reference.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli#codemod-workflow">
+    Validate and run workflows from the command line.
+  </Card>
+  <Card title="JSSG Quickstart" icon="code" href="/jssg/quickstart">
+    Write JavaScript/TypeScript codemods.
+  </Card>
+  <Card title="Publishing" icon="upload" href="/publishing">
+    Share your codemod via the Registry.
+  </Card>
+</CardGroup>

@@ -410,7 +410,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         let help_msg = if workspace {
             "This creates .github/workflows/publish.yml triggered by <codemod-name>@v* tags"
         } else {
-            "This creates .github/workflows/publish.yml using codemod-com/publish-action"
+            "This creates .github/workflows/publish.yml using codemod/publish-action"
         };
         Confirm::new("Create GitHub Actions workflow for publishing?")
             .with_default(false)

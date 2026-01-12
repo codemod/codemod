@@ -22,6 +22,6 @@ jobs:
           echo "codemod_name=$CODEMOD_NAME" >> $GITHUB_OUTPUT
 
       - name: Publish codemod
-        uses: codemod-com/publish-action@v1
+        uses: codemod/publish-action@v1
         with:
           path: codemods/${{ steps.extract.outputs.codemod_name }}
