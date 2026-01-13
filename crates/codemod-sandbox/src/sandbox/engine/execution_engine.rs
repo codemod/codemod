@@ -2,6 +2,7 @@ use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
@@ -42,6 +43,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    /// Optional metrics context for tracking metrics across execution
+    pub metrics_context: Option<MetricsContext>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -103,6 +106,10 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
 
+    // Add MetricsModule (metrics tracking)
+    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
+    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
@@ -122,8 +129,20 @@ where
             },
         })?;
 
+    // Capture metrics context for use inside async block
+    let metrics_context = options.metrics_context.clone();
+
     // Execute JavaScript code
     async_with!(context => |ctx| {
+        // Store metrics context in runtime userdata if provided (must be done inside async_with)
+        if let Some(ref metrics_ctx) = metrics_context {
+            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+        }
+
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
@@ -330,6 +349,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
+    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
@@ -467,6 +489,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -509,6 +532,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -552,6 +576,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -595,6 +620,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -632,6 +658,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -672,6 +699,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
+            metrics_context: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -711,5 +739,93 @@ function example() {
             }
             _ => panic!("Clone should preserve the Skipped variant"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_execute_codemod_with_metrics() {
+        use crate::metrics::MetricsContext;
+
+        // Create a metrics context for this test
+        let metrics_ctx = MetricsContext::new();
+
+        // Simpler codemod that just counts console.log calls
+        let codemod_content = r#"
+import { useMetricAtom } from "codemod:metrics";
+
+const callMetric = useMetricAtom("call-count");
+
+export default function transform(root) {
+  const rootNode = root.root();
+
+  // Find all console.log calls
+  const calls = rootNode.findAll({
+    rule: {
+      pattern: "console.log($$$ARGS)",
+    },
+  });
+
+  // Count each call
+  for (const call of calls) {
+    callMetric.increment("console.log");
+  }
+
+  return null;
+}
+        "#
+        .trim();
+
+        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+
+        // Test with JS content that has console.log calls
+        let content = r#"
+function example() {
+    console.log("Hello");
+    console.log("World");
+    console.log(1, 2, 3);
+}
+        "#
+        .trim();
+
+        let file_path = Path::new("test.js");
+
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: SupportLang::JavaScript,
+            file_path,
+            content,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: Some(metrics_ctx.clone()),
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
+
+        // Should return Unmodified since we return null
+        match result {
+            Ok(ExecutionResult::Unmodified) => {
+                // Expected
+            }
+            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+
+        // Now check the metrics
+        let all_metrics = metrics_ctx.get_all();
+        assert!(
+            all_metrics.contains_key("call-count"),
+            "call-count metric should exist"
+        );
+
+        let call_count = all_metrics.get("call-count").unwrap();
+        assert_eq!(
+            call_count.get("console.log"),
+            Some(&3),
+            "Should have counted 3 console.log calls"
+        );
     }
 }

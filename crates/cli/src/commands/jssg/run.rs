@@ -15,6 +15,7 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
+use codemod_sandbox::MetricsContext;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
@@ -88,6 +89,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     dirty_check(&target_directory, args.allow_dirty);
 
     std::env::set_var("CODEMOD_STEP_ID", "jssg");
+
+    // Create a new metrics context for this execution run
+    let metrics_context = MetricsContext::new();
 
     // Verify the JavaScript file exists
     if !js_file_path.exists() {
@@ -176,6 +180,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
+    let metrics_context_clone = metrics_context.clone();
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
@@ -205,6 +210,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
+                metrics_context: Some(metrics_context_clone.clone()),
             };
 
             // Execute the codemod on this file
@@ -241,6 +247,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             }
         });
     });
+
+    // Print metrics report if any metrics were collected
+    crate::utils::metrics::print_metrics(&metrics_context.get_all());
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");

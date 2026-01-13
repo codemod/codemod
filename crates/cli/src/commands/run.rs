@@ -164,6 +164,8 @@ pub async fn handler(
 
     run_workflow(&engine, config).await?;
 
+    crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
+
     telemetry
         .send_event(
             BaseEvent {

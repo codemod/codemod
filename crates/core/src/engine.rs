@@ -52,6 +52,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
+    MetricsContext,
 };
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
@@ -95,6 +96,9 @@ pub struct Engine {
 
     pub execution_stats: Arc<ExecutionStats>,
 
+    /// Metrics context for tracking metrics across all JSSG steps
+    pub metrics_context: MetricsContext,
+
     /// Async file writer for batched I/O operations
     file_writer: Arc<AsyncFileWriter>,
 
@@ -131,6 +135,7 @@ impl Engine {
             scheduler: Scheduler::new(),
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
+            metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
         }
@@ -146,6 +151,7 @@ impl Engine {
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
+            metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
         }
@@ -163,6 +169,7 @@ impl Engine {
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
+            metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
         }
@@ -1685,6 +1692,8 @@ impl Engine {
         capabilities_data: &CapabilitiesData,
         bundle_path: &Option<PathBuf>,
     ) -> Result<()> {
+        let metrics_context = self.metrics_context.clone();
+
         // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
         let effective_bundle_path = bundle_path
             .as_ref()
@@ -1836,6 +1845,7 @@ impl Engine {
         let progress_callback = self.workflow_run_config.progress_callback.clone();
         let file_writer = Arc::clone(&self.file_writer);
         let selector_config = selector_config.map(Arc::new);
+        let metrics_context_clone = metrics_context.clone();
 
         // Execute the codemod on each file using the config's multi-threading
         config
@@ -1868,6 +1878,7 @@ impl Engine {
                         matrix_values: matrix_input.clone(),
                         capabilities: config.capabilities.clone(),
                         semantic_provider: semantic_provider.clone(),
+                        metrics_context: Some(metrics_context_clone.clone()),
                     })
                     .await
                 });
@@ -2603,6 +2614,7 @@ impl Clone for Engine {
             scheduler: Scheduler::new(),
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),
+            metrics_context: self.metrics_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
         }
