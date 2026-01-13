@@ -23,6 +23,7 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
             workflow,
             config.params,
             Some(config.bundle_path),
+            Some(config.target_path),
             config.capabilities.as_ref(),
         )
         .await

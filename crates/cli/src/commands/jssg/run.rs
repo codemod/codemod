@@ -205,6 +205,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
+                console_log_collector: None,
             };
 
             // Execute the codemod on this file
