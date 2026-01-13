@@ -83,6 +83,10 @@ pub struct Command {
     #[arg(long)]
     pub expect_errors: Option<String>,
 
+    /// Use semantic comparison (ignores property ordering in objects)
+    #[arg(long)]
+    pub semantic: bool,
+
     /// Enable workspace-wide semantic analysis for cross-file references.
     /// Uses the provided path as workspace root.
     #[arg(long)]
@@ -138,6 +142,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         ignore_whitespace: global_config.ignore_whitespace,
         context_lines: global_config.context_lines,
         expect_errors: global_config.expect_errors,
+        semantic: args.semantic,
+        language: global_config.language.clone(),
     };
 
     let script_base_dir = codemod_path

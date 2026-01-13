@@ -16,6 +16,8 @@ pub struct TestOptions {
     pub ignore_whitespace: bool,
     pub context_lines: usize,
     pub expect_errors: Vec<String>,
+    pub semantic: bool,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone)]

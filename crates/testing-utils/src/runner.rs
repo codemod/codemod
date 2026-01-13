@@ -9,6 +9,7 @@ use tokio::time::timeout;
 use crate::{
     config::TestOptions,
     fixtures::{TestSource, UnifiedTestCase},
+    semantic::semantic_compare,
 };
 
 /// Result of executing a transformation on input code
@@ -246,6 +247,12 @@ impl TestRunner {
     }
 
     fn contents_match(expected: &str, actual: &str, options: &TestOptions) -> bool {
+        if options.semantic {
+            if let Some(ref lang) = options.language {
+                return semantic_compare(expected, actual, lang);
+            }
+        }
+
         if options.ignore_whitespace {
             let normalize = |s: &str| {
                 s.lines()

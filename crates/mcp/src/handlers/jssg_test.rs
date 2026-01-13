@@ -82,6 +82,9 @@ pub struct RunJssgTestRequest {
     /// Timeout for each test in seconds (default: 30)
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    /// Use semantic comparison (ignores property ordering in objects)
+    #[serde(default)]
+    pub semantic: Option<bool>,
 }
 
 fn default_timeout() -> u64 {
@@ -185,6 +188,7 @@ impl JssgTestHandler {
             .collect();
 
         // Create test options
+        let language_str = request.language.clone();
         let test_options = TestOptions {
             filter: None,
             update_snapshots: false,
@@ -198,6 +202,8 @@ impl JssgTestHandler {
             ignore_whitespace: false,
             context_lines: 3,
             expect_errors: vec![],
+            semantic: request.semantic.unwrap_or(false),
+            language: Some(language_str),
         };
 
         // Create execution function
