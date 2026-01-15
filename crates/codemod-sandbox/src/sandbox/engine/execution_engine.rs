@@ -310,6 +310,8 @@ where
 pub struct SimpleJsExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
+    /// Optional metrics context for tracking metrics across execution
+    pub metrics_context: Option<MetricsContext>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -370,8 +372,18 @@ where
             },
         })?;
 
+    let metrics_context = options.metrics_context.clone();
+
     // Execute JavaScript code
     async_with!(context => |ctx| {
+        if let Some(ref metrics_ctx) = metrics_context {
+            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+        }
+
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
