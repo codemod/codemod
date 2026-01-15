@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use crate::{
     config::TestOptions,
     fixtures::{TestSource, UnifiedTestCase},
-    semantic::semantic_compare,
+    semantic::{detect_language, semantic_compare},
 };
 
 /// Result of executing a transformation on input code
@@ -218,7 +218,12 @@ impl TestRunner {
             )),
         }?;
 
-        if !Self::contents_match(&test_case.expected_output_code, &actual_content, options) {
+        if !Self::contents_match(
+            &test_case.expected_output_code,
+            &actual_content,
+            options,
+            test_case.input_path.as_deref(),
+        ) {
             if options.update_snapshots {
                 match test_case.update_expected_output(&actual_content) {
                     Ok(()) => {
@@ -246,9 +251,20 @@ impl TestRunner {
         Ok(())
     }
 
-    fn contents_match(expected: &str, actual: &str, options: &TestOptions) -> bool {
+    fn contents_match(
+        expected: &str,
+        actual: &str,
+        options: &TestOptions,
+        input_path: Option<&std::path::Path>,
+    ) -> bool {
         if options.semantic {
-            if let Some(ref lang) = options.language {
+            // Priority: explicit language > auto-detected from file path
+            let language = options
+                .language
+                .as_deref()
+                .or_else(|| input_path.and_then(detect_language));
+
+            if let Some(lang) = language {
                 return semantic_compare(expected, actual, lang);
             }
         }

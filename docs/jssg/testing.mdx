@@ -49,6 +49,9 @@ npx codemod jssg test -l tsx ./scripts/codemod.ts -v
 
 # Run tests one at a time (helpful for debugging)
 npx codemod jssg test -l tsx ./scripts/codemod.ts --sequential
+
+# Use semantic comparison (ignores property ordering differences)
+npx codemod jssg test -l tsx ./scripts/codemod.ts --semantic
 ```
 
 <Info>
@@ -202,6 +205,44 @@ jobs:
       - run: npm test
 ```
 
+## Semantic comparison
+
+Use the `--semantic` flag to enable semantic comparison, which ignores non-semantic differences when comparing expected and actual outputs.
+
+```bash
+npx codemod jssg test -l tsx ./scripts/codemod.ts --semantic
+```
+
+### What semantic comparison ignores
+
+- **Object property ordering**: `{a: 1, b: 2}` matches `{b: 2, a: 1}`
+- **Import ordering**: `import {a, b} from 'x'` matches `import {b, a} from 'x'`
+- **Keyword argument ordering** (Python): `func(a=1, b=2)` matches `func(b=2, a=1)`
+- **Interface member ordering**: Order of properties in TypeScript interfaces
+- **Derive attribute ordering** (Rust): `#[derive(Debug, Clone)]` matches `#[derive(Clone, Debug)]`
+
+### When to use semantic comparison
+
+Use `--semantic` when:
+- Your codemod modifies structures where order doesn't matter
+- You want tests to be resilient to formatting tool differences
+- The semantic meaning is more important than exact formatting
+
+### Supported languages
+
+| Language | Features |
+|----------|----------|
+| JavaScript/JSX | Objects, imports, exports |
+| TypeScript/TSX | Objects, imports, exports, type definitions, interfaces |
+| Python | Dictionaries, imports, keyword arguments, type unions |
+| Go | Imports, struct literals (keyed), interface definitions |
+| Rust | Struct expressions, derive attributes, use lists, trait bounds |
+| JSON | Objects |
+
+<Warning>
+Semantic comparison preserves order when it matters semantically. For example, spread operators (`{...x, a: 1}` vs `{a: 1, ...x}`) maintain their order because they affect property override behavior.
+</Warning>
+
 ## Best practices
 
 - **Start simple**: Begin with basic transformations before complex ones
@@ -209,5 +250,6 @@ jobs:
 - **Use descriptive names**: Make test cases self-documenting
 - **Keep tests focused**: One transformation per test case
 - **Validate locally**: Always test before publishing
+- **Use semantic comparison**: When testing transforms that may produce semantically equivalent but textually different outputs
 
 

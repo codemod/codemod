@@ -288,6 +288,9 @@ npx codemod jssg test -l typescript ./codemods/transform.ts -u
 # Test with semantic analysis enabled
 npx codemod jssg test -l typescript ./codemods/transform.ts --semantic-workspace /path/to/project
 
+# Test with semantic comparison (ignores property ordering)
+npx codemod jssg test -l typescript ./codemods/transform.ts --semantic
+
 # Run a codemod directly
 npx codemod jssg run -l typescript ./codemods/transform.ts ./target
 ```

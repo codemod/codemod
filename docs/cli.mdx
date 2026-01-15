@@ -352,6 +352,10 @@ npx codemod jssg test <codemod_file> [options]
   Ignore whitespace differences when comparing test outputs.
 </ResponseField>
 
+<ResponseField name="--semantic" type="boolean">
+  Use semantic comparison for test outputs. Ignores non-semantic differences like property ordering in objects, import ordering, and keyword argument ordering. Supported languages: JavaScript, TypeScript, Python, Go, Rust, JSON.
+</ResponseField>
+
 <ResponseField name="--timeout" type="number">
   Test timeout in seconds (default: 30).
 </ResponseField>
