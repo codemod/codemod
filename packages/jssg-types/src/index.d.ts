@@ -86,3 +86,7 @@ declare module "codemod:ast-grep/langs/typescript" {
 declare module "codemod:ast-grep/langs/yaml" {
   export { default } from "@codemod.com/jssg-types/langs/yaml";
 }
+
+declare module "codemod:metrics" {
+  export * from "./metrics.d.ts";
+}

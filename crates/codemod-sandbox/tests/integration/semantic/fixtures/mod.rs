@@ -231,6 +231,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         matrix_values: None,
         capabilities: None,
         semantic_provider: provider,
+        metrics_context: None,
     };
 
     let result = execute_codemod_with_quickjs(options).await;

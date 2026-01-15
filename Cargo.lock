@@ -1159,6 +1159,7 @@ dependencies = [
  "ast-grep-language",
  "bytes",
  "codemod-llrt-capabilities",
+ "dashmap 6.1.0",
  "ignore",
  "js-sys",
  "language-core",

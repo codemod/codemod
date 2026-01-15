@@ -89,6 +89,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Run workflow using the extracted workflow runner
     let (_, seconds) = run_workflow(&engine, config).await?;
 
+    crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
+
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     telemetry
         .send_event(

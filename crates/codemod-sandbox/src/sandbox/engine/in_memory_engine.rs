@@ -3,6 +3,7 @@ use super::quickjs_adapters::QuickJSResolver;
 use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::utils::quickjs_utils::maybe_promise;
@@ -39,6 +40,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub file_path: Option<&'a str>,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    /// Optional metrics context for tracking metrics across execution
+    pub metrics_context: Option<MetricsContext>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -100,6 +103,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
+    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
     let in_memory_resolver = QuickJSResolver::new(Arc::clone(&resolver_arc));
     let noop_loader = InMemoryLoader::new(Arc::clone(&resolver_arc));
 
@@ -118,7 +124,19 @@ where
             },
         })?;
 
+    // Capture metrics context for use inside async block
+    let metrics_context = options.metrics_context.clone();
+
     async_with!(context => |ctx| {
+        // Store metrics context in runtime userdata if provided (must be done inside async_with)
+        if let Some(ref metrics_ctx) = metrics_context {
+            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+        }
+
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
@@ -310,6 +328,7 @@ export default function transform(root) {
             matrix_values: None,
             file_path: None,
             semantic_provider: None,
+            metrics_context: None,
         });
 
         match result {
