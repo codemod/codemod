@@ -99,11 +99,17 @@ mod tests {
         let children = vec![
             NormalizedNode::new(
                 "pair".into(),
-                vec![NormalizedNode::leaf("property_identifier".into(), "b".into())],
+                vec![NormalizedNode::leaf(
+                    "property_identifier".into(),
+                    "b".into(),
+                )],
             ),
             NormalizedNode::new(
                 "pair".into(),
-                vec![NormalizedNode::leaf("property_identifier".into(), "a".into())],
+                vec![NormalizedNode::leaf(
+                    "property_identifier".into(),
+                    "a".into(),
+                )],
             ),
         ];
         let result = normalize_object_children(children);
@@ -116,12 +122,18 @@ mod tests {
         let children = vec![
             NormalizedNode::new(
                 "pair".into(),
-                vec![NormalizedNode::leaf("property_identifier".into(), "b".into())],
+                vec![NormalizedNode::leaf(
+                    "property_identifier".into(),
+                    "b".into(),
+                )],
             ),
             NormalizedNode::new("spread_element".into(), vec![]),
             NormalizedNode::new(
                 "pair".into(),
-                vec![NormalizedNode::leaf("property_identifier".into(), "a".into())],
+                vec![NormalizedNode::leaf(
+                    "property_identifier".into(),
+                    "a".into(),
+                )],
             ),
         ];
         let result = normalize_object_children(children);

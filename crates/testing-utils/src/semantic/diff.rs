@@ -56,7 +56,12 @@ impl std::fmt::Display for SemanticDiff {
         } else {
             "textual"
         };
-        writeln!(f, "Found {} differences ({} comparison):", self.differences.len(), mode)?;
+        writeln!(
+            f,
+            "Found {} differences ({} comparison):",
+            self.differences.len(),
+            mode
+        )?;
         writeln!(f)?;
 
         for (i, diff) in self.differences.iter().enumerate() {
@@ -87,7 +92,12 @@ impl std::fmt::Display for DiffKind {
 /// Returns a diff highlighting actual semantic differences, ignoring
 /// non-semantic variations like property ordering.
 pub fn semantic_diff(expected: &str, actual: &str, language: &str) -> SemanticDiff {
-    semantic_diff_with_registry(expected, actual, language, NormalizerRegistry::default_ref())
+    semantic_diff_with_registry(
+        expected,
+        actual,
+        language,
+        NormalizerRegistry::default_ref(),
+    )
 }
 
 /// Generate a semantic diff using a custom registry.
@@ -116,7 +126,12 @@ pub fn semantic_diff_with_registry(
     let actual_normalized = normalize_node(actual_tree.root_node(), actual.as_bytes(), normalizer);
 
     let mut differences = Vec::new();
-    compare_trees(&expected_normalized, &actual_normalized, "root", &mut differences);
+    compare_trees(
+        &expected_normalized,
+        &actual_normalized,
+        "root",
+        &mut differences,
+    );
 
     SemanticDiff {
         differences,

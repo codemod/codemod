@@ -39,15 +39,21 @@ pub const KEY_BEARING_KINDS: &[&str] = &[
 
 /// Check if children contain a spread-like element that affects ordering semantics.
 pub fn has_spread_element(children: &[NormalizedNode]) -> bool {
-    children
-        .iter()
-        .any(|c| matches!(c.kind.as_str(), "spread_element" | "rest_pattern" | "dictionary_splat"))
+    children.iter().any(|c| {
+        matches!(
+            c.kind.as_str(),
+            "spread_element" | "rest_pattern" | "dictionary_splat"
+        )
+    })
 }
 
 /// Check if children contain JSX spread attributes.
 pub fn has_jsx_spread(children: &[NormalizedNode]) -> bool {
     children.iter().any(|c| {
-        c.kind == "jsx_expression" && c.children.iter().any(|inner| inner.kind == "spread_element")
+        c.kind == "jsx_expression"
+            && c.children
+                .iter()
+                .any(|inner| inner.kind == "spread_element")
     })
 }
 
@@ -101,7 +107,11 @@ pub fn extract_sort_key(node: &NormalizedNode) -> String {
 ///
 /// Used for associative operations like union types (`A | B | C`) where
 /// the AST represents them as nested binary nodes.
-pub fn flatten_and_sort<F>(children: Vec<NormalizedNode>, kind: &str, key_fn: F) -> Vec<NormalizedNode>
+pub fn flatten_and_sort<F>(
+    children: Vec<NormalizedNode>,
+    kind: &str,
+    key_fn: F,
+) -> Vec<NormalizedNode>
 where
     F: Fn(&NormalizedNode) -> String,
 {

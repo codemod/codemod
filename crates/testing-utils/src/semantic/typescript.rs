@@ -85,9 +85,17 @@ fn normalize_ts_children(
 ) -> (Vec<NormalizedNode>, bool) {
     match node_kind {
         "object" | "object_pattern" => (normalize_object_children(children), true),
-        "union_type" => (flatten_and_sort(children, "union_type", extract_sort_key), true),
-        "intersection_type" => (flatten_and_sort(children, "intersection_type", extract_sort_key), true),
-        "jsx_self_closing_element" | "jsx_opening_element" => (normalize_jsx_element(children), true),
+        "union_type" => (
+            flatten_and_sort(children, "union_type", extract_sort_key),
+            true,
+        ),
+        "intersection_type" => (
+            flatten_and_sort(children, "intersection_type", extract_sort_key),
+            true,
+        ),
+        "jsx_self_closing_element" | "jsx_opening_element" => {
+            (normalize_jsx_element(children), true)
+        }
         "implements_clause" | "extends_type_clause" => (sort_by_key(children), true),
         _ => (children, false),
     }

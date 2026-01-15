@@ -45,7 +45,10 @@ impl SemanticNormalizer for RustNormalizer {
     ) -> (Vec<NormalizedNode>, bool) {
         match node_kind {
             "attribute" => (normalize_derive_attribute(children), true),
-            "or_pattern" => (flatten_and_sort(children, "or_pattern", extract_sort_key), true),
+            "or_pattern" => (
+                flatten_and_sort(children, "or_pattern", extract_sort_key),
+                true,
+            ),
             _ => (children, false),
         }
     }

@@ -20,9 +20,7 @@ impl SemanticNormalizer for GoNormalizer {
 
     fn get_parser(&self) -> Option<Parser> {
         let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_go::LANGUAGE.into())
-            .ok()?;
+        parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok()?;
         Some(parser)
     }
 

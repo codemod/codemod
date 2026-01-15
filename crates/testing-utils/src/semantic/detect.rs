@@ -6,7 +6,10 @@ use super::compare::semantic_compare_with_registry;
 use super::registry::NormalizerRegistry;
 
 /// Detect language from file extension using a custom registry.
-pub fn detect_language_from_path(path: &Path, registry: &NormalizerRegistry) -> Option<&'static str> {
+pub fn detect_language_from_path(
+    path: &Path,
+    registry: &NormalizerRegistry,
+) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?;
     let ext_with_dot = format!(".{}", ext.to_lowercase());
     registry
@@ -119,13 +122,28 @@ mod tests {
     #[test]
     fn test_semantic_compare_with_path_fallback() {
         let path = PathBuf::from("test.unknown");
-        assert!(semantic_compare_with_path("func(a=1, b=2)", "func(b=2, a=1)", &path, Some("python")));
+        assert!(semantic_compare_with_path(
+            "func(a=1, b=2)",
+            "func(b=2, a=1)",
+            &path,
+            Some("python")
+        ));
     }
 
     #[test]
     fn test_semantic_compare_with_path_no_fallback() {
         let path = PathBuf::from("test.unknown");
-        assert!(semantic_compare_with_path("some code", "some code", &path, None));
-        assert!(!semantic_compare_with_path("some code", "different code", &path, None));
+        assert!(semantic_compare_with_path(
+            "some code",
+            "some code",
+            &path,
+            None
+        ));
+        assert!(!semantic_compare_with_path(
+            "some code",
+            "different code",
+            &path,
+            None
+        ));
     }
 }

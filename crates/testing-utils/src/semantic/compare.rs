@@ -51,7 +51,12 @@ impl std::error::Error for SemanticCompareError {}
 /// `true` if the code is semantically equivalent, `false` otherwise.
 /// Falls back to exact string comparison if no normalizer is found or parsing fails.
 pub fn semantic_compare(expected: &str, actual: &str, language: &str) -> bool {
-    semantic_compare_with_registry(expected, actual, language, NormalizerRegistry::default_ref())
+    semantic_compare_with_registry(
+        expected,
+        actual,
+        language,
+        NormalizerRegistry::default_ref(),
+    )
 }
 
 /// Compare two code strings for semantic equivalence using a custom registry.
@@ -95,7 +100,12 @@ pub fn try_semantic_compare(
     actual: &str,
     language: &str,
 ) -> Result<bool, SemanticCompareError> {
-    try_semantic_compare_with_registry(expected, actual, language, NormalizerRegistry::default_ref())
+    try_semantic_compare_with_registry(
+        expected,
+        actual,
+        language,
+        NormalizerRegistry::default_ref(),
+    )
 }
 
 /// Try to compare two code strings for semantic equivalence using a custom registry.
@@ -271,7 +281,11 @@ mod tests {
     #[test]
     fn test_unknown_language_falls_back_to_exact() {
         assert!(semantic_compare("some code", "some code", "unknown_lang"));
-        assert!(!semantic_compare("some code", "different code", "unknown_lang"));
+        assert!(!semantic_compare(
+            "some code",
+            "different code",
+            "unknown_lang"
+        ));
     }
 
     #[test]
