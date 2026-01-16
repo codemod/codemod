@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::compare::semantic_compare_with_registry;
+use super::compare::loose_compare_with_registry;
 use super::registry::NormalizerRegistry;
 
 /// Detect language from file extension using a custom registry.
@@ -25,13 +25,13 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
 /// Compare two code strings with automatic language detection from file path.
 ///
 /// Falls back to `fallback_language` if provided, otherwise exact string comparison.
-pub fn semantic_compare_with_path(
+pub fn loose_compare_with_path(
     expected: &str,
     actual: &str,
     file_path: &Path,
     fallback_language: Option<&str>,
 ) -> bool {
-    semantic_compare_with_path_and_registry(
+    loose_compare_with_path_and_registry(
         expected,
         actual,
         file_path,
@@ -41,7 +41,7 @@ pub fn semantic_compare_with_path(
 }
 
 /// Compare with automatic language detection using a custom registry.
-pub fn semantic_compare_with_path_and_registry(
+pub fn loose_compare_with_path_and_registry(
     expected: &str,
     actual: &str,
     file_path: &Path,
@@ -49,7 +49,7 @@ pub fn semantic_compare_with_path_and_registry(
     registry: &NormalizerRegistry,
 ) -> bool {
     match detect_language_from_path(file_path, registry).or(fallback_language) {
-        Some(lang) => semantic_compare_with_registry(expected, actual, lang, registry),
+        Some(lang) => loose_compare_with_registry(expected, actual, lang, registry),
         None => expected == actual,
     }
 }
@@ -102,27 +102,27 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_compare_with_path_js() {
+    fn test_loose_compare_with_path_js() {
         let expected = r#"const obj = { a: 1, b: 2 };"#;
         let actual = r#"const obj = { b: 2, a: 1 };"#;
         let path = PathBuf::from("test.js");
 
-        assert!(semantic_compare_with_path(expected, actual, &path, None));
+        assert!(loose_compare_with_path(expected, actual, &path, None));
     }
 
     #[test]
-    fn test_semantic_compare_with_path_python() {
+    fn test_loose_compare_with_path_python() {
         let expected = "func(a=1, b=2)";
         let actual = "func(b=2, a=1)";
         let path = PathBuf::from("test.py");
 
-        assert!(semantic_compare_with_path(expected, actual, &path, None));
+        assert!(loose_compare_with_path(expected, actual, &path, None));
     }
 
     #[test]
-    fn test_semantic_compare_with_path_fallback() {
+    fn test_loose_compare_with_path_fallback() {
         let path = PathBuf::from("test.unknown");
-        assert!(semantic_compare_with_path(
+        assert!(loose_compare_with_path(
             "func(a=1, b=2)",
             "func(b=2, a=1)",
             &path,
@@ -131,15 +131,15 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_compare_with_path_no_fallback() {
+    fn test_loose_compare_with_path_no_fallback() {
         let path = PathBuf::from("test.unknown");
-        assert!(semantic_compare_with_path(
+        assert!(loose_compare_with_path(
             "some code",
             "some code",
             &path,
             None
         ));
-        assert!(!semantic_compare_with_path(
+        assert!(!loose_compare_with_path(
             "some code",
             "different code",
             &path,

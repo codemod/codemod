@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::{NormalizedNode, SemanticNormalizer};
+use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, has_spread_element};
 
 /// Semantic normalizer for JavaScript (including JSX, MJS, CJS).
 pub struct JavaScriptNormalizer;
 
-impl SemanticNormalizer for JavaScriptNormalizer {
+impl ParserProvider for JavaScriptNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["javascript", "js", "jsx", "mjs", "cjs"]
     }
@@ -25,7 +25,9 @@ impl SemanticNormalizer for JavaScriptNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for JavaScriptNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         ["named_imports", "export_clause"].into_iter().collect()
     }

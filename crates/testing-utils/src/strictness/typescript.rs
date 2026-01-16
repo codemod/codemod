@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::{NormalizedNode, SemanticNormalizer};
+use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, flatten_and_sort, has_jsx_spread, has_spread_element};
 
 const TS_UNORDERED_NODE_TYPES: &[&str] = &[
@@ -16,7 +16,7 @@ const TS_UNORDERED_NODE_TYPES: &[&str] = &[
 /// Semantic normalizer for TypeScript (non-TSX files).
 pub struct TypeScriptNormalizer;
 
-impl SemanticNormalizer for TypeScriptNormalizer {
+impl ParserProvider for TypeScriptNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["typescript", "ts"]
     }
@@ -32,7 +32,9 @@ impl SemanticNormalizer for TypeScriptNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for TypeScriptNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         TS_UNORDERED_NODE_TYPES.iter().copied().collect()
     }
@@ -49,7 +51,7 @@ impl SemanticNormalizer for TypeScriptNormalizer {
 /// Semantic normalizer for TSX files.
 pub struct TsxNormalizer;
 
-impl SemanticNormalizer for TsxNormalizer {
+impl ParserProvider for TsxNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["tsx"]
     }
@@ -65,7 +67,9 @@ impl SemanticNormalizer for TsxNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for TsxNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         TS_UNORDERED_NODE_TYPES.iter().copied().collect()
     }

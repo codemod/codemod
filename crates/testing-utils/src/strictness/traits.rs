@@ -1,4 +1,4 @@
-//! Core trait and types for semantic normalization.
+//! Core traits and types for semantic normalization.
 
 use std::collections::HashSet;
 use tree_sitter::Parser;
@@ -31,19 +31,18 @@ impl NormalizedNode {
     }
 }
 
-/// Trait for language-specific semantic normalization.
+/// Trait for providing a tree-sitter parser for a language.
 ///
-/// Implementations define how code in a specific language should be normalized
-/// for semantic comparison. This includes:
-/// - Which node types have unordered children (e.g., object properties)
-/// - Custom normalization logic for specific constructs (e.g., Python keyword args)
-pub trait SemanticNormalizer: Send + Sync {
-    /// Language identifiers this normalizer handles.
+/// This is the base trait for language support. It provides parser creation
+/// and language identification. Languages with only parser support (no semantic
+/// rules) can implement just this trait to enable AST and CST comparison.
+pub trait ParserProvider: Send + Sync {
+    /// Language identifiers this provider handles.
     ///
     /// Examples: `["javascript", "js", "jsx"]`, `["python", "py"]`
     fn language_ids(&self) -> &[&'static str];
 
-    /// File extensions this normalizer handles (with leading dot).
+    /// File extensions this provider handles (with leading dot).
     ///
     /// Examples: `[".js", ".mjs", ".cjs"]`, `[".py", ".pyi"]`
     fn file_extensions(&self) -> &[&'static str];
@@ -53,6 +52,29 @@ pub trait SemanticNormalizer: Send + Sync {
     /// Returns `None` if the parser cannot be created.
     fn get_parser(&self) -> Option<Parser>;
 
+    /// Check if this provider handles the given language identifier.
+    fn handles_language(&self, language: &str) -> bool {
+        self.language_ids()
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(language))
+    }
+
+    /// Check if this provider handles the given file extension.
+    fn handles_extension(&self, extension: &str) -> bool {
+        self.file_extensions()
+            .iter()
+            .any(|ext| ext.eq_ignore_ascii_case(extension))
+    }
+}
+
+/// Trait for language-specific semantic normalization.
+///
+/// Extends [`ParserProvider`] with semantic rules for comparing code.
+/// Implementations define how code in a specific language should be normalized
+/// for semantic comparison. This includes:
+/// - Which node types have unordered children (e.g., object properties)
+/// - Custom normalization logic for specific constructs (e.g., Python keyword args)
+pub trait SemanticNormalizer: ParserProvider {
     /// Node types whose children can be reordered without changing semantics.
     ///
     /// Examples: `object` in JavaScript, `dictionary` in Python
@@ -83,19 +105,5 @@ pub trait SemanticNormalizer: Send + Sync {
         children: Vec<NormalizedNode>,
     ) -> (Vec<NormalizedNode>, bool) {
         (children, false)
-    }
-
-    /// Check if this normalizer handles the given language identifier.
-    fn handles_language(&self, language: &str) -> bool {
-        self.language_ids()
-            .iter()
-            .any(|id| id.eq_ignore_ascii_case(language))
-    }
-
-    /// Check if this normalizer handles the given file extension.
-    fn handles_extension(&self, extension: &str) -> bool {
-        self.file_extensions()
-            .iter()
-            .any(|ext| ext.eq_ignore_ascii_case(extension))
     }
 }

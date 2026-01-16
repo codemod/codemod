@@ -3,12 +3,12 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::SemanticNormalizer;
+use super::traits::{ParserProvider, SemanticNormalizer};
 
 /// Semantic normalizer for JSON.
 pub struct JsonNormalizer;
 
-impl SemanticNormalizer for JsonNormalizer {
+impl ParserProvider for JsonNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["json"]
     }
@@ -24,7 +24,9 @@ impl SemanticNormalizer for JsonNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for JsonNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         ["object"].into_iter().collect()
     }

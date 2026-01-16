@@ -349,11 +349,17 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--ignore-whitespace" type="boolean">
-  Ignore whitespace differences when comparing test outputs.
+  Ignore whitespace differences when comparing test outputs (only applies to strict mode).
 </ResponseField>
 
-<ResponseField name="--semantic" type="boolean">
-  Use semantic comparison for test outputs. Ignores non-semantic differences like property ordering in objects, import ordering, and keyword argument ordering. Supported languages: JavaScript, TypeScript, Python, Go, Rust, JSON.
+<ResponseField name="--strictness <LEVEL>" type="string">
+  Comparison strictness level (default: `strict`):
+  - `strict` - Exact string equality
+  - `cst` - Compare Concrete Syntax Trees (includes all tokens, preserves ordering)
+  - `ast` - Compare Abstract Syntax Trees (ignores formatting, preserves ordering)
+  - `loose` - Loose AST comparison (ignores formatting and ordering of unordered nodes like object properties, imports)
+
+  Supported languages: JavaScript, TypeScript, Python, Go, Rust, JSON.
 </ResponseField>
 
 <ResponseField name="--timeout" type="number">

@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::{NormalizedNode, SemanticNormalizer};
+use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, flatten_and_sort, has_spread_element};
 
 /// Semantic normalizer for Python.
@@ -11,7 +11,7 @@ use super::utils::{extract_sort_key, flatten_and_sort, has_spread_element};
 /// Handles special cases like keyword argument reordering in function calls.
 pub struct PythonNormalizer;
 
-impl SemanticNormalizer for PythonNormalizer {
+impl ParserProvider for PythonNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["python", "py"]
     }
@@ -27,7 +27,9 @@ impl SemanticNormalizer for PythonNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for PythonNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         ["set"].into_iter().collect()
     }

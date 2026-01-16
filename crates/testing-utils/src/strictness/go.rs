@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::{NormalizedNode, SemanticNormalizer};
+use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, find_first_text};
 
 /// Semantic normalizer for Go.
 pub struct GoNormalizer;
 
-impl SemanticNormalizer for GoNormalizer {
+impl ParserProvider for GoNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["go", "golang"]
     }
@@ -23,7 +23,9 @@ impl SemanticNormalizer for GoNormalizer {
         parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for GoNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         // Note: literal_value is handled specially in normalize_children
         // because it can be either keyed (reorderable) or unkeyed (positional)

@@ -4,9 +4,8 @@
 //! cosmetic differences like property ordering.
 
 use super::registry::NormalizerRegistry;
-use super::traits::{NormalizedNode, SemanticNormalizer};
-use super::utils::extract_sort_key;
-use tree_sitter::Node;
+use super::traits::NormalizedNode;
+use super::utils::{extract_sort_key, normalize_node};
 
 /// A semantic difference between two code snippets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,31 +163,6 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len])
     }
-}
-
-fn normalize_node<'a>(
-    node: Node<'a>,
-    source: &'a [u8],
-    normalizer: &dyn SemanticNormalizer,
-) -> NormalizedNode {
-    let kind = node.kind().to_string();
-
-    if node.named_child_count() == 0 {
-        return NormalizedNode::leaf(kind, node.utf8_text(source).unwrap_or("").to_string());
-    }
-
-    let children: Vec<NormalizedNode> = node
-        .named_children(&mut node.walk())
-        .map(|child| normalize_node(child, source, normalizer))
-        .collect();
-
-    let (mut children, handled) = normalizer.normalize_children(&kind, children);
-
-    if !handled && normalizer.unordered_node_types().contains(node.kind()) {
-        children.sort_by_key(extract_sort_key);
-    }
-
-    NormalizedNode::new(kind, children)
 }
 
 fn compare_trees(

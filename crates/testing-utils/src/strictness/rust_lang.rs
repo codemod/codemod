@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 use tree_sitter::Parser;
 
-use super::traits::{NormalizedNode, SemanticNormalizer};
+use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, flatten_and_sort};
 
 /// Semantic normalizer for Rust.
 pub struct RustNormalizer;
 
-impl SemanticNormalizer for RustNormalizer {
+impl ParserProvider for RustNormalizer {
     fn language_ids(&self) -> &[&'static str] {
         &["rust", "rs"]
     }
@@ -25,7 +25,9 @@ impl SemanticNormalizer for RustNormalizer {
             .ok()?;
         Some(parser)
     }
+}
 
+impl SemanticNormalizer for RustNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         [
             "struct_expression",
