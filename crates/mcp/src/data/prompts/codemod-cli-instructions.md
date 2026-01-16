@@ -288,6 +288,12 @@ npx codemod jssg test -l typescript ./codemods/transform.ts -u
 # Test with semantic analysis enabled
 npx codemod jssg test -l typescript ./codemods/transform.ts --semantic-workspace /path/to/project
 
+# Test with AST comparison (ignores formatting, preserves ordering)
+npx codemod jssg test -l typescript ./codemods/transform.ts --strictness ast
+
+# Test with loose comparison (ignores formatting and unordered children like object properties)
+npx codemod jssg test -l typescript ./codemods/transform.ts --strictness loose
+
 # Run a codemod directly
 npx codemod jssg run -l typescript ./codemods/transform.ts ./target
 ```

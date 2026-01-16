@@ -2,6 +2,48 @@ use libtest_mimic::Arguments;
 use std::str::FromStr;
 use std::time::Duration;
 
+/// Test comparison strictness level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Strictness {
+    /// Strict string equality (default behavior).
+    #[default]
+    Strict,
+    /// Compare Concrete Syntax Trees (CSTs) - includes all tokens and whitespace.
+    Cst,
+    /// Compare Abstract Syntax Trees (ASTs) - ignores formatting and whitespace.
+    Ast,
+    /// Loose AST comparison - ignores ordering of certain children (e.g., object members).
+    Loose,
+}
+
+impl FromStr for Strictness {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "strict" => Ok(Self::Strict),
+            "cst" => Ok(Self::Cst),
+            "ast" => Ok(Self::Ast),
+            "loose" => Ok(Self::Loose),
+            _ => Err(format!(
+                "Invalid strictness level: '{}'. Valid options are: strict, cst, ast, loose",
+                s
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for Strictness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Strict => write!(f, "strict"),
+            Self::Cst => write!(f, "cst"),
+            Self::Ast => write!(f, "ast"),
+            Self::Loose => write!(f, "loose"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TestOptions {
     pub filter: Option<String>,
@@ -16,6 +58,8 @@ pub struct TestOptions {
     pub ignore_whitespace: bool,
     pub context_lines: usize,
     pub expect_errors: Vec<String>,
+    pub strictness: Strictness,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,34 +86,22 @@ impl FromStr for ReporterType {
 
 impl TestOptions {
     pub fn to_libtest_args(&self) -> Arguments {
-        let mut args = Arguments::default();
-
-        if let Some(filter) = &self.filter {
-            args.filter = Some(filter.clone());
+        Arguments {
+            filter: self.filter.clone(),
+            nocapture: self.verbose,
+            test_threads: if !self.parallel {
+                Some(1)
+            } else {
+                self.max_threads
+            },
+            format: Some(match self.reporter {
+                ReporterType::Console => libtest_mimic::FormatSetting::Pretty,
+                ReporterType::Json => libtest_mimic::FormatSetting::Json,
+                ReporterType::Terse => libtest_mimic::FormatSetting::Terse,
+            }),
+            quiet: matches!(self.reporter, ReporterType::Terse),
+            ..Default::default()
         }
-
-        args.nocapture = self.verbose;
-
-        // Handle threading - if not parallel, set to 1 thread
-        if !self.parallel {
-            args.test_threads = Some(1);
-        } else if let Some(threads) = self.max_threads {
-            args.test_threads = Some(threads);
-        }
-
-        // Map our reporter to libtest format
-        args.format = Some(match self.reporter {
-            ReporterType::Console => libtest_mimic::FormatSetting::Pretty,
-            ReporterType::Json => libtest_mimic::FormatSetting::Json,
-            ReporterType::Terse => libtest_mimic::FormatSetting::Terse,
-        });
-
-        // Set quiet mode for terse output
-        if matches!(self.reporter, ReporterType::Terse) {
-            args.quiet = true;
-        }
-
-        args
     }
 
     /// Check if tests should fail fast (stop on first failure)

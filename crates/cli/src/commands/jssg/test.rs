@@ -83,6 +83,11 @@ pub struct Command {
     #[arg(long)]
     pub expect_errors: Option<String>,
 
+    /// Comparison strictness level: strict (string equality), cst (compare CSTs),
+    /// ast (compare ASTs, ignores formatting), loose (compare AST, ignores ordering)
+    #[arg(long, value_name = "LEVEL", default_value = "strict")]
+    pub strictness: String,
+
     /// Enable workspace-wide semantic analysis for cross-file references.
     /// Uses the provided path as workspace root.
     #[arg(long)]
@@ -125,6 +130,11 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let default_language_enum: SupportLang = default_language_str.parse()?;
 
+    let strictness: testing_utils::Strictness = args
+        .strictness
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
+
     let options = TestOptions {
         filter: global_config.filter,
         update_snapshots: global_config.update_snapshots,
@@ -138,6 +148,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         ignore_whitespace: global_config.ignore_whitespace,
         context_lines: global_config.context_lines,
         expect_errors: global_config.expect_errors,
+        strictness,
+        language: global_config.language.clone(),
     };
 
     let script_base_dir = codemod_path

@@ -49,6 +49,9 @@ npx codemod jssg test -l tsx ./scripts/codemod.ts -v
 
 # Run tests one at a time (helpful for debugging)
 npx codemod jssg test -l tsx ./scripts/codemod.ts --sequential
+
+# Use loose comparison (ignores formatting and property ordering)
+npx codemod jssg test -l tsx ./scripts/codemod.ts --strictness loose
 ```
 
 <Info>
@@ -202,6 +205,55 @@ jobs:
       - run: npm test
 ```
 
+## Comparison strictness
+
+Use the `--strictness` flag to control how expected and actual outputs are compared. This helps tests pass when outputs are semantically equivalent but differ in formatting.
+
+```bash
+npx codemod jssg test -l tsx ./scripts/codemod.ts --strictness <LEVEL>
+```
+
+### Strictness levels
+
+| Level | Description |
+|-------|-------------|
+| `strict` | (Default) Exact string equality. Fails on any whitespace or formatting differences. |
+| `cst` | Compare Concrete Syntax Trees. Includes all tokens but ignores whitespace content. Preserves ordering. |
+| `ast` | Compare Abstract Syntax Trees. Ignores formatting and whitespace, preserves ordering. |
+| `loose` | Loose AST comparison. Ignores formatting and ordering of unordered children (e.g., object members, imports). |
+
+### What `loose` comparison ignores
+
+The `loose` level ignores ordering for semantically unordered constructs:
+
+- **Object property ordering**: `{a: 1, b: 2}` matches `{b: 2, a: 1}`
+- **Import ordering**: `import {a, b} from 'x'` matches `import {b, a} from 'x'`
+- **Keyword argument ordering** (Python): `func(a=1, b=2)` matches `func(b=2, a=1)`
+- **Interface member ordering**: Order of properties in TypeScript interfaces
+- **Derive attribute ordering** (Rust): `#[derive(Debug, Clone)]` matches `#[derive(Clone, Debug)]`
+
+### When to use each level
+
+- **`strict`**: Default. Use when exact output matters (most cases).
+- **`cst`**: Use when you want to compare token structure but ignore whitespace content.
+- **`ast`**: Use when you want to ignore formatting differences but preserve ordering.
+- **`loose`**: Use when your codemod modifies structures where order doesn't matter semantically.
+
+### Supported languages
+
+| Language | Features |
+|----------|----------|
+| JavaScript/JSX | Objects, imports, exports |
+| TypeScript/TSX | Objects, imports, exports, type definitions, interfaces |
+| Python | Dictionaries, imports, keyword arguments, type unions |
+| Go | Imports, struct literals (keyed), interface definitions |
+| Rust | Struct expressions, derive attributes, use lists, trait bounds |
+| JSON | Objects |
+
+<Warning>
+AST comparison preserves order when it matters semantically. For example, spread operators (`{...x, a: 1}` vs `{a: 1, ...x}`) maintain their order because they affect property override behavior.
+</Warning>
+
 ## Best practices
 
 - **Start simple**: Begin with basic transformations before complex ones
@@ -209,5 +261,6 @@ jobs:
 - **Use descriptive names**: Make test cases self-documenting
 - **Keep tests focused**: One transformation per test case
 - **Validate locally**: Always test before publishing
+- **Use `--strictness loose`**: When testing transforms that may produce semantically equivalent outputs with different formatting or ordering
 
 

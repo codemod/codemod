@@ -35,27 +35,43 @@ pub enum TestCase {
     },
 }
 
-impl From<TestCase> for TransformationTestCase {
-    fn from(test_case: TestCase) -> Self {
-        match test_case {
+impl TestCase {
+    /// Convert a TestCase to TransformationTestCase, reading files if necessary.
+    ///
+    /// Returns an error if file system test cases fail to read their files.
+    fn try_into_transformation_test_case(self) -> Result<TransformationTestCase, std::io::Error> {
+        match self {
             TestCase::Adhoc {
                 input_code,
                 expected_output_code,
-            } => TransformationTestCase {
+            } => Ok(TransformationTestCase {
                 name: "adhoc_test".to_string(),
                 input_code,
                 expected_output_code,
-            },
+            }),
             TestCase::FileSystem {
                 input_file,
                 expected_output_file,
             } => {
-                // For file system test cases, we'll read the files
-                let input_code = std::fs::read_to_string(&input_file).unwrap_or_default();
+                // For file system test cases, we'll read the files with proper error handling
+                let input_code = std::fs::read_to_string(&input_file).map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to read input file '{}': {}", input_file, e),
+                    )
+                })?;
                 let expected_output_code =
-                    std::fs::read_to_string(&expected_output_file).unwrap_or_default();
+                    std::fs::read_to_string(&expected_output_file).map_err(|e| {
+                        std::io::Error::new(
+                            e.kind(),
+                            format!(
+                                "Failed to read expected output file '{}': {}",
+                                expected_output_file, e
+                            ),
+                        )
+                    })?;
 
-                TransformationTestCase {
+                Ok(TransformationTestCase {
                     name: format!(
                         "fs_test_{}",
                         Path::new(&input_file)
@@ -65,7 +81,7 @@ impl From<TestCase> for TransformationTestCase {
                     ),
                     input_code,
                     expected_output_code,
-                }
+                })
             }
         }
     }
@@ -82,6 +98,13 @@ pub struct RunJssgTestRequest {
     /// Timeout for each test in seconds (default: 30)
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    /// Comparison strictness level (default: "strict"):
+    /// - "strict": Exact string equality
+    /// - "cst": Compare Concrete Syntax Trees (includes all tokens, preserves ordering)
+    /// - "ast": Compare Abstract Syntax Trees (ignores formatting, preserves ordering)
+    /// - "loose": Loose AST comparison (ignores formatting and ordering of unordered nodes)
+    #[serde(default)]
+    pub strictness: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -178,13 +201,21 @@ impl JssgTestHandler {
             .into_iter()
             .enumerate()
             .map(|(index, test_case)| {
-                let mut transformed = TransformationTestCase::from(test_case);
+                let mut transformed = test_case.try_into_transformation_test_case()?;
                 transformed.name = format!("test_{index}");
-                transformed
+                Ok(transformed)
             })
-            .collect();
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
 
         // Create test options
+        let language_str = request.language.clone();
+        let strictness: testing_utils::Strictness = request
+            .strictness
+            .as_deref()
+            .unwrap_or("strict")
+            .parse()
+            .map_err(|e: String| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
         let test_options = TestOptions {
             filter: None,
             update_snapshots: false,
@@ -198,6 +229,8 @@ impl JssgTestHandler {
             ignore_whitespace: false,
             context_lines: 3,
             expect_errors: vec![],
+            strictness,
+            language: Some(language_str),
         };
 
         // Create execution function
@@ -268,18 +301,40 @@ impl JssgTestHandler {
                 message: format!("All {} tests passed! 🎉", summary.total),
             })
         } else {
-            // Create test results from summary (simplified for now)
-            let test_results = (0..summary.total)
-                .map(|index| TestResult {
-                    success: index < summary.passed,
-                    message: if index < summary.passed {
-                        format!("Test {index} passed")
-                    } else {
-                        format!("Test {index} failed")
-                    },
-                    test_index: index,
-                })
-                .collect();
+            // Create test results from detailed summary
+            let test_results: Vec<TestResult> = if summary.details.is_empty() {
+                // Fallback to count-based results if details not available
+                (0..summary.total)
+                    .map(|index| TestResult {
+                        success: index < summary.passed,
+                        message: if index < summary.passed {
+                            format!("Test {index} passed")
+                        } else {
+                            format!("Test {index} failed")
+                        },
+                        test_index: index,
+                    })
+                    .collect()
+            } else {
+                // Use detailed results with actual error messages
+                summary
+                    .details
+                    .iter()
+                    .enumerate()
+                    .map(|(index, detail)| TestResult {
+                        success: detail.passed,
+                        message: if detail.passed {
+                            format!("{} passed", detail.name)
+                        } else {
+                            detail
+                                .error_message
+                                .clone()
+                                .unwrap_or_else(|| format!("{} failed", detail.name))
+                        },
+                        test_index: index,
+                    })
+                    .collect()
+            };
 
             Ok(RunJssgTestResponse::Failure {
                 message: format!(
