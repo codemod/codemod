@@ -18,7 +18,18 @@ use rquickjs::{
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// Default execution timeout in milliseconds (180s)
+const DEFAULT_TIMEOUT_MS: u64 = 180000;
+
+/// Default memory limit in bytes (512 MB)
+const DEFAULT_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+
+/// Default max stack size in bytes (4 MB)
+const DEFAULT_MAX_STACK_SIZE: usize = 4 * 1024 * 1024;
 
 /// In-memory execution options for executing a codemod on a string
 pub struct InMemoryExecutionOptions<'a, R> {
@@ -42,6 +53,10 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Execution timeout in milliseconds (default: 200ms)
+    pub timeout_ms: Option<u64>,
+    /// Memory limit in bytes (default: 64 MB)
+    pub memory_limit: Option<usize>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -94,6 +109,26 @@ where
         },
     })?;
 
+    let timeout_ms = options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    let memory_limit = options.memory_limit.unwrap_or(DEFAULT_MEMORY_LIMIT);
+
+    runtime.set_memory_limit(memory_limit).await;
+    runtime.set_max_stack_size(DEFAULT_MAX_STACK_SIZE).await;
+    let start_time = Instant::now();
+    let timeout_exceeded = Arc::new(AtomicBool::new(false));
+    let timeout_exceeded_clone = Arc::clone(&timeout_exceeded);
+
+    runtime
+        .set_interrupt_handler(Some(Box::new(move || {
+            if start_time.elapsed().as_millis() as u64 > timeout_ms {
+                timeout_exceeded_clone.store(true, Ordering::SeqCst);
+                true // Interrupt execution
+            } else {
+                false // Continue execution
+            }
+        })))
+        .await;
+
     let ast_grep = AstGrep::new(options.content, options.language);
 
     let module_builder = LlrtModuleBuilder::build();
@@ -127,7 +162,9 @@ where
     // Capture metrics context for use inside async block
     let metrics_context = options.metrics_context.clone();
 
-    async_with!(context => |ctx| {
+    let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
+
+    let result = async_with!(context => |ctx| {
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
             ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
@@ -282,16 +319,72 @@ where
         };
         execution.await
     })
-    .await
+    .await;
+
+    if timeout_exceeded_check.load(Ordering::SeqCst) {
+        return Err(ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionTimeout { timeout_ms },
+        });
+    }
+
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::errors::RuntimeError;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_execute_codemod_sync_timeout() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        // Create a codemod with an infinite loop
+        let codemod_content = r#"
+export default function transform(root) {
+  while (true) {
+    // Infinite loop to trigger timeout
+  }
+  return root.root().text();
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("timeout_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: SupportLang::JavaScript,
+            content,
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: None,
+            semantic_provider: None,
+            metrics_context: None,
+            timeout_ms: Some(50), // 50ms timeout for faster test
+            memory_limit: None,
+        });
+
+        match result {
+            Err(ExecutionError::Runtime {
+                source: RuntimeError::ExecutionTimeout { timeout_ms },
+            }) => {
+                assert_eq!(timeout_ms, 50);
+            }
+            Ok(_) => panic!("Expected timeout error, but got success"),
+            Err(e) => panic!("Expected timeout error, got different error: {:?}", e),
+        }
+    }
 
     #[test]
     fn test_execute_codemod_sync_simple() {
@@ -329,6 +422,8 @@ export default function transform(root) {
             file_path: None,
             semantic_provider: None,
             metrics_context: None,
+            timeout_ms: None,
+            memory_limit: None,
         });
 
         match result {

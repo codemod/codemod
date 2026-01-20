@@ -54,7 +54,7 @@ impl From<HashMap<String, String>> for Cardinality {
 }
 
 /// A single metric entry with its cardinality dimensions and count
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MetricEntry {
     pub cardinality: HashMap<String, String>,
     pub count: u64,
