@@ -4,7 +4,7 @@ use codemod_sandbox::MetricsData;
 pub fn print_metrics(metrics: &MetricsData) {
     let metrics_with_values: Vec<_> = metrics
         .iter()
-        .filter(|(_, labels)| !labels.is_empty())
+        .filter(|(_, entries)| !entries.is_empty())
         .collect();
 
     if metrics_with_values.is_empty() {
@@ -12,12 +12,24 @@ pub fn print_metrics(metrics: &MetricsData) {
     }
 
     println!("\nMetrics:");
-    for (metric_name, labels) in metrics_with_values {
+    for (metric_name, entries) in metrics_with_values {
         println!("  {}:", metric_name);
-        let mut sorted_labels: Vec<_> = labels.iter().collect();
-        sorted_labels.sort_by(|a, b| b.1.cmp(a.1));
-        for (label, count) in sorted_labels {
-            println!("    {}: {}", label, count);
+        let mut sorted_entries: Vec<_> = entries.iter().collect();
+        sorted_entries.sort_by(|a, b| b.count.cmp(&a.count));
+        for entry in sorted_entries {
+            if entry.cardinality.is_empty() {
+                // No cardinality dimensions, just show the count
+                println!("    {}", entry.count);
+            } else {
+                // Format cardinality as key=value pairs
+                let cardinality_str: String = entry
+                    .cardinality
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("    {}: {}", cardinality_str, entry.count);
+            }
         }
     }
 }

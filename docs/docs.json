@@ -69,6 +69,7 @@
                   "jssg/quickstart",
                   "jssg/testing",
                   "jssg/reference",
+                  "jssg/metrics",
                   "jssg/semantic-analysis",
                   "jssg/advanced",
                   "jssg/security"

@@ -1,0 +1,103 @@
+---
+title: "Metrics"
+description: "Track and aggregate data across codemod executions"
+---
+
+Metrics allow you to collect and aggregate data while running codemods. This is useful for:
+
+- **Codebase analysis**: Count occurrences of patterns, prop usages, component instances
+- **Migration tracking**: Track what needs to be migrated before making changes
+- **Read-only codemods**: Gather insights without modifying code
+
+## Basic Usage
+
+Import `useMetricAtom` from `codemod:metrics` to create a metric tracker:
+
+```typescript
+import { useMetricAtom } from "codemod:metrics";
+
+const metric = useMetricAtom("my-metric");
+
+// Increment with cardinality dimensions
+metric.increment({ category: "buttons", variant: "primary" });
+
+// Increment by a specific amount
+metric.increment({ category: "buttons" }, 5);
+
+// Increment without cardinality (simple counter)
+metric.increment();
+```
+
+## Cardinality
+
+Cardinality dimensions are key-value pairs that let you group and filter metrics. When you call `increment()`, you pass an object with string keys and values:
+
+```typescript
+metric.increment({
+  propName: "className",
+  propValue: "container",
+  component: "Button"
+});
+```
+
+This creates a unique metric entry for each combination of cardinality values. You can later group by any dimension (e.g., all entries where `component=Button`).
+
+<Tip>
+Use cardinality to capture context about what you're counting. For example, when counting prop usages, include both the prop name and the component it belongs to.
+</Tip>
+
+## Example: Counting Prop Usage
+
+This read-only codemod counts how many times each prop is used on `Button` components:
+
+```typescript
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { useMetricAtom } from "codemod:metrics";
+
+const propUsageMetric = useMetricAtom("prop-usage");
+
+const codemod: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+
+  const jsxAttrs = rootNode.findAll({
+    rule: {
+      kind: "jsx_attribute",
+      inside: {
+        any: [
+          { kind: "jsx_opening_element" },
+          { kind: "jsx_self_closing_element" },
+        ],
+        has: {
+          field: "name",
+          kind: "identifier",
+          regex: "^Button$"
+        },
+      },
+    },
+  });
+
+  for (const attr of jsxAttrs) {
+    const name = attr?.find({ rule: { kind: "property_identifier" } });
+    const propName = name?.text();
+    if (propName) {
+      propUsageMetric.increment({ propName });
+    }
+  }
+
+  return null;
+};
+
+export default codemod;
+```
+
+Running this codemod produces output like:
+
+```
+Metrics:
+  prop-usage:
+    propName=onClick: 42
+    propName=className: 38
+    propName=disabled: 15
+    propName=variant: 12
+```

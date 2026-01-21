@@ -69,6 +69,12 @@ pub enum RuntimeError {
 
     #[error("QuickJS error")]
     QuickJS(#[from] rquickjs::Error),
+
+    #[error("Execution timeout: exceeded {timeout_ms}ms limit")]
+    ExecutionTimeout { timeout_ms: u64 },
+
+    #[error("Memory limit exceeded")]
+    MemoryLimitExceeded,
 }
 
 #[derive(Debug, Error)]

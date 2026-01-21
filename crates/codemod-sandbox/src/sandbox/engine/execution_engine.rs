@@ -778,7 +778,7 @@ export default function transform(root) {
 
   // Count each call
   for (const call of calls) {
-    callMetric.increment("console.log");
+    callMetric.increment({ method: "console.log" });
   }
 
   return null;
@@ -833,10 +833,17 @@ function example() {
             "call-count metric should exist"
         );
 
-        let call_count = all_metrics.get("call-count").unwrap();
+        let call_count_entries = all_metrics.get("call-count").unwrap();
+        let console_log_entry = call_count_entries
+            .iter()
+            .find(|e| e.cardinality.get("method") == Some(&"console.log".to_string()));
+        assert!(
+            console_log_entry.is_some(),
+            "Should have a console.log metric entry"
+        );
         assert_eq!(
-            call_count.get("console.log"),
-            Some(&3),
+            console_log_entry.unwrap().count,
+            3,
             "Should have counted 3 console.log calls"
         );
     }
