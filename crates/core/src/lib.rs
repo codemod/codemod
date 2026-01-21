@@ -1,4 +1,5 @@
 pub mod config;
+pub mod diff;
 pub mod engine;
 pub mod execution;
 pub(crate) mod execution_stats;

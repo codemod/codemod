@@ -1,76 +1,74 @@
-use anyhow::Result;
-use inquire::Confirm;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 type GitDirtyCheckCallback = Arc<Box<dyn Fn(&Path, bool) + Send + Sync>>;
 
-fn ask_for_git_init(path: &Path) -> Result<bool> {
-    let answer = Confirm::new(&format!(
-        "⚠️  The target path '{}' is not tracked by Git. Do you want to continue?",
+/// Prints an error message about the path not being tracked by Git and exits.
+fn exit_not_tracked(path: &Path) -> ! {
+    eprintln!(
+        "Error: The target path '{}' is not tracked by Git. Use --allow-dirty to proceed anyway.",
         path.display()
-    ))
-    .with_default(false)
-    .with_help_message("Press 'y' to continue or 'n' to abort")
-    .prompt()?;
-
-    Ok(answer)
+    );
+    std::process::exit(1)
 }
 
+/// Creates a callback that checks if a git repository has uncommitted changes.
+///
+/// The callback will exit with an error if:
+/// - The path has uncommitted changes and `allow_dirty` is false
+/// - The path is not tracked by git and `allow_dirty` is false
 pub fn dirty_check() -> GitDirtyCheckCallback {
-    let paths = Arc::new(Mutex::new(vec![]));
+    let checked_paths = Arc::new(Mutex::new(Vec::new()));
 
     Arc::new(Box::new(move |path: &Path, allow_dirty: bool| {
-        let mut paths = paths.lock().unwrap();
-        if !paths.contains(&path.to_path_buf()) {
-            paths.push(path.to_path_buf());
+        // Skip if already checked or dirty is allowed
+        if allow_dirty {
+            return;
+        }
 
-            if !allow_dirty && Command::new("git").arg("--version").output().is_ok() {
-                let output = Command::new("git")
-                    .args(["rev-parse", "--is-inside-work-tree"])
+        let mut paths = checked_paths.lock().unwrap();
+        if paths.contains(&path.to_path_buf()) {
+            return;
+        }
+        paths.push(path.to_path_buf());
+
+        // Check if git is available
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let output = Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(path)
+            .output();
+
+        match output {
+            Ok(ref out) if out.status.success() => {
+                let is_inside_work_tree = String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .eq_ignore_ascii_case("true");
+
+                if !is_inside_work_tree {
+                    exit_not_tracked(path);
+                }
+
+                // Check for uncommitted changes
+                let status_output = Command::new("git")
+                    .args(["status", "--porcelain"])
                     .current_dir(path)
-                    .output();
+                    .output()
+                    .expect("Failed to run git status");
 
-                match output {
-                    Ok(output) if output.status.success() => {
-                        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if result == "true" || Path::new(".git").exists() {
-                            let output = Command::new("git")
-                                .args(["status", "--porcelain"])
-                                .current_dir(path)
-                                .output()
-                                .expect("Failed to run git");
-
-                            if !output.stdout.is_empty() {
-                                let answer = Confirm::new(
-                                    &format!(
-                                        "⚠️  You have uncommitted changes in this path {}. Do you want to continue anyway?",
-                                        path.display()
-                                    ),
-                                )
-                                .with_default(false)
-                                .with_help_message("Press 'y' to continue or 'n' to abort")
-                                .prompt();
-
-                                if answer.is_err() || !answer.unwrap() {
-                                    eprintln!("Error: Aborting due to uncommitted changes");
-                                    std::process::exit(1);
-                                }
-                            }
-                        } else if !ask_for_git_init(path).unwrap_or(false) {
-                            eprintln!("Error: Aborting due to uninitialized Git repository");
-                            std::process::exit(1);
-                        }
-                    }
-                    _ => {
-                        if !ask_for_git_init(path).unwrap_or(false) {
-                            eprintln!("Error: Aborting due to uninitialized Git repository");
-                            std::process::exit(1);
-                        }
-                    }
+                if !status_output.stdout.is_empty() {
+                    eprintln!(
+                        "Error: You have uncommitted changes in {}. Use --allow-dirty to proceed anyway.",
+                        path.display()
+                    );
+                    std::process::exit(1);
                 }
             }
+            _ => exit_not_tracked(path),
         }
     }))
 }

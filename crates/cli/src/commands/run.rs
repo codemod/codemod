@@ -6,18 +6,30 @@ use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
-use console::style;
+use console::{strip_ansi_codes, style};
 use log::info;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
+
+/// Represents a file change from legacy codemod JSON output
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyFileChange {
+    kind: String,
+    old_path: String,
+    old_data: String,
+    new_data: String,
+}
 #[derive(Args, Debug)]
 pub struct Command {
     /// Package name with optional version (e.g., @org/package@1.0.0)
@@ -63,6 +75,10 @@ pub struct Command {
     /// No interactive mode
     #[arg(long)]
     no_interactive: bool,
+
+    /// Disable colored diff output in dry-run mode
+    #[arg(long)]
+    no_color: bool,
 }
 
 pub async fn handler(
@@ -160,6 +176,7 @@ pub async fn handler(
         args.registry.clone(),
         Some(capabilities),
         args.no_interactive,
+        args.no_color,
     )?;
 
     run_workflow(&engine, config).await?;
@@ -189,9 +206,20 @@ pub async fn handler(
     let files_modified = stats.files_modified.load(Ordering::Relaxed);
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
-    println!("\n📝 Modified files: {files_modified}");
-    println!("✅ Unmodified files: {files_unmodified}");
-    println!("❌ Files with errors: {files_with_errors}");
+
+    if args.dry_run {
+        println!("\n=== DRY RUN SUMMARY ===");
+        println!("Files that would be modified: {files_modified}");
+        println!("Files that would be unmodified: {files_unmodified}");
+        if files_with_errors > 0 {
+            println!("Files with errors: {files_with_errors}");
+        }
+        println!("No changes were made to the filesystem.");
+    } else {
+        println!("\n📝 Modified files: {files_modified}");
+        println!("✅ Unmodified files: {files_unmodified}");
+        println!("❌ Files with errors: {files_with_errors}");
+    }
 
     let execution_id = generate_execution_id();
 
@@ -215,20 +243,35 @@ pub async fn handler(
     Ok(())
 }
 
+
+/// Returns an error for a failed legacy codemod command.
+fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
+    anyhow!("Legacy codemod command failed with exit code: {:?}", exit_code)
+}
+
 pub async fn run_legacy_codemod_with_raw_args(raw_args: &[String]) -> Result<()> {
     let mut cmd = if cfg!(target_os = "windows") {
-        // On Windows, use cmd.exe to resolve npx properly
         let mut cmd = ProcessCommand::new("cmd");
         cmd.args(["/C", "npx", "codemod@legacy"]);
         cmd.args(raw_args);
         cmd
     } else {
-        // On Unix systems, npx can be called directly
         let mut cmd = ProcessCommand::new("npx");
         cmd.arg("codemod@legacy");
         cmd.args(raw_args);
         cmd
     };
+
+    let is_non_interactive = raw_args.iter().any(|arg| arg == "--no-interactive");
+
+    if is_non_interactive {
+        // Disable interactive features for CI/headless environments
+        cmd.env("CI", "true")
+            .env("TERM", "dumb")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+    }
 
     info!(
         "Executing: {} with args: {:?}",
@@ -240,25 +283,242 @@ pub async fn run_legacy_codemod_with_raw_args(raw_args: &[String]) -> Result<()>
         cmd.get_args().collect::<Vec<_>>()
     );
 
-    let status = cmd.status()?;
+    if is_non_interactive {
+        let output = cmd.output()?;
 
-    if !status.success() {
-        return Err(anyhow::anyhow!(
-            "Legacy codemod command failed with exit code: {:?}",
-            status.code()
-        ));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let filtered_stdout = strip_ansi_codes(&stdout);
+        let filtered_stderr = strip_ansi_codes(&stderr);
+
+        if !filtered_stdout.is_empty() {
+            print!("{filtered_stdout}");
+        }
+        if !filtered_stderr.is_empty() {
+            eprint!("{filtered_stderr}");
+        }
+
+        if !output.status.success() {
+            return Err(legacy_command_error(output.status.code()));
+        }
+    } else {
+        let status = cmd.status()?;
+        if !status.success() {
+            return Err(legacy_command_error(status.code()));
+        }
     }
 
     Ok(())
 }
 
 async fn run_legacy_codemod(args: &Command, disable_analytics: bool) -> Result<()> {
+    // If dry-run mode, use JSON output and generate diffs ourselves
+    if args.dry_run {
+        return run_legacy_codemod_with_diff(args, disable_analytics).await;
+    }
+
     let mut legacy_args = vec![args.package.clone()];
     if let Some(target_path) = args.target_path.as_ref() {
-        legacy_args.push(format!("--target {}", target_path.to_string_lossy()));
+        legacy_args.push("--target".to_string());
+        legacy_args.push(target_path.to_string_lossy().to_string());
+    }
+    if args.allow_dirty {
+        legacy_args.push("--skip-git-check".to_string());
+    }
+    if args.no_interactive {
+        legacy_args.push("--no-interactive".to_string());
     }
     if disable_analytics {
         legacy_args.push("--no-telemetry".to_string());
     }
     run_legacy_codemod_with_raw_args(&legacy_args).await
+}
+
+/// Run legacy codemod in dry-run mode with diff output
+async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -> Result<()> {
+    let mut legacy_args = vec![args.package.clone()];
+    if let Some(target_path) = args.target_path.as_ref() {
+        legacy_args.push("--target".to_string());
+        legacy_args.push(target_path.to_string_lossy().to_string());
+    }
+    legacy_args.push("--dry".to_string());
+    legacy_args.push("--mode".to_string());
+    legacy_args.push("json".to_string());
+    legacy_args.push("--no-interactive".to_string());
+    if args.allow_dirty {
+        legacy_args.push("--skip-git-check".to_string());
+    }
+    if disable_analytics {
+        legacy_args.push("--no-telemetry".to_string());
+    }
+
+    // Build command
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut cmd = ProcessCommand::new("cmd");
+        cmd.args(["/C", "npx", "codemod@legacy"]);
+        cmd.args(&legacy_args);
+        cmd
+    } else {
+        let mut cmd = ProcessCommand::new("npx");
+        cmd.arg("codemod@legacy");
+        cmd.args(&legacy_args);
+        cmd
+    };
+
+    // Capture output
+    cmd.env("CI", "true")
+        .env("TERM", "dumb")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    info!(
+        "Executing legacy codemod with JSON output: {:?}",
+        cmd.get_args().collect::<Vec<_>>()
+    );
+
+    let output = cmd.output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Print stderr (contains progress info)
+    if !stderr.is_empty() {
+        let filtered_stderr = strip_ansi_codes(&stderr);
+        eprint!("{}", filtered_stderr);
+    }
+
+    // Try to find JSON array in stdout (it may have other output before it)
+    let json_start = stdout.find('[');
+    let json_end = stdout.rfind(']');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &stdout[start..=end];
+
+        match serde_json::from_str::<Vec<LegacyFileChange>>(json_str) {
+            Ok(changes) => {
+                let diff_config = DiffConfig::with_color_control(args.no_color);
+
+                let mut total_additions = 0;
+                let mut total_deletions = 0;
+                let files_modified = changes.len();
+
+                for change in &changes {
+                    if change.kind == "updateFile" {
+                        let path = PathBuf::from(&change.old_path);
+                        let diff = generate_unified_diff(
+                            &path,
+                            &change.old_data,
+                            &change.new_data,
+                            &diff_config,
+                        );
+                        diff.print();
+                        total_additions += diff.additions;
+                        total_deletions += diff.deletions;
+                    }
+                }
+
+                // Print summary
+                println!("\n=== DRY RUN SUMMARY ===");
+                println!("Files that would be modified: {}", files_modified);
+                println!(
+                    "Total: +{} additions, -{} deletions",
+                    total_additions, total_deletions
+                );
+                println!("No changes were made to the filesystem.");
+            }
+            Err(e) => {
+                // JSON parsing failed, print raw output
+                info!("Failed to parse JSON output: {}", e);
+                let filtered_stdout = strip_ansi_codes(&stdout);
+                if !filtered_stdout.is_empty() {
+                    print!("{}", filtered_stdout);
+                }
+            }
+        }
+    } else {
+        // No JSON found, print raw output
+        let filtered_stdout = strip_ansi_codes(&stdout);
+        if !filtered_stdout.is_empty() {
+            print!("{}", filtered_stdout);
+        }
+    }
+
+    if !output.status.success() {
+        return Err(legacy_command_error(output.status.code()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_file_change_deserialization() {
+        let json = r#"{
+            "kind": "updateFile",
+            "oldPath": "/path/to/file.js",
+            "oldData": "const x = 1;",
+            "newData": "const x = 2;"
+        }"#;
+
+        let change: LegacyFileChange = serde_json::from_str(json).unwrap();
+        assert_eq!(change.kind, "updateFile");
+        assert_eq!(change.old_path, "/path/to/file.js");
+        assert_eq!(change.old_data, "const x = 1;");
+        assert_eq!(change.new_data, "const x = 2;");
+    }
+
+    #[test]
+    fn test_legacy_file_change_array_deserialization() {
+        let json = r#"[
+            {
+                "kind": "updateFile",
+                "oldPath": "/path/to/file1.js",
+                "oldData": "import { it } from 'jest';",
+                "newData": "import { it } from 'vitest';"
+            },
+            {
+                "kind": "updateFile",
+                "oldPath": "/path/to/file2.js",
+                "oldData": "jest.fn()",
+                "newData": "vi.fn()"
+            }
+        ]"#;
+
+        let changes: Vec<LegacyFileChange> = serde_json::from_str(json).unwrap();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].old_path, "/path/to/file1.js");
+        assert_eq!(changes[1].old_path, "/path/to/file2.js");
+    }
+
+    #[test]
+    fn test_extract_json_from_mixed_output() {
+        // Simulates output with stderr noise before JSON
+        let mixed_output = r#"- Fetching "jest/vitest"...
+✔ Successfully fetched "jest/vitest" from local cache.
+[
+  {
+    "kind": "updateFile",
+    "oldPath": "/path/to/test.js",
+    "oldData": "old content",
+    "newData": "new content"
+  }
+]"#;
+
+        let json_start = mixed_output.find('[');
+        let json_end = mixed_output.rfind(']');
+
+        assert!(json_start.is_some());
+        assert!(json_end.is_some());
+
+        let json_str = &mixed_output[json_start.unwrap()..=json_end.unwrap()];
+        let changes: Vec<LegacyFileChange> = serde_json::from_str(json_str).unwrap();
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, "updateFile");
+        assert_eq!(changes[0].old_path, "/path/to/test.js");
+    }
+
 }

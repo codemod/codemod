@@ -49,6 +49,10 @@ pub struct Command {
     /// No interactive mode
     #[arg(long)]
     no_interactive: bool,
+
+    /// Disable colored diff output in dry-run mode
+    #[arg(long)]
+    no_color: bool,
 }
 
 /// Run a workflow
@@ -84,6 +88,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         None,
         Some(capabilities),
         args.no_interactive,
+        args.no_color,
     )?;
 
     // Run workflow using the extracted workflow runner

@@ -745,6 +745,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "similar",
  "tar",
  "tempfile",
  "thiserror 2.0.16",

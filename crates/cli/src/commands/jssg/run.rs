@@ -4,6 +4,7 @@ use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig};
 use anyhow::Result;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -76,6 +77,10 @@ pub struct Command {
     /// Uses the provided path as workspace root.
     #[arg(long)]
     pub semantic_workspace: Option<PathBuf>,
+
+    /// Disable colored diff output in dry-run mode
+    #[arg(long)]
+    pub no_color: bool,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -181,6 +186,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
     let metrics_context_clone = metrics_context.clone();
+
+    // Create diff config for dry-run mode
+    let diff_config = DiffConfig::with_color_control(args.no_color);
+
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
@@ -232,7 +241,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     let _ = provider.notify_file_processed(file_path, new_content);
                                 }
                             }
-                        } else if config.dry_run {
+                        } else {
+                            // Dry-run mode: print diff
+                            let diff = generate_unified_diff(
+                                file_path,
+                                &content,
+                                new_content,
+                                &diff_config,
+                            );
+                            diff.print();
                             debug!("Would modify file (dry run): {}", file_path.display());
                         }
                     }

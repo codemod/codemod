@@ -16,6 +16,20 @@ pub type CapabilitiesSecurityCallback =
     Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
+/// Info about a file that would be modified in dry-run mode
+#[derive(Clone, Debug)]
+pub struct DryRunChange {
+    /// Path to the file that would be modified
+    pub file_path: PathBuf,
+    /// Original content of the file
+    pub original_content: String,
+    /// New content that would be written
+    pub new_content: String,
+}
+
+/// Callback type for reporting dry-run changes
+pub type DryRunCallback = Arc<Box<dyn Fn(DryRunChange) + Send + Sync>>;
+
 /// Configuration for running a workflow
 #[derive(Clone)]
 pub struct WorkflowRunConfig {
@@ -30,6 +44,10 @@ pub struct WorkflowRunConfig {
     pub dry_run: bool,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
+    /// Non-interactive mode for CI/headless environments
+    pub no_interactive: bool,
+    /// Callback for reporting changes in dry-run mode
+    pub dry_run_callback: Option<DryRunCallback>,
 }
 
 impl Default for WorkflowRunConfig {
@@ -46,6 +64,8 @@ impl Default for WorkflowRunConfig {
             dry_run: false,
             capabilities: None,
             capabilities_security_callback: None,
+            no_interactive: false,
+            dry_run_callback: None,
         }
     }
 }
