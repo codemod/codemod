@@ -250,7 +250,7 @@ Execute AI-powered transformations or reviews:
 steps:
   - name: "AI Code Review"
     ai:
-      model: "gpt-4o-mini"
+      model: "gpt-5.2-codex"
       prompt: |
         Review the transformed code and fix any issues...
       system_prompt: |
@@ -261,7 +261,7 @@ steps:
 
 - `prompt` — The instructions for the AI agent
 - `system_prompt` — Optional system context
-- `model` — LLM model to use (default: gpt-4o)
+- `model` — LLM model to use (default: gpt-5.2)
 - `max_steps` — Maximum agent steps (default: 100)
 
 **Environment Variables:**
@@ -269,7 +269,7 @@ steps:
 - `LLM_API_KEY` — API key for the LLM provider
 - `LLM_MODEL` — Override the model
 - `LLM_PROVIDER` — Provider (openai, anthropic, google_ai)
-- `LLM_BASE_URL` — Custom endpoint URL
+- `LLM_BASE_URL` — Optional custom endpoint URL (inferred from provider if not set)
 
 **Agent Handoff (No API Key):**
 
@@ -423,8 +423,8 @@ For running codemods in CI pipelines or headless environments, use these flags:
 ============================================================
 File: /path/to/src/App.test.js
 ============================================================
---- a/src/App.test.js
-+++ b/src/App.test.js
+--- [before] /path/to/src/App.test.js
++++ [after]  /path/to/src/App.test.js
 @@ -1,3 +1,4 @@
 +import { describe, expect, it } from "vitest";
  import App from "./App"

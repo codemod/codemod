@@ -2301,12 +2301,6 @@ impl Engine {
             env.insert("npm_config_yes".to_string(), "true".to_string());
         }
 
-        // Set dry run flag so scripts can check it
-        env.insert(
-            "CODEMOD_DRY_RUN".to_string(),
-            self.workflow_run_config.dry_run.to_string(),
-        );
-
         // Add node environment variables
         for (key, value) in &node.env {
             env.insert(key.clone(), value.clone());
