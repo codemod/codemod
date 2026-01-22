@@ -52,6 +52,7 @@ npx codemod@latest init ./path/to/dir \
 ```
 
 Best for:
+
 - Complex TypeScript/JavaScript transformations
 - Type-safe AST manipulations
 - Reusable utility functions
@@ -89,7 +90,7 @@ version: "0.1.0"
 description: "Transform legacy patterns to modern syntax"
 author: "Your Name <you@example.com>"
 license: "MIT"
-workflow: "workflow.yaml"  # Points to your workflow definition
+workflow: "workflow.yaml" # Points to your workflow definition
 category: "migration"
 repository: "https://github.com/username/codemod-repo"
 
@@ -125,7 +126,7 @@ version: "1"
 
 # Global configuration
 config:
-  timeout: 300  # seconds
+  timeout: 300 # seconds
   continue_on_error: false
 
 # Workflow nodes (execution units)
@@ -232,13 +233,57 @@ steps:
     name: Transform with cross-file analysis
     js-ast-grep:
       js_file: "scripts/codemod.ts"
-      semantic_analysis: workspace  # Enable workspace-wide analysis
+      semantic_analysis: workspace # Enable workspace-wide analysis
 ```
 
 **Semantic analysis modes:**
+
 - `file` — Single-file analysis (default, fast)
 - `workspace` — Cross-file analysis with import resolution
 - `{ mode: workspace, root: "./path" }` — Workspace with custom root
+
+#### 5. AI Steps
+
+Execute AI-powered transformations or reviews:
+
+```yaml
+steps:
+  - name: "AI Code Review"
+    ai:
+      model: "gpt-5.2-codex"
+      prompt: |
+        Review the transformed code and fix any issues...
+      system_prompt: |
+        You are a code review expert...
+```
+
+**AI Step Configuration:**
+
+- `prompt` — The instructions for the AI agent
+- `system_prompt` — Optional system context
+- `model` — LLM model to use (default: gpt-5.2)
+- `max_steps` — Maximum agent steps (default: 100)
+
+**Environment Variables:**
+
+- `LLM_API_KEY` — API key for the LLM provider
+- `LLM_MODEL` — Override the model
+- `LLM_PROVIDER` — Provider (openai, anthropic, google_ai)
+- `LLM_BASE_URL` — Optional custom endpoint URL (inferred from provider if not set)
+
+**Agent Handoff (No API Key):**
+
+When no `LLM_API_KEY` is set, the CLI prints the prompt as `[AI INSTRUCTIONS]` instead of failing:
+
+```
+[AI INSTRUCTIONS]
+
+<prompt content here>
+
+[/AI INSTRUCTIONS]
+```
+
+This allows coding agents like Claude Code to detect and execute the instructions directly, enabling seamless human-AI collaboration without requiring API keys.
 
 ## CLI Commands
 
@@ -298,6 +343,100 @@ npx codemod jssg test -l typescript ./codemods/transform.ts --strictness loose
 npx codemod jssg run -l typescript ./codemods/transform.ts ./target
 ```
 
+### Running Codemods
+
+```bash
+# Run a codemod from the registry
+npx codemod run <package-name> [OPTIONS]
+
+Options:
+  --target, -t         Target directory (default: current directory)
+  --dry-run            Preview changes without modifying files (shows colored diffs)
+  --allow-dirty        Allow running on repos with uncommitted changes
+  --no-interactive     CI/headless mode - no prompts, auto-accept packages
+  --no-color           Disable colored diff output in dry-run mode
+  --allow-fs           Allow filesystem access for the codemod
+  --allow-fetch        Allow network requests for the codemod
+  --allow-child-process Allow spawning child processes
+  --param KEY=VALUE    Pass parameters to the codemod (e.g., --param autoAiReview=true)
+  --registry           Custom registry URL
+  --force              Force re-download even if cached
+```
+
+**AI-Powered Codemods:**
+
+Some codemods include optional AI steps (e.g., `class-to-function-component` with `--param autoAiReview=true`). When running AI steps:
+
+- Set `LLM_API_KEY` environment variable to execute AI steps automatically
+- Without an API key, the CLI prints `[AI INSTRUCTIONS]` containing the prompt, allowing coding agents like Claude Code to perform those instructions directly
+
+```bash
+# With API key - AI step executes automatically
+LLM_API_KEY=sk-xxx npx codemod run class-to-function-component --param autoAiReview=true
+
+# Without API key - prints [AI INSTRUCTIONS] for agents to pick up
+npx codemod run class-to-function-component --param autoAiReview=true
+```
+
+**Examples:**
+
+```bash
+# Dry run to preview changes
+npx codemod run @org/my-codemod --dry-run --target ./src
+
+# CI/headless mode (no prompts, auto-accept npm packages)
+npx codemod run @org/my-codemod --no-interactive
+
+# Full CI pipeline usage
+npx codemod run @org/my-codemod \
+  --dry-run \
+  --no-interactive \
+  --target ./src
+```
+
+### CI/Headless Mode
+
+For running codemods in CI pipelines or headless environments, use these flags:
+
+| Flag               | Description                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `--no-interactive` | Disables all prompts. Auto-accepts npm package installations.                                    |
+| `--dry-run`        | Skips all `run:` script steps and file modifications. Safe for validation.                       |
+| `--allow-dirty`    | Bypasses the git dirty check. Without this flag, the CLI exits if there are uncommitted changes. |
+
+**Git Dirty Check Behavior:**
+
+- Without `--allow-dirty`: CLI **exits with error** if the target has uncommitted changes
+- With `--allow-dirty`: CLI proceeds regardless of git state
+
+**Dry Run Behavior:**
+
+- Shows colored unified diffs for each file that would be modified
+- Displays addition/deletion counts per file and total summary
+- Skips all `run:` script steps in workflows (shell commands are not executed)
+- No files are modified on disk
+- Use `--no-color` to disable colored output (useful for CI logs)
+
+**Example dry-run output:**
+
+```
+============================================================
+File: /path/to/src/App.test.js
+============================================================
+--- [before] /path/to/src/App.test.js
++++ [after]  /path/to/src/App.test.js
+@@ -1,3 +1,4 @@
++import { describe, expect, it } from "vitest";
+ import App from "./App"
+...
++1 additions, -0 deletions
+
+=== DRY RUN SUMMARY ===
+Files that would be modified: 8
+Total: +10 additions, -2 deletions
+No changes were made to the filesystem.
+```
+
 ### Publishing
 
 ```bash
@@ -319,6 +458,7 @@ npx codemod@latest run @scope/codemod-name
 ### Preparing for Publication
 
 1. **Update codemod.yaml**:
+
    ```yaml
    name: "@yourscope/codemod-name"
    version: "1.0.0"
@@ -386,6 +526,7 @@ The workflow engine supports the following languages:
 - And more...
 
 **Semantic Analysis Support:** Cross-file symbol analysis (`definition()`, `references()`) is only available for:
+
 - JavaScript/TypeScript (using [oxc](https://oxc.rs/))
 - Python (using [ruff](https://docs.astral.sh/ruff/))
 

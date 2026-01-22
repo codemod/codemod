@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use butterflow_core::config::{PreRunCallback, WorkflowRunConfig};
+use butterflow_core::config::{DryRunCallback, DryRunChange, PreRunCallback, WorkflowRunConfig};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
@@ -14,6 +15,21 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
 use crate::{dirty_git_check, progress_bar};
+
+/// Create a callback for reporting dry-run changes with diffs
+pub fn create_dry_run_callback(no_color: bool) -> DryRunCallback {
+    let config = DiffConfig::with_color_control(no_color);
+
+    Arc::new(Box::new(move |change: DryRunChange| {
+        let diff = generate_unified_diff(
+            &change.file_path,
+            &change.original_content,
+            &change.new_content,
+            &config,
+        );
+        diff.print();
+    }))
+}
 
 pub fn create_progress_callback() -> ProgressCallback {
     let (progress_reporter, _) = progress_bar::create_multi_progress_reporter();
@@ -86,6 +102,7 @@ pub fn create_engine(
     registry: Option<String>,
     capabilities: Option<HashSet<LlrtSupportedModules>>,
     no_interactive: bool,
+    no_color: bool,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -105,6 +122,12 @@ pub fn create_engine(
     let registry_client = create_registry_client(registry)?;
 
     let capabilities_security_callback = capabilities_security_callback(no_interactive);
+    let dry_run_callback = if dry_run {
+        Some(create_dry_run_callback(no_color))
+    } else {
+        None
+    };
+
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(Some(progress_callback)),
@@ -116,6 +139,8 @@ pub fn create_engine(
         registry_client,
         capabilities_security_callback: Some(capabilities_security_callback),
         capabilities,
+        no_interactive,
+        dry_run_callback,
         ..WorkflowRunConfig::default()
     };
 

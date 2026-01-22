@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-use crate::config::{CapabilitiesSecurityCallback, WorkflowRunConfig};
+use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -1457,6 +1457,14 @@ impl Engine {
     ) -> Result<()> {
         match action {
             StepAction::RunScript(run) => {
+                // Skip run script steps in dry-run mode
+                if self.workflow_run_config.dry_run {
+                    eprintln!(
+                        "\n[WARN] Skipping run: script step (cannot preview):\n  {}...",
+                        run.chars().take(80).collect::<String>()
+                    );
+                    return Ok(());
+                }
                 self.execute_run_script_step(
                     runner,
                     run,
@@ -1892,6 +1900,15 @@ impl Engine {
                                         .files_modified
                                         .fetch_add(1, Ordering::Relaxed);
 
+                                    // Report the change via callback if provided
+                                    if let Some(callback) = &self.workflow_run_config.dry_run_callback {
+                                        callback(DryRunChange {
+                                            file_path: file_path.to_path_buf(),
+                                            original_content: content.clone(),
+                                            new_content: new_content.clone(),
+                                        });
+                                    }
+
                                     debug!("Would modify file (dry run): {}", file_path.display());
                                 } else {
                                     // Use async file writing to avoid blocking the thread
@@ -1983,17 +2000,31 @@ impl Engine {
 
         info!("Executing AI agent step with prompt: {}", resolved_prompt);
 
-        // Configure LLM settings
-        let api_key = ai_config
+        // Configure LLM settings - check for API key from config or environment
+        let api_key = match ai_config
             .api_key
             .clone()
             .or_else(|| std::env::var("LLM_API_KEY").ok())
-            .ok_or_else(|| {
-                Error::StepExecution(
-                    "AI API key not provided and not found in environment variables (LLM_API_KEY)"
-                        .to_string(),
-                )
-            })?;
+        {
+            Some(key) => key,
+            None => {
+                // No API key - surface instructions for coding agents and skip the step
+                println!();
+                println!("[AI INSTRUCTIONS]");
+                println!();
+                if let Some(system_prompt) = &ai_config.system_prompt {
+                    println!("{system_prompt}");
+                    println!();
+                }
+                println!("{resolved_prompt}");
+                println!();
+                println!("[/AI INSTRUCTIONS]");
+                println!();
+
+                info!("Skipping AI step - no API key provided. See [AI INSTRUCTIONS] above.");
+                return Ok(());
+            }
+        };
 
         let model = ai_config
             .model
@@ -2264,6 +2295,11 @@ impl Engine {
     ) -> Result<()> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
+
+        // Set npm_config_yes for non-interactive mode (auto-accept package installations)
+        if self.workflow_run_config.no_interactive {
+            env.insert("npm_config_yes".to_string(), "true".to_string());
+        }
 
         // Add node environment variables
         for (key, value) in &node.env {
