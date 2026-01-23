@@ -243,10 +243,12 @@ pub async fn handler(
     Ok(())
 }
 
-
 /// Returns an error for a failed legacy codemod command.
 fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
-    anyhow!("Legacy codemod command failed with exit code: {:?}", exit_code)
+    anyhow!(
+        "Legacy codemod command failed with exit code: {:?}",
+        exit_code
+    )
 }
 
 pub async fn run_legacy_codemod_with_raw_args(raw_args: &[String]) -> Result<()> {
@@ -520,5 +522,4 @@ mod tests {
         assert_eq!(changes[0].kind, "updateFile");
         assert_eq!(changes[0].old_path, "/path/to/test.js");
     }
-
 }

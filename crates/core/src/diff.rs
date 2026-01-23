@@ -66,7 +66,10 @@ impl FileDiff {
         println!("File: {}", self.path);
         println!("{}", "=".repeat(60));
         print!("{}", self.diff_text);
-        println!("+{} additions, -{} deletions", self.additions, self.deletions);
+        println!(
+            "+{} additions, -{} deletions",
+            self.additions, self.deletions
+        );
     }
 }
 
@@ -98,7 +101,11 @@ pub fn generate_unified_diff(
     }
 
     // Generate unified diff with context
-    for hunk in diff.unified_diff().context_radius(config.context_lines).iter_hunks() {
+    for hunk in diff
+        .unified_diff()
+        .context_radius(config.context_lines)
+        .iter_hunks()
+    {
         // Add hunk header
         let hunk_header = hunk.header().to_string();
         if config.color {
@@ -248,7 +255,9 @@ mod tests {
 
     #[test]
     fn test_generate_unified_diff_truncation() {
-        let original = (0..1000).map(|i| format!("line{}\n", i)).collect::<String>();
+        let original = (0..1000)
+            .map(|i| format!("line{}\n", i))
+            .collect::<String>();
         let modified = (0..1000)
             .map(|i| format!("modified{}\n", i))
             .collect::<String>();

@@ -1901,7 +1901,9 @@ impl Engine {
                                         .fetch_add(1, Ordering::Relaxed);
 
                                     // Report the change via callback if provided
-                                    if let Some(callback) = &self.workflow_run_config.dry_run_callback {
+                                    if let Some(callback) =
+                                        &self.workflow_run_config.dry_run_callback
+                                    {
                                         callback(DryRunChange {
                                             file_path: file_path.to_path_buf(),
                                             original_content: content.clone(),
