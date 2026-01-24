@@ -1,14 +1,18 @@
 ---
 title: "Introduction"
 ---
-JavaScript ast-grep (JSSG) is a toolkit for building, testing, and running deterministic codemods. 
+JavaScript ast-grep (JSSG) is a secure JavaScript runtime for building, testing, and running deterministic codemods. 
 If you have used jscodeshift, it will feel familiar, but it is faster, more powerful, and more secure. Some notable feature include:
 - [Any target language](https://tree-sitter.github.io/tree-sitter/) with a tree-sitter parser can be transformed with JSSG.
 - [Semantic analysis](./semantic-analysis) features like finding symbol definitions and references.
 - [Deny-by-default security model](./security) that requires user permission for risky operations like file system access, network requests, and spawning child processes.
 - [Metrics](./metrics), for built-in code mining and aggregating data while running codemods. 
-- [LLRT](./reference#runtime-and-built-ins) for Node.js module compatibility (e.g., `fs`, `process`).
 - [Testing](./testing) with built-in snapshot testing support. 
+
+</Info>
+JSSG is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility (e.g., `fs`, `process`).
+</Info>
+
 
 **Key concepts:**
 - **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
