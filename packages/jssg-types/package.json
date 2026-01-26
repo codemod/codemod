@@ -9,14 +9,14 @@
     "codemod",
     "types"
   ],
-  "author": "Codemod, Inc.",
-  "license": "Apache-2.0",
-  "sideEffects": false,
-  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/codemod/codemod"
   },
+  "author": "Codemod, Inc.",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "type": "module",
   "exports": {
     ".": {
       "types": "./src/index.d.ts",
