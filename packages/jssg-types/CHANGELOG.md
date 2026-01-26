@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.3.2
+
+### Patch Changes
+
+- 693d420: Add metrics types to jssg-types
+
 ## 1.3.1
 
 ### Patch Changes
