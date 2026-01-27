@@ -240,8 +240,9 @@ pub fn is_comment_kind(kind: &str) -> bool {
 /// Non-comment children are preserved in their original order.
 /// Comment children are sorted by their text content and appended at the end.
 pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<NormalizedNode> {
-    let (mut non_comments, mut comments): (Vec<_>, Vec<_>) =
-        children.into_iter().partition(|c| !is_comment_kind(&c.kind));
+    let (mut non_comments, mut comments): (Vec<_>, Vec<_>) = children
+        .into_iter()
+        .partition(|c| !is_comment_kind(&c.kind));
 
     // Sort comments by their text content for consistent comparison
     comments.sort_by(|a, b| {
