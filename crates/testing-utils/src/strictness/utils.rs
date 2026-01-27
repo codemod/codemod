@@ -170,8 +170,11 @@ pub fn normalize_node<'a>(
     // Let the normalizer handle it first (no clone needed - takes ownership)
     let (mut children, handled) = normalizer.normalize_children(&kind, children);
 
-    // Apply default sorting only if normalizer didn't handle it and node type is unordered
-    if !handled && normalizer.unordered_node_types().contains(node.kind()) {
+    // Apply comment normalization if this is a comment scope and normalizer didn't handle it
+    if !handled && normalizer.comment_scope_kinds().contains(&kind.as_str()) {
+        children = normalize_comments_in_children(children);
+    } else if !handled && normalizer.unordered_node_types().contains(node.kind()) {
+        // Apply default sorting only if normalizer didn't handle it and node type is unordered
         children.sort_by_key(extract_sort_key);
     }
 
@@ -218,4 +221,35 @@ pub fn build_cst_node<'a>(node: Node<'a>, source: &'a [u8]) -> NormalizedNode {
         .collect();
 
     NormalizedNode::new(kind, children)
+}
+
+/// Comment node kinds across different languages.
+const COMMENT_KINDS: &[&str] = &["comment", "line_comment", "block_comment", "hash_comment"];
+
+/// Check if a node kind represents a comment.
+pub fn is_comment_kind(kind: &str) -> bool {
+    COMMENT_KINDS.contains(&kind)
+}
+
+/// Normalize children by extracting comments, sorting them, and appending at the end.
+///
+/// This allows comment content to be verified while making their position
+/// relative to other siblings irrelevant. Useful for codemod tests where
+/// transforms may insert comments at slightly different positions.
+///
+/// Non-comment children are preserved in their original order.
+/// Comment children are sorted by their text content and appended at the end.
+pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<NormalizedNode> {
+    let (mut non_comments, mut comments): (Vec<_>, Vec<_>) =
+        children.into_iter().partition(|c| !is_comment_kind(&c.kind));
+
+    // Sort comments by their text content for consistent comparison
+    comments.sort_by(|a, b| {
+        let a_text = a.text.as_deref().unwrap_or("");
+        let b_text = b.text.as_deref().unwrap_or("");
+        a_text.cmp(b_text)
+    });
+
+    non_comments.extend(comments);
+    non_comments
 }

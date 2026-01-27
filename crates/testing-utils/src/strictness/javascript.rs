@@ -27,6 +27,17 @@ impl ParserProvider for JavaScriptNormalizer {
     }
 }
 
+/// Node types where comment ordering should be normalized.
+/// These are typically block/scope nodes where comments can appear between statements.
+const COMMENT_SCOPE_KINDS: &[&str] = &[
+    "program",
+    "statement_block",
+    "class_body",
+    "switch_body",
+    "object",
+    "array",
+];
+
 impl SemanticNormalizer for JavaScriptNormalizer {
     fn unordered_node_types(&self) -> HashSet<&'static str> {
         ["named_imports", "export_clause"].into_iter().collect()
@@ -41,6 +52,10 @@ impl SemanticNormalizer for JavaScriptNormalizer {
             "object" | "object_pattern" => (normalize_object_children(children), true),
             _ => (children, false),
         }
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 

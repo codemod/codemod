@@ -6,6 +6,20 @@ use tree_sitter::Parser;
 use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, find_first_text};
 
+const COMMENT_SCOPE_KINDS: &[&str] = &[
+    "source_file",
+    "block",
+    "function_declaration",
+    "method_declaration",
+    "type_declaration",
+    "const_declaration",
+    "var_declaration",
+    "if_statement",
+    "for_statement",
+    "switch_statement",
+    "select_statement",
+];
+
 /// Semantic normalizer for Go.
 pub struct GoNormalizer;
 
@@ -42,6 +56,10 @@ impl SemanticNormalizer for GoNormalizer {
             "literal_value" => (normalize_literal_value(children), true),
             _ => (children, false),
         }
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 

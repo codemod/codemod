@@ -6,6 +6,22 @@ use tree_sitter::Parser;
 use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, flatten_and_sort};
 
+const COMMENT_SCOPE_KINDS: &[&str] = &[
+    "source_file",
+    "block",
+    "function_item",
+    "impl_item",
+    "mod_item",
+    "struct_item",
+    "enum_item",
+    "trait_item",
+    "match_block",
+    "if_expression",
+    "loop_expression",
+    "while_expression",
+    "for_expression",
+];
+
 /// Semantic normalizer for Rust.
 pub struct RustNormalizer;
 
@@ -53,6 +69,10 @@ impl SemanticNormalizer for RustNormalizer {
             ),
             _ => (children, false),
         }
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 

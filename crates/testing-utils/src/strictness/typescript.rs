@@ -13,6 +13,19 @@ const TS_UNORDERED_NODE_TYPES: &[&str] = &[
     "interface_body",
 ];
 
+/// Node types where comment ordering should be normalized.
+/// These are typically block/scope nodes where comments can appear between statements.
+const COMMENT_SCOPE_KINDS: &[&str] = &[
+    "program",
+    "statement_block",
+    "class_body",
+    "switch_body",
+    "object",
+    "array",
+    "enum_body",
+    "module_block",
+];
+
 /// Semantic normalizer for TypeScript (non-TSX files).
 pub struct TypeScriptNormalizer;
 
@@ -45,6 +58,10 @@ impl SemanticNormalizer for TypeScriptNormalizer {
         children: Vec<NormalizedNode>,
     ) -> (Vec<NormalizedNode>, bool) {
         normalize_ts_children(node_kind, children)
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 
@@ -80,6 +97,10 @@ impl SemanticNormalizer for TsxNormalizer {
         children: Vec<NormalizedNode>,
     ) -> (Vec<NormalizedNode>, bool) {
         normalize_ts_children(node_kind, children)
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 
