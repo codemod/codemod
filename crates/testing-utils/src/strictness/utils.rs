@@ -231,26 +231,61 @@ pub fn is_comment_kind(kind: &str) -> bool {
     COMMENT_KINDS.contains(&kind)
 }
 
-/// Normalize children by extracting comments, sorting them, and appending at the end.
+/// Normalize children by sorting consecutive runs of comments.
 ///
-/// This allows comment content to be verified while making their position
-/// relative to other siblings irrelevant. Useful for codemod tests where
-/// transforms may insert comments at slightly different positions.
+/// This allows comment content to be verified while making the order of
+/// adjacent comments irrelevant. Comments that are separated by non-comment
+/// nodes maintain their relative position to those nodes.
 ///
-/// Non-comment children are preserved in their original order.
-/// Comment children are sorted by their text content and appended at the end.
+/// For example:
+/// ```text
+/// // B
+/// // A
+/// function foo() {}
+/// // D
+/// // C
+/// ```
+/// Becomes:
+/// ```text
+/// // A  (first run sorted)
+/// // B
+/// function foo() {}
+/// // C  (second run sorted)
+/// // D
+/// ```
+///
+/// This preserves the semantic meaning of comments relative to code while
+/// allowing flexibility in the order of adjacent comments.
 pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<NormalizedNode> {
-    let (mut non_comments, mut comments): (Vec<_>, Vec<_>) = children
-        .into_iter()
-        .partition(|c| !is_comment_kind(&c.kind));
+    let mut result = Vec::with_capacity(children.len());
+    let mut comment_run: Vec<NormalizedNode> = Vec::new();
 
-    // Sort comments by their text content for consistent comparison
-    comments.sort_by(|a, b| {
-        let a_text = a.text.as_deref().unwrap_or("");
-        let b_text = b.text.as_deref().unwrap_or("");
-        a_text.cmp(b_text)
-    });
+    for child in children {
+        if is_comment_kind(&child.kind) {
+            comment_run.push(child);
+        } else {
+            // Flush any accumulated comments (sorted) before adding non-comment
+            if !comment_run.is_empty() {
+                comment_run.sort_by(|a, b| {
+                    let a_text = a.text.as_deref().unwrap_or("");
+                    let b_text = b.text.as_deref().unwrap_or("");
+                    a_text.cmp(b_text)
+                });
+                result.append(&mut comment_run);
+            }
+            result.push(child);
+        }
+    }
 
-    non_comments.extend(comments);
-    non_comments
+    // Flush any trailing comments
+    if !comment_run.is_empty() {
+        comment_run.sort_by(|a, b| {
+            let a_text = a.text.as_deref().unwrap_or("");
+            let b_text = b.text.as_deref().unwrap_or("");
+            a_text.cmp(b_text)
+        });
+        result.append(&mut comment_run);
+    }
+
+    result
 }

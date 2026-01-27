@@ -1497,6 +1497,36 @@ function foo() {}"#;
     }
 
     #[test]
+    fn test_js_comment_order_interleaved_preserves_position() {
+        // Comments separated by code should NOT be interchangeable
+        // because their position relative to code has semantic meaning
+        let expected = r#"// A
+function foo() {}
+// B"#;
+        let actual = r#"// B
+function foo() {}
+// A"#;
+        // These should NOT be equal - comment position relative to code matters
+        assert!(!loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_js_consecutive_comments_order_insensitive() {
+        // Only consecutive/adjacent comments should be order-insensitive
+        let expected = r#"// B
+// A
+function foo() {}
+// D
+// C"#;
+        let actual = r#"// A
+// B
+function foo() {}
+// C
+// D"#;
+        assert!(loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
     fn test_ts_comment_order_doesnt_matter() {
         let expected = r#"// Original comment
 // TODO: Added comment
