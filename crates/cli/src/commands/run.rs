@@ -183,25 +183,6 @@ pub async fn handler(
 
     crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
 
-    telemetry
-        .send_event(
-            BaseEvent {
-                kind: "failedToExecuteCommand".to_string(),
-                properties: HashMap::from([
-                    ("codemodName".to_string(), args.package.clone()),
-                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
-                    (
-                        "commandName".to_string(),
-                        "codemod.executeCodemod".to_string(),
-                    ),
-                    ("os".to_string(), std::env::consts::OS.to_string()),
-                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                ]),
-            },
-            None,
-        )
-        .await;
-
     let stats = engine.execution_stats;
     let files_modified = stats.files_modified.load(Ordering::Relaxed);
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
