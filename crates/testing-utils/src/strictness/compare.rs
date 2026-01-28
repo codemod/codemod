@@ -1468,4 +1468,182 @@ mod tests {
             assert_ne!(code1, code2);
         }
     }
+
+    // Comment ordering tests
+    #[test]
+    fn test_js_comment_order_doesnt_matter() {
+        let expected = r#"// First comment
+// Second comment
+function foo() {}"#;
+        let actual = r#"// Second comment
+// First comment
+function foo() {}"#;
+        assert!(loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_js_comment_order_in_function_body() {
+        let expected = r#"function foo() {
+  // Comment A
+  // Comment B
+  const x = 1;
+}"#;
+        let actual = r#"function foo() {
+  // Comment B
+  // Comment A
+  const x = 1;
+}"#;
+        assert!(loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_js_comment_order_interleaved_preserves_position() {
+        // Comments separated by code should NOT be interchangeable
+        // because their position relative to code has semantic meaning
+        let expected = r#"// A
+function foo() {}
+// B"#;
+        let actual = r#"// B
+function foo() {}
+// A"#;
+        // These should NOT be equal - comment position relative to code matters
+        assert!(!loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_js_consecutive_comments_order_insensitive() {
+        // Only consecutive/adjacent comments should be order-insensitive
+        let expected = r#"// B
+// A
+function foo() {}
+// D
+// C"#;
+        let actual = r#"// A
+// B
+function foo() {}
+// C
+// D"#;
+        assert!(loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_ts_comment_order_doesnt_matter() {
+        let expected = r#"// Original comment
+// TODO: Added comment
+function useHook() {}"#;
+        let actual = r#"// TODO: Added comment
+// Original comment
+function useHook() {}"#;
+        assert!(loose_compare(expected, actual, "typescript"));
+    }
+
+    #[test]
+    fn test_tsx_comment_order_doesnt_matter() {
+        let expected = r#"// First comment
+// Second comment
+const Component = () => <div />;"#;
+        let actual = r#"// Second comment
+// First comment
+const Component = () => <div />;"#;
+        assert!(loose_compare(expected, actual, "tsx"));
+    }
+
+    #[test]
+    fn test_js_different_comment_content_fails() {
+        let expected = r#"// Comment A
+function foo() {}"#;
+        let actual = r#"// Comment B
+function foo() {}"#;
+        assert!(!loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_js_missing_comment_fails() {
+        let expected = r#"// Comment
+function foo() {}"#;
+        let actual = r#"function foo() {}"#;
+        assert!(!loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_python_comment_order_doesnt_matter() {
+        let expected = r#"# First comment
+# Second comment
+def foo():
+    pass"#;
+        let actual = r#"# Second comment
+# First comment
+def foo():
+    pass"#;
+        assert!(loose_compare(expected, actual, "python"));
+    }
+
+    #[test]
+    fn test_python_comment_in_function_body() {
+        let expected = r#"def foo():
+    # Comment A
+    # Comment B
+    x = 1"#;
+        let actual = r#"def foo():
+    # Comment B
+    # Comment A
+    x = 1"#;
+        assert!(loose_compare(expected, actual, "python"));
+    }
+
+    #[test]
+    fn test_go_comment_order_doesnt_matter() {
+        let expected = r#"// First comment
+// Second comment
+package main"#;
+        let actual = r#"// Second comment
+// First comment
+package main"#;
+        assert!(loose_compare(expected, actual, "go"));
+    }
+
+    #[test]
+    fn test_go_comment_in_function_body() {
+        let expected = r#"package main
+
+func foo() {
+    // Comment A
+    // Comment B
+    x := 1
+}"#;
+        let actual = r#"package main
+
+func foo() {
+    // Comment B
+    // Comment A
+    x := 1
+}"#;
+        assert!(loose_compare(expected, actual, "go"));
+    }
+
+    #[test]
+    fn test_rust_comment_order_doesnt_matter() {
+        let expected = r#"// First comment
+// Second comment
+fn main() {}"#;
+        let actual = r#"// Second comment
+// First comment
+fn main() {}"#;
+        assert!(loose_compare(expected, actual, "rust"));
+    }
+
+    #[test]
+    fn test_rust_comment_in_function_body() {
+        let expected = r#"fn foo() {
+    // Comment A
+    // Comment B
+    let x = 1;
+}"#;
+        let actual = r#"fn foo() {
+    // Comment B
+    // Comment A
+    let x = 1;
+}"#;
+        assert!(loose_compare(expected, actual, "rust"));
+    }
 }

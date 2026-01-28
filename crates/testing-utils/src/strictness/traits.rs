@@ -106,4 +106,19 @@ pub trait SemanticNormalizer: ParserProvider {
     ) -> (Vec<NormalizedNode>, bool) {
         (children, false)
     }
+
+    /// Node types where comment ordering should be normalized.
+    ///
+    /// For these node types, consecutive runs of comments are sorted by content
+    /// while preserving their position relative to non-comment nodes. This allows
+    /// comment content to be verified while making their exact order among
+    /// adjacent comments irrelevant.
+    ///
+    /// Typically includes block/scope nodes where comments can appear between
+    /// statements (e.g., `program`, `block`, `function_definition`).
+    ///
+    /// Default implementation returns an empty slice (no comment normalization).
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
 }

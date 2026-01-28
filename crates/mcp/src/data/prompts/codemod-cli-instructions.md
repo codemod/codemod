@@ -336,7 +336,7 @@ npx codemod jssg test -l typescript ./codemods/transform.ts --semantic-workspace
 # Test with AST comparison (ignores formatting, preserves ordering)
 npx codemod jssg test -l typescript ./codemods/transform.ts --strictness ast
 
-# Test with loose comparison (ignores formatting and unordered children like object properties)
+# Test with loose comparison (ignores formatting, unordered children like object properties, and comment positions)
 npx codemod jssg test -l typescript ./codemods/transform.ts --strictness loose
 
 # Run a codemod directly

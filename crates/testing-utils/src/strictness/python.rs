@@ -6,6 +6,19 @@ use tree_sitter::Parser;
 use super::traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 use super::utils::{extract_sort_key, flatten_and_sort, has_spread_element};
 
+const COMMENT_SCOPE_KINDS: &[&str] = &[
+    "module",
+    "block",
+    "function_definition",
+    "class_definition",
+    "if_statement",
+    "for_statement",
+    "while_statement",
+    "try_statement",
+    "with_statement",
+    "match_statement",
+];
+
 /// Semantic normalizer for Python.
 ///
 /// Handles special cases like keyword argument reordering in function calls.
@@ -49,6 +62,10 @@ impl SemanticNormalizer for PythonNormalizer {
             "type" => (normalize_type_annotation(children), true),
             _ => (children, false),
         }
+    }
+
+    fn comment_scope_kinds(&self) -> &'static [&'static str] {
+        COMMENT_SCOPE_KINDS
     }
 }
 

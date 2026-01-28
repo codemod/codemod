@@ -646,7 +646,7 @@ pnpm test --filter <test-name>
 # Verbose output for debugging
 npx codemod jssg test -l tsx ./scripts/codemod.ts -v
 
-# Use loose comparison (ignores property ordering, import ordering, etc.)
+# Use loose comparison (ignores property ordering, import ordering, comment ordering, etc.)
 npx codemod jssg test -l tsx ./scripts/codemod.ts --strictness loose
 ```
 
@@ -659,9 +659,9 @@ Use `--strictness` to control how test outputs are compared:
 | `strict` | (Default) Exact string equality |
 | `cst` | Compare Concrete Syntax Trees (includes all tokens, preserves ordering) |
 | `ast` | Compare Abstract Syntax Trees (ignores formatting, preserves ordering) |
-| `loose` | Loose AST comparison (ignores formatting and ordering of unordered nodes) |
+| `loose` | Loose AST comparison (ignores formatting, ordering of unordered nodes, and comment positions) |
 
-Use `--strictness loose` when your codemod produces semantically equivalent output but with different ordering (e.g., object properties, imports).
+Use `--strictness loose` when your codemod produces semantically equivalent output but with different ordering (e.g., object properties, imports, comments).
 
 ## Writing Effective Tests
 
