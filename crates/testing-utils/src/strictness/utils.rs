@@ -231,6 +231,15 @@ pub fn is_comment_kind(kind: &str) -> bool {
     COMMENT_KINDS.contains(&kind)
 }
 
+/// Sort comments by their text content for consistent comparison.
+fn sort_comments_by_text(comments: &mut [NormalizedNode]) {
+    comments.sort_by(|a, b| {
+        let a_text = a.text.as_deref().unwrap_or("");
+        let b_text = b.text.as_deref().unwrap_or("");
+        a_text.cmp(b_text)
+    });
+}
+
 /// Normalize children by sorting consecutive runs of comments.
 ///
 /// This allows comment content to be verified while making the order of
@@ -266,11 +275,7 @@ pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<Norm
         } else {
             // Flush any accumulated comments (sorted) before adding non-comment
             if !comment_run.is_empty() {
-                comment_run.sort_by(|a, b| {
-                    let a_text = a.text.as_deref().unwrap_or("");
-                    let b_text = b.text.as_deref().unwrap_or("");
-                    a_text.cmp(b_text)
-                });
+                sort_comments_by_text(&mut comment_run);
                 result.append(&mut comment_run);
             }
             result.push(child);
@@ -279,11 +284,7 @@ pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<Norm
 
     // Flush any trailing comments
     if !comment_run.is_empty() {
-        comment_run.sort_by(|a, b| {
-            let a_text = a.text.as_deref().unwrap_or("");
-            let b_text = b.text.as_deref().unwrap_or("");
-            a_text.cmp(b_text)
-        });
+        sort_comments_by_text(&mut comment_run);
         result.append(&mut comment_run);
     }
 
