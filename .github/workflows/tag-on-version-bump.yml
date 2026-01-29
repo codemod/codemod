@@ -3,7 +3,7 @@ name: Tag on Version Bump
 on:
   pull_request:
     types: [closed]
-    branches: [main]
+    branches: [legacy]
 
 jobs:
   create-tag:

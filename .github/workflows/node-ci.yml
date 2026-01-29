@@ -3,10 +3,10 @@ name: Lint
 on:
     push:
         branches:
-            - main
+            - legacy
     pull_request:
         branches:
-            - main
+            - legacy
 
 jobs:
     lint:

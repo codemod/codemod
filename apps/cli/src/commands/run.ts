@@ -300,7 +300,10 @@ export const handleRunCliCommand = async (options: {
     },
   });
 
-  let finishRun = () => onExit();
+  let finishRun = async () => {
+    await telemetry.dispose();
+    onExit();
+  };
 
   if (args.logs && executionErrors?.length) {
     const notice = await writeLogs({
@@ -315,10 +318,11 @@ export const handleRunCliCommand = async (options: {
         .join("\n\n"),
     });
 
-    finishRun = () => {
+    finishRun = async () => {
       printer.terminateExecutionProgress();
       printer.printConsoleMessage("info", notice);
-      return onExit();
+      await telemetry.dispose();
+      onExit();
     };
   }
 
@@ -336,9 +340,9 @@ export const handleRunCliCommand = async (options: {
   if (flowSettings.dry && allExecutedCommands.length > 0) {
     const screen = getDiffScreen(allExecutedCommands.map(getDiff));
 
-    screen.key(["escape", "q", "C-c"], () => {
+    screen.key(["escape", "q", "C-c"], async () => {
       screen?.destroy();
-      return finishRun();
+      await finishRun();
     });
 
     return screen.render();
