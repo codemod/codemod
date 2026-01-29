@@ -1,38 +1,6 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.1.1/schema.json",
-  "organizeImports": {
-    "enabled": false
-  },
-  "files": {
-    "include": ["**"],
-    "ignore": [
-      "**/__testfixtures__/**",
-      "**/schemas/**",
-      "**/submodules/**",
-      "crates/cli/src/templates/**",
-      "**/target/**",
-      "**/build/**",
-      "**/.next/**",
-      "**/dist/**"
-    ]
-  },
   "linter": {
-    "ignore": [
-      "packages",
-      "**/*.d.ts",
-      "**/*.js",
-      "**/dist",
-      "**/cdmd_dist",
-      "**/build",
-      "**/pnpm-lock.yaml",
-      "**/node_modules",
-      "**/.eslint*",
-      "**/.next",
-      "**/.vscode",
-      "**/build-ncc",
-      "**/generated",
-      "**/target"
-    ],
     "rules": {
       "suspicious": {
         "noMisleadingCharacterClass": "warn",
@@ -57,8 +25,7 @@
         "noDuplicateJsxProps": "warn",
         "noExplicitAny": "warn",
         "noUnsafeDeclarationMerging": "warn",
-        "noArrayIndexKey": "off",
-        "useValidTypeof": "warn"
+        "noArrayIndexKey": "off"
       },
       "correctness": {
         "noUndeclaredVariables": "off",
@@ -82,9 +49,7 @@
         "noUselessConstructor": "off",
         "noUselessLabel": "warn",
         "noUselessRename": "warn",
-        "noForEach": "off",
-        "noMultipleSpacesInRegularExpressionLiterals": "warn",
-        "noWith": "warn"
+        "noForEach": "off"
       },
       "style": {
         "noUnusedTemplateLiteral": "off",
@@ -121,26 +86,6 @@
   },
   "formatter": {
     "formatWithErrors": true,
-    "indentStyle": "space",
-    "include": ["**"],
-    "ignore": [
-      "**/*.d.ts",
-      "**/input.js",
-      "**/output.js",
-      "**/dist",
-      "**/cdmd_dist",
-      "**/build",
-      "**/pnpm-lock.yaml",
-      "**/node_modules",
-      "**/build-ncc",
-      "**/.next",
-      "**/.vscode",
-      "**/generated",
-      "**/*.py",
-      "apps/ai/**",
-      "**/.all-contributorsrc",
-      "**/__testfixtures__/**",
-      "**/target"
-    ]
+    "indentStyle": "space"
   }
 }
