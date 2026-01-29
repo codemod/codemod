@@ -81,6 +81,32 @@ pub struct Command {
     no_color: bool,
 }
 
+async fn send_failure_event(
+    telemetry: &TelemetrySenderMutex,
+    codemod_name: &str,
+    error_message: &str,
+) {
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "failedToExecuteCommand".to_string(),
+                properties: HashMap::from([
+                    ("codemodName".to_string(), codemod_name.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    (
+                        "commandName".to_string(),
+                        "codemod.executeCodemod".to_string(),
+                    ),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                    ("errorMessage".to_string(), error_message.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
+}
+
 pub async fn handler(
     args: &Command,
     telemetry: TelemetrySenderMutex,
@@ -118,7 +144,11 @@ pub async fn handler(
             );
             return run_legacy_codemod(args, disable_analytics).await;
         }
-        Err(e) => return Err(anyhow::anyhow!("Registry error: {}", e)),
+        Err(e) => {
+            let error_msg = format!("Registry error: {}", e);
+            send_failure_event(&telemetry, &args.package, &error_msg).await;
+            return Err(anyhow::anyhow!("{}", error_msg));
+        }
     };
 
     info!(
@@ -179,7 +209,11 @@ pub async fn handler(
         args.no_color,
     )?;
 
-    run_workflow(&engine, config).await?;
+    if let Err(e) = run_workflow(&engine, config).await {
+        let error_msg = format!("Workflow execution failed: {}", e);
+        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        return Err(e);
+    }
 
     crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
 
