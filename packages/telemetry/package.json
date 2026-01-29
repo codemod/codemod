@@ -1,7 +1,7 @@
 {
   "name": "@codemod-com/telemetry",
   "author": "Codemod, Inc.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Telemetry for CLI and VSCE",
   "type": "module",
   "main": "./dist/index.js",
