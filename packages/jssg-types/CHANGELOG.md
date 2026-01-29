@@ -1,5 +1,16 @@
 # @codemod.com/jssg-types
 
+## 1.4.0
+
+### Minor Changes
+
+- cd61dde: feat: add workflow globals types
+- 5f13a27: Add getStepOutput functionality for workflow global package
+
+### Patch Changes
+
+- b57fac1: Add support llrt types for jssg-types package
+
 ## 1.0.7
 
 ### Patch Changes
