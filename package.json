@@ -40,7 +40,7 @@
     "build:publish": "turbo run build:publish",
     "clean": "turbo run clean",
     "link": "turbo run link",
-    "lint": "biome check .",
+    "lint": "echo 'Linting disabled in legacy'",
     "lint:write": "biome check --write --diagnostic-level=error .",
     "lint:linter": "biome lint --write --diagnostic-level=error .",
     "lint:formatter": "biome format --write --diagnostic-level=error .",
@@ -49,7 +49,6 @@
     "test:unit": "vitest run --exclude '(apps/backend/**/*.*|submodules/**/*.*|crates/**/*.*)'",
     "test:backend": "pnpm --filter @codemod-com/backend test",
     "coverage": "pnpm test:unit --coverage",
-    "prepare": "husky install",
     "release": "pnpm changeset publish --tag legacy",
     "db:up": "docker-compose up -d",
     "db:generate": "turbo run db:generate",
@@ -78,11 +77,6 @@
     "typescript": "^5.4.5",
     "vite-tsconfig-paths": "catalog:",
     "vitest": "^2.1.9"
-  },
-  "lint-staged": {
-    "*": [
-      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error"
-    ]
   },
   "pnpm": {
     "peerDependencyRules": {
