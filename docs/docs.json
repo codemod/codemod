@@ -45,7 +45,8 @@
                 "pages": [
                   "platform/integrations/github",
                   "platform/integrations/gitlab",
-                  "platform/integrations/jira"
+                  "platform/integrations/jira",
+                  "platform/saml"
                 ]
               }
             ]

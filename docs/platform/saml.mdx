@@ -1,0 +1,174 @@
+---
+title: "SAML SSO Setup"
+icon: "lock"
+description: "Set up SAML single sign-on (SSO) for your Codemod organization."
+---
+
+Use this guide to configure SAML login for your organization in Codemod. The usual flow is:
+
+1. Connect your organization using GitHub or GitLab.
+2. Add a SAML SSO provider in Codemod.
+3. Configure your identity provider (Okta, Google Workspace, or another SAML IdP).
+
+If you need to coordinate with a security or identity team, identify a point of contact early. The SP metadata URL and ACS URL are shown in the Configuration step and can be shared with your IdP administrator.
+
+If you haven't connected your organization yet, follow the GitHub or GitLab integration guide first:
+
+- [GitHub Integration](/platform/integrations/github)
+- [GitLab Integration](/platform/integrations/gitlab)
+
+## Steps
+
+<Steps>
+  <Step title="Open SSO settings">
+    Go to **Organization Settings** → **Security** → **Single Sign-On (SSO)** and click **Add Provider**.
+
+    <img
+      src="/images/saml/codemod-sso-security-settings-page-dark.png"
+      alt="Security settings page with Single Sign-On and Add Provider button"
+      title="Open Single Sign-On settings"
+      className="hidden dark:block mx-auto"
+      style={{ width: "85%" }}
+    />
+
+    <img
+      src="/images/saml/codemod-sso-security-settings-page-light.png"
+      alt="Security settings page with Single Sign-On and Add Provider button"
+      title="Open Single Sign-On settings"
+      className="block dark:hidden mx-auto"
+      style={{ width: "85%" }}
+    />
+  </Step>
+
+  <Step title="Basics">
+    Select **SAML 2.0**, then enter the **Provider ID**, **Domain**, and **Entity ID** for your SAML provider.
+
+    - **Provider ID**: A short, unique identifier (for example, `acme-saml`)
+    - **Domain**: Your email domain (for example, `company.com`)
+    - **Entity ID**: The SP Entity ID you will also configure in your IdP
+
+    <img
+      src="/images/saml/codemod-sso-add-sso-provider-page-1-dark.png"
+      alt="Add SSO Provider basics step with provider ID, domain, and entity ID fields"
+      title="SSO provider basics"
+      className="hidden dark:block mx-auto"
+      style={{ width: "85%" }}
+    />
+
+    <img
+      src="/images/saml/codemod-sso-add-sso-provider-page-1-light.png"
+      alt="Add SSO Provider basics step with provider ID, domain, and entity ID fields"
+      title="SSO provider basics"
+      className="block dark:hidden mx-auto"
+      style={{ width: "85%" }}
+    />
+  </Step>
+
+  <Step title="Configuration">
+    Add the IdP details from your provider:
+
+    - **IdP Metadata XML** (recommended)
+    - **SSO URL / Entry Point**
+    - **IdP X.509 Certificate**
+
+    If your IdP provides metadata XML, paste it and click **Parse metadata** to auto-fill the SSO URL and certificate.
+
+    This step also shows your **SP metadata URL** and **ACS URL**. Use those values when configuring the Codemod app in your provider (Okta, Google Workspace, etc.).
+
+    <img
+      src="/images/saml/codemod-sso-add-sso-provider-page-2-dark.png"
+      alt="Add SSO Provider configuration step showing IdP metadata, SSO URL, and certificate fields"
+      title="SSO provider configuration"
+      className="hidden dark:block mx-auto"
+      style={{ width: "85%" }}
+    />
+
+    <img
+      src="/images/saml/codemod-sso-add-sso-provider-page-2-light.png"
+      alt="Add SSO Provider configuration step showing IdP metadata, SSO URL, and certificate fields"
+      title="SSO provider configuration"
+      className="block dark:hidden mx-auto"
+      style={{ width: "85%" }}
+    />
+  </Step>
+
+  <Step title="Review and save">
+    Review the settings, then save the provider. Your organization will be ready for SSO login.
+  </Step>
+</Steps>
+
+## Required SAML attributes
+
+Codemod requires the following user attributes:
+
+- `email`
+- `givenName`
+- `surname`
+- `sub` (must be a unique identifier for each user; you can use an ID, login, or email)
+
+Attribute names are case-sensitive. Make sure the assertion includes **all four** attributes exactly as written above.
+
+## Configure your identity provider (IdP)
+
+The Codemod configuration screen provides the **SP metadata URL** and **ACS URL**. Your IdP will also give you an **IdP metadata XML**, **SSO URL**, and **X.509 certificate**. You can paste the metadata XML to auto-fill the SSO URL and certificate.
+
+If your IdP supports importing a Service Provider by URL, use the **SP metadata URL** from Codemod. If it doesn’t, configure the **ACS URL** and **Entity ID** manually.
+
+Use this mapping when moving values between Codemod and your IdP:
+
+| Codemod | Okta | Google Workspace |
+| --- | --- | --- |
+| **ACS URL** | Single sign-on URL | ACS URL |
+| **Entity ID** | Audience URI (SP Entity ID) | Entity ID |
+| **IdP Metadata XML** | IdP metadata XML | IdP metadata XML |
+| **SSO URL / Entry Point** | SSO URL | SSO URL |
+| **IdP X.509 Certificate** | X.509 certificate | Certificate |
+
+Below are provider-specific instructions for Okta and Google Workspace. If you are using another IdP, map the same values and attributes.
+
+### Okta
+
+1. In the Okta Admin Console, go to **Applications** → **Applications** and select your Codemod SAML app (or create a new **SAML 2.0** app).
+2. In the app's **Sign On** tab, click **Edit** in the SAML settings.
+3. Under **SAML Settings**, set:
+   - **Single sign on URL** → Codemod **ACS URL**
+   - **Audience URI (SP Entity ID)** → Codemod **Entity ID**
+4. Save, then copy the IdP details back to Codemod:
+   - Use **View IdP metadata** (or equivalent) and paste the XML into **IdP Metadata XML** in Codemod.
+   - Alternatively, copy the **SSO URL** and **X.509 certificate** into the corresponding fields.
+5. Under **Attribute Statements**, add these mappings:
+   - `email` → `user.email`
+   - `givenName` → `user.firstName`
+   - `surname` → `user.lastName`
+   - `sub` → `user.login` (or `user.id` / `user.email` if you prefer)
+
+Example Okta attribute statements:
+
+<img
+  src="/images/saml/okta-attributes.png"
+  alt="Okta attribute statements mapping email, givenName, surname, and sub.sub"
+  title="Okta attribute statements"
+  className="mx-auto"
+  style={{ width: "85%" }}
+/>
+
+### Google Workspace (Google SAML)
+
+1. In the Google Admin console, go to **Apps** → **Web and mobile apps** → **Add app** → **Add custom SAML app**.
+2. On the **Google IdP information** step, copy the **SSO URL** and **certificate** (or download metadata if available) and paste them into Codemod:
+   - **SSO URL** → Codemod **SSO URL / Entry Point**
+   - **Certificate** → Codemod **IdP X.509 Certificate**
+3. On the **Service provider details** step, set:
+   - **ACS URL** → Codemod **ACS URL**
+   - **Entity ID** → Codemod **Entity ID**
+4. On the **Attribute mapping** step, add these mappings:
+   - `email` → **Basic Information > Primary Email**
+   - `givenName` → **Basic Information > First Name**
+   - `surname` → **Basic Information > Last Name**
+   - `sub` → **Basic Information > Primary Email** (or another unique user ID if you prefer)
+
+After saving, make sure the SAML app is turned **On** for the correct users or organizational units.
+
+## Finalize
+
+When setup is complete, let the Codemod team know. We will remove the initial non-SSO login method so the first user also signs in through SSO going forward.
