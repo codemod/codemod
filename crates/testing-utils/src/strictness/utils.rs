@@ -159,7 +159,13 @@ pub fn normalize_node<'a>(
     let kind = node.kind().to_string();
 
     if node.named_child_count() == 0 {
-        return NormalizedNode::leaf(kind, node.utf8_text(source).unwrap_or("").to_string());
+        let text = node.utf8_text(source).unwrap_or("").to_string();
+        let normalized_text = if normalizer.is_indentation_sensitive() {
+            text
+        } else {
+            normalize_indentation(&text)
+        };
+        return NormalizedNode::leaf(kind, normalized_text);
     }
 
     let children: Vec<NormalizedNode> = node
@@ -226,6 +232,17 @@ pub fn build_cst_node<'a>(node: Node<'a>, source: &'a [u8]) -> NormalizedNode {
 /// Comment node kinds across different languages.
 const COMMENT_KINDS: &[&str] = &["comment", "line_comment", "block_comment", "hash_comment"];
 
+/// Normalize indentation by stripping leading whitespace from each line.
+///
+/// Used for non-indentation-sensitive languages (JavaScript, TypeScript, Go, etc.)
+/// where indentation is purely cosmetic and shouldn't affect semantic comparison.
+pub fn normalize_indentation(text: &str) -> String {
+    text.lines()
+        .map(|line| line.trim_start())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Check if a node kind represents a comment.
 pub fn is_comment_kind(kind: &str) -> bool {
     COMMENT_KINDS.contains(&kind)
@@ -289,4 +306,41 @@ pub fn normalize_comments_in_children(children: Vec<NormalizedNode>) -> Vec<Norm
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_indentation_single_line() {
+        assert_eq!(normalize_indentation("    const x = 1;"), "const x = 1;");
+    }
+
+    #[test]
+    fn test_normalize_indentation_multi_line() {
+        let input = "    const x = 1;\n    const y = 2;";
+        let expected = "const x = 1;\nconst y = 2;";
+        assert_eq!(normalize_indentation(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_indentation_mixed_indentation() {
+        let input = "  line1\n    line2\n\tline3";
+        let expected = "line1\nline2\nline3";
+        assert_eq!(normalize_indentation(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_indentation_empty_lines() {
+        let input = "    code\n\n    more";
+        let expected = "code\n\nmore";
+        assert_eq!(normalize_indentation(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_indentation_no_indentation() {
+        let input = "no indent";
+        assert_eq!(normalize_indentation(input), "no indent");
+    }
 }

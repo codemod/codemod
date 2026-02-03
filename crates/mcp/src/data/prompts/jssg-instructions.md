@@ -659,9 +659,11 @@ Use `--strictness` to control how test outputs are compared:
 | `strict` | (Default) Exact string equality |
 | `cst` | Compare Concrete Syntax Trees (includes all tokens, preserves ordering) |
 | `ast` | Compare Abstract Syntax Trees (ignores formatting, preserves ordering) |
-| `loose` | Loose AST comparison (ignores formatting, ordering of unordered nodes, and comment positions) |
+| `loose` | Loose AST comparison (ignores formatting, indentation, ordering of unordered nodes, and comment positions) |
 
-Use `--strictness loose` when your codemod produces semantically equivalent output but with different ordering (e.g., object properties, imports, comments).
+Use `--strictness loose` when your codemod produces semantically equivalent output but with different ordering (e.g., object properties, imports, comments) or indentation.
+
+**Note:** For Python, indentation is preserved even in `loose` mode since indentation is semantically significant in Python.
 
 ## Writing Effective Tests
 

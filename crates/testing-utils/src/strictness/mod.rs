@@ -5,6 +5,9 @@
 //! - Object property ordering
 //! - Dictionary key ordering
 //! - Keyword argument ordering (Python)
+//! - Indentation differences (for non-indentation-sensitive languages like JS, TS, Go, Rust, JSON)
+//!
+//! Note: Python preserves indentation checking since indentation is semantically significant.
 //!
 //! Note: Whitespace normalization is handled separately by the test runner
 //! (e.g., via the `ignore_whitespace` option for strict mode). The AST/CST/loose

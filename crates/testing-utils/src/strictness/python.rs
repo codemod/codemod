@@ -67,6 +67,10 @@ impl SemanticNormalizer for PythonNormalizer {
     fn comment_scope_kinds(&self) -> &'static [&'static str] {
         COMMENT_SCOPE_KINDS
     }
+
+    fn is_indentation_sensitive(&self) -> bool {
+        true
+    }
 }
 
 /// Normalize dictionary children, preserving dictionary_splat positions.

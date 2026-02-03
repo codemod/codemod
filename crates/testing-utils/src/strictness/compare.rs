@@ -1646,4 +1646,126 @@ fn main() {}"#;
 }"#;
         assert!(loose_compare(expected, actual, "rust"));
     }
+
+    // Indentation sensitivity tests
+    #[test]
+    fn test_js_different_indentation_matches() {
+        // JavaScript is not indentation-sensitive, so different indentation should match
+        let expected = r#"function foo() {
+    const x = 1;
+    const y = 2;
+}"#;
+        let actual = r#"function foo() {
+        const x = 1;
+        const y = 2;
+}"#;
+        assert!(loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
+    fn test_ts_different_indentation_matches() {
+        // TypeScript is not indentation-sensitive
+        let expected = r#"function foo(): number {
+    const x = 1;
+    return x;
+}"#;
+        let actual = r#"function foo(): number {
+        const x = 1;
+        return x;
+}"#;
+        assert!(loose_compare(expected, actual, "typescript"));
+    }
+
+    #[test]
+    fn test_tsx_different_indentation_matches() {
+        // TSX is not indentation-sensitive
+        let expected = r#"const Component = () => {
+    return <div>Hello</div>;
+};"#;
+        let actual = r#"const Component = () => {
+        return <div>Hello</div>;
+};"#;
+        assert!(loose_compare(expected, actual, "tsx"));
+    }
+
+    #[test]
+    fn test_go_different_indentation_matches() {
+        // Go is not indentation-sensitive
+        let expected = r#"func foo() {
+    x := 1
+    y := 2
+}"#;
+        let actual = r#"func foo() {
+        x := 1
+        y := 2
+}"#;
+        assert!(loose_compare(expected, actual, "go"));
+    }
+
+    #[test]
+    fn test_rust_different_indentation_matches() {
+        // Rust is not indentation-sensitive
+        let expected = r#"fn foo() {
+    let x = 1;
+    let y = 2;
+}"#;
+        let actual = r#"fn foo() {
+        let x = 1;
+        let y = 2;
+}"#;
+        assert!(loose_compare(expected, actual, "rust"));
+    }
+
+    #[test]
+    fn test_json_different_indentation_matches() {
+        // JSON is not indentation-sensitive
+        let expected = r#"{
+    "key": "value"
+}"#;
+        let actual = r#"{
+        "key": "value"
+}"#;
+        assert!(loose_compare(expected, actual, "json"));
+    }
+
+    #[test]
+    fn test_python_indentation_preserved_in_strings() {
+        // Python IS indentation-sensitive, and indentation in string literals is preserved
+        // This tests that indentation normalization doesn't break string content
+        let expected = r#"x = """
+    indented content
+    more content
+""""#;
+        let actual = r#"x = """
+        differently indented
+        content
+""""#;
+        // These should NOT match because string content differs
+        assert!(!loose_compare(expected, actual, "python"));
+    }
+
+    #[test]
+    fn test_python_structural_indentation_matters() {
+        // Python structural indentation differences should be caught
+        let expected = r#"def foo():
+    if True:
+        x = 1"#;
+        let actual = r#"def foo():
+    if True:
+    x = 1"#;  // x = 1 is not inside the if block
+        // These have different structure due to indentation
+        assert!(!loose_compare(expected, actual, "python"));
+    }
+
+    #[test]
+    fn test_python_same_indentation_matches() {
+        // Python with same indentation should match
+        let expected = r#"def foo():
+    x = 1
+    y = 2"#;
+        let actual = r#"def foo():
+    x = 1
+    y = 2"#;
+        assert!(loose_compare(expected, actual, "python"));
+    }
 }
