@@ -1752,8 +1752,8 @@ fn main() {}"#;
         x = 1"#;
         let actual = r#"def foo():
     if True:
-    x = 1"#;  // x = 1 is not inside the if block
-        // These have different structure due to indentation
+    x = 1"#; // x = 1 is not inside the if block
+             // These have different structure due to indentation
         assert!(!loose_compare(expected, actual, "python"));
     }
 
