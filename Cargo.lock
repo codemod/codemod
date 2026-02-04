@@ -1174,6 +1174,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "swc_core",
  "swc_ts_fast_strip",
  "tempfile",

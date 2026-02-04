@@ -9,6 +9,7 @@ use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
+use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
@@ -16,6 +17,7 @@ use language_core::SemanticProvider;
 use rquickjs::{
     async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,14 +33,20 @@ const DEFAULT_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 /// Default max stack size in bytes (4 MB)
 const DEFAULT_MAX_STACK_SIZE: usize = 4 * 1024 * 1024;
 
-/// In-memory execution options for executing a codemod on a string
+/// SHA256 hash type (32 bytes)
+pub type Sha256Hash = [u8; 32];
+
+/// In-memory execution options for executing a codemod on a pre-parsed AST
 pub struct InMemoryExecutionOptions<'a, R> {
     /// The JavaScript codemod source code (not a file path)
     pub codemod_source: &'a str,
     /// The programming language of the source code to transform
     pub language: SupportLang,
-    /// The source code to transform
-    pub content: &'a str,
+    /// The pre-parsed AST (allows leveraging AST caching)
+    pub ast: AstGrep<StrDoc<SupportLang>>,
+    /// SHA256 hash of the original content (used for modification detection)
+    /// If None, any non-null result is considered modified
+    pub original_sha256: Option<Sha256Hash>,
     /// Optional module resolver (if None, a no-op resolver is used)
     pub resolver: Option<Arc<R>>,
     /// Optional selector config for pre-filtering
@@ -129,7 +137,8 @@ where
         })))
         .await;
 
-    let ast_grep = AstGrep::new(options.content, options.language);
+    // Use the pre-parsed AST from options (allows AST caching)
+    let ast_grep = options.ast;
 
     let module_builder = LlrtModuleBuilder::build();
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
@@ -302,10 +311,19 @@ where
 
             if result_obj.is_string() {
                 let new_content = result_obj.get::<String>().unwrap();
-                if new_content == options.content {
-                    Ok(ExecutionResult::Unmodified)
-                } else {
+                let is_modified = match options.original_sha256 {
+                    Some(original_hash) => {
+                        let mut hasher = Sha256::new();
+                        hasher.update(new_content.as_bytes());
+                        let new_hash: [u8; 32] = hasher.finalize().into();
+                        new_hash != original_hash
+                    }
+                    None => true,
+                };
+                if is_modified {
                     Ok(ExecutionResult::Modified(new_content))
+                } else {
+                    Ok(ExecutionResult::Unmodified)
                 }
             } else if result_obj.is_null() || result_obj.is_undefined() {
                 Ok(ExecutionResult::Unmodified)
@@ -339,6 +357,12 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    fn compute_sha256(content: &str) -> Sha256Hash {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        hasher.finalize().into()
+    }
+
     #[test]
     fn test_execute_codemod_sync_timeout() {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -359,11 +383,13 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";
+        let ast = AstGrep::new(content, SupportLang::JavaScript);
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
             language: SupportLang::JavaScript,
-            content,
+            ast,
+            original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
             selector_config: None,
             params: None,
@@ -410,11 +436,13 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "console.log('Hello, world!');";
+        let ast = AstGrep::new(content, SupportLang::JavaScript);
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
             language: SupportLang::JavaScript,
-            content,
+            ast,
+            original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
             selector_config: None,
             params: None,
