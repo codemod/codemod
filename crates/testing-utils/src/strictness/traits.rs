@@ -121,4 +121,20 @@ pub trait SemanticNormalizer: ParserProvider {
     fn comment_scope_kinds(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// Whether this language uses indentation for semantic meaning.
+    ///
+    /// Returns `true` for Python where indentation defines block structure,
+    /// `false` for most other languages where indentation is purely cosmetic.
+    ///
+    /// When `false`, leading whitespace in comment text is normalized during loose comparison.
+    /// When `true`, indentation is preserved and compared (including comments).
+    ///
+    /// Note: indentation inside string/template literal contents remains semantic and is
+    /// not normalized regardless of this setting.
+    ///
+    /// Default: `false`
+    fn is_indentation_sensitive(&self) -> bool {
+        false
+    }
 }
