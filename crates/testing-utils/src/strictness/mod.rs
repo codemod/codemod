@@ -5,7 +5,7 @@
 //! - Object property ordering
 //! - Dictionary key ordering
 //! - Keyword argument ordering (Python)
-//! - Indentation differences (for non-indentation-sensitive languages like JS, TS, Go, Rust, JSON)
+//! - Comment indentation differences (for non-indentation-sensitive languages like JS, TS, Go, Rust, JSON)
 //!
 //! Note: Python preserves indentation checking since indentation is semantically significant.
 //!

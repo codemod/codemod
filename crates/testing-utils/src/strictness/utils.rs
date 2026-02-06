@@ -162,8 +162,10 @@ pub fn normalize_node<'a>(
         let text = node.utf8_text(source).unwrap_or("").to_string();
         let normalized_text = if normalizer.is_indentation_sensitive() {
             text
-        } else {
+        } else if is_comment_kind(&kind) {
             normalize_indentation(&text)
+        } else {
+            text
         };
         return NormalizedNode::leaf(kind, normalized_text);
     }
@@ -232,15 +234,26 @@ pub fn build_cst_node<'a>(node: Node<'a>, source: &'a [u8]) -> NormalizedNode {
 /// Comment node kinds across different languages.
 const COMMENT_KINDS: &[&str] = &["comment", "line_comment", "block_comment", "hash_comment"];
 
-/// Normalize indentation by stripping leading whitespace from each line.
+/// Normalize indentation by stripping leading whitespace from each line while
+/// preserving trailing newlines.
 ///
 /// Used for non-indentation-sensitive languages (JavaScript, TypeScript, Go, etc.)
 /// where indentation is purely cosmetic and shouldn't affect semantic comparison.
 pub fn normalize_indentation(text: &str) -> String {
-    text.lines()
-        .map(|line| line.trim_start())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut result = String::with_capacity(text.len());
+
+    for segment in text.split_inclusive('\n') {
+        if let Some(content) = segment.strip_suffix('\n') {
+            let trimmed = content.trim_start();
+            result.push_str(trimmed);
+            result.push('\n');
+        } else {
+            let trimmed = segment.trim_start();
+            result.push_str(trimmed);
+        }
+    }
+
+    result
 }
 
 /// Check if a node kind represents a comment.
@@ -342,5 +355,12 @@ mod tests {
     fn test_normalize_indentation_no_indentation() {
         let input = "no indent";
         assert_eq!(normalize_indentation(input), "no indent");
+    }
+
+    #[test]
+    fn test_normalize_indentation_preserves_trailing_newline() {
+        let input = "    line1\n    line2\n";
+        let expected = "line1\nline2\n";
+        assert_eq!(normalize_indentation(input), expected);
     }
 }

@@ -1663,6 +1663,16 @@ fn main() {}"#;
     }
 
     #[test]
+    fn test_js_template_literal_indentation_is_semantic() {
+        // Indentation inside template literals should remain semantic in loose mode
+        let expected = r#"const text = `line1
+  line2`;"#;
+        let actual = r#"const text = `line1
+    line2`;"#;
+        assert!(!loose_compare(expected, actual, "javascript"));
+    }
+
+    #[test]
     fn test_ts_different_indentation_matches() {
         // TypeScript is not indentation-sensitive
         let expected = r#"function foo(): number {

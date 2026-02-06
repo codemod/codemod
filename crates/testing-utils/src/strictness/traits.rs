@@ -127,8 +127,11 @@ pub trait SemanticNormalizer: ParserProvider {
     /// Returns `true` for Python where indentation defines block structure,
     /// `false` for most other languages where indentation is purely cosmetic.
     ///
-    /// When `false`, indentation differences are ignored during loose comparison.
-    /// When `true`, indentation is preserved and compared.
+    /// When `false`, leading whitespace in comment text is normalized during loose comparison.
+    /// When `true`, indentation is preserved and compared (including comments).
+    ///
+    /// Note: indentation inside string/template literal contents remains semantic and is
+    /// not normalized regardless of this setting.
     ///
     /// Default: `false`
     fn is_indentation_sensitive(&self) -> bool {
