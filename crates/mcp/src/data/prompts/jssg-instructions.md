@@ -880,6 +880,95 @@ For large codebases:
 
 ---
 
+# Part 9: Metrics (IMPORTANT)
+
+## Always Add Metrics to Codemods
+
+**Every codemod should include metrics** to provide insights about the codebase being transformed. Metrics help users understand the scope and impact of a codemod before and during execution. Even if a codemod modifies code, it should also track what it's changing.
+
+Use `useMetricAtom` from `codemod:metrics` to create metric trackers:
+
+```typescript
+import { useMetricAtom } from "codemod:metrics";
+
+const changeCount = useMetricAtom("changes");
+```
+
+## Why Metrics Matter
+
+- **Pre-migration analysis**: Run the codemod in read-only mode first to count how many places will change
+- **Impact assessment**: Understand the scope before committing to a migration
+- **Progress tracking**: Track migration progress over time by running metrics repeatedly
+- **Stakeholder communication**: Share concrete numbers about what needs to change
+
+## How to Add Metrics
+
+### 1. Count matches before transforming
+
+```typescript
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { useMetricAtom } from "codemod:metrics";
+
+const migrationMetric = useMetricAtom("api-migrations");
+
+const codemod: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
+
+  const deprecatedCalls = rootNode.findAll({
+    rule: { pattern: "oldApi($$$ARGS)" },
+  });
+
+  // Always track metrics, even when transforming
+  for (const call of deprecatedCalls) {
+    migrationMetric.increment({ api: "oldApi" });
+    edits.push(call.replace("newApi($$$ARGS)"));
+  }
+
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+};
+
+export default codemod;
+```
+
+### 2. Use cardinality for rich insights
+
+Track multiple dimensions to enable grouping and filtering:
+
+```typescript
+const componentMetric = useMetricAtom("component-usage");
+
+// Track which components use which props
+componentMetric.increment({
+  component: componentName,
+  prop: propName,
+  file: root.filename(),
+});
+```
+
+### 3. Read-only analysis codemods
+
+Sometimes you just want to gather data without changing code. Return `null` from your transform and only collect metrics:
+
+```typescript
+const codemod: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+
+  const patterns = rootNode.findAll({
+    rule: { kind: "call_expression", /* ... */ },
+  });
+
+  for (const match of patterns) {
+    analysisMetric.increment({ pattern: match.text() });
+  }
+
+  return null; // No modifications, just collecting data
+};
+```
+
+---
+
 # Quality Bar & Anti-Pitfalls
 
 * **Package correctness**: Transformations must only apply to the intended library API — verify imports/bindings first
