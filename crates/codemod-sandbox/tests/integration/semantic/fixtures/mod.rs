@@ -5,6 +5,7 @@
 //! - The `jssg_test!` macro for declarative test definitions
 
 use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 use codemod_sandbox::sandbox::engine::execution_engine::{
     execute_codemod_with_quickjs, ExecutionResult, JssgExecutionOptions,
 };
@@ -122,7 +123,7 @@ pub struct TestConfig<'a> {
     pub codemod_name: &'a str,
     pub fixture_dir: &'a str,
     pub target_file: &'a str,
-    pub language: SupportLang,
+    pub language: CodemodLang,
     pub scope: ProviderScope,
     pub preprocess_files: Vec<&'a str>,
     pub expected_file: Option<&'a str>,
@@ -134,7 +135,7 @@ impl<'a> TestConfig<'a> {
         codemod_name: &'a str,
         fixture_dir: &'a str,
         target_file: &'a str,
-        language: SupportLang,
+        language: CodemodLang,
     ) -> Self {
         Self {
             codemod_name,
@@ -197,10 +198,14 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         None
     } else {
         let provider = match config.language {
-            SupportLang::JavaScript | SupportLang::TypeScript | SupportLang::Tsx => {
+            CodemodLang::Static(SupportLang::JavaScript)
+            | CodemodLang::Static(SupportLang::TypeScript)
+            | CodemodLang::Static(SupportLang::Tsx) => {
                 create_js_provider(config.scope, Some(temp_dir.path()))
             }
-            SupportLang::Python => create_python_provider(config.scope, Some(temp_dir.path())),
+            CodemodLang::Static(SupportLang::Python) => {
+                create_python_provider(config.scope, Some(temp_dir.path()))
+            }
             _ => panic!("Unsupported language: {:?}", config.language),
         };
 
@@ -232,23 +237,24 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         capabilities: None,
         semantic_provider: provider,
         metrics_context: None,
+        test_mode: false,
     };
 
     let result = execute_codemod_with_quickjs(options).await;
 
     match result {
-        Ok(ExecutionResult::Modified(new_content)) => {
+        Ok(ExecutionResult::Modified(modified)) => {
             // If expected file is specified, verify the output
             if let Some(expected_file) = config.expected_file {
                 let expected = load_fixture(config.fixture_dir, expected_file);
-                if new_content.trim() != expected.trim() {
+                if modified.content.trim() != expected.trim() {
                     return Err(format!(
                         "Output mismatch.\nExpected:\n{}\n\nGot:\n{}",
-                        expected, new_content
+                        expected, modified.content
                     ));
                 }
             }
-            Ok(Some(new_content))
+            Ok(Some(modified.content))
         }
         Ok(ExecutionResult::Unmodified) | Ok(ExecutionResult::Skipped) => Ok(None),
         Err(e) => Err(format!("Execution failed: {:?}", e)),

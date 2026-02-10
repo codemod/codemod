@@ -1887,6 +1887,7 @@ impl Engine {
                         capabilities: config.capabilities.clone(),
                         semantic_provider: semantic_provider.clone(),
                         metrics_context: Some(metrics_context_clone.clone()),
+                        test_mode: false,
                     })
                     .await
                 });
@@ -1894,7 +1895,8 @@ impl Engine {
                 match execution_result {
                     Ok(execution_output) => {
                         match execution_output {
-                            ExecutionResult::Modified(ref new_content) => {
+                            ExecutionResult::Modified(ref modified) => {
+                                let write_path = modified.rename_to.as_deref().unwrap_or(file_path);
                                 if config.dry_run {
                                     self.execution_stats
                                         .files_modified
@@ -1907,7 +1909,7 @@ impl Engine {
                                         callback(DryRunChange {
                                             file_path: file_path.to_path_buf(),
                                             original_content: content.clone(),
-                                            new_content: new_content.clone(),
+                                            new_content: modified.content.clone(),
                                         });
                                     }
 
@@ -1917,8 +1919,8 @@ impl Engine {
                                     let write_result = runtime_handle.block_on(async {
                                         file_writer
                                             .write_file(
-                                                file_path.to_path_buf(),
-                                                new_content.clone(),
+                                                write_path.to_path_buf(),
+                                                modified.content.clone(),
                                             )
                                             .await
                                     });
@@ -1926,17 +1928,30 @@ impl Engine {
                                     if let Err(e) = write_result {
                                         error!(
                                             "Failed to write modified file {}: {}",
-                                            file_path.display(),
+                                            write_path.display(),
                                             e
                                         );
                                         self.execution_stats
                                             .files_with_errors
                                             .fetch_add(1, Ordering::Relaxed);
                                     } else {
-                                        debug!("Modified file: {}", file_path.display());
+                                        // If renamed, delete the original file
+                                        if modified.rename_to.is_some() {
+                                            if let Err(e) = std::fs::remove_file(file_path) {
+                                                error!(
+                                                    "Failed to remove original file {}: {}",
+                                                    file_path.display(),
+                                                    e
+                                                );
+                                            } else {
+                                                debug!("Renamed file: {} -> {}", file_path.display(), write_path.display());
+                                            }
+                                        } else {
+                                            debug!("Modified file: {}", file_path.display());
+                                        }
                                         if let Some(ref provider) = semantic_provider {
                                             let _ = provider
-                                                .notify_file_processed(file_path, new_content);
+                                                .notify_file_processed(write_path, &modified.content);
                                         }
                                         self.execution_stats
                                             .files_modified

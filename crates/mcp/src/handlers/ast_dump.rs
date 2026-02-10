@@ -1,5 +1,5 @@
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -47,7 +47,7 @@ impl AstDumpHandler {
     fn dump_ast_for_language(
         &self,
         source_code: &str,
-        language: SupportLang,
+        language: CodemodLang,
     ) -> Result<String, String> {
         let root = AstGrep::new(source_code, language);
         let result = self.dump_ast_for_ai_context(root.root(), 0);

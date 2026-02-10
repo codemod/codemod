@@ -3,10 +3,11 @@
 
 use super::fixtures::jssg_test;
 use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 
 jssg_test! {
     name: test_get_definition_without_provider,
-    language: SupportLang::JavaScript,
+    language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "no_provider_definition.js",
     fixture_dir: "common/without_provider",
     target: "input.js",
@@ -15,7 +16,7 @@ jssg_test! {
 
 jssg_test! {
     name: test_find_references_without_provider,
-    language: SupportLang::JavaScript,
+    language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "no_provider_references.js",
     fixture_dir: "common/without_provider",
     target: "input.js",
@@ -24,7 +25,7 @@ jssg_test! {
 
 jssg_test! {
     name: test_type_info_without_provider,
-    language: SupportLang::JavaScript,
+    language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "no_provider_type_info.js",
     fixture_dir: "common/without_provider",
     target: "input.js",

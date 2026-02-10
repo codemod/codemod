@@ -1,4 +1,4 @@
-use super::execution_engine::ExecutionResult;
+use super::execution_engine::{ExecutionResult, ModifiedResult};
 use super::quickjs_adapters::QuickJSResolver;
 use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
@@ -11,7 +11,7 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+use super::codemod_lang::CodemodLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use language_core::SemanticProvider;
 use rquickjs::{
@@ -20,6 +20,7 @@ use rquickjs::{
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,16 +42,16 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// The JavaScript codemod source code (not a file path)
     pub codemod_source: &'a str,
     /// The programming language of the source code to transform
-    pub language: SupportLang,
+    pub language: CodemodLang,
     /// The pre-parsed AST (allows leveraging AST caching)
-    pub ast: AstGrep<StrDoc<SupportLang>>,
+    pub ast: AstGrep<StrDoc<CodemodLang>>,
     /// SHA256 hash of the original content (used for modification detection)
     /// If None, any non-null result is considered modified
     pub original_sha256: Option<Sha256Hash>,
     /// Optional module resolver (if None, a no-op resolver is used)
     pub resolver: Option<Arc<R>>,
     /// Optional selector config for pre-filtering
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
     /// Optional parameters passed to the codemod
     pub params: Option<HashMap<String, String>>,
     /// Optional matrix values for parameterized codemods
@@ -225,6 +226,9 @@ where
                     },
                 })?;
 
+            // Keep a reference to read rename_to after JS execution
+            let sg_root_inner = Arc::clone(&parsed_content.inner);
+
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
                 let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -309,6 +313,8 @@ where
                     },
                 })?;
 
+            let rename_to = sg_root_inner.rename_to.lock().unwrap().clone().map(PathBuf::from);
+
             if result_obj.is_string() {
                 let new_content = result_obj.get::<String>().unwrap();
                 let is_modified = match options.original_sha256 {
@@ -320,13 +326,25 @@ where
                     }
                     None => true,
                 };
-                if is_modified {
-                    Ok(ExecutionResult::Modified(new_content))
+                if is_modified || rename_to.is_some() {
+                    Ok(ExecutionResult::Modified(ModifiedResult {
+                        content: new_content,
+                        rename_to,
+                    }))
                 } else {
                     Ok(ExecutionResult::Unmodified)
                 }
             } else if result_obj.is_null() || result_obj.is_undefined() {
-                Ok(ExecutionResult::Unmodified)
+                if rename_to.is_some() {
+                    // Rename-only: content unchanged but file should be renamed
+                    let original_content = sg_root_inner.grep.source().to_string();
+                    Ok(ExecutionResult::Modified(ModifiedResult {
+                        content: original_content,
+                        rename_to,
+                    }))
+                } else {
+                    Ok(ExecutionResult::Unmodified)
+                }
             } else {
                 Err(ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
@@ -353,9 +371,14 @@ mod tests {
     use super::*;
     use crate::sandbox::errors::RuntimeError;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use ast_grep_language::SupportLang;
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    fn js_lang() -> CodemodLang {
+        CodemodLang::Static(SupportLang::JavaScript)
+    }
 
     fn compute_sha256(content: &str) -> Sha256Hash {
         let mut hasher = Sha256::new();
@@ -383,11 +406,11 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";
-        let ast = AstGrep::new(content, SupportLang::JavaScript);
+        let ast = AstGrep::new(content, js_lang());
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             ast,
             original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
@@ -436,11 +459,11 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "console.log('Hello, world!');";
-        let ast = AstGrep::new(content, SupportLang::JavaScript);
+        let ast = AstGrep::new(content, js_lang());
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             ast,
             original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
@@ -455,8 +478,9 @@ export default function transform(root) {
         });
 
         match result {
-            Ok(ExecutionResult::Modified(new_content)) => {
-                assert!(new_content.contains("logger.log('Hello, world!')"));
+            Ok(ExecutionResult::Modified(modified)) => {
+                assert!(modified.content.contains("logger.log('Hello, world!')"));
+                assert!(modified.rename_to.is_none());
             }
             Ok(other) => panic!("Expected modified result, got: {:?}", other),
             Err(e) => panic!("Expected success, got error: {:?}", e),

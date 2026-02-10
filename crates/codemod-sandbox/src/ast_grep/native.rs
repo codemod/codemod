@@ -6,7 +6,9 @@ use std::{fs, panic};
 use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
+
+use crate::sandbox::engine::codemod_lang::CodemodLang;
+type SupportLang = CodemodLang;
 
 use crate::ast_grep::scanner::scan_content;
 use crate::ast_grep::types::{AstGrepError, AstGrepMatch};

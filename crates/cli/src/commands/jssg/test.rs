@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{
@@ -17,7 +17,7 @@ use codemod_sandbox::{
     },
     utils::project_discovery::find_tsconfig,
 };
-use testing_utils::{TestOptions, TestRunner, TestSource, TransformationResult};
+use testing_utils::{TestOptions, TestRunner, TestSource, TransformOutput, TransformationResult};
 
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 
@@ -128,7 +128,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         )
     })?;
 
-    let default_language_enum: SupportLang = default_language_str.parse()?;
+    let default_language_enum: CodemodLang = default_language_str.parse()
+        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     let strictness: testing_utils::Strictness = args
         .strictness
@@ -208,7 +209,8 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .language
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
-                let language_enum: SupportLang = language_str.parse()?;
+                let language_enum: CodemodLang = language_str.parse()
+                    .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
@@ -222,15 +224,22 @@ pub async fn handler(args: &Command) -> Result<()> {
                     capabilities,
                     semantic_provider,
                     metrics_context: None,
+                    test_mode: true,
                 };
                 let execution_output = execute_codemod_with_quickjs(options).await?;
 
                 match execution_output {
-                    ExecutionResult::Modified(content) => {
-                        Ok(TransformationResult::Success(content))
+                    ExecutionResult::Modified(modified) => {
+                        Ok(TransformationResult::Success(TransformOutput {
+                            content: modified.content,
+                            rename_to: modified.rename_to,
+                        }))
                     }
                     ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                        Ok(TransformationResult::Success(input_code))
+                        Ok(TransformationResult::Success(TransformOutput {
+                            content: input_code,
+                            rename_to: None,
+                        }))
                     }
                 }
             })

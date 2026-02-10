@@ -23,6 +23,10 @@ pub struct TestConfig {
 
     /// Parameters to pass to the codemod
     pub params: Option<HashMap<String, serde_json::Value>>,
+
+    /// Expected file extension after rename (e.g., ".mjs", ".css").
+    /// If set, tests verify the codemod's rename() target ends with this extension.
+    pub expected_extension: Option<String>,
 }
 
 /// Merged configuration from CLI args and config files
@@ -35,6 +39,7 @@ pub struct ResolvedTestConfig {
     pub ignore_whitespace: bool,
     pub expect_errors: Vec<String>,
     pub params: Option<HashMap<String, serde_json::Value>>,
+    pub expected_extension: Option<String>,
 
     // Global-only options (CLI args only)
     pub filter: Option<String>,
@@ -150,6 +155,9 @@ impl TestConfig {
         if other.params.is_some() {
             self.params = other.params;
         }
+        if other.expected_extension.is_some() {
+            self.expected_extension = other.expected_extension;
+        }
     }
 }
 
@@ -202,6 +210,7 @@ impl ResolvedTestConfig {
             merged_config.expect_errors.clone().unwrap_or_default()
         };
         let params = merged_config.params.clone();
+        let expected_extension = merged_config.expected_extension.clone();
 
         Ok(Self {
             language,
@@ -218,6 +227,7 @@ impl ResolvedTestConfig {
             reporter,
             context_lines,
             params,
+            expected_extension,
         })
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "tree-sitter-loader"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "Dynamic tree-sitter parser downloader and loader for codemod"
+
+[dependencies]
+ast-grep-dynamic = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+dirs = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

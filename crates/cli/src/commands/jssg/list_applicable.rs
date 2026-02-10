@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ast_grep_config::CombinedScan;
-use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
@@ -100,7 +100,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         capabilities: config.capabilities.clone(),
     })
     .await?;
-    let combined_scan: Option<Arc<CombinedScan<SupportLang>>> = selector_config
+    let combined_scan: Option<Arc<CombinedScan<CodemodLang>>> = selector_config
         .as_ref()
         .map(|c| Arc::new(CombinedScan::new(vec![c])));
 

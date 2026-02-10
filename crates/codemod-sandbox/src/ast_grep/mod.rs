@@ -11,14 +11,21 @@ pub mod wasm_utils;
 #[cfg(feature = "native")]
 pub mod native;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::{LanguageExt, SupportLang};
+
+#[cfg(feature = "native")]
+use crate::sandbox::engine::codemod_lang::CodemodLang;
+#[cfg(feature = "native")]
+use ast_grep_core::tree_sitter::LanguageExt;
 
 #[cfg(feature = "wasm")]
 use ast_grep_core::language::Language;
 
 use rquickjs::module::{Declarations, Exports, ModuleDef};
 use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
+#[cfg(feature = "native")]
+use rquickjs::{Function, Value};
 
 use sg_node::{SgNodeRjs, SgRootRjs};
 
@@ -41,6 +48,8 @@ impl ModuleDef for AstGrepModule {
         declare.declare("default")?;
         #[cfg(feature = "native")]
         declare.declare("parseFile")?;
+        #[cfg(feature = "native")]
+        declare.declare("jssgTransform")?;
         Ok(())
     }
 
@@ -55,6 +64,8 @@ impl ModuleDef for AstGrepModule {
         {
             default.set("parseFile", Func::from(parse_file_rjs))?;
             exports.export("parseFile", Func::from(parse_file_rjs))?;
+            default.set("jssgTransform", Func::from(jssg_transform_rjs))?;
+            exports.export("jssgTransform", Func::from(jssg_transform_rjs))?;
         }
         exports.export("default", default)?;
         exports.export("parse", Func::from(parse_rjs))?;
@@ -104,7 +115,7 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     Ok(kind)
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
@@ -116,4 +127,122 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
         .id_for_node_kind(&kind_name, /* named */ true);
 
     Ok(kind)
+}
+
+#[cfg(feature = "native")]
+fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
+    use std::str::FromStr;
+
+    let lang = CodemodLang::from_str(&lang)
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Language error: {e}")))?;
+
+    let kind = lang
+        .get_ts_language()
+        .id_for_node_kind(&kind_name, /* named */ true);
+
+    Ok(kind)
+}
+
+/// Execute a transform function on a file, writing back the result.
+///
+/// `jssgTransform(transformFn, pathToFile, language)` reads the file,
+/// parses it, calls the transform, and writes back content + handles rename.
+///
+/// Returns a promise that resolves when the transform is complete.
+#[cfg(feature = "native")]
+fn jssg_transform_rjs<'js>(
+    ctx: Ctx<'js>,
+    transform_fn: Function<'js>,
+    path_to_file: String,
+    language: String,
+) -> Result<Value<'js>> {
+    use crate::sandbox::engine::ExecutionModeFlag;
+    use crate::utils::quickjs_utils::maybe_promise;
+    use std::str::FromStr;
+
+    let should_noop = ctx
+        .userdata::<ExecutionModeFlag>()
+        .map(|f| f.test_mode)
+        .unwrap_or(true); // No flag = in-memory engine → no-op
+    if should_noop {
+        let ctx2 = ctx.clone();
+        let promise = rquickjs::Promise::wrap_future(&ctx, async move {
+            Ok::<_, rquickjs::Error>(Value::new_undefined(ctx2))
+        })?;
+        return Ok(promise.into_value());
+    }
+
+    let file_path = std::path::Path::new(&path_to_file);
+
+    // Read the file
+    let content = std::fs::read_to_string(file_path).map_err(|e| {
+        Exception::throw_message(
+            &ctx,
+            &format!("Failed to read file '{}': {}", path_to_file, e),
+        )
+    })?;
+
+    // Parse with language and filename
+    let sg_root = SgRootRjs::try_new(language, content.clone(), Some(path_to_file.clone()))
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+
+    // Build default options object
+    let options = Object::new(ctx.clone())?;
+    options.set("params", Object::new(ctx.clone())?)?;
+
+    let lang_str = CodemodLang::from_str(
+        sg_root.inner.grep.lang().to_string().as_str(),
+    )
+    .map(|l| l.to_string())
+    .unwrap_or_default();
+    options.set("language", lang_str)?;
+
+    // Call the transform function
+    let result_val: Value<'js> = transform_fn.call((sg_root.clone(), options))?;
+
+    // Create a promise to handle async transforms
+    let ctx2 = ctx.clone();
+    let promise = rquickjs::Promise::wrap_future(&ctx, async move {
+        let result = maybe_promise(result_val).await.map_err(|e| {
+            Exception::throw_message(&ctx2, &format!("Transform failed: {e}"))
+        })?;
+
+        let rename_to = sg_root.get_rename_to();
+
+        if result.is_string() {
+            let new_content: String = result.get().unwrap();
+            let write_path = rename_to.as_deref().unwrap_or(&path_to_file);
+
+            std::fs::write(write_path, &new_content).map_err(|e| {
+                Exception::throw_message(
+                    &ctx2,
+                    &format!("Failed to write file '{}': {}", write_path, e),
+                )
+            })?;
+
+            // If renamed, delete the original file
+            if rename_to.is_some() && write_path != path_to_file {
+                let _ = std::fs::remove_file(&path_to_file);
+            }
+        } else if result.is_null() || result.is_undefined() {
+            // If rename was requested with null return, rename with original content
+            if let Some(ref new_path) = rename_to {
+                std::fs::write(new_path, &content).map_err(|e| {
+                    Exception::throw_message(
+                        &ctx2,
+                        &format!("Failed to write file '{}': {}", new_path, e),
+                    )
+                })?;
+
+                if new_path != &path_to_file {
+                    let _ = std::fs::remove_file(&path_to_file);
+                }
+            }
+            // No rename and null return = no changes
+        }
+
+        Ok::<_, rquickjs::Error>(Value::new_undefined(ctx2))
+    })?;
+
+    Ok(promise.into_value())
 }

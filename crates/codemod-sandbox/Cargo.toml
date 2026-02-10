@@ -49,6 +49,8 @@ codemod-llrt-capabilities = { workspace = true, optional = true, features = ["na
 language-core = { workspace = true, optional = true }
 language-javascript = { workspace = true, optional = true }
 language-python = { workspace = true, optional = true }
+tree-sitter-loader = { workspace = true, optional = true }
+ast-grep-dynamic = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -82,6 +84,8 @@ native = [
   "language-core",
   "language-javascript",
   "language-python",
+  "tree-sitter-loader",
+  "ast-grep-dynamic",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

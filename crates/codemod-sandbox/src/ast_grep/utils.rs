@@ -7,8 +7,10 @@ use ast_grep_core::{
     meta_var::MetaVarEnv,
     Doc, Node, Pattern,
 };
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::SupportLang;
+#[cfg(feature = "native")]
+use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
 

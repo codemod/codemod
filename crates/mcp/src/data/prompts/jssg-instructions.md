@@ -774,8 +774,33 @@ class SgRoot<M> {
   filename(): string;
   /** Write content to this file (only for files from definition()/references()) */
   write(content: string): void;
+  /** Rename the current file. Relative paths resolve against the file's directory. */
+  rename(newPath: string): void;
 }
 ```
+
+### File Renaming
+
+Use `root.rename()` to rename a file alongside content changes. This is useful for codemods that convert between file formats (e.g., `.less` → `.css`, `.js` → `.ts`, `.cjs` → `.mjs`).
+
+```typescript
+// Rename .less → .css
+const codemod: Transform<CSS> = async (root) => {
+  root.rename(root.filename().replace('.less', '.css'));
+  return transformedContent; // or null for rename-only
+};
+```
+
+Behavior:
+| `return` value | `root.rename()` called | Result |
+|---|---|---|
+| `string` | no | Modify content only |
+| `null` | no | No changes |
+| `string` | yes | Modify content + rename file |
+| `null` | yes | Rename file only (content unchanged) |
+
+- If the path is **relative**, it's resolved against the current file's parent directory.
+- If the path is **absolute**, it's used as-is.
 
 ## Semantic Types
 

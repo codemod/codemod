@@ -180,7 +180,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     let capabilities_for_closure = config.capabilities.clone();
-    let language: ast_grep_language::SupportLang = args
+    let language: codemod_sandbox::CodemodLang = args
         .language
         .clone()
         .parse()
@@ -220,33 +220,51 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
+                test_mode: false,
             };
 
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(options).await {
                 Ok(execution_output) => {
                     // Handle the execution output (write back if modified and not dry run)
-                    if let ExecutionResult::Modified(ref new_content) = execution_output {
+                    if let ExecutionResult::Modified(ref modified) = execution_output {
+                        let write_path = modified.rename_to.as_deref().unwrap_or(file_path);
                         if !config.dry_run {
-                            if let Err(e) = tokio::fs::write(&file_path, new_content).await {
+                            if let Err(e) = tokio::fs::write(write_path, &modified.content).await {
                                 error!(
                                     "Failed to write modified file {}: {}",
-                                    file_path.display(),
+                                    write_path.display(),
                                     e
                                 );
                             } else {
-                                debug!("Modified file: {}", file_path.display());
+                                // If renamed, delete the original file
+                                if modified.rename_to.is_some() {
+                                    if let Err(e) = tokio::fs::remove_file(file_path).await {
+                                        error!(
+                                            "Failed to remove original file {}: {}",
+                                            file_path.display(),
+                                            e
+                                        );
+                                    } else {
+                                        debug!("Renamed file: {} -> {}", file_path.display(), write_path.display());
+                                    }
+                                } else {
+                                    debug!("Modified file: {}", file_path.display());
+                                }
                                 // Notify semantic provider of the change
                                 if let Some(ref provider) = semantic_provider {
-                                    let _ = provider.notify_file_processed(file_path, new_content);
+                                    let _ = provider.notify_file_processed(write_path, &modified.content);
                                 }
                             }
                         } else {
                             // Dry-run mode: print diff
+                            if modified.rename_to.is_some() {
+                                println!("Rename: {} -> {}", file_path.display(), write_path.display());
+                            }
                             let diff = generate_unified_diff(
                                 file_path,
                                 &content,
-                                new_content,
+                                &modified.content,
                                 &diff_config,
                             );
                             diff.print();
