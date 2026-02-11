@@ -88,5 +88,5 @@ declare module "codemod:ast-grep/langs/yaml" {
 }
 
 declare module "codemod:metrics" {
-  export * from "./metrics.d.ts";
+  export * from "@codemod.com/jssg-types/metrics";
 }

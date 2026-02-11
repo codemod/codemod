@@ -198,8 +198,7 @@ pub fn register_all() -> Result<(), LoaderError> {
     }
 
     unsafe {
-        DynamicLang::register(registrations)
-            .map_err(|e| LoaderError::Register(format!("{e}")))?;
+        DynamicLang::register(registrations).map_err(|e| LoaderError::Register(format!("{e}")))?;
     }
 
     Ok(())

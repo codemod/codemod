@@ -5,11 +5,11 @@
 //! - The `jssg_test!` macro for declarative test definitions
 
 use ast_grep_language::SupportLang;
-use codemod_sandbox::CodemodLang;
 use codemod_sandbox::sandbox::engine::execution_engine::{
-    execute_codemod_with_quickjs, ExecutionResult, JssgExecutionOptions,
+    execute_codemod_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
 };
 use codemod_sandbox::sandbox::resolvers::oxc_resolver::OxcResolver;
+use codemod_sandbox::CodemodLang;
 use language_core::SemanticProvider;
 use language_javascript::OxcSemanticProvider;
 use language_python::RuffSemanticProvider;
@@ -243,7 +243,10 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
     let result = execute_codemod_with_quickjs(options).await;
 
     match result {
-        Ok(ExecutionResult::Modified(modified)) => {
+        Ok(CodemodOutput {
+            primary: ExecutionResult::Modified(modified),
+            ..
+        }) => {
             // If expected file is specified, verify the output
             if let Some(expected_file) = config.expected_file {
                 let expected = load_fixture(config.fixture_dir, expected_file);
@@ -256,7 +259,14 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
             }
             Ok(Some(modified.content))
         }
-        Ok(ExecutionResult::Unmodified) | Ok(ExecutionResult::Skipped) => Ok(None),
+        Ok(CodemodOutput {
+            primary: ExecutionResult::Unmodified,
+            ..
+        })
+        | Ok(CodemodOutput {
+            primary: ExecutionResult::Skipped,
+            ..
+        }) => Ok(None),
         Err(e) => Err(format!("Execution failed: {:?}", e)),
     }
 }

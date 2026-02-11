@@ -1,5 +1,8 @@
+use super::codemod_lang::CodemodLang;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::serde::JsValue;
+use super::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -10,17 +13,15 @@ use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use super::codemod_lang::CodemodLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
-use rquickjs::{IntoJs, Object};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Flag indicating whether execution is in test mode.
 /// When in test mode, `jssgTransform` becomes a no-op.
@@ -31,6 +32,18 @@ pub struct ExecutionModeFlag {
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
     type Changed<'to> = ExecutionModeFlag;
+}
+
+/// Execution context passed to `jssgTransform` via QuickJS userdata.
+/// Contains the params and matrixValues from the parent codemod execution.
+#[derive(Debug, Clone)]
+pub struct JssgExecutionContext {
+    pub params: HashMap<String, serde_json::Value>,
+    pub matrix_values: Option<HashMap<String, serde_json::Value>>,
+}
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgExecutionContext {
+    type Changed<'to> = JssgExecutionContext;
 }
 
 /// Details of a modified file
@@ -46,6 +59,33 @@ pub enum ExecutionResult {
     Modified(ModifiedResult),
     Unmodified,
     Skipped,
+}
+
+/// A file change produced by `jssgTransform` (secondary output)
+#[derive(Debug, Clone)]
+pub struct FileChange {
+    pub path: PathBuf,
+    pub result: ExecutionResult,
+}
+
+/// Output of a codemod execution including both the primary result
+/// and any secondary file changes produced by `jssgTransform`.
+#[derive(Debug, Clone)]
+pub struct CodemodOutput {
+    pub primary: ExecutionResult,
+    pub secondary: Vec<FileChange>,
+}
+
+/// Shared accumulator for file changes produced by `jssgTransform`.
+/// Stored as QuickJS userdata so the JS-facing function can push changes
+/// without touching the filesystem.
+#[derive(Debug, Clone, Default)]
+pub struct JssgFileChanges {
+    pub changes: Arc<Mutex<Vec<FileChange>>>,
+}
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgFileChanges {
+    type Changed<'to> = JssgFileChanges;
 }
 
 /// Options for executing a codemod on a single file
@@ -71,7 +111,7 @@ pub struct JssgExecutionOptions<'a, R> {
 /// This is the core execution logic that doesn't touch the filesystem
 pub async fn execute_codemod_with_quickjs<'a, R>(
     options: JssgExecutionOptions<'a, R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -162,6 +202,24 @@ where
             },
         })?;
 
+        // Store shared accumulator for jssgTransform file changes
+        let jssg_file_changes = JssgFileChanges::default();
+        ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store JssgFileChanges: {:?}", e),
+            },
+        })?;
+
+        // Store jssg execution context so jssgTransform can access params/matrixValues
+        ctx.store_userdata(JssgExecutionContext {
+            params: params.clone(),
+            matrix_values: options.matrix_values.clone(),
+        }).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store JssgExecutionContext: {:?}", e),
+            },
+        })?;
+
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
             ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
@@ -236,7 +294,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(ExecutionResult::Skipped);
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -250,44 +308,13 @@ where
 
             let language_str = options.language.to_string();
 
-            let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let params_js = params.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>();
-            run_options.set("params", params_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("matches", matches).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let matrix_values_js = options.matrix_values
-                .map(|input| input.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>());
-
-            run_options.set("matrixValues", matrix_values_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let run_options_qjs = run_options.into_js(&ctx);
+            let run_options_qjs = build_transform_options(
+                &ctx,
+                params,
+                &language_str,
+                options.matrix_values,
+                matches,
+            )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
@@ -315,35 +342,17 @@ where
                     },
                 })?;
 
-            let rename_to = sg_root_inner.rename_to.lock().unwrap().clone().map(PathBuf::from);
+            let primary = process_transform_result(
+                &result_obj,
+                &sg_root_inner,
+                ModificationCheck::StringEquality { original_content: options.content },
+            )?;
 
-            if result_obj.is_string() {
-                let new_content = result_obj.get::<String>().unwrap();
-                if new_content == options.content && rename_to.is_none() {
-                    Ok(ExecutionResult::Unmodified)
-                } else {
-                    Ok(ExecutionResult::Modified(ModifiedResult {
-                        content: new_content,
-                        rename_to,
-                    }))
-                }
-            } else if result_obj.is_null() || result_obj.is_undefined() {
-                if rename_to.is_some() {
-                    // Rename-only: no content change but file should be renamed
-                    Ok(ExecutionResult::Modified(ModifiedResult {
-                        content: options.content.to_string(),
-                        rename_to,
-                    }))
-                } else {
-                    Ok(ExecutionResult::Unmodified)
-                }
-            } else {
-                Err(ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: "Invalid result type".to_string(),
-                    },
-                })
-            }
+            let secondary = jssg_file_changes.changes.lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+
+            Ok(CodemodOutput { primary, secondary })
         };
         execution.await
     })
@@ -556,14 +565,16 @@ function example() {
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Modified(modified)) => {
-                assert!(modified.content.contains("logger.log(\"Hello, world!\")"));
-                assert!(modified.content.contains("logger.log(\"Debug message\")"));
-                // console.info should remain unchanged
-                assert!(modified.content.contains("console.info(\"Info message\")"));
-                assert!(modified.rename_to.is_none());
-            }
-            Ok(other) => panic!("Expected modified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert!(modified.content.contains("logger.log(\"Hello, world!\")"));
+                    assert!(modified.content.contains("logger.log(\"Debug message\")"));
+                    // console.info should remain unchanged
+                    assert!(modified.content.contains("console.info(\"Info message\")"));
+                    assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -601,10 +612,12 @@ function example() {
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected behavior - no console.log or console.debug found
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected behavior - no console.log or console.debug found
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -646,10 +659,12 @@ function example() {
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected behavior - codemod returned null
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected behavior - codemod returned null
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -733,9 +748,9 @@ function example() {
             Err(ExecutionError::Runtime { source }) => {
                 assert!(source.to_string().contains("Invalid result type"));
             }
-            Ok(other) => panic!(
+            Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",
-                other
+                output.primary
             ),
             Err(e) => panic!("Expected specific runtime error, got: {:?}", e),
         }
@@ -878,10 +893,12 @@ function example() {
 
         // Should return Unmodified since we return null
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
 

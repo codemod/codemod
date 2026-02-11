@@ -719,7 +719,10 @@ impl<'js> SgNodeRjs<'js> {
     }
 
     pub fn debug(&self) -> Result<String> {
-        fn format_node<D: ast_grep_core::Doc>(node: &ast_grep_core::Node<D>, indent: usize) -> String {
+        fn format_node<D: ast_grep_core::Doc>(
+            node: &ast_grep_core::Node<D>,
+            indent: usize,
+        ) -> String {
             let indent_str = "  ".repeat(indent);
             let kind = node.kind();
             let is_named = node.is_named();

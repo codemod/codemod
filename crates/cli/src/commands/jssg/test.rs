@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 use std::collections::HashSet;
@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use codemod_sandbox::CodemodLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::CodemodLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -128,7 +128,8 @@ pub async fn handler(args: &Command) -> Result<()> {
         )
     })?;
 
-    let default_language_enum: CodemodLang = default_language_str.parse()
+    let default_language_enum: CodemodLang = default_language_str
+        .parse()
         .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     let strictness: testing_utils::Strictness = args
@@ -151,6 +152,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         expect_errors: global_config.expect_errors,
         strictness,
         language: global_config.language.clone(),
+        expected_extension: global_config.expected_extension.clone(),
     };
 
     let script_base_dir = codemod_path
@@ -209,7 +211,8 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .language
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Language must be specified for test case"))?;
-                let language_enum: CodemodLang = language_str.parse()
+                let language_enum: CodemodLang = language_str
+                    .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
                 let options = JssgExecutionOptions {
@@ -226,9 +229,9 @@ pub async fn handler(args: &Command) -> Result<()> {
                     metrics_context: None,
                     test_mode: true,
                 };
-                let execution_output = execute_codemod_with_quickjs(options).await?;
+                let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
 
-                match execution_output {
+                match primary {
                     ExecutionResult::Modified(modified) => {
                         Ok(TransformationResult::Success(TransformOutput {
                             content: modified.content,

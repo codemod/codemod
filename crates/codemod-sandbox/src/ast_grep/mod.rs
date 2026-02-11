@@ -156,9 +156,16 @@ fn jssg_transform_rjs<'js>(
     path_to_file: String,
     language: String,
 ) -> Result<Value<'js>> {
+    use crate::sandbox::engine::execution_engine::{
+        FileChange, JssgExecutionContext, JssgFileChanges,
+    };
+    use crate::sandbox::engine::transform_helpers::{
+        build_transform_options, process_transform_result, ModificationCheck,
+    };
     use crate::sandbox::engine::ExecutionModeFlag;
     use crate::utils::quickjs_utils::maybe_promise;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     let should_noop = ctx
         .userdata::<ExecutionModeFlag>()
@@ -167,10 +174,22 @@ fn jssg_transform_rjs<'js>(
     if should_noop {
         let ctx2 = ctx.clone();
         let promise = rquickjs::Promise::wrap_future(&ctx, async move {
-            Ok::<_, rquickjs::Error>(Value::new_undefined(ctx2))
+            Ok::<_, rquickjs::Error>(Value::new_null(ctx2))
         })?;
         return Ok(promise.into_value());
     }
+
+    let file_changes = ctx
+        .userdata::<JssgFileChanges>()
+        .map(|guard| guard.clone())
+        .ok_or_else(|| Exception::throw_message(&ctx, "JssgFileChanges not found in userdata"))?;
+
+    let exec_ctx = ctx.userdata::<JssgExecutionContext>();
+    let params = exec_ctx
+        .as_ref()
+        .map(|c| c.params.clone())
+        .unwrap_or_default();
+    let matrix_values = exec_ctx.as_ref().and_then(|c| c.matrix_values.clone());
 
     let file_path = std::path::Path::new(&path_to_file);
 
@@ -186,62 +205,57 @@ fn jssg_transform_rjs<'js>(
     let sg_root = SgRootRjs::try_new(language, content.clone(), Some(path_to_file.clone()))
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
 
-    // Build default options object
-    let options = Object::new(ctx.clone())?;
-    options.set("params", Object::new(ctx.clone())?)?;
+    let sg_root_inner = Arc::clone(&sg_root.inner);
 
-    let lang_str = CodemodLang::from_str(
-        sg_root.inner.grep.lang().to_string().as_str(),
-    )
-    .map(|l| l.to_string())
-    .unwrap_or_default();
-    options.set("language", lang_str)?;
+    let lang_str = CodemodLang::from_str(sg_root.inner.grep.lang().to_string().as_str())
+        .map(|l| l.to_string())
+        .unwrap_or_default();
+
+    let run_options = build_transform_options(&ctx, params, &lang_str, matrix_values, None)
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
 
     // Call the transform function
-    let result_val: Value<'js> = transform_fn.call((sg_root.clone(), options))?;
+    let result_val: Value<'js> = transform_fn.call((sg_root, run_options))?;
 
     // Create a promise to handle async transforms
     let ctx2 = ctx.clone();
     let promise = rquickjs::Promise::wrap_future(&ctx, async move {
-        let result = maybe_promise(result_val).await.map_err(|e| {
-            Exception::throw_message(&ctx2, &format!("Transform failed: {e}"))
-        })?;
+        let result = maybe_promise(result_val)
+            .await
+            .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
 
-        let rename_to = sg_root.get_rename_to();
+        let exec_result = process_transform_result(
+            &result,
+            &sg_root_inner,
+            ModificationCheck::StringEquality {
+                original_content: &content,
+            },
+        )
+        .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform result error: {e}")))?;
 
-        if result.is_string() {
-            let new_content: String = result.get().unwrap();
-            let write_path = rename_to.as_deref().unwrap_or(&path_to_file);
-
-            std::fs::write(write_path, &new_content).map_err(|e| {
-                Exception::throw_message(
-                    &ctx2,
-                    &format!("Failed to write file '{}': {}", write_path, e),
-                )
-            })?;
-
-            // If renamed, delete the original file
-            if rename_to.is_some() && write_path != path_to_file {
-                let _ = std::fs::remove_file(&path_to_file);
+        // Extract content before pushing to accumulator
+        let return_content = match &exec_result {
+            crate::sandbox::engine::ExecutionResult::Modified(modified) => {
+                Some(modified.content.clone())
             }
-        } else if result.is_null() || result.is_undefined() {
-            // If rename was requested with null return, rename with original content
-            if let Some(ref new_path) = rename_to {
-                std::fs::write(new_path, &content).map_err(|e| {
-                    Exception::throw_message(
-                        &ctx2,
-                        &format!("Failed to write file '{}': {}", new_path, e),
-                    )
-                })?;
+            _ => None,
+        };
 
-                if new_path != &path_to_file {
-                    let _ = std::fs::remove_file(&path_to_file);
-                }
-            }
-            // No rename and null return = no changes
+        // Push the file change to the shared accumulator instead of writing to disk
+        if let Ok(mut changes) = file_changes.changes.lock() {
+            changes.push(FileChange {
+                path: std::path::PathBuf::from(&path_to_file),
+                result: exec_result,
+            });
         }
 
-        Ok::<_, rquickjs::Error>(Value::new_undefined(ctx2))
+        // Return the transformed content string, or null if unmodified
+        match return_content {
+            Some(content) => {
+                Ok::<_, rquickjs::Error>(rquickjs::String::from_str(ctx2, &content)?.into_value())
+            }
+            None => Ok::<_, rquickjs::Error>(Value::new_null(ctx2)),
+        }
     })?;
 
     Ok(promise.into_value())

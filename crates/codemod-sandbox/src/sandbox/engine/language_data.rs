@@ -11,7 +11,10 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
     {
         use ast_grep_language::SupportLang::*;
 
-        map.insert(CodemodLang::Static(JavaScript), vec![".js", ".mjs", ".cjs", ".jsx"]);
+        map.insert(
+            CodemodLang::Static(JavaScript),
+            vec![".js", ".mjs", ".cjs", ".jsx"],
+        );
         map.insert(
             CodemodLang::Static(TypeScript),
             vec![".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"],
@@ -20,7 +23,10 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
             CodemodLang::Static(Tsx),
             vec![".tsx", ".jsx", ".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"],
         );
-        map.insert(CodemodLang::Static(Bash), vec![".sh", ".bash", ".zsh", ".fish"]);
+        map.insert(
+            CodemodLang::Static(Bash),
+            vec![".sh", ".bash", ".zsh", ".fish"],
+        );
         map.insert(CodemodLang::Static(C), vec![".c", ".h"]);
         map.insert(CodemodLang::Static(CSharp), vec![".cs"]);
         map.insert(CodemodLang::Static(Css), vec![".css"]);
@@ -97,14 +103,24 @@ mod tests {
         let map = create_language_extension_map();
         assert!(!map.is_empty());
 
-        assert!(map.get(&CodemodLang::Static(SupportLang::JavaScript)).unwrap().contains(&".js"));
-        assert!(map.get(&CodemodLang::Static(SupportLang::TypeScript)).unwrap().contains(&".ts"));
-        assert!(map.get(&CodemodLang::Static(SupportLang::Rust)).unwrap().contains(&".rs"));
+        assert!(map
+            .get(&CodemodLang::Static(SupportLang::JavaScript))
+            .unwrap()
+            .contains(&".js"));
+        assert!(map
+            .get(&CodemodLang::Static(SupportLang::TypeScript))
+            .unwrap()
+            .contains(&".ts"));
+        assert!(map
+            .get(&CodemodLang::Static(SupportLang::Rust))
+            .unwrap()
+            .contains(&".rs"));
     }
 
     #[test]
     fn test_get_extensions_for_language() {
-        let js_extensions = get_extensions_for_language(CodemodLang::Static(SupportLang::JavaScript));
+        let js_extensions =
+            get_extensions_for_language(CodemodLang::Static(SupportLang::JavaScript));
         assert!(js_extensions.contains(&".js"));
         assert!(js_extensions.contains(&".mjs"));
         assert!(js_extensions.contains(&".cjs"));

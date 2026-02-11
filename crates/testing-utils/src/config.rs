@@ -60,6 +60,7 @@ pub struct TestOptions {
     pub expect_errors: Vec<String>,
     pub strictness: Strictness,
     pub language: Option<String>,
+    pub expected_extension: Option<String>,
 }
 
 #[derive(Debug, Clone)]

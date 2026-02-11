@@ -1,3 +1,4 @@
+use super::codemod_lang::CodemodLang;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::MetricsModule;
@@ -5,7 +6,6 @@ use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
-use super::codemod_lang::CodemodLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};

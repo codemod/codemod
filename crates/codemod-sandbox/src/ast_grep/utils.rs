@@ -1,6 +1,8 @@
 use crate::ast_grep::types::AstGrepError;
 #[cfg(feature = "wasm")]
 use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
+#[cfg(feature = "native")]
+use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
 use ast_grep_config::{DeserializeEnv, RuleCore, SerializableRuleCore};
 use ast_grep_core::{
     matcher::{KindMatcher, Matcher},
@@ -9,8 +11,6 @@ use ast_grep_core::{
 };
 #[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::SupportLang;
-#[cfg(feature = "native")]
-use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
 

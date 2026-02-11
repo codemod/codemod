@@ -1,4 +1,4 @@
-use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -7,8 +7,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codemod_sandbox::CodemodLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::CodemodLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -172,10 +172,7 @@ impl JssgTestHandler {
         request: RunJssgTestRequest,
     ) -> Result<RunJssgTestResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Parse language
-        let language: CodemodLang = request
-            .language
-            .parse()
-            .map_err(|e: String| e)?;
+        let language: CodemodLang = request.language.parse().map_err(|e: String| e)?;
 
         // Set up execution components
         let codemod_path = PathBuf::from(&request.codemod_file);
@@ -232,6 +229,7 @@ impl JssgTestHandler {
             expect_errors: vec![],
             strictness,
             language: Some(language_str),
+            expected_extension: None,
         };
 
         // Create execution function
@@ -259,9 +257,10 @@ impl JssgTestHandler {
                         metrics_context: None,
                         test_mode: true,
                     };
-                    let execution_output = execute_codemod_with_quickjs(options).await?;
+                    let CodemodOutput { primary, .. } =
+                        execute_codemod_with_quickjs(options).await?;
 
-                    match execution_output {
+                    match primary {
                         ExecutionResult::Modified(modified) => {
                             Ok(TransformationResult::Success(TransformOutput {
                                 content: modified.content,

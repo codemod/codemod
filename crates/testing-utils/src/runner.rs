@@ -119,7 +119,7 @@ impl TestRunner {
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
-            .to_unified_test_cases(extensions)
+            .to_unified_test_cases(extensions, self.options.expected_extension.as_deref())
             .map_err(|e| anyhow::anyhow!("Failed to load test cases: {}", e))?;
 
         if test_cases.is_empty() {

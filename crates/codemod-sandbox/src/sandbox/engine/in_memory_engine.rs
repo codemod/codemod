@@ -1,6 +1,9 @@
-use super::execution_engine::{ExecutionResult, ModifiedResult};
+use super::codemod_lang::CodemodLang;
+use super::execution_engine::{CodemodOutput, ExecutionResult};
 use super::quickjs_adapters::QuickJSResolver;
-use crate::ast_grep::serde::JsValue;
+use super::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -11,16 +14,11 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
-use super::codemod_lang::CodemodLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use language_core::SemanticProvider;
-use rquickjs::{
-    async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
-};
-use sha2::{Digest, Sha256};
+use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -74,7 +72,7 @@ pub struct InMemoryExecutionOptions<'a, R> {
 /// suitable for use in synchronous contexts like PostgreSQL extensions.
 pub fn execute_codemod_sync<R>(
     options: InMemoryExecutionOptions<R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -95,7 +93,7 @@ where
 /// This function executes the codemod entirely in memory without filesystem access.
 pub async fn execute_codemod_in_memory<R>(
     options: InMemoryExecutionOptions<'_, R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -254,39 +252,18 @@ where
 
             let language_str = options.language.to_string();
 
-            let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("params", params).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("matches", matches).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+            // Convert String params to serde_json::Value for the shared helper
+            let params_json = params.into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect::<HashMap<String, serde_json::Value>>();
 
-            let matrix_values_js = options.matrix_values
-                .map(|input| input.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>());
-
-            run_options.set("matrixValues", matrix_values_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let run_options_qjs = run_options.into_js(&ctx);
+            let run_options_qjs = build_transform_options(
+                &ctx,
+                params_json,
+                &language_str,
+                options.matrix_values,
+                matches,
+            )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
@@ -313,45 +290,11 @@ where
                     },
                 })?;
 
-            let rename_to = sg_root_inner.rename_to.lock().unwrap().clone().map(PathBuf::from);
-
-            if result_obj.is_string() {
-                let new_content = result_obj.get::<String>().unwrap();
-                let is_modified = match options.original_sha256 {
-                    Some(original_hash) => {
-                        let mut hasher = Sha256::new();
-                        hasher.update(new_content.as_bytes());
-                        let new_hash: [u8; 32] = hasher.finalize().into();
-                        new_hash != original_hash
-                    }
-                    None => true,
-                };
-                if is_modified || rename_to.is_some() {
-                    Ok(ExecutionResult::Modified(ModifiedResult {
-                        content: new_content,
-                        rename_to,
-                    }))
-                } else {
-                    Ok(ExecutionResult::Unmodified)
-                }
-            } else if result_obj.is_null() || result_obj.is_undefined() {
-                if rename_to.is_some() {
-                    // Rename-only: content unchanged but file should be renamed
-                    let original_content = sg_root_inner.grep.source().to_string();
-                    Ok(ExecutionResult::Modified(ModifiedResult {
-                        content: original_content,
-                        rename_to,
-                    }))
-                } else {
-                    Ok(ExecutionResult::Unmodified)
-                }
-            } else {
-                Err(ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: "Invalid result type".to_string(),
-                    },
-                })
-            }
+            process_transform_result(
+                &result_obj,
+                &sg_root_inner,
+                ModificationCheck::Sha256(options.original_sha256),
+            )
         };
         execution.await
     })
@@ -363,7 +306,10 @@ where
         });
     }
 
-    result
+    result.map(|primary| CodemodOutput {
+        primary,
+        secondary: vec![],
+    })
 }
 
 #[cfg(test)]
@@ -372,6 +318,7 @@ mod tests {
     use crate::sandbox::errors::RuntimeError;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
     use ast_grep_language::SupportLang;
+    use sha2::{Digest, Sha256};
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -430,7 +377,10 @@ export default function transform(root) {
             }) => {
                 assert_eq!(timeout_ms, 50);
             }
-            Ok(_) => panic!("Expected timeout error, but got success"),
+            Ok(output) => panic!(
+                "Expected timeout error, but got success: {:?}",
+                output.primary
+            ),
             Err(e) => panic!("Expected timeout error, got different error: {:?}", e),
         }
     }
@@ -478,11 +428,13 @@ export default function transform(root) {
         });
 
         match result {
-            Ok(ExecutionResult::Modified(modified)) => {
-                assert!(modified.content.contains("logger.log('Hello, world!')"));
-                assert!(modified.rename_to.is_none());
-            }
-            Ok(other) => panic!("Expected modified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert!(modified.content.contains("logger.log('Hello, world!')"));
+                    assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }

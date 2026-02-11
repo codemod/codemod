@@ -555,27 +555,31 @@ export type GetSelectorOptions<_T extends TypesMap> = {
 export type GetSelector<T extends TypesMap> = ({ params }: GetSelectorOptions<T>) => RuleConfig<T>;
 
 /**
- * Execute a transform function on a file, writing back the result.
+ * Execute a transform function on a file, collecting the result.
  *
  * Reads the file at `pathToFile`, parses it with the given `language`,
- * calls the `transformFn` with the parsed root, and writes back
- * the result (including file renames if `root.rename()` was called).
+ * calls the `transformFn` with the parsed root, and returns the
+ * transformed content string if the file was modified, or `null` if
+ * the file was unchanged.
  *
  * @param transformFn - The transform function to apply
  * @param pathToFile - Path to the file to transform
  * @param language - The language to parse the file as (e.g., "typescript", "javascript")
- * @returns A promise that resolves when the transform is complete
+ * @returns A promise that resolves with the transformed content, or null if unchanged
  *
  * @example
  * ```ts
  * import { jssgTransform } from "codemod:ast-grep";
  *
- * // Apply a transform to a specific file
- * await jssgTransform(myTransform, "./src/config.ts", "typescript");
+ * // Apply a transform to a specific file and get the result
+ * const result = await jssgTransform(myTransform, "./src/config.ts", "typescript");
+ * if (result !== null) {
+ *   console.log("Transformed content:", result);
+ * }
  * ```
  */
 export declare function jssgTransform<T extends TypesMap = TypesMap>(
   transformFn: Transform<T>,
   pathToFile: string,
   language: string,
-): Promise<void>;
+): Promise<string | null>;

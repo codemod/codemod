@@ -10,8 +10,7 @@ use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
-use codemod_sandbox::sandbox::engine::ExecutionResult;
-use codemod_sandbox::sandbox::engine::JssgExecutionOptions;
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
@@ -225,50 +224,84 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(options).await {
-                Ok(execution_output) => {
-                    // Handle the execution output (write back if modified and not dry run)
-                    if let ExecutionResult::Modified(ref modified) = execution_output {
-                        let write_path = modified.rename_to.as_deref().unwrap_or(file_path);
-                        if !config.dry_run {
-                            if let Err(e) = tokio::fs::write(write_path, &modified.content).await {
-                                error!(
-                                    "Failed to write modified file {}: {}",
-                                    write_path.display(),
-                                    e
-                                );
-                            } else {
-                                // If renamed, delete the original file
-                                if modified.rename_to.is_some() {
-                                    if let Err(e) = tokio::fs::remove_file(file_path).await {
-                                        error!(
-                                            "Failed to remove original file {}: {}",
-                                            file_path.display(),
-                                            e
-                                        );
-                                    } else {
-                                        debug!("Renamed file: {} -> {}", file_path.display(), write_path.display());
-                                    }
+                Ok(CodemodOutput { primary, secondary }) => {
+                    // Collect all file changes: primary + secondary from jssgTransform
+                    let mut all_changes: Vec<(
+                        std::path::PathBuf,
+                        &codemod_sandbox::sandbox::engine::ExecutionResult,
+                    )> = Vec::new();
+                    if let ExecutionResult::Modified(_) = &primary {
+                        all_changes.push((file_path.to_path_buf(), &primary));
+                    }
+                    for change in &secondary {
+                        if let ExecutionResult::Modified(_) = &change.result {
+                            all_changes.push((change.path.clone(), &change.result));
+                        }
+                    }
+
+                    for (change_path, change_result) in &all_changes {
+                        if let ExecutionResult::Modified(ref modified) = change_result {
+                            let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
+                            if !config.dry_run {
+                                if let Err(e) =
+                                    tokio::fs::write(write_path, &modified.content).await
+                                {
+                                    error!(
+                                        "Failed to write modified file {}: {}",
+                                        write_path.display(),
+                                        e
+                                    );
                                 } else {
-                                    debug!("Modified file: {}", file_path.display());
+                                    // If renamed, delete the original file
+                                    if modified.rename_to.is_some() {
+                                        if let Err(e) = tokio::fs::remove_file(change_path).await {
+                                            error!(
+                                                "Failed to remove original file {}: {}",
+                                                change_path.display(),
+                                                e
+                                            );
+                                        } else {
+                                            debug!(
+                                                "Renamed file: {} -> {}",
+                                                change_path.display(),
+                                                write_path.display()
+                                            );
+                                        }
+                                    } else {
+                                        debug!("Modified file: {}", change_path.display());
+                                    }
+                                    // Notify semantic provider of the change
+                                    if let Some(ref provider) = semantic_provider {
+                                        let _ = provider
+                                            .notify_file_processed(write_path, &modified.content);
+                                    }
                                 }
-                                // Notify semantic provider of the change
-                                if let Some(ref provider) = semantic_provider {
-                                    let _ = provider.notify_file_processed(write_path, &modified.content);
+                            } else {
+                                // Dry-run mode: print diff
+                                if modified.rename_to.is_some() {
+                                    println!(
+                                        "Rename: {} -> {}",
+                                        change_path.display(),
+                                        write_path.display()
+                                    );
                                 }
+                                // For secondary changes, read original content from disk
+                                let original = if change_path == file_path {
+                                    content.clone()
+                                } else {
+                                    tokio::fs::read_to_string(change_path)
+                                        .await
+                                        .unwrap_or_default()
+                                };
+                                let diff = generate_unified_diff(
+                                    change_path,
+                                    &original,
+                                    &modified.content,
+                                    &diff_config,
+                                );
+                                diff.print();
+                                debug!("Would modify file (dry run): {}", change_path.display());
                             }
-                        } else {
-                            // Dry-run mode: print diff
-                            if modified.rename_to.is_some() {
-                                println!("Rename: {} -> {}", file_path.display(), write_path.display());
-                            }
-                            let diff = generate_unified_diff(
-                                file_path,
-                                &content,
-                                &modified.content,
-                                &diff_config,
-                            );
-                            diff.print();
-                            debug!("Would modify file (dry run): {}", file_path.display());
                         }
                     }
                 }
