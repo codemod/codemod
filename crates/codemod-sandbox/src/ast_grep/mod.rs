@@ -28,7 +28,7 @@ use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
 use rquickjs::{Function, Value};
 
 use crate::sandbox::engine::execution_engine::{
-    FileChange, JssgExecutionContext, JssgFileChanges, validate_path_within_target,
+    validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
 };
 use crate::sandbox::engine::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,

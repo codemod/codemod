@@ -1,5 +1,5 @@
 use ast_grep_dynamic::{DynamicLang, Registration};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Once;
 use thiserror::Error;
 
@@ -115,7 +115,7 @@ fn get_cache_dir() -> Result<PathBuf, LoaderError> {
 
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
-    cache_dir: &PathBuf,
+    cache_dir: &Path,
 ) -> Result<PathBuf, LoaderError> {
     let (os, arch) = current_platform()?;
 

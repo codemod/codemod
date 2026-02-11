@@ -813,7 +813,9 @@ function example() {
 
         match result {
             Err(ExecutionError::Runtime { source }) => {
-                assert!(source.to_string().contains("Invalid result type"));
+                assert!(source
+                    .to_string()
+                    .contains("must return either a string or null/undefined"));
             }
             Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",

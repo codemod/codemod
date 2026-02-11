@@ -130,11 +130,7 @@ impl<'js> SgRootRjs<'js> {
         #[cfg(feature = "native")]
         {
             use crate::sandbox::engine::execution_engine::validate_path_within_target;
-            validate_path_within_target(
-                &ctx,
-                std::path::Path::new(&resolved_path),
-                "rename()",
-            )?;
+            validate_path_within_target(&ctx, std::path::Path::new(&resolved_path), "rename()")?;
         }
 
         let mut rename_to = self.inner.rename_to.lock().map_err(|e| {

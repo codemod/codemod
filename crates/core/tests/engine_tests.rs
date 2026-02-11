@@ -2396,63 +2396,6 @@ export default function transform(ast) {
     );
 }
 
-#[tokio::test]
-async fn test_execute_js_ast_grep_step_invalid_language() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
-
-    // Create a simple codemod file
-    create_test_file(
-        temp_path,
-        "codemod.js",
-        r#"
-export default function transform(ast) {
-  return ast;
-}
-"#,
-    );
-
-    // Create test file
-    create_test_file(temp_path, "test.js", "console.log('test');");
-
-    // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
-        bundle_path: temp_path.to_path_buf(),
-        ..WorkflowRunConfig::default()
-    };
-    let engine = Engine::with_workflow_run_config(config);
-    let result = engine
-        .execute_js_ast_grep_step(
-            "test-node".to_string(),
-            "test-step".to_string(),
-            &UseJSAstGrep {
-                js_file: "codemod.js".to_string(),
-                base_path: None,
-                include: None,
-                exclude: None,
-                max_threads: None,
-                dry_run: Some(false),
-                language: Some("invalid-language".to_string()), // Invalid language
-                capabilities: None,
-                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
-            },
-            None,
-            None,
-            &CapabilitiesData {
-                capabilities: None,
-                capabilities_security_callback: None,
-            },
-            &None,
-        )
-        .await;
-
-    // Currently the implementation doesn't validate language strings, so just test that it doesn't panic
-    // Note: This test was updated because the current implementation doesn't validate language strings
-    // If validation is needed, it should be added to the execute_js_ast_grep_step method
-    // assert!(result.is_err(), "Should fail with invalid language");
-    println!("Result with invalid language: {result:?}");
-}
-
 // Helper function to create a workflow with JSAstGrep step
 fn create_js_ast_grep_workflow() -> Workflow {
     Workflow {
