@@ -17,7 +17,8 @@ use crate::file_ops::AsyncFileWriter;
 use crate::utils::validate_workflow;
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{
-    extract_selector_with_quickjs, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
+    extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
+    SelectorEngineOptions,
 };
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
@@ -1887,68 +1888,115 @@ impl Engine {
                         capabilities: config.capabilities.clone(),
                         semantic_provider: semantic_provider.clone(),
                         metrics_context: Some(metrics_context_clone.clone()),
+                        test_mode: false,
+                        target_directory: Some(&target_path),
                     })
                     .await
                 });
 
                 match execution_result {
-                    Ok(execution_output) => {
-                        match execution_output {
-                            ExecutionResult::Modified(ref new_content) => {
-                                if config.dry_run {
-                                    self.execution_stats
-                                        .files_modified
-                                        .fetch_add(1, Ordering::Relaxed);
-
-                                    // Report the change via callback if provided
-                                    if let Some(callback) =
-                                        &self.workflow_run_config.dry_run_callback
-                                    {
-                                        callback(DryRunChange {
-                                            file_path: file_path.to_path_buf(),
-                                            original_content: content.clone(),
-                                            new_content: new_content.clone(),
-                                        });
-                                    }
-
-                                    debug!("Would modify file (dry run): {}", file_path.display());
-                                } else {
-                                    // Use async file writing to avoid blocking the thread
-                                    let write_result = runtime_handle.block_on(async {
-                                        file_writer
-                                            .write_file(
-                                                file_path.to_path_buf(),
-                                                new_content.clone(),
-                                            )
-                                            .await
-                                    });
-
-                                    if let Err(e) = write_result {
-                                        error!(
-                                            "Failed to write modified file {}: {}",
-                                            file_path.display(),
-                                            e
-                                        );
-                                        self.execution_stats
-                                            .files_with_errors
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    } else {
-                                        debug!("Modified file: {}", file_path.display());
-                                        if let Some(ref provider) = semantic_provider {
-                                            let _ = provider
-                                                .notify_file_processed(file_path, new_content);
-                                        }
+                    Ok(CodemodOutput { primary, secondary }) => {
+                        let apply_change = |change_path: &Path, result: &ExecutionResult| {
+                            match result {
+                                ExecutionResult::Modified(ref modified) => {
+                                    let write_path =
+                                        modified.rename_to.as_deref().unwrap_or(change_path);
+                                    if config.dry_run {
                                         self.execution_stats
                                             .files_modified
                                             .fetch_add(1, Ordering::Relaxed);
+
+                                        // Report the change via callback if provided
+                                        if let Some(callback) =
+                                            &self.workflow_run_config.dry_run_callback
+                                        {
+                                            let original = if change_path == file_path {
+                                                content.clone()
+                                            } else {
+                                                std::fs::read_to_string(change_path)
+                                                    .unwrap_or_default()
+                                            };
+                                            callback(DryRunChange {
+                                                file_path: change_path.to_path_buf(),
+                                                original_content: original,
+                                                new_content: modified.content.clone(),
+                                            });
+                                        }
+
+                                        debug!(
+                                            "Would modify file (dry run): {}",
+                                            change_path.display()
+                                        );
+                                    } else {
+                                        // Use async file writing to avoid blocking the thread
+                                        let write_result = runtime_handle.block_on(async {
+                                            file_writer
+                                                .write_file(
+                                                    write_path.to_path_buf(),
+                                                    modified.content.clone(),
+                                                )
+                                                .await
+                                        });
+
+                                        if let Err(e) = write_result {
+                                            error!(
+                                                "Failed to write modified file {}: {}",
+                                                write_path.display(),
+                                                e
+                                            );
+                                            self.execution_stats
+                                                .files_with_errors
+                                                .fetch_add(1, Ordering::Relaxed);
+                                        } else {
+                                            // If renamed, delete the original file
+                                            if modified.rename_to.is_some()
+                                                && write_path != change_path
+                                            {
+                                                if let Err(e) = std::fs::remove_file(change_path) {
+                                                    error!(
+                                                        "Failed to remove original file {}: {}",
+                                                        change_path.display(),
+                                                        e
+                                                    );
+                                                } else {
+                                                    debug!(
+                                                        "Renamed file: {} -> {}",
+                                                        change_path.display(),
+                                                        write_path.display()
+                                                    );
+                                                }
+                                            } else {
+                                                debug!("Modified file: {}", change_path.display());
+                                            }
+                                            if let Some(ref provider) = semantic_provider {
+                                                let _ = provider.notify_file_processed(
+                                                    write_path,
+                                                    &modified.content,
+                                                );
+                                            }
+                                            self.execution_stats
+                                                .files_modified
+                                                .fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
+                                ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
+                            }
+                        };
+
+                        match &primary {
+                            ExecutionResult::Modified(_) => {
+                                apply_change(file_path, &primary);
                             }
                             ExecutionResult::Unmodified | ExecutionResult::Skipped => {
                                 self.execution_stats
                                     .files_unmodified
                                     .fetch_add(1, Ordering::Relaxed);
                             }
+                        }
+
+                        for change in &secondary {
+                            apply_change(&change.path, &change.result);
                         }
                     }
                     Err(e) => {

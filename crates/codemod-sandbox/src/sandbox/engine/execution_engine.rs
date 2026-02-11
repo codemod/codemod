@@ -1,5 +1,8 @@
+use super::codemod_lang::CodemodLang;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::serde::JsValue;
+use super::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -10,34 +13,139 @@ use crate::workflow_global::WorkflowGlobalModule;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 use rquickjs::{CatchResultExt, Function, Module};
-use rquickjs::{IntoJs, Object};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Flag indicating whether execution is in test mode.
+/// When in test mode, `jssgTransform` becomes a no-op.
+#[derive(Debug, Clone)]
+pub struct ExecutionModeFlag {
+    pub test_mode: bool,
+}
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
+    type Changed<'to> = ExecutionModeFlag;
+}
+
+/// Execution context passed to `jssgTransform` via QuickJS userdata.
+/// Contains the params and matrixValues from the parent codemod execution.
+#[derive(Debug, Clone)]
+pub struct JssgExecutionContext {
+    pub params: HashMap<String, serde_json::Value>,
+    pub matrix_values: Option<HashMap<String, serde_json::Value>>,
+}
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgExecutionContext {
+    type Changed<'to> = JssgExecutionContext;
+}
+
+/// Details of a modified file
+#[derive(Debug, Clone)]
+pub struct ModifiedResult {
+    pub content: String,
+    pub rename_to: Option<PathBuf>,
+}
 
 /// Result of executing a codemod on a single file
 #[derive(Debug, Clone)]
 pub enum ExecutionResult {
-    Modified(String),
+    Modified(ModifiedResult),
     Unmodified,
     Skipped,
+}
+
+/// A file change produced by `jssgTransform` (secondary output)
+#[derive(Debug, Clone)]
+pub struct FileChange {
+    pub path: PathBuf,
+    pub result: ExecutionResult,
+}
+
+/// Output of a codemod execution including both the primary result
+/// and any secondary file changes produced by `jssgTransform`.
+#[derive(Debug, Clone)]
+pub struct CodemodOutput {
+    pub primary: ExecutionResult,
+    pub secondary: Vec<FileChange>,
+}
+
+/// Shared accumulator for file changes produced by `jssgTransform`.
+/// Stored as QuickJS userdata so the JS-facing function can push changes
+/// without touching the filesystem.
+#[derive(Debug, Clone, Default)]
+pub struct JssgFileChanges {
+    pub changes: Arc<Mutex<Vec<FileChange>>>,
+}
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgFileChanges {
+    type Changed<'to> = JssgFileChanges;
+}
+
+/// The target directory that the codemod is running against.
+/// Stored as QuickJS userdata so `jssgTransform` and `rename()` can
+/// validate that file paths stay within this directory.
+#[derive(Debug, Clone)]
+pub struct TargetDirectory(pub PathBuf);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for TargetDirectory {
+    type Changed<'to> = TargetDirectory;
+}
+
+/// Validate that `path` resolves within the target directory stored in QuickJS userdata.
+/// `caller` is used in error messages (e.g. "jssgTransform()" or "rename()").
+/// If the file doesn't exist yet (e.g. rename target), the parent directory is canonicalized instead.
+/// Returns `Ok(())` if no `TargetDirectory` userdata is set (e.g. test / in-memory contexts).
+pub fn validate_path_within_target<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    path: &Path,
+    caller: &str,
+) -> rquickjs::Result<()> {
+    if let Some(target_dir) = ctx.userdata::<TargetDirectory>() {
+        let canonical_target = target_dir
+            .0
+            .canonicalize()
+            .unwrap_or_else(|_| target_dir.0.clone());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| {
+            // File may not exist yet (e.g. rename target); canonicalize the parent instead
+            if let Some(parent) = path.parent() {
+                let canonical_parent = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf());
+                canonical_parent.join(path.file_name().unwrap_or_default())
+            } else {
+                path.to_path_buf()
+            }
+        });
+        if !canonical_path.starts_with(&canonical_target) {
+            return Err(rquickjs::Exception::throw_message(
+                ctx,
+                &format!(
+                    "{} path '{}' is outside the target directory '{}'",
+                    caller,
+                    path.display(),
+                    target_dir.0.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Options for executing a codemod on a single file
 pub struct JssgExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    pub language: SupportLang,
+    pub language: CodemodLang,
     pub file_path: &'a Path,
     pub content: &'a str,
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
@@ -45,13 +153,18 @@ pub struct JssgExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Whether this is a test execution (jssgTransform becomes a no-op)
+    pub test_mode: bool,
+    /// The target directory the codemod is running against.
+    /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Execute a codemod on string content using QuickJS
 /// This is the core execution logic that doesn't touch the filesystem
 pub async fn execute_codemod_with_quickjs<'a, R>(
     options: JssgExecutionOptions<'a, R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -131,9 +244,44 @@ where
 
     // Capture metrics context for use inside async block
     let metrics_context = options.metrics_context.clone();
+    let test_mode = options.test_mode;
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
+        // Store execution mode flag in runtime userdata
+        ctx.store_userdata(ExecutionModeFlag { test_mode }).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store ExecutionModeFlag: {:?}", e),
+            },
+        })?;
+
+        // Store shared accumulator for jssgTransform file changes
+        let jssg_file_changes = JssgFileChanges::default();
+        ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store JssgFileChanges: {:?}", e),
+            },
+        })?;
+
+        // Store jssg execution context so jssgTransform can access params/matrixValues
+        ctx.store_userdata(JssgExecutionContext {
+            params: params.clone(),
+            matrix_values: options.matrix_values.clone(),
+        }).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store JssgExecutionContext: {:?}", e),
+            },
+        })?;
+
+        // Store target directory in runtime userdata if provided
+        if let Some(target_dir) = options.target_directory {
+            ctx.store_userdata(TargetDirectory(target_dir.to_path_buf())).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store TargetDirectory: {:?}", e),
+                },
+            })?;
+        }
+
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
             ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
@@ -193,6 +341,9 @@ where
                     },
                 })?;
 
+            // Keep a reference to read rename_to after JS execution
+            let sg_root_inner = Arc::clone(&parsed_content.inner);
+
             // Calculate matches inside the JS context
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
                 let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
@@ -205,7 +356,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(ExecutionResult::Skipped);
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -219,44 +370,13 @@ where
 
             let language_str = options.language.to_string();
 
-            let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let params_js = params.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>();
-            run_options.set("params", params_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("matches", matches).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let matrix_values_js = options.matrix_values
-                .map(|input| input.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>());
-
-            run_options.set("matrixValues", matrix_values_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let run_options_qjs = run_options.into_js(&ctx);
+            let run_options_qjs = build_transform_options(
+                &ctx,
+                params,
+                &language_str,
+                options.matrix_values,
+                matches,
+            )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
@@ -284,22 +404,17 @@ where
                     },
                 })?;
 
-            if result_obj.is_string() {
-                let new_content = result_obj.get::<String>().unwrap();
-                if new_content == options.content {
-                    Ok(ExecutionResult::Unmodified)
-                } else {
-                    Ok(ExecutionResult::Modified(new_content))
-                }
-            } else if result_obj.is_null() || result_obj.is_undefined() {
-                Ok(ExecutionResult::Unmodified)
-            } else {
-                Err(ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: "Invalid result type".to_string(),
-                    },
-                })
-            }
+            let primary = process_transform_result(
+                &result_obj,
+                &sg_root_inner,
+                ModificationCheck::StringEquality { original_content: options.content },
+            )?;
+
+            let secondary = jssg_file_changes.changes.lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+
+            Ok(CodemodOutput { primary, secondary })
         };
         execution.await
     })
@@ -438,6 +553,10 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    fn js_lang() -> CodemodLang {
+        CodemodLang::Static(SupportLang::JavaScript)
+    }
+
     /// Helper to create a temporary codemod file and test directory
     fn setup_test_codemod(codemod_content: &str) -> (TempDir, std::path::PathBuf) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -493,7 +612,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -502,18 +621,23 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Modified(new_content)) => {
-                assert!(new_content.contains("logger.log(\"Hello, world!\")"));
-                assert!(new_content.contains("logger.log(\"Debug message\")"));
-                // console.info should remain unchanged
-                assert!(new_content.contains("console.info(\"Info message\")"));
-            }
-            Ok(other) => panic!("Expected modified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert!(modified.content.contains("logger.log(\"Hello, world!\")"));
+                    assert!(modified.content.contains("logger.log(\"Debug message\")"));
+                    // console.info should remain unchanged
+                    assert!(modified.content.contains("console.info(\"Info message\")"));
+                    assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -536,7 +660,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -545,15 +669,19 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected behavior - no console.log or console.debug found
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected behavior - no console.log or console.debug found
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -580,7 +708,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -589,15 +717,19 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected behavior - codemod returned null
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected behavior - codemod returned null
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
@@ -624,7 +756,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -633,6 +765,8 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -662,7 +796,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -671,17 +805,21 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
 
         match result {
             Err(ExecutionError::Runtime { source }) => {
-                assert!(source.to_string().contains("Invalid result type"));
+                assert!(source
+                    .to_string()
+                    .contains("must return either a string or null/undefined"));
             }
-            Ok(other) => panic!(
+            Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",
-                other
+                output.primary
             ),
             Err(e) => panic!("Expected specific runtime error, got: {:?}", e),
         }
@@ -703,7 +841,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: nonexistent_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -712,6 +850,8 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -722,12 +862,15 @@ function example() {
 
     #[tokio::test]
     async fn test_execution_result_debug_clone() {
-        let result1 = ExecutionResult::Modified("test".to_string());
+        let result1 = ExecutionResult::Modified(ModifiedResult {
+            content: "test".to_string(),
+            rename_to: None,
+        });
         let result2 = result1.clone();
 
         match (result1, result2) {
-            (ExecutionResult::Modified(content1), ExecutionResult::Modified(content2)) => {
-                assert_eq!(content1, content2);
+            (ExecutionResult::Modified(m1), ExecutionResult::Modified(m2)) => {
+                assert_eq!(m1.content, m2.content);
             }
             _ => panic!("Clone should preserve the variant and content"),
         }
@@ -804,7 +947,7 @@ function example() {
         let options = JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             file_path,
             content,
             selector_config: None,
@@ -813,16 +956,20 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
+            test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
 
         // Should return Unmodified since we return null
         match result {
-            Ok(ExecutionResult::Unmodified) => {
-                // Expected
-            }
-            Ok(other) => panic!("Expected unmodified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Unmodified => {
+                    // Expected
+                }
+                other => panic!("Expected unmodified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
 

@@ -1,6 +1,9 @@
-use super::execution_engine::ExecutionResult;
+use super::codemod_lang::CodemodLang;
+use super::execution_engine::{CodemodOutput, ExecutionResult};
 use super::quickjs_adapters::QuickJSResolver;
-use crate::ast_grep::serde::JsValue;
+use super::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -11,13 +14,9 @@ use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
-use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use language_core::SemanticProvider;
-use rquickjs::{
-    async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, IntoJs, Module, Object,
-};
-use sha2::{Digest, Sha256};
+use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,16 +40,16 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// The JavaScript codemod source code (not a file path)
     pub codemod_source: &'a str,
     /// The programming language of the source code to transform
-    pub language: SupportLang,
+    pub language: CodemodLang,
     /// The pre-parsed AST (allows leveraging AST caching)
-    pub ast: AstGrep<StrDoc<SupportLang>>,
+    pub ast: AstGrep<StrDoc<CodemodLang>>,
     /// SHA256 hash of the original content (used for modification detection)
     /// If None, any non-null result is considered modified
     pub original_sha256: Option<Sha256Hash>,
     /// Optional module resolver (if None, a no-op resolver is used)
     pub resolver: Option<Arc<R>>,
     /// Optional selector config for pre-filtering
-    pub selector_config: Option<Arc<Box<RuleConfig<SupportLang>>>>,
+    pub selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
     /// Optional parameters passed to the codemod
     pub params: Option<HashMap<String, String>>,
     /// Optional matrix values for parameterized codemods
@@ -73,7 +72,7 @@ pub struct InMemoryExecutionOptions<'a, R> {
 /// suitable for use in synchronous contexts like PostgreSQL extensions.
 pub fn execute_codemod_sync<R>(
     options: InMemoryExecutionOptions<R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -94,7 +93,7 @@ where
 /// This function executes the codemod entirely in memory without filesystem access.
 pub async fn execute_codemod_in_memory<R>(
     options: InMemoryExecutionOptions<'_, R>,
-) -> Result<ExecutionResult, ExecutionError>
+) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -225,6 +224,9 @@ where
                     },
                 })?;
 
+            // Keep a reference to read rename_to after JS execution
+            let sg_root_inner = Arc::clone(&parsed_content.inner);
+
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
                 let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -250,39 +252,18 @@ where
 
             let language_str = options.language.to_string();
 
-            let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("params", params).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("language", &language_str).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-            run_options.set("matches", matches).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+            // Convert String params to serde_json::Value for the shared helper
+            let params_json = params.into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect::<HashMap<String, serde_json::Value>>();
 
-            let matrix_values_js = options.matrix_values
-                .map(|input| input.into_iter()
-                .map(|(k, v)| (k, JsValue(v)))
-                .collect::<HashMap<String, JsValue>>());
-
-            run_options.set("matrixValues", matrix_values_js).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
-
-            let run_options_qjs = run_options.into_js(&ctx);
+            let run_options_qjs = build_transform_options(
+                &ctx,
+                params_json,
+                &language_str,
+                options.matrix_values,
+                matches,
+            )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
@@ -309,31 +290,11 @@ where
                     },
                 })?;
 
-            if result_obj.is_string() {
-                let new_content = result_obj.get::<String>().unwrap();
-                let is_modified = match options.original_sha256 {
-                    Some(original_hash) => {
-                        let mut hasher = Sha256::new();
-                        hasher.update(new_content.as_bytes());
-                        let new_hash: [u8; 32] = hasher.finalize().into();
-                        new_hash != original_hash
-                    }
-                    None => true,
-                };
-                if is_modified {
-                    Ok(ExecutionResult::Modified(new_content))
-                } else {
-                    Ok(ExecutionResult::Unmodified)
-                }
-            } else if result_obj.is_null() || result_obj.is_undefined() {
-                Ok(ExecutionResult::Unmodified)
-            } else {
-                Err(ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: "Invalid result type".to_string(),
-                    },
-                })
-            }
+            process_transform_result(
+                &result_obj,
+                &sg_root_inner,
+                ModificationCheck::Sha256(options.original_sha256),
+            )
         };
         execution.await
     })
@@ -345,7 +306,10 @@ where
         });
     }
 
-    result
+    result.map(|primary| CodemodOutput {
+        primary,
+        secondary: vec![],
+    })
 }
 
 #[cfg(test)]
@@ -353,9 +317,15 @@ mod tests {
     use super::*;
     use crate::sandbox::errors::RuntimeError;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use ast_grep_language::SupportLang;
+    use sha2::{Digest, Sha256};
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    fn js_lang() -> CodemodLang {
+        CodemodLang::Static(SupportLang::JavaScript)
+    }
 
     fn compute_sha256(content: &str) -> Sha256Hash {
         let mut hasher = Sha256::new();
@@ -383,11 +353,11 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";
-        let ast = AstGrep::new(content, SupportLang::JavaScript);
+        let ast = AstGrep::new(content, js_lang());
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             ast,
             original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
@@ -407,7 +377,10 @@ export default function transform(root) {
             }) => {
                 assert_eq!(timeout_ms, 50);
             }
-            Ok(_) => panic!("Expected timeout error, but got success"),
+            Ok(output) => panic!(
+                "Expected timeout error, but got success: {:?}",
+                output.primary
+            ),
             Err(e) => panic!("Expected timeout error, got different error: {:?}", e),
         }
     }
@@ -436,11 +409,11 @@ export default function transform(root) {
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "console.log('Hello, world!');";
-        let ast = AstGrep::new(content, SupportLang::JavaScript);
+        let ast = AstGrep::new(content, js_lang());
 
         let result = execute_codemod_sync(InMemoryExecutionOptions {
             codemod_source: codemod_content,
-            language: SupportLang::JavaScript,
+            language: js_lang(),
             ast,
             original_sha256: Some(compute_sha256(content)),
             resolver: Some(resolver),
@@ -455,10 +428,13 @@ export default function transform(root) {
         });
 
         match result {
-            Ok(ExecutionResult::Modified(new_content)) => {
-                assert!(new_content.contains("logger.log('Hello, world!')"));
-            }
-            Ok(other) => panic!("Expected modified result, got: {:?}", other),
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert!(modified.content.contains("logger.log('Hello, world!')"));
+                    assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }

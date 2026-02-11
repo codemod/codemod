@@ -4,7 +4,7 @@ use crate::ast_grep::wasm_lang::WasmDoc;
 use ast_grep_core::tree_sitter::StrDoc as TSStrDoc;
 use ast_grep_core::{AstGrep, Node, NodeMatch};
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::SupportLang;
 
 #[cfg(feature = "native")]
@@ -15,23 +15,32 @@ use rquickjs::{
 };
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
 use crate::ast_grep::utils::convert_matcher;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::SupportLang as Lang;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(feature = "native")]
+use crate::sandbox::engine::codemod_lang::CodemodLang;
+#[cfg(feature = "native")]
+use CodemodLang as Lang;
+
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 type TSDoc = TSStrDoc<SupportLang>;
+#[cfg(feature = "native")]
+type TSDoc = TSStrDoc<CodemodLang>;
 #[cfg(feature = "wasm")]
 type TSDoc = WasmDoc;
 
 pub(crate) struct SgRootInner {
-    grep: AstGrep<TSDoc>,
+    pub(crate) grep: AstGrep<TSDoc>,
     filename: Option<String>,
+    /// Optional rename target path set by root.rename()
+    pub(crate) rename_to: Mutex<Option<String>>,
     /// Optional semantic provider for symbol indexing (native only)
     #[cfg(feature = "native")]
     pub(crate) semantic_provider: Option<Arc<dyn SemanticProvider>>,
@@ -90,6 +99,53 @@ impl<'js> SgRootRjs<'js> {
     /// modified content from the `transform()` function instead.
     ///
     /// After writing, the semantic provider's cache is updated with the new content.
+    /// Rename the current file to a new path.
+    ///
+    /// If the path is relative, it is resolved against the current file's parent directory.
+    /// If absolute, it is used as-is.
+    pub fn rename(&self, new_path: String, ctx: Ctx<'js>) -> Result<()> {
+        if new_path.is_empty() {
+            return Err(Exception::throw_message(
+                &ctx,
+                "rename() requires a non-empty path",
+            ));
+        }
+
+        let resolved_path = if std::path::Path::new(&new_path).is_absolute() {
+            new_path
+        } else {
+            // Resolve relative to current file's parent directory
+            match &self.inner.filename {
+                Some(filename) => {
+                    let parent = std::path::Path::new(filename)
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."));
+                    parent.join(&new_path).to_string_lossy().to_string()
+                }
+                None => new_path,
+            }
+        };
+
+        // Validate: resolved path must stay within the target directory
+        #[cfg(feature = "native")]
+        {
+            use crate::sandbox::engine::execution_engine::validate_path_within_target;
+            validate_path_within_target(&ctx, std::path::Path::new(&resolved_path), "rename()")?;
+        }
+
+        let mut rename_to = self.inner.rename_to.lock().map_err(|e| {
+            Exception::throw_message(&ctx, &format!("Failed to lock rename_to mutex: {e}"))
+        })?;
+        if rename_to.is_some() {
+            return Err(Exception::throw_message(
+                &ctx,
+                "rename() has already been called for this file. It can only be called once.",
+            ));
+        }
+        *rename_to = Some(resolved_path);
+        Ok(())
+    }
+
     #[cfg(feature = "native")]
     pub fn write(&self, content: String, ctx: Ctx<'js>) -> Result<()> {
         let file_path = match &self.inner.filename {
@@ -135,6 +191,15 @@ impl<'js> SgRootRjs<'js> {
 }
 
 impl<'js> SgRootRjs<'js> {
+    /// Get the rename target path, if rename() was called.
+    pub fn get_rename_to(&self) -> Option<String> {
+        self.inner
+            .rename_to
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     pub fn try_new(
         lang_str: String,
         src: String,
@@ -158,12 +223,13 @@ impl<'js> SgRootRjs<'js> {
                 inner: Arc::new(SgRootInner {
                     grep: unsafe { std::mem::transmute(doc) },
                     filename,
+                    rename_to: Mutex::new(None),
                 }),
                 _phantom: PhantomData,
             })
         }
 
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(all(not(feature = "wasm"), not(feature = "native")))]
         {
             let lang = SupportLang::from_str(&lang_str)
                 .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
@@ -172,6 +238,26 @@ impl<'js> SgRootRjs<'js> {
                 inner: Arc::new(SgRootInner {
                     grep,
                     filename,
+                    rename_to: Mutex::new(None),
+                    #[cfg(feature = "native")]
+                    semantic_provider: None,
+                    #[cfg(feature = "native")]
+                    current_file_path: None,
+                }),
+                _phantom: PhantomData,
+            })
+        }
+
+        #[cfg(feature = "native")]
+        {
+            let lang = CodemodLang::from_str(&lang_str)
+                .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
+            let grep = AstGrep::new(src, lang);
+            Ok(SgRootRjs {
+                inner: Arc::new(SgRootInner {
+                    grep,
+                    filename,
+                    rename_to: Mutex::new(None),
                     #[cfg(feature = "native")]
                     semantic_provider: None,
                     #[cfg(feature = "native")]
@@ -190,6 +276,7 @@ impl<'js> SgRootRjs<'js> {
             inner: Arc::new(SgRootInner {
                 grep,
                 filename,
+                rename_to: Mutex::new(None),
                 #[cfg(feature = "native")]
                 semantic_provider: None,
                 #[cfg(feature = "native")]
@@ -211,6 +298,7 @@ impl<'js> SgRootRjs<'js> {
             inner: Arc::new(SgRootInner {
                 grep,
                 filename,
+                rename_to: Mutex::new(None),
                 semantic_provider,
                 current_file_path,
             }),
@@ -647,6 +735,51 @@ impl<'js> SgNodeRjs<'js> {
         // Add trailing content
         new_content.push_str(&old_content[start..]);
         Ok(new_content)
+    }
+
+    pub fn debug(&self) -> Result<String> {
+        fn format_node<D: ast_grep_core::Doc>(
+            node: &ast_grep_core::Node<D>,
+            indent: usize,
+        ) -> String {
+            let indent_str = "  ".repeat(indent);
+            let kind = node.kind();
+            let is_named = node.is_named();
+
+            let mut result = String::new();
+
+            if is_named {
+                let text = node.text();
+                let has_children = node.children().next().is_some();
+
+                if has_children {
+                    result.push_str(&format!("{indent_str}{kind}:\n"));
+                    for child in node.children() {
+                        result.push_str(&format_node(&child, indent + 1));
+                    }
+                } else {
+                    // Leaf named node — show text inline
+                    let display_text = if text.len() > 40 {
+                        match text.char_indices().nth(40) {
+                            Some((idx, _)) => format!("{}...", &text[..idx]),
+                            None => text.to_string(),
+                        }
+                    } else {
+                        text.to_string()
+                    };
+                    result.push_str(&format!("{indent_str}{kind}: {display_text:?}\n"));
+                }
+            } else {
+                // Anonymous node (punctuation, keywords)
+                let text = node.text();
+                result.push_str(&format!("{indent_str}[{text:?}]\n"));
+            }
+
+            result
+        }
+
+        let node: ast_grep_core::Node<TSDoc> = self.inner_node.clone().into();
+        Ok(format_node(&node, 0))
     }
 
     #[qjs(rename = "getRoot")]

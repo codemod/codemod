@@ -1,4 +1,4 @@
-use codemod_sandbox::sandbox::engine::{ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -7,8 +7,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::CodemodLang;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -17,7 +17,8 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    ReporterType, TestOptions, TestRunner, TestSource, TransformationResult, TransformationTestCase,
+    ReporterType, TestOptions, TestRunner, TestSource, TransformOutput, TransformationResult,
+    TransformationTestCase,
 };
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -171,10 +172,7 @@ impl JssgTestHandler {
         request: RunJssgTestRequest,
     ) -> Result<RunJssgTestResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Parse language
-        let language: SupportLang = request
-            .language
-            .parse()
-            .map_err(|_| format!("Unsupported language: {}", request.language))?;
+        let language: CodemodLang = request.language.parse().map_err(|e: String| e)?;
 
         // Set up execution components
         let codemod_path = PathBuf::from(&request.codemod_file);
@@ -231,6 +229,7 @@ impl JssgTestHandler {
             expect_errors: vec![],
             strictness,
             language: Some(language_str),
+            expected_extension: None,
         };
 
         // Create execution function
@@ -256,15 +255,24 @@ impl JssgTestHandler {
                         capabilities: capabilities.clone(),
                         semantic_provider: None,
                         metrics_context: None,
+                        test_mode: true,
+                        target_directory: None,
                     };
-                    let execution_output = execute_codemod_with_quickjs(options).await?;
+                    let CodemodOutput { primary, .. } =
+                        execute_codemod_with_quickjs(options).await?;
 
-                    match execution_output {
-                        ExecutionResult::Modified(content) => {
-                            Ok(TransformationResult::Success(content))
+                    match primary {
+                        ExecutionResult::Modified(modified) => {
+                            Ok(TransformationResult::Success(TransformOutput {
+                                content: modified.content,
+                                rename_to: modified.rename_to,
+                            }))
                         }
                         ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                            Ok(TransformationResult::Success(input_code))
+                            Ok(TransformationResult::Success(TransformOutput {
+                                content: input_code,
+                                rename_to: None,
+                            }))
                         }
                     }
                 })

@@ -11,14 +11,32 @@ pub mod wasm_utils;
 #[cfg(feature = "native")]
 pub mod native;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 use ast_grep_language::{LanguageExt, SupportLang};
+
+#[cfg(feature = "native")]
+use crate::sandbox::engine::codemod_lang::CodemodLang;
+#[cfg(feature = "native")]
+use ast_grep_core::tree_sitter::LanguageExt;
 
 #[cfg(feature = "wasm")]
 use ast_grep_core::language::Language;
 
 use rquickjs::module::{Declarations, Exports, ModuleDef};
 use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
+#[cfg(feature = "native")]
+use rquickjs::{Function, Value};
+
+use crate::sandbox::engine::execution_engine::{
+    validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
+};
+use crate::sandbox::engine::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
+use crate::sandbox::engine::ExecutionModeFlag;
+use crate::utils::quickjs_utils::maybe_promise;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use sg_node::{SgNodeRjs, SgRootRjs};
 
@@ -41,6 +59,8 @@ impl ModuleDef for AstGrepModule {
         declare.declare("default")?;
         #[cfg(feature = "native")]
         declare.declare("parseFile")?;
+        #[cfg(feature = "native")]
+        declare.declare("jssgTransform")?;
         Ok(())
     }
 
@@ -55,6 +75,8 @@ impl ModuleDef for AstGrepModule {
         {
             default.set("parseFile", Func::from(parse_file_rjs))?;
             exports.export("parseFile", Func::from(parse_file_rjs))?;
+            default.set("jssgTransform", Func::from(jssg_transform_rjs))?;
+            exports.export("jssgTransform", Func::from(jssg_transform_rjs))?;
         }
         exports.export("default", default)?;
         exports.export("parse", Func::from(parse_rjs))?;
@@ -104,7 +126,7 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     Ok(kind)
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
@@ -116,4 +138,129 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
         .id_for_node_kind(&kind_name, /* named */ true);
 
     Ok(kind)
+}
+
+#[cfg(feature = "native")]
+fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
+    use std::str::FromStr;
+
+    let lang = CodemodLang::from_str(&lang)
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Language error: {e}")))?;
+
+    let kind = lang
+        .get_ts_language()
+        .id_for_node_kind(&kind_name, /* named */ true);
+
+    Ok(kind)
+}
+
+/// Execute a transform function on a file, writing back the result.
+///
+/// `jssgTransform(transformFn, pathToFile, language)` reads the file,
+/// parses it, calls the transform, and writes back content + handles rename.
+///
+/// Returns a promise that resolves when the transform is complete.
+#[cfg(feature = "native")]
+fn jssg_transform_rjs<'js>(
+    ctx: Ctx<'js>,
+    transform_fn: Function<'js>,
+    path_to_file: String,
+    language: String,
+) -> Result<Value<'js>> {
+    let should_noop = ctx
+        .userdata::<ExecutionModeFlag>()
+        .map(|f| f.test_mode)
+        .unwrap_or(true); // No flag = in-memory engine → no-op
+    if should_noop {
+        let ctx2 = ctx.clone();
+        let promise = rquickjs::Promise::wrap_future(&ctx, async move {
+            Ok::<_, rquickjs::Error>(Value::new_null(ctx2))
+        })?;
+        return Ok(promise.into_value());
+    }
+
+    let file_changes = ctx
+        .userdata::<JssgFileChanges>()
+        .map(|guard| guard.clone())
+        .ok_or_else(|| Exception::throw_message(&ctx, "JssgFileChanges not found in userdata"))?;
+
+    let exec_ctx = ctx.userdata::<JssgExecutionContext>();
+    let params = exec_ctx
+        .as_ref()
+        .map(|c| c.params.clone())
+        .unwrap_or_default();
+    let matrix_values = exec_ctx.as_ref().and_then(|c| c.matrix_values.clone());
+
+    let file_path = std::path::Path::new(&path_to_file);
+
+    // Validate: file path must resolve within the target directory
+    validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
+
+    // Read the file
+    let content = std::fs::read_to_string(file_path).map_err(|e| {
+        Exception::throw_message(
+            &ctx,
+            &format!("Failed to read file '{}': {}", path_to_file, e),
+        )
+    })?;
+
+    // Parse with language and filename
+    let sg_root = SgRootRjs::try_new(language, content.clone(), Some(path_to_file.clone()))
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+
+    let sg_root_inner = Arc::clone(&sg_root.inner);
+
+    let lang_str = CodemodLang::from_str(sg_root.inner.grep.lang().to_string().as_str())
+        .map(|l| l.to_string())
+        .unwrap_or_default();
+
+    let run_options = build_transform_options(&ctx, params, &lang_str, matrix_values, None)
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
+
+    // Call the transform function
+    let result_val: Value<'js> = transform_fn.call((sg_root, run_options))?;
+
+    // Create a promise to handle async transforms
+    let ctx2 = ctx.clone();
+    let promise = rquickjs::Promise::wrap_future(&ctx, async move {
+        let result = maybe_promise(result_val)
+            .await
+            .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
+
+        let exec_result = process_transform_result(
+            &result,
+            &sg_root_inner,
+            ModificationCheck::StringEquality {
+                original_content: &content,
+            },
+        )
+        .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform result error: {e}")))?;
+
+        // Extract content before pushing to accumulator
+        let return_content = match &exec_result {
+            crate::sandbox::engine::ExecutionResult::Modified(modified) => {
+                Some(modified.content.clone())
+            }
+            _ => None,
+        };
+
+        // Push the file change to the shared accumulator instead of writing to disk
+        let mut changes = file_changes.changes.lock().map_err(|e| {
+            Exception::throw_message(&ctx2, &format!("Failed to lock file_changes mutex: {e}"))
+        })?;
+        changes.push(FileChange {
+            path: std::path::PathBuf::from(&path_to_file),
+            result: exec_result,
+        });
+
+        // Return the transformed content string, or null if unmodified
+        match return_content {
+            Some(content) => {
+                Ok::<_, rquickjs::Error>(rquickjs::String::from_str(ctx2, &content)?.into_value())
+            }
+            None => Ok::<_, rquickjs::Error>(Value::new_null(ctx2)),
+        }
+    })?;
+
+    Ok(promise.into_value())
 }

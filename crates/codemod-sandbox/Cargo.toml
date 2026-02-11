@@ -40,8 +40,8 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 web-tree-sitter-sg = { git = "https://github.com/mohebifar/tree-sitter-wasm.git", branch = "upgrade/0.25.4", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
-ast-grep-core = { workspace = true, default-features = false, optional = true }
-ast-grep-config = { workspace = true, default-features = false, optional = true }
+ast-grep-core = { workspace = true, optional = true }
+ast-grep-config = { workspace = true, optional = true }
 ast-grep-language = { workspace = true, default-features = true, optional = true }
 ignore = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
@@ -49,6 +49,8 @@ codemod-llrt-capabilities = { workspace = true, optional = true, features = ["na
 language-core = { workspace = true, optional = true }
 language-javascript = { workspace = true, optional = true }
 language-python = { workspace = true, optional = true }
+tree-sitter-loader = { workspace = true, optional = true }
+ast-grep-dynamic = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -82,6 +84,8 @@ native = [
   "language-core",
   "language-javascript",
   "language-python",
+  "tree-sitter-loader",
+  "ast-grep-dynamic",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

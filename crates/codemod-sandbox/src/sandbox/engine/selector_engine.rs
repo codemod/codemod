@@ -1,3 +1,4 @@
+use super::codemod_lang::CodemodLang;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::MetricsModule;
@@ -5,7 +6,6 @@ use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
-use ast_grep_language::SupportLang;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
@@ -20,7 +20,7 @@ use crate::workflow_global::WorkflowGlobalModule;
 
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
-    pub language: SupportLang,
+    pub language: CodemodLang,
     pub resolver: Arc<R>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
@@ -29,7 +29,7 @@ pub struct SelectorEngineOptions<'a, R> {
 /// This executes the getSelector function and converts the result to RuleConfig
 pub async fn extract_selector_with_quickjs<'a, R>(
     options: SelectorEngineOptions<'a, R>,
-) -> Result<Option<Box<RuleConfig<SupportLang>>>, ExecutionError>
+) -> Result<Option<Box<RuleConfig<CodemodLang>>>, ExecutionError>
 where
     R: ModuleResolver + 'static,
 {
@@ -201,7 +201,7 @@ where
                         },
                     })?;
 
-                let serializable_config: SerializableRuleConfig<SupportLang> =
+                let serializable_config: SerializableRuleConfig<CodemodLang> =
                     serde_json::from_value(js_value.0)
                         .map_err(|e| ExecutionError::Runtime {
                             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {

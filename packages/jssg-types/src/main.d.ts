@@ -130,6 +130,29 @@ export declare class SgRoot<M extends TypesMap = TypesMap> {
    * ```
    */
   write(content: string): void;
+  /**
+   * Rename the current file to a new path.
+   *
+   * If the path is relative, it is resolved against the current file's parent directory.
+   * If absolute, it is used as-is.
+   *
+   * The rename is applied after the transform function returns:
+   * - If the transform returns a string, the file is renamed and its content is updated.
+   * - If the transform returns null, the file is renamed with its original content.
+   *
+   * @param newPath - The new file path (relative or absolute)
+   * @throws Error if the path is empty
+   *
+   * @example
+   * ```ts
+   * // Rename .less to .css
+   * export default function transform(root) {
+   *   root.rename(root.filename().replace('.less', '.css'));
+   *   return transformedContent;
+   * }
+   * ```
+   */
+  rename(newPath: string): void;
 }
 
 interface NodeMethod<M extends TypesMap, Args extends unknown[] = []> {
@@ -530,3 +553,33 @@ export type GetSelectorOptions<_T extends TypesMap> = {
 };
 
 export type GetSelector<T extends TypesMap> = ({ params }: GetSelectorOptions<T>) => RuleConfig<T>;
+
+/**
+ * Execute a transform function on a file, collecting the result.
+ *
+ * Reads the file at `pathToFile`, parses it with the given `language`,
+ * calls the `transformFn` with the parsed root, and returns the
+ * transformed content string if the file was modified, or `null` if
+ * the file was unchanged.
+ *
+ * @param transformFn - The transform function to apply
+ * @param pathToFile - Path to the file to transform
+ * @param language - The language to parse the file as (e.g., "typescript", "javascript")
+ * @returns A promise that resolves with the transformed content, or null if unchanged
+ *
+ * @example
+ * ```ts
+ * import { jssgTransform } from "codemod:ast-grep";
+ *
+ * // Apply a transform to a specific file and get the result
+ * const result = await jssgTransform(myTransform, "./src/config.ts", "typescript");
+ * if (result !== null) {
+ *   console.log("Transformed content:", result);
+ * }
+ * ```
+ */
+export declare function jssgTransform<T extends TypesMap = TypesMap>(
+  transformFn: Transform<T>,
+  pathToFile: string,
+  language: string,
+): Promise<string | null>;

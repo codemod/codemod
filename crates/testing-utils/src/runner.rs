@@ -12,10 +12,17 @@ use crate::{
     strictness::{ast_compare, cst_compare, detect_language, loose_compare},
 };
 
+/// Output of a successful transformation
+#[derive(Debug, Clone)]
+pub struct TransformOutput {
+    pub content: String,
+    pub rename_to: Option<std::path::PathBuf>,
+}
+
 /// Result of executing a transformation on input code
 #[derive(Debug, Clone)]
 pub enum TransformationResult {
-    Success(String),
+    Success(TransformOutput),
     Error(String),
 }
 
@@ -112,7 +119,7 @@ impl TestRunner {
     ) -> Result<TestSummary> {
         let test_cases = self
             .test_source
-            .to_unified_test_cases(extensions)
+            .to_unified_test_cases(extensions, self.options.expected_extension.as_deref())
             .map_err(|e| anyhow::anyhow!("Failed to load test cases: {}", e))?;
 
         if test_cases.is_empty() {
@@ -227,7 +234,7 @@ impl TestRunner {
         }
 
         let actual_content = match execution_result {
-            TransformationResult::Success(content) => content,
+            TransformationResult::Success(output) => output.content,
             TransformationResult::Error(error) => {
                 return Err(anyhow::anyhow!(
                     "Transformation execution failed:\n{}",

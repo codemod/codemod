@@ -245,6 +245,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ast-grep-dynamic"
+version = "0.39.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f9f4ca501155a8f22b8b6d0a59381ce1f57e0228ce6d23d1719611d2c368450"
+dependencies = [
+ "ast-grep-core",
+ "ignore",
+ "libloading",
+ "serde",
+ "target-triple",
+ "thiserror 2.0.16",
+ "tree-sitter",
+]
+
+[[package]]
 name = "ast-grep-language"
 version = "0.39.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1157,6 +1172,7 @@ version = "1.3.14"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
+ "ast-grep-dynamic",
  "ast-grep-language",
  "bytes",
  "codemod-llrt-capabilities",
@@ -1180,6 +1196,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.16",
  "tokio",
+ "tree-sitter-loader",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-tree-sitter-sg",
@@ -6291,6 +6308,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.12",
@@ -9080,6 +9098,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "target-triple"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
+
+[[package]]
 name = "tempfile"
 version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9718,6 +9742,17 @@ name = "tree-sitter-language"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4013970217383f67b18aef68f6fb2e8d409bc5755227092d32efb0422ba24b8"
+
+[[package]]
+name = "tree-sitter-loader"
+version = "1.3.14"
+dependencies = [
+ "ast-grep-dynamic",
+ "dirs",
+ "log",
+ "reqwest 0.12.23",
+ "thiserror 2.0.16",
+]
 
 [[package]]
 name = "tree-sitter-lua"

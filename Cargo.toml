@@ -16,6 +16,7 @@ members = [
     "crates/language-javascript",
     "crates/language-python",
     "crates/semantic-factory",
+    "crates/tree-sitter-loader",
 ]
 resolver = "2"
 
@@ -50,6 +51,7 @@ language-core = { path = "crates/language-core" }
 language-javascript = { path = "crates/language-javascript" }
 language-python = { path = "crates/language-python" }
 semantic-factory = { path = "crates/semantic-factory" }
+tree-sitter-loader = { path = "crates/tree-sitter-loader" }
 
 # Ruff Python semantic analysis and ty_ide
 ruff_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }
@@ -65,6 +67,7 @@ ty_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.1
 anyhow = "1.0"
 ast-grep-core = "0.39.7"
 ast-grep-config = "0.39.7"
+ast-grep-dynamic = "0.39.7"
 ast-grep-language = "0.39.7"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

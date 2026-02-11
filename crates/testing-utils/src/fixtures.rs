@@ -92,10 +92,12 @@ impl TestSource {
     pub fn to_unified_test_cases(
         &self,
         extensions: &[&str],
+        expected_extension: Option<&str>,
     ) -> Result<Vec<UnifiedTestCase>, TestError> {
         match self {
             TestSource::Directory(dir) => {
-                let fs_test_cases = FileSystemTestCase::discover_in_directory(dir, extensions)?;
+                let fs_test_cases =
+                    FileSystemTestCase::discover_in_directory(dir, extensions, expected_extension)?;
                 let mut unified_cases = Vec::new();
 
                 for fs_case in fs_test_cases {
@@ -111,8 +113,10 @@ impl TestSource {
                                 ),
                                 None => {
                                     // Expected file doesn't exist - create placeholder path for snapshot updates
-                                    let expected_path = match build_expected_path(&input_file.path)
-                                    {
+                                    let expected_path = match build_expected_path(
+                                        &input_file.path,
+                                        expected_extension,
+                                    ) {
                                         Ok(path) => Some(path),
                                         Err(e) => {
                                             eprintln!("error constructing path: {}", e);
@@ -163,6 +167,7 @@ impl FileSystemTestCase {
     pub fn discover_in_directory(
         test_dir: &Path,
         extensions: &[&str],
+        expected_extension: Option<&str>,
     ) -> Result<Vec<FileSystemTestCase>, TestError> {
         let mut test_cases = Vec::new();
 
@@ -171,7 +176,7 @@ impl FileSystemTestCase {
             let path = entry.path();
 
             if path.is_dir() {
-                if let Ok(test_case) = Self::from_directory(&path, extensions) {
+                if let Ok(test_case) = Self::from_directory(&path, extensions, expected_extension) {
                     test_cases.push(test_case);
                 }
             }
@@ -185,6 +190,7 @@ impl FileSystemTestCase {
     fn from_directory(
         test_dir: &Path,
         extensions: &[&str],
+        expected_extension: Option<&str>,
     ) -> Result<FileSystemTestCase, TestError> {
         let name = test_dir
             .file_name()
@@ -197,7 +203,7 @@ impl FileSystemTestCase {
 
         // Check for single file format (input.js + expected.js)
         if let Ok(input_files) = find_input_files(test_dir, extensions) {
-            let expected_files = find_expected_files(&input_files)?;
+            let expected_files = find_expected_files(&input_files, expected_extension)?;
 
             let mut input_files_map = HashMap::new();
             let mut expected_files_map = HashMap::new();
@@ -213,10 +219,23 @@ impl FileSystemTestCase {
 
             for expected_file_path in expected_files {
                 if let Ok(expected_file) = TestFile::from_path(&expected_file_path) {
-                    if let Some(ext) = expected_file_path.extension().and_then(|e| e.to_str()) {
-                        let key = PathBuf::from(format!("input.{}", ext));
-                        expected_files_map.insert(key, expected_file);
-                    }
+                    // When expected_extension is set, the expected file has a different ext
+                    let key_ext = if let Some(exp_ext) = expected_extension {
+                        input_files_map
+                            .keys()
+                            .next()
+                            .and_then(|k| k.extension().and_then(|e| e.to_str()))
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| exp_ext.trim_start_matches('.').to_string())
+                    } else {
+                        expected_file_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    let key = PathBuf::from(format!("input.{}", key_ext));
+                    expected_files_map.insert(key, expected_file);
                 }
             }
 
@@ -356,11 +375,14 @@ fn find_input_files(test_dir: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>
 }
 
 /// Find expected files corresponding to input files
-fn find_expected_files(input_files: &[PathBuf]) -> Result<Vec<PathBuf>, TestError> {
+fn find_expected_files(
+    input_files: &[PathBuf],
+    expected_extension: Option<&str>,
+) -> Result<Vec<PathBuf>, TestError> {
     let mut expected_files = Vec::new();
 
     for input_file in input_files {
-        if let Ok(expected_file) = build_expected_path(input_file) {
+        if let Ok(expected_file) = build_expected_path(input_file, expected_extension) {
             if expected_file.exists() {
                 expected_files.push(expected_file);
             } else {
@@ -400,7 +422,10 @@ fn collect_files_in_directory(
     Ok(files)
 }
 
-fn build_expected_path(input_file_path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn build_expected_path(
+    input_file_path: &Path,
+    expected_extension: Option<&str>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let file_stem = match input_file_path.file_stem().and_then(|s| s.to_str()) {
         Some(stem) => stem,
         None => return Err("Invalid file stem".into()),
@@ -413,9 +438,13 @@ fn build_expected_path(input_file_path: &Path) -> Result<PathBuf, Box<dyn std::e
 
     let expected_path = match file_stem {
         "input" => {
-            let extension = match input_file_path.extension().and_then(|ext| ext.to_str()) {
-                Some(ext) => ext,
-                None => return Err("No file extension".into()),
+            let extension = if let Some(ext) = expected_extension {
+                ext.trim_start_matches('.')
+            } else {
+                match input_file_path.extension().and_then(|ext| ext.to_str()) {
+                    Some(ext) => ext,
+                    None => return Err("No file extension".into()),
+                }
             };
 
             parent_dir.join(format!("expected.{}", extension))
