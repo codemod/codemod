@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.4.0
+
+### Minor Changes
+
+- ceaa003: feat: new jssgTransform type and SgRoot.rename() API
+
 ## 1.3.2
 
 ### Patch Changes
