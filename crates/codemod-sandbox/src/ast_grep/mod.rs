@@ -27,6 +27,17 @@ use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
 #[cfg(feature = "native")]
 use rquickjs::{Function, Value};
 
+use crate::sandbox::engine::execution_engine::{
+    FileChange, JssgExecutionContext, JssgFileChanges, validate_path_within_target,
+};
+use crate::sandbox::engine::transform_helpers::{
+    build_transform_options, process_transform_result, ModificationCheck,
+};
+use crate::sandbox::engine::ExecutionModeFlag;
+use crate::utils::quickjs_utils::maybe_promise;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use sg_node::{SgNodeRjs, SgRootRjs};
 
 pub(crate) mod scanner;
@@ -156,17 +167,6 @@ fn jssg_transform_rjs<'js>(
     path_to_file: String,
     language: String,
 ) -> Result<Value<'js>> {
-    use crate::sandbox::engine::execution_engine::{
-        FileChange, JssgExecutionContext, JssgFileChanges,
-    };
-    use crate::sandbox::engine::transform_helpers::{
-        build_transform_options, process_transform_result, ModificationCheck,
-    };
-    use crate::sandbox::engine::ExecutionModeFlag;
-    use crate::utils::quickjs_utils::maybe_promise;
-    use std::str::FromStr;
-    use std::sync::Arc;
-
     let should_noop = ctx
         .userdata::<ExecutionModeFlag>()
         .map(|f| f.test_mode)
@@ -192,6 +192,9 @@ fn jssg_transform_rjs<'js>(
     let matrix_values = exec_ctx.as_ref().and_then(|c| c.matrix_values.clone());
 
     let file_path = std::path::Path::new(&path_to_file);
+
+    // Validate: file path must resolve within the target directory
+    validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
 
     // Read the file
     let content = std::fs::read_to_string(file_path).map_err(|e| {
@@ -242,12 +245,13 @@ fn jssg_transform_rjs<'js>(
         };
 
         // Push the file change to the shared accumulator instead of writing to disk
-        if let Ok(mut changes) = file_changes.changes.lock() {
-            changes.push(FileChange {
-                path: std::path::PathBuf::from(&path_to_file),
-                result: exec_result,
-            });
-        }
+        let mut changes = file_changes.changes.lock().map_err(|e| {
+            Exception::throw_message(&ctx2, &format!("Failed to lock file_changes mutex: {e}"))
+        })?;
+        changes.push(FileChange {
+            path: std::path::PathBuf::from(&path_to_file),
+            result: exec_result,
+        });
 
         // Return the transformed content string, or null if unmodified
         match return_content {

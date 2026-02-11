@@ -220,6 +220,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
                 test_mode: false,
+                target_directory: Some(&target_directory),
             };
 
             // Execute the codemod on this file
@@ -253,7 +254,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     );
                                 } else {
                                     // If renamed, delete the original file
-                                    if modified.rename_to.is_some() {
+                                    if modified.rename_to.is_some()
+                                        && write_path != change_path.as_path()
+                                    {
                                         if let Err(e) = tokio::fs::remove_file(change_path).await {
                                             error!(
                                                 "Failed to remove original file {}: {}",
@@ -307,7 +310,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
                 Err(e) => {
                     error!(
-                        "Failed to execute codemod on {}:\n{:?}",
+                        "Failed to execute codemod on {}:\n{}",
                         file_path.display(),
                         e
                     );

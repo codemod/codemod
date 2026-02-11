@@ -75,7 +75,9 @@ impl FromStr for CodemodLang {
         }
 
         // Initialize dynamic parsers and try dynamic languages
-        let _ = tree_sitter_loader::init();
+        if let Err(e) = tree_sitter_loader::init() {
+            eprintln!("Warning: failed to initialize dynamic tree-sitter parsers: {e}");
+        }
 
         if let Ok(lang) = DynamicLang::from_str(s) {
             return Ok(CodemodLang::Dynamic(lang));

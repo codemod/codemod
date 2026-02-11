@@ -256,6 +256,7 @@ impl JssgTestHandler {
                         semantic_provider: None,
                         metrics_context: None,
                         test_mode: true,
+                        target_directory: None,
                     };
                     let CodemodOutput { primary, .. } =
                         execute_codemod_with_quickjs(options).await?;

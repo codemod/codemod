@@ -88,6 +88,56 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgFileChanges {
     type Changed<'to> = JssgFileChanges;
 }
 
+/// The target directory that the codemod is running against.
+/// Stored as QuickJS userdata so `jssgTransform` and `rename()` can
+/// validate that file paths stay within this directory.
+#[derive(Debug, Clone)]
+pub struct TargetDirectory(pub PathBuf);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for TargetDirectory {
+    type Changed<'to> = TargetDirectory;
+}
+
+/// Validate that `path` resolves within the target directory stored in QuickJS userdata.
+/// `caller` is used in error messages (e.g. "jssgTransform()" or "rename()").
+/// If the file doesn't exist yet (e.g. rename target), the parent directory is canonicalized instead.
+/// Returns `Ok(())` if no `TargetDirectory` userdata is set (e.g. test / in-memory contexts).
+pub fn validate_path_within_target<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    path: &Path,
+    caller: &str,
+) -> rquickjs::Result<()> {
+    if let Some(target_dir) = ctx.userdata::<TargetDirectory>() {
+        let canonical_target = target_dir
+            .0
+            .canonicalize()
+            .unwrap_or_else(|_| target_dir.0.clone());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| {
+            // File may not exist yet (e.g. rename target); canonicalize the parent instead
+            if let Some(parent) = path.parent() {
+                let canonical_parent = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf());
+                canonical_parent.join(path.file_name().unwrap_or_default())
+            } else {
+                path.to_path_buf()
+            }
+        });
+        if !canonical_path.starts_with(&canonical_target) {
+            return Err(rquickjs::Exception::throw_message(
+                ctx,
+                &format!(
+                    "{} path '{}' is outside the target directory '{}'",
+                    caller,
+                    path.display(),
+                    target_dir.0.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Options for executing a codemod on a single file
 pub struct JssgExecutionOptions<'a, R> {
     pub script_path: &'a Path,
@@ -105,6 +155,9 @@ pub struct JssgExecutionOptions<'a, R> {
     pub metrics_context: Option<MetricsContext>,
     /// Whether this is a test execution (jssgTransform becomes a no-op)
     pub test_mode: bool,
+    /// The target directory the codemod is running against.
+    /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -219,6 +272,15 @@ where
                 message: format!("Failed to store JssgExecutionContext: {:?}", e),
             },
         })?;
+
+        // Store target directory in runtime userdata if provided
+        if let Some(target_dir) = options.target_directory {
+            ctx.store_userdata(TargetDirectory(target_dir.to_path_buf())).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store TargetDirectory: {:?}", e),
+                },
+            })?;
+        }
 
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
@@ -560,6 +622,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -607,6 +670,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -654,6 +718,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -701,6 +766,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -740,6 +806,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -782,6 +849,7 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -887,6 +955,7 @@ function example() {
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
             test_mode: false,
+            target_directory: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;

@@ -228,6 +228,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                     semantic_provider,
                     metrics_context: None,
                     test_mode: true,
+                    target_directory: None,
                 };
                 let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
 

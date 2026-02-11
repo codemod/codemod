@@ -1889,6 +1889,7 @@ impl Engine {
                         semantic_provider: semantic_provider.clone(),
                         metrics_context: Some(metrics_context_clone.clone()),
                         test_mode: false,
+                        target_directory: Some(&target_path),
                     })
                     .await
                 });
@@ -1948,7 +1949,9 @@ impl Engine {
                                                 .fetch_add(1, Ordering::Relaxed);
                                         } else {
                                             // If renamed, delete the original file
-                                            if modified.rename_to.is_some() {
+                                            if modified.rename_to.is_some()
+                                                && write_path != change_path
+                                            {
                                                 if let Err(e) = std::fs::remove_file(change_path) {
                                                     error!(
                                                         "Failed to remove original file {}: {}",

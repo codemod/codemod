@@ -126,7 +126,26 @@ impl<'js> SgRootRjs<'js> {
             }
         };
 
-        let mut rename_to = self.inner.rename_to.lock().unwrap();
+        // Validate: resolved path must stay within the target directory
+        #[cfg(feature = "native")]
+        {
+            use crate::sandbox::engine::execution_engine::validate_path_within_target;
+            validate_path_within_target(
+                &ctx,
+                std::path::Path::new(&resolved_path),
+                "rename()",
+            )?;
+        }
+
+        let mut rename_to = self.inner.rename_to.lock().map_err(|e| {
+            Exception::throw_message(&ctx, &format!("Failed to lock rename_to mutex: {e}"))
+        })?;
+        if rename_to.is_some() {
+            return Err(Exception::throw_message(
+                &ctx,
+                "rename() has already been called for this file. It can only be called once.",
+            ));
+        }
         *rename_to = Some(resolved_path);
         Ok(())
     }
@@ -178,7 +197,11 @@ impl<'js> SgRootRjs<'js> {
 impl<'js> SgRootRjs<'js> {
     /// Get the rename target path, if rename() was called.
     pub fn get_rename_to(&self) -> Option<String> {
-        self.inner.rename_to.lock().unwrap().clone()
+        self.inner
+            .rename_to
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub fn try_new(
@@ -741,7 +764,10 @@ impl<'js> SgNodeRjs<'js> {
                 } else {
                     // Leaf named node — show text inline
                     let display_text = if text.len() > 40 {
-                        format!("{}...", &text[..40])
+                        match text.char_indices().nth(40) {
+                            Some((idx, _)) => format!("{}...", &text[..idx]),
+                            None => text.to_string(),
+                        }
                     } else {
                         text.to_string()
                     };

@@ -96,12 +96,14 @@ pub fn process_transform_result(
     let rename_to = sg_root_inner
         .rename_to
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
         .map(PathBuf::from);
 
     if result_obj.is_string() {
-        let new_content = result_obj.get::<String>().unwrap();
+        let new_content = result_obj
+            .get::<String>()
+            .expect("result_obj should be a String after is_string() check");
         let is_modified = match modification_check {
             ModificationCheck::StringEquality { original_content } => {
                 new_content != original_content
@@ -137,9 +139,10 @@ pub fn process_transform_result(
             Ok(ExecutionResult::Unmodified)
         }
     } else {
+        let type_name = result_obj.type_name();
         Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: "Invalid result type".to_string(),
+                message: format!("Codemod Transform functions must return either a string or null/undefined. Received {type_name}"),
             },
         })
     }
