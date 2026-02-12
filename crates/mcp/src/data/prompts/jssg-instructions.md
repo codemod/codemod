@@ -803,6 +803,58 @@ Behavior:
 
 - If the path is **relative**, it's resolved against the current file's parent directory.
 - If the path is **absolute**, it's used as-is.
+- The resolved path must stay within the target directory.
+- `rename()` can only be called once per file. Calling it again throws an error.
+
+### Multi-File Transforms with `jssgTransform`
+
+Use `jssgTransform()` to apply a transform function to a secondary file from within your main transform. This is useful when a change in one file requires a corresponding change in another file (e.g., renaming a `.less` file and updating its import in a `.tsx` file).
+
+```typescript
+import { jssgTransform } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import type CSS from "codemod:ast-grep/langs/css";
+
+// A secondary transform that converts .less → .css
+const lessToCSS: Transform<CSS> = async (root) => {
+  root.rename(root.filename().replace('.less', '.css'));
+  // Transform LESS-specific syntax to CSS...
+  return transformedCSS;
+};
+
+// Main transform: update imports and trigger the .less → .css conversion
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
+
+  // Find .less imports
+  const lessImports = rootNode.findAll({
+    rule: { pattern: "import $$$NAMES from $SOURCE" },
+  });
+
+  for (const imp of lessImports) {
+    // Logic to extract lessPath and cssPath
+
+    // Transform the .less file (reads, transforms, writes back)
+    const newCssContent = await jssgTransform(lessToCSS, lessPath, "css");
+
+    // Update the import path in this file
+    edits.push(source.replace(`"${cssPath}"`));
+  }
+
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+};
+
+export default transform;
+```
+
+**Key behavior:**
+- `jssgTransform(transformFn, filePath, language)` reads the file, parses it, calls your transform, and collects the result.
+- File changes from `jssgTransform` are applied alongside the primary file's changes — not written to disk mid-transform.
+- The file path must be within the target directory.
+- In test mode, `jssgTransform` is a no-op (returns `null`).
+- Returns a promise that resolves with the transformed content string, or `null` if the file was unchanged.
 
 ## Semantic Types
 

@@ -340,6 +340,81 @@ const transform: Transform<TSX> = async (root, options) => {
 export default transform;
 ```
 
+## Multi-File Transforms
+
+Sometimes a codemod needs to modify multiple files in a coordinated way. For example, renaming a `.less` file to `.css` and updating every import that references it. JSSG provides two mechanisms for this:
+
+### `jssgTransform` — Transform Secondary Files
+
+Use `jssgTransform()` to apply a transform function to another file from within your main transform. The secondary file's changes are collected and applied atomically alongside the primary file's changes.
+
+```ts
+import { jssgTransform } from "codemod:ast-grep";
+import type { Transform, Edit } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import type CSS from "codemod:ast-grep/langs/css";
+
+const migrateStyles: Transform<CSS> = async (root) => {
+  // Rename the file from .less to .css
+  root.rename(root.filename().replace('.less', '.css'));
+  // Optionally transform the content
+  return transformedContent;
+};
+
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
+
+  // Find imports referencing .less files
+  const lessImports = rootNode.findAll({
+    rule: { pattern: "import $SOURCE" },
+  });
+
+  for (const imp of lessImports) {
+    const source = imp.getMatch("SOURCE");
+    if (!source?.text().includes(".less")) continue;
+
+    const lessPath = source.text().slice(1, -1);
+
+    // Transform the secondary file
+    await jssgTransform(migrateStyles, lessPath, "css");
+
+    // Update the import path in this file
+    edits.push(source.replace(`"${lessPath.replace('.less', '.css')}"`));
+  }
+
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+};
+
+export default transform;
+```
+
+<Info>
+`jssgTransform` is a no-op in test mode — it returns `null` without reading or writing files. This means test cases only verify the primary transform. To test secondary transforms, write separate test cases for them.
+</Info>
+
+### `root.rename()` — Rename the Current File
+
+Use `root.rename(newPath)` to rename the file currently being processed. This is useful for file extension conversions (`.js` → `.ts`, `.less` → `.css`, `.cjs` → `.mjs`).
+
+```ts
+const transform: Transform<CSS> = async (root) => {
+  // Rename .less → .css
+  root.rename(root.filename().replace('.less', '.css'));
+
+  // Return modified content, or null for rename-only
+  return null;
+};
+```
+
+**Rules:**
+- Relative paths resolve against the file's parent directory.
+- Absolute paths are used as-is.
+- The resolved path must stay within the target directory.
+- `rename()` can only be called once per file.
+
+See the [API Reference](/jssg/reference#file-renaming) for the full behavior matrix.
+
 ## Advanced Pattern Composition
 
 ### Rule References with Utils
