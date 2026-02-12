@@ -1,0 +1,41 @@
+# Kotlin null safety modernization
+id: single-if-statement
+language: kotlin
+rule:
+  any:
+    - pattern: "if ($VAR == null) { return $DEFAULT }"
+    - pattern: "if ($VAR == null) return $DEFAULT"
+transform:
+  SAFEVARSEP:
+    replace:
+      by: $var-Safe
+      replace: (?<var>.*)
+      source: $VAR
+  SAFEVAR:
+    convert:
+      toCase: camelCase
+      source: $SAFEVARSEP
+fix: "val $SAFEVAR = $VAR ?: return $DEFAULT"
+---
+id: if-else-statement
+language: kotlin
+rule:
+  pattern: |
+    if ($VAR != null) {
+      $BODY
+    } else {
+      return $DEFAULT
+    }
+transform:
+  SAFEVARSEP:
+    replace:
+      by: $var-Safe
+      replace: (?<var>.*)
+      source: $VAR
+  SAFEVAR:
+    convert:
+      toCase: camelCase
+      source: $SAFEVARSEP
+fix: |
+  val $SAFEVAR = $VAR ?: return $DEFAULT
+  $BODY

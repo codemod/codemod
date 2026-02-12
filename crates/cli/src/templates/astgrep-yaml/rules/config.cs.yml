@@ -1,0 +1,10 @@
+# Codemod Studio uses ast-grep to match and rewrite code.
+# https://ast-grep.github.io/guide/rule-config.html#rule
+id: replace-console-calls
+language: csharp
+rule:
+  any:
+    - pattern: Console.WriteLine($ARG)
+    - pattern: Console.Write($ARG)
+fix:
+  Logger.Log($ARG)
