@@ -93,6 +93,19 @@ impl CodemodMcpServer {
     }
 
     #[tool(
+        description = "Get jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"
+    )]
+    async fn get_jssg_utils_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
         description = "Get Codemod CLI instructions for project setup and workflow configuration"
     )]
     async fn get_codemod_cli_instructions(
@@ -116,7 +129,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_jssg_instructions (get jssg and ast-grep instructions), get_codemod_cli_instructions (get CLI and workflow instructions). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup).".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_jssg_instructions (get jssg and ast-grep instructions), get_jssg_utils_instructions (get import manipulation helpers), get_codemod_cli_instructions (get CLI and workflow instructions). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use get_jssg_utils_instructions when you need to find, add, or remove imports.".to_string()),
         }
     }
 
@@ -144,6 +157,11 @@ impl ServerHandler for CodemodMcpServer {
                     ),
                 ),
                 self._create_resource_text(
+                    "jssg-utils://instructions",
+                    "jssg-utils-instructions",
+                    Some("jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"),
+                ),
+                self._create_resource_text(
                     "codemod-cli://instructions",
                     "codemod-cli-instructions",
                     Some("Codemod CLI instructions for project setup and workflow configuration"),
@@ -161,6 +179,12 @@ impl ServerHandler for CodemodMcpServer {
         match uri.as_str() {
             "jssg://instructions" => {
                 let instructions_content = include_str!("data/prompts/jssg-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "jssg-utils://instructions" => {
+                let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
                 Ok(ReadResourceResult {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
