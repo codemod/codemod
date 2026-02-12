@@ -55,6 +55,9 @@ The root object provides access to the parsed file:
 
 <ParamField path="root()" type="SgNode">Get the root AST node of the file.</ParamField>
 <ParamField path="filename()" type="string">Get the file path or "anonymous" for ad-hoc parsing.</ParamField>
+<ParamField path="source()" type="string">Get the full source code of the file.</ParamField>
+<ParamField path="write(content)" type="void">Write content to this file. Only valid for files obtained via `definition()` or `references()` — cannot be called on the current file being processed.</ParamField>
+<ParamField path="rename(newPath)" type="void">Rename the current file to a new path. If relative, resolved against the file's parent directory. Can only be called once per file. See [File Renaming](#file-renaming) for details.</ParamField>
 
 ```ts
 const rootNode = root.root();
@@ -522,6 +525,100 @@ export default function main() {
   return null;
 }
 ```
+
+## File Renaming
+
+Use `root.rename()` to rename a file alongside content changes. This is useful for codemods that convert between file formats (e.g., `.less` → `.css`, `.js` → `.ts`, `.cjs` → `.mjs`).
+
+```ts
+import type { Transform } from "codemod:ast-grep";
+import type CSS from "codemod:ast-grep/langs/css";
+
+const transform: Transform<CSS> = async (root) => {
+  root.rename(root.filename().replace('.less', '.css'));
+  return transformedContent; // or null for rename-only
+};
+
+export default transform;
+```
+
+**Behavior matrix:**
+
+| `return` value | `root.rename()` called | Result |
+|---|---|---|
+| `string` | no | Modify content only |
+| `null` | no | No changes |
+| `string` | yes | Modify content + rename file |
+| `null` | yes | Rename file only (content unchanged) |
+
+**Path resolution:**
+- **Relative paths** are resolved against the current file's parent directory (e.g., `"newname.css"` renames in the same directory).
+- **Absolute paths** are used as-is.
+- The resolved path must stay within the target directory.
+- `rename()` can only be called **once** per file. Calling it again throws an error.
+
+## Multi-File Transforms with `jssgTransform`
+
+<ParamField path="jssgTransform(transformFn, pathToFile, language)" type="Promise<string | null>">
+Apply a transform function to a secondary file. Reads the file, parses it with the given language, calls the transform, and collects the result. Returns the transformed content string, or null if unchanged.
+</ParamField>
+
+```ts
+import { jssgTransform } from "codemod:ast-grep";
+```
+
+Use `jssgTransform()` when a change in one file requires a corresponding change in another file. For example, renaming a `.less` file to `.css` while also updating its import path in a `.tsx` file.
+
+```ts
+import { jssgTransform } from "codemod:ast-grep";
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import type CSS from "codemod:ast-grep/langs/css";
+
+// Secondary transform: convert .less → .css
+const lessToCSS: Transform<CSS> = async (root) => {
+  root.rename(root.filename().replace('.less', '.css'));
+  return transformedCSS;
+};
+
+// Primary transform: update imports and trigger the conversion
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
+
+  const lessImports = rootNode.findAll({
+    rule: { pattern: "import $$$NAMES from $SOURCE" },
+  });
+
+  for (const imp of lessImports) {
+    const source = imp.getMatch("SOURCE");
+    if (!source || !source.text().includes(".less")) continue;
+
+    const lessPath = source.text().slice(1, -1);
+    const cssPath = lessPath.replace(".less", ".css");
+
+    // Transform the .less file
+    await jssgTransform(lessToCSS, lessPath, "css");
+
+    // Update the import in this file
+    edits.push(source.replace(`"${cssPath}"`));
+  }
+
+  return edits.length > 0 ? rootNode.commitEdits(edits) : null;
+};
+
+export default transform;
+```
+
+<Info>
+File changes from `jssgTransform` are collected and applied alongside the primary file's changes — the secondary file is not written to disk mid-transform. This ensures atomicity.
+</Info>
+
+**Key details:**
+- The file path must be within the target directory.
+- In test mode, `jssgTransform` is a no-op and returns `null`.
+- The `transformFn` receives the same `(root, options)` signature as your main transform, including `params` and `matrixValues` from the parent execution.
+- You can call `jssgTransform` multiple times to transform multiple secondary files.
 
 ## Async Transformations
 

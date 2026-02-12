@@ -73,6 +73,7 @@
                   "jssg/metrics",
                   "jssg/semantic-analysis",
                   "jssg/advanced",
+                  "jssg/utils",
                   "jssg/security"
                 ]
               },
