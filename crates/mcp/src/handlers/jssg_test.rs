@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::CodemodLang;
+use codemod_sandbox::MetricsContext;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -241,6 +242,7 @@ impl JssgTestHandler {
                 let resolver = resolver.clone();
                 let input_code = input_code.to_string();
                 let input_path = input_path.to_path_buf();
+                let metrics_context = MetricsContext::new();
 
                 Box::pin(async move {
                     let options = JssgExecutionOptions {
@@ -254,7 +256,7 @@ impl JssgTestHandler {
                         matrix_values: None,
                         capabilities: capabilities.clone(),
                         semantic_provider: None,
-                        metrics_context: None,
+                        metrics_context: Some(metrics_context),
                         test_mode: true,
                         target_directory: None,
                     };

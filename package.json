@@ -1,5 +1,5 @@
 {
-  "name": "@codemod/codemod",
+  "name": "@codemod.com/codemod",
   "version": "0.0.0-development",
   "private": true,
   "description": "A monorepo for all the interconnected tools of codemod.com",

@@ -43,7 +43,8 @@
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false"
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",

@@ -1,2 +1,5 @@
 # Set all files in schemas/ directory as generated
 schemas/* linguist-generated=true
+
+# LLRT types pulled from awslabs/llrt
+packages/jssg-types/src/llrt/** linguist-generated=true

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::MetricsData;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 use std::collections::HashSet;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::CodemodLang;
+use codemod_sandbox::MetricsContext;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -186,6 +188,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         } else {
             Some(Arc::new(LazySemanticProvider::file_scope()))
         };
+    let update_snapshots = args.update_snapshots;
     let execution_fn = Box::new(
         move |input_code: &str,
               input_path: &Path,
@@ -215,6 +218,8 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
+                let metrics_context = MetricsContext::new();
+
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
                     resolver,
@@ -226,11 +231,46 @@ pub async fn handler(args: &Command) -> Result<()> {
                     matrix_values: None,
                     capabilities,
                     semantic_provider,
-                    metrics_context: None,
+                    metrics_context: Some(metrics_context.clone()),
                     test_mode: true,
                     target_directory: None,
                 };
                 let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
+
+                // Handle metrics snapshot
+                let metrics_data = metrics_context.get_all();
+                let metrics_path = test_case_dir.join("metrics.json");
+
+                if !metrics_data.is_empty() {
+                    let actual_json = metrics_to_canonical_json(&metrics_data)?;
+
+                    if metrics_path.exists() {
+                        let expected_json = std::fs::read_to_string(&metrics_path)?;
+                        if actual_json != expected_json {
+                            if update_snapshots {
+                                std::fs::write(&metrics_path, &actual_json)?;
+                            } else {
+                                anyhow::bail!(
+                                    "Metrics mismatch:\n--- expected\n+++ actual\n{}",
+                                    generate_metrics_diff(&expected_json, &actual_json)
+                                );
+                            }
+                        }
+                    } else {
+                        std::fs::write(&metrics_path, &actual_json)?;
+                    }
+                } else if metrics_path.exists() {
+                    // Codemod produced no metrics but a snapshot exists — stale snapshot
+                    if update_snapshots {
+                        std::fs::remove_file(&metrics_path)?;
+                    } else {
+                        anyhow::bail!(
+                            "Metrics snapshot exists at {} but codemod produced no metrics. \
+                             Run with --update-snapshots to remove the stale snapshot.",
+                            metrics_path.display()
+                        );
+                    }
+                }
 
                 match primary {
                     ExecutionResult::Modified(modified) => {
@@ -271,4 +311,38 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
+/// Deterministic regardless of HashMap iteration order.
+fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
+    let json_value = serde_json::to_value(metrics)?;
+    let canonical = String::from_utf8(serde_json_canonicalizer::to_vec(&json_value)?)?;
+    // Re-parse and pretty-print the canonicalized JSON
+    let reparsed: serde_json::Value = serde_json::from_str(&canonical)?;
+    let pretty = serde_json::to_string_pretty(&reparsed)?;
+    Ok(pretty)
+}
+
+fn generate_metrics_diff(expected: &str, actual: &str) -> String {
+    use similar::{ChangeTag, TextDiff};
+    use std::fmt::Write;
+
+    let diff = TextDiff::from_lines(expected, actual);
+    let mut result = String::new();
+
+    for group in diff.grouped_ops(3) {
+        for op in &group {
+            for change in diff.iter_changes(op) {
+                let sign = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal => " ",
+                };
+                let _ = write!(result, "{sign}{change}");
+            }
+        }
+    }
+
+    result
 }

@@ -5,6 +5,7 @@
     ".all-contributorsrc",
     "*.md",
     "crates/cli/src/templates/**",
+    "packages/jssg-types/src/llrt/**",
     "schemas/*.json"
   ]
 }
