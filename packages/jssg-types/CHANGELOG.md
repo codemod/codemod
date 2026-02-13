@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.4.1
+
+### Patch Changes
+
+- 2ae0c3e: Improve types using references instead of hacky imports
+
 ## 1.4.0
 
 ### Minor Changes

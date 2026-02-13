@@ -1,6 +1,6 @@
 {
   "name": "@codemod.com/jssg-types",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": false,
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
   "keywords": [
