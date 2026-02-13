@@ -194,7 +194,7 @@ my-codemod/
 The two fundamental types you'll work with:
 
 ```typescript
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type { SgRoot, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 // SgRoot - represents the entire file
@@ -213,7 +213,7 @@ const node: SgNode<TSX> = rootNode.find({
 Your main transformation logic with proper type annotations:
 
 ```typescript
-import type { SgRoot, SgNode } from "@codemod.com/jssg-types/main";
+import type { SgRoot, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 // Main transformation function - return null to skip file
@@ -913,7 +913,7 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
 
 ```typescript
 // Always import these types
-import type { SgRoot, SgNode, Edit } from "@codemod.com/jssg-types/main";
+import type { SgRoot, SgNode, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 // Use proper type annotations

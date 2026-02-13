@@ -438,7 +438,7 @@ const imports = rootNode.findAll({
 Leverage TypeScript's type system:
 
 ```ts
-import type { SgNode } from "@codemod.com/jssg-types/main";
+import type { SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 // Type-safe node type checking
@@ -866,7 +866,7 @@ export default transform;
     <b>Solution:</b> Ensure proper type imports and annotations:
     <CodeBlock language="ts">
 {`// Always import these types
-import type { SgRoot, SgNode, Edit } from "@codemod.com/jssg-types/main";
+import type { SgRoot, SgNode, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 // Use proper type annotations
