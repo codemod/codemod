@@ -25,25 +25,14 @@
     "./langs/*": {
       "types": "./src/langs/*.d.ts",
       "default": "./src/langs/*.d.ts"
-    },
-    "./main": {
-      "types": "./src/main.d.ts",
-      "default": "./src/main.d.ts"
-    },
-    "./metrics": {
-      "types": "./src/metrics.d.ts",
-      "default": "./src/metrics.d.ts"
-    },
-    "./workflow": {
-      "types": "./src/workflow.d.ts",
-      "default": "./src/workflow.d.ts"
     }
   },
   "files": [
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false"
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
