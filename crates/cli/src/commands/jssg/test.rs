@@ -4,7 +4,7 @@ use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecu
 use codemod_sandbox::MetricsData;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -239,24 +239,36 @@ pub async fn handler(args: &Command) -> Result<()> {
 
                 // Handle metrics snapshot
                 let metrics_data = metrics_context.get_all();
+                let metrics_path = test_case_dir.join("metrics.json");
+
                 if !metrics_data.is_empty() {
-                    let actual_yaml = metrics_to_canonical_yaml(&metrics_data);
-                    let metrics_path = test_case_dir.join("metrics.yaml");
+                    let actual_json = metrics_to_canonical_json(&metrics_data)?;
 
                     if metrics_path.exists() {
-                        let expected_yaml = std::fs::read_to_string(&metrics_path)?;
-                        if actual_yaml != expected_yaml {
+                        let expected_json = std::fs::read_to_string(&metrics_path)?;
+                        if actual_json != expected_json {
                             if update_snapshots {
-                                std::fs::write(&metrics_path, &actual_yaml)?;
+                                std::fs::write(&metrics_path, &actual_json)?;
                             } else {
                                 anyhow::bail!(
                                     "Metrics mismatch:\n--- expected\n+++ actual\n{}",
-                                    generate_metrics_diff(&expected_yaml, &actual_yaml)
+                                    generate_metrics_diff(&expected_json, &actual_json)
                                 );
                             }
                         }
                     } else {
-                        std::fs::write(&metrics_path, &actual_yaml)?;
+                        std::fs::write(&metrics_path, &actual_json)?;
+                    }
+                } else if metrics_path.exists() {
+                    // Codemod produced no metrics but a snapshot exists — stale snapshot
+                    if update_snapshots {
+                        std::fs::remove_file(&metrics_path)?;
+                    } else {
+                        anyhow::bail!(
+                            "Metrics snapshot exists at {} but codemod produced no metrics. \
+                             Run with --update-snapshots to remove the stale snapshot.",
+                            metrics_path.display()
+                        );
                     }
                 }
 
@@ -301,44 +313,15 @@ pub async fn handler(args: &Command) -> Result<()> {
     Ok(())
 }
 
-/// Serialize MetricsData to a canonical YAML string.
-/// Sorted by metric name, then by cardinality keys, for deterministic output.
-fn metrics_to_canonical_yaml(metrics: &MetricsData) -> String {
-    use std::fmt::Write;
-
-    let sorted: BTreeMap<&String, Vec<_>> = metrics
-        .iter()
-        .map(|(name, entries)| {
-            let mut sorted_entries: Vec<_> = entries
-                .iter()
-                .map(|e| {
-                    let sorted_cardinality: BTreeMap<&String, &String> =
-                        e.cardinality.iter().collect();
-                    (sorted_cardinality, e.count)
-                })
-                .collect();
-            sorted_entries.sort_by(|a, b| {
-                let a_keys: Vec<_> = a.0.iter().map(|(k, v)| (*k, *v)).collect();
-                let b_keys: Vec<_> = b.0.iter().map(|(k, v)| (*k, *v)).collect();
-                a_keys.cmp(&b_keys)
-            });
-            (name, sorted_entries)
-        })
-        .collect();
-
-    let mut out = String::new();
-    for (name, entries) in &sorted {
-        writeln!(out, "{}:", name).unwrap();
-        for (cardinality, count) in entries {
-            writeln!(out, "  - cardinality:").unwrap();
-            for (k, v) in cardinality {
-                writeln!(out, "      {}: \"{}\"", k, v).unwrap();
-            }
-            writeln!(out, "    count: {}", count).unwrap();
-        }
-    }
-
-    out
+/// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
+/// Deterministic regardless of HashMap iteration order.
+fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
+    let json_value = serde_json::to_value(metrics)?;
+    let canonical = String::from_utf8(serde_json_canonicalizer::to_vec(&json_value)?)?;
+    // Re-parse and pretty-print the canonicalized JSON
+    let reparsed: serde_json::Value = serde_json::from_str(&canonical)?;
+    let pretty = serde_json::to_string_pretty(&reparsed)?;
+    Ok(pretty)
 }
 
 fn generate_metrics_diff(expected: &str, actual: &str) -> String {
