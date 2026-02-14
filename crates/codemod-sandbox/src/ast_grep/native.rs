@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::error::Error;
 use std::path::Path;
 use std::str::FromStr;
@@ -44,11 +45,13 @@ pub fn with_combined_scan<T>(
     Ok(result)
 }
 
-pub fn scan_file_with_combined_scan(
+type ScanResult<'a> = (Vec<AstGrepMatch>, bool, Option<Cow<'a, str>>);
+
+pub fn scan_file_with_combined_scan<'a>(
     file_path: &Path,
     combined_scan: &CombinedScan<SupportLang>,
     apply_fixes: bool,
-) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
+) -> Result<ScanResult<'a>, AstGrepError> {
     let content = fs::read_to_string(file_path)?;
 
     let language_str = detect_language_from_extension(
@@ -74,7 +77,7 @@ pub fn scan_file_with_combined_scan(
 
     let file_modified = scan_result.file_modified;
     let new_content = if file_modified {
-        Some(scan_result.new_content)
+        Some(Cow::Owned(scan_result.new_content.to_string()))
     } else {
         None
     };

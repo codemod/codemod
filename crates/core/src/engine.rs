@@ -1643,7 +1643,7 @@ impl Engine {
                                     // Use async file writing to avoid blocking the thread
                                     let write_result = runtime_handle.block_on(async {
                                         file_writer
-                                            .write_file(path.to_path_buf(), new_content)
+                                            .write_file(path.to_path_buf(), new_content.to_string())
                                             .await
                                     });
 
