@@ -167,7 +167,6 @@ fn create_test_run(workflow: Workflow) -> WorkflowRun {
         bundle_path: None,
         target_path: None,
         capabilities: None,
-        target_path: None,
     }
 }
 
