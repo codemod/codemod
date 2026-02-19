@@ -79,6 +79,7 @@ pub struct ExecutionReport {
 }
 
 impl ExecutionReport {
+    #[allow(clippy::too_many_arguments)]
     /// Build a new execution report
     pub fn build(
         codemod_name: String,

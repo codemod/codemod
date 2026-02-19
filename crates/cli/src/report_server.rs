@@ -75,7 +75,6 @@ async fn handle_request(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
-                .header("Access-Control-Allow-Origin", "*")
                 .body(Body::from(json))
                 .unwrap()
         }

@@ -94,6 +94,9 @@ jobs:
       - name: Build report UI
         run: pnpm --filter codemod-report-ui build
 
+      - name: Verify report UI build
+        run: test -f crates/cli/report-ui/dist/index.html
+
       - name: Build
         run: |
           cargo build --release -p codemod --target ${{ matrix.target }}
