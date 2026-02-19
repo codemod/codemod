@@ -68,11 +68,7 @@ impl RolldownBundler {
                 import: entry_str.to_string(),
             }]),
             cwd: Some(base_dir.clone()),
-            sourcemap: if self.config.source_maps {
-                Some(SourceMapType::File)
-            } else {
-                None
-            },
+            sourcemap: self.config.source_maps.then_some(SourceMapType::File),
             ..Default::default()
         };
 
