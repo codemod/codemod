@@ -390,6 +390,58 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_tcs_install_with_opencode_harness() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "tcs",
+            "install",
+            "jest-to-vitest",
+            "--harness",
+            "opencode",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_tcs_install_with_cursor_harness() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "tcs",
+            "install",
+            "jest-to-vitest",
+            "--harness",
+            "cursor",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_skills_with_opencode_harness() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "agent",
+            "install-skills",
+            "--harness",
+            "opencode",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_skills_with_cursor_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install-skills", "--harness", "cursor"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_skills_with_interactive() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install-skills", "--interactive"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn agent_help_lists_stubbed_subcommands() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
         let error = match parse_result {
@@ -403,5 +455,20 @@ mod tests {
         assert!(help_text.contains("verify-skills"));
         assert!(help_text.contains("list-skills"));
         assert!(help_text.contains("run"));
+    }
+
+    #[test]
+    fn install_skills_help_lists_opencode_and_cursor_harnesses() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install-skills", "--help"]);
+        let error = match parse_result {
+            Err(error) => error,
+            Ok(_) => panic!("expected --help to return clap display help"),
+        };
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+
+        let help_text = error.to_string();
+        assert!(help_text.contains("opencode"));
+        assert!(help_text.contains("cursor"));
+        assert!(help_text.contains("--interactive"));
     }
 }

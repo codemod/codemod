@@ -1,6 +1,4 @@
-use crate::commands::harness_adapter::{
-    resolve_adapter, resolve_install_scope, Harness, InstallRequest, OutputFormat,
-};
+use crate::commands::harness_adapter::{Harness, OutputFormat};
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
@@ -30,10 +28,10 @@ struct InstallCommand {
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
     harness: Harness,
     /// Install into current repo workspace
-    #[arg(long)]
+    #[arg(long, conflicts_with = "user")]
     project: bool,
     /// Install into user-level skills path
-    #[arg(long)]
+    #[arg(long, conflicts_with = "project")]
     user: bool,
     /// Overwrite existing skill files
     #[arg(long)]
@@ -81,16 +79,15 @@ struct RunCommand {
 pub async fn handler(args: &Command) -> Result<()> {
     match &args.action {
         TcsAction::Install(command) => {
-            let scope = resolve_install_scope(command.project, command.user)?;
-            let adapter = resolve_adapter(command.harness)?;
-            let _ = adapter.metadata();
-            let request = InstallRequest {
-                scope,
-                force: command.force,
-            };
-            let _ = (&command.tcs_id, command.format);
-            let _ = adapter.install_skills(&request)?;
-            Ok(())
+            let _ = (
+                &command.tcs_id,
+                command.harness,
+                command.project,
+                command.user,
+                command.force,
+                command.format,
+            );
+            bail!("tcs install is not implemented yet")
         }
         TcsAction::Inspect(command) => {
             let _ = (&command.tcs_id, command.format);
