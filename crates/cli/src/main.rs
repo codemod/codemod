@@ -10,6 +10,7 @@ mod commands;
 mod dirty_git_check;
 mod engine;
 mod progress_bar;
+mod report_server;
 mod utils;
 mod workflow_runner;
 use crate::auth::TokenStorage;

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use butterflow_core::config::{DryRunCallback, DryRunChange, PreRunCallback, WorkflowRunConfig};
-use butterflow_core::diff::{generate_unified_diff, DiffConfig};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
@@ -16,8 +16,12 @@ use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
 use crate::{dirty_git_check, progress_bar};
 
-/// Create a callback for reporting dry-run changes with diffs
-pub fn create_dry_run_callback(no_color: bool) -> DryRunCallback {
+/// Create a callback for reporting dry-run changes with diffs.
+/// When `diff_collector` is provided, also generates plain-text diffs and collects them.
+pub fn create_dry_run_callback(
+    no_color: bool,
+    diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
+) -> DryRunCallback {
     let config = DiffConfig::with_color_control(no_color);
 
     Arc::new(Box::new(move |change: DryRunChange| {
@@ -28,6 +32,43 @@ pub fn create_dry_run_callback(no_color: bool) -> DryRunCallback {
             &config,
         );
         diff.print();
+
+        // If collecting diffs for report, generate a plain-text (no color) version
+        if let Some(ref collector) = diff_collector {
+            let plain_config = DiffConfig {
+                color: false,
+                ..DiffConfig::default()
+            };
+            let plain_diff = generate_unified_diff(
+                &change.file_path,
+                &change.original_content,
+                &change.new_content,
+                &plain_config,
+            );
+            if let Ok(mut diffs) = collector.lock() {
+                diffs.push(plain_diff);
+            }
+        }
+    }))
+}
+
+/// Create a callback that silently collects diffs without printing to terminal.
+/// Used when --report is passed without --dry-run.
+pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> DryRunCallback {
+    Arc::new(Box::new(move |change: DryRunChange| {
+        let config = DiffConfig {
+            color: false,
+            ..DiffConfig::default()
+        };
+        let diff = generate_unified_diff(
+            &change.file_path,
+            &change.original_content,
+            &change.new_content,
+            &config,
+        );
+        if let Ok(mut diffs) = collector.lock() {
+            diffs.push(diff);
+        }
     }))
 }
 
@@ -103,6 +144,7 @@ pub fn create_engine(
     capabilities: Option<HashSet<LlrtSupportedModules>>,
     no_interactive: bool,
     no_color: bool,
+    diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -123,9 +165,10 @@ pub fn create_engine(
 
     let capabilities_security_callback = capabilities_security_callback(no_interactive);
     let dry_run_callback = if dry_run {
-        Some(create_dry_run_callback(no_color))
+        // In dry-run mode: print diffs to terminal + optionally collect for report
+        Some(create_dry_run_callback(no_color, diff_collector))
     } else {
-        None
+        diff_collector.map(create_silent_diff_collector)
     };
 
     let config = WorkflowRunConfig {

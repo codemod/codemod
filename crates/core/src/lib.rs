@@ -5,6 +5,7 @@ pub mod execution;
 pub(crate) mod execution_stats;
 pub mod file_ops;
 pub mod registry;
+pub mod report;
 pub mod utils;
 
 pub use butterflow_models::{

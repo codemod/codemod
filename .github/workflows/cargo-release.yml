@@ -81,6 +81,19 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Install report UI dependencies
+        run: pnpm install --frozen-lockfile --filter codemod-report-ui...
+
+      - name: Build report UI
+        run: pnpm --filter codemod-report-ui build
+
       - name: Build
         run: |
           cargo build --release -p codemod --target ${{ matrix.target }}

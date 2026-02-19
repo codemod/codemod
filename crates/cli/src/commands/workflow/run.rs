@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{Context, Result};
+use butterflow_core::diff::FileDiff;
+use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils;
 use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
+use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
 use crate::workflow_runner::{resolve_workflow_source, run_workflow};
@@ -53,6 +57,10 @@ pub struct Command {
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
+
+    /// Open a web-based execution report after the run completes
+    #[arg(long)]
+    report: bool,
 }
 
 /// Run a workflow
@@ -79,9 +87,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    // Always collect diffs so we can offer report interactively
+    let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
+
+    let started = std::time::Instant::now();
+
     let (engine, config) = create_engine(
         workflow_file_path,
-        target_path,
+        target_path.clone(),
         args.dry_run,
         args.allow_dirty,
         params,
@@ -89,12 +102,44 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(capabilities),
         args.no_interactive,
         args.no_color,
+        diff_collector.clone(),
     )?;
 
     // Run workflow using the extracted workflow runner
     let (_, seconds) = run_workflow(&engine, config).await?;
 
-    crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
+    let duration_ms = started.elapsed().as_millis() as f64;
+
+    let metrics_data = engine.metrics_context.get_all();
+
+    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let stats = engine.execution_stats.clone();
+        let files_modified = stats.files_modified.load(Ordering::Relaxed);
+        let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
+        let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+
+        let report = ExecutionReport::build(
+            args.workflow.clone(),
+            None,
+            duration_ms,
+            args.dry_run,
+            target_path.display().to_string(),
+            CLI_VERSION.to_string(),
+            files_modified,
+            files_unmodified,
+            files_with_errors,
+            convert_metrics(&metrics_data),
+            convert_diffs(&collected_diffs, &target_path.display().to_string()),
+        );
+
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
+    }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     telemetry
