@@ -62,6 +62,9 @@ impl RolldownBundler {
                 .ok_or_else(|| anyhow::anyhow!("Entry path is not valid UTF-8"))?
         };
 
+        // Path Fix for Windows
+        let entry_str = entry_str.replace('\\', "/");
+
         let bundler_options = BundlerOptions {
             input: Some(vec![InputItem {
                 name: None,
