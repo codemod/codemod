@@ -5,6 +5,7 @@ use thiserror::Error;
 
 const MCS_SKILL_NAME: &str = "codemod-cli";
 const MCS_SKILL_VERSION: &str = "1.0.0";
+const TCS_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility: tcs-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
 const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.0.0";
@@ -48,6 +49,13 @@ const MCS_INDEX_LINKED_REFERENCE_PATHS: [&str; 5] = [
     MCS_DRY_RUN_VERIFY_RELATIVE_PATH,
     MCS_TROUBLESHOOTING_RELATIVE_PATH,
 ];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TcsInstallPackage {
+    pub id: String,
+    pub version: String,
+    pub description: String,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum Harness {
@@ -139,6 +147,10 @@ pub enum HarnessAdapterError {
     InvalidSkillPackage(String),
     #[error("Skill install failed: {0}")]
     InstallFailed(String),
+    #[error("Unknown TCS id: {0}")]
+    TcsNotFound(String),
+    #[error("TCS install failed: {0}")]
+    TcsInstallFailed(String),
 }
 
 impl HarnessAdapterError {
@@ -147,6 +159,8 @@ impl HarnessAdapterError {
             Self::UnsupportedHarness(_) => "E_UNSUPPORTED_HARNESS",
             Self::InvalidSkillPackage(_) => "E_SKILL_INVALID",
             Self::InstallFailed(_) => "E_SKILL_INSTALL_FAILED",
+            Self::TcsNotFound(_) => "E_TCS_NOT_FOUND",
+            Self::TcsInstallFailed(_) => "E_TCS_INSTALL_FAILED",
         }
     }
 
@@ -155,6 +169,8 @@ impl HarnessAdapterError {
             Self::UnsupportedHarness(_) => 20,
             Self::InvalidSkillPackage(_) => 21,
             Self::InstallFailed(_) => 22,
+            Self::TcsNotFound(_) => 27,
+            Self::TcsInstallFailed(_) => 28,
         }
     }
 
@@ -167,6 +183,10 @@ impl HarnessAdapterError {
                 "Run `codemod agent verify-skills --format json` after reinstalling skills."
             }
             Self::InstallFailed(_) => "Retry with --force or check filesystem permissions.",
+            Self::TcsNotFound(_) => {
+                "Run `codemod search <migration> --format json` to locate a valid TCS id."
+            }
+            Self::TcsInstallFailed(_) => "Retry with --force or check filesystem permissions.",
         }
     }
 }
@@ -176,6 +196,11 @@ pub type AdapterResult<T> = std::result::Result<T, HarnessAdapterError>;
 pub trait HarnessAdapter: Send + Sync {
     fn metadata(&self) -> CompatibilityMetadata;
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>>;
+    fn install_tcs_skill(
+        &self,
+        package: &TcsInstallPackage,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>>;
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>>;
     fn verify_skills(&self) -> AdapterResult<Vec<VerificationCheck>>;
 }
@@ -225,6 +250,15 @@ impl HarnessAdapter for ClaudeHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Claude, request, &runtime_paths)
     }
 
+    fn install_tcs_skill(
+        &self,
+        package: &TcsInstallPackage,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_tcs_skill_bundle_with_runtime(Harness::Claude, package, request, &runtime_paths)
+    }
+
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Claude, &runtime_paths)
@@ -252,6 +286,15 @@ impl HarnessAdapter for GooseHarnessAdapter {
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Goose, request, &runtime_paths)
+    }
+
+    fn install_tcs_skill(
+        &self,
+        package: &TcsInstallPackage,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_tcs_skill_bundle_with_runtime(Harness::Goose, package, request, &runtime_paths)
     }
 
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
@@ -283,6 +326,15 @@ impl HarnessAdapter for OpencodeHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Opencode, request, &runtime_paths)
     }
 
+    fn install_tcs_skill(
+        &self,
+        package: &TcsInstallPackage,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_tcs_skill_bundle_with_runtime(Harness::Opencode, package, request, &runtime_paths)
+    }
+
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Opencode, &runtime_paths)
@@ -310,6 +362,15 @@ impl HarnessAdapter for CursorHarnessAdapter {
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Cursor, request, &runtime_paths)
+    }
+
+    fn install_tcs_skill(
+        &self,
+        package: &TcsInstallPackage,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_tcs_skill_bundle_with_runtime(Harness::Cursor, package, request, &runtime_paths)
     }
 
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
@@ -408,6 +469,80 @@ fn install_mcs_skill_bundle_with_runtime(
         version: Some(MCS_SKILL_VERSION.to_string()),
         scope: Some(request.scope),
     }])
+}
+
+fn install_tcs_skill_bundle_with_runtime(
+    harness: Harness,
+    package: &TcsInstallPackage,
+    request: &InstallRequest,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<InstalledSkill>> {
+    let skill_md_content = render_tcs_skill_md(package);
+    let skill_dir_name = skill_directory_name_for_tcs_id(&package.id);
+
+    let skill_root =
+        skills_root_for_harness(harness, request.scope, runtime_paths)?.join(skill_dir_name);
+    let skill_md_path = skill_root.join("SKILL.md");
+
+    write_tcs_skill_file(&skill_md_path, &skill_md_content, request.force)?;
+
+    Ok(vec![InstalledSkill {
+        name: package.id.clone(),
+        path: skill_md_path,
+        version: Some(package.version.clone()),
+        scope: Some(request.scope),
+    }])
+}
+
+fn skill_directory_name_for_tcs_id(tcs_id: &str) -> String {
+    tcs_id.trim_start_matches('@').replace(['/', '\\'], "__")
+}
+
+fn yaml_double_quoted_scalar(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            _ => quoted.push(character),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn render_tcs_skill_md(tcs_package: &TcsInstallPackage) -> String {
+    let name_yaml = yaml_double_quoted_scalar(&tcs_package.id);
+    let description_yaml = yaml_double_quoted_scalar(&tcs_package.description);
+
+    format!(
+        r#"---
+name: {name_yaml}
+description: {description_yaml}
+allowed-tools:
+  - Bash(codemod *)
+argument-hint: "<target-repo-or-path>"
+---
+
+# {name}
+
+{compatibility_marker}
+codemod-skill-version: {version}
+
+Use this task-specific codemod skill with:
+- `codemod tcs run {name} --target <path> --dry-run`
+- `codemod run {name} --target <path> --dry-run`
+"#,
+        name = tcs_package.id.as_str(),
+        name_yaml = name_yaml,
+        description_yaml = description_yaml,
+        compatibility_marker = TCS_COMPATIBILITY_MARKER_PREFIX,
+        version = tcs_package.version.as_str(),
+    )
 }
 
 fn list_skills_with_runtime(
@@ -804,6 +939,44 @@ fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()
     Ok(())
 }
 
+fn write_tcs_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()> {
+    if path.exists() {
+        if force {
+            return write_skill_file(path, content, true)
+                .map_err(map_skill_install_error_as_tcs_install_error);
+        }
+
+        let existing_content = fs::read_to_string(path).map_err(|error| {
+            HarnessAdapterError::TcsInstallFailed(format!(
+                "Failed to read existing skill file {}: {error}",
+                path.display()
+            ))
+        })?;
+
+        if existing_content == content {
+            // Idempotent install: existing file already matches expected content.
+            return Ok(());
+        }
+
+        return Err(HarnessAdapterError::TcsInstallFailed(format!(
+            "Skill file already exists at {} with different content. Re-run with --force to overwrite.",
+            path.display()
+        )));
+    }
+
+    write_skill_file(path, content, force).map_err(map_skill_install_error_as_tcs_install_error)
+}
+
+fn map_skill_install_error_as_tcs_install_error(error: HarnessAdapterError) -> HarnessAdapterError {
+    match error {
+        HarnessAdapterError::InstallFailed(message)
+        | HarnessAdapterError::InvalidSkillPackage(message) => {
+            HarnessAdapterError::TcsInstallFailed(message)
+        }
+        other_error => other_error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -990,6 +1163,115 @@ mod tests {
         );
 
         assert!(forced.is_ok());
+    }
+
+    #[test]
+    fn install_tcs_skill_bundle_writes_expected_skill_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let tcs_package = TcsInstallPackage {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+        };
+
+        let installed = install_tcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &tcs_package,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(installed.len(), 1);
+        let installed_skill = installed.first().unwrap();
+        assert_eq!(installed_skill.name, "jest-to-vitest");
+        assert_eq!(installed_skill.version, Some("0.1.0".to_string()));
+        assert!(installed_skill.path.exists());
+        assert!(installed_skill
+            .path
+            .to_string_lossy()
+            .contains(".claude/skills/jest-to-vitest/SKILL.md"));
+    }
+
+    #[test]
+    fn install_tcs_skill_bundle_is_idempotent_without_force() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let tcs_package = TcsInstallPackage {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+        };
+
+        let first_install = install_tcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &tcs_package,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+        let second_install = install_tcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &tcs_package,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(first_install.len(), 1);
+        assert_eq!(second_install.len(), 1);
+        assert_eq!(first_install[0].path, second_install[0].path);
+    }
+
+    #[test]
+    fn tcs_skill_directory_name_sanitizes_scoped_ids() {
+        let scoped_name = skill_directory_name_for_tcs_id("@codemod/jest-to-vitest");
+        assert_eq!(scoped_name, "codemod__jest-to-vitest");
+    }
+
+    #[test]
+    fn tcs_error_codes_and_exit_codes_match_contract() {
+        let not_found = HarnessAdapterError::TcsNotFound("missing-package".to_string());
+        assert_eq!(not_found.code(), "E_TCS_NOT_FOUND");
+        assert_eq!(not_found.exit_code(), 27);
+
+        let install_failed = HarnessAdapterError::TcsInstallFailed("permission denied".to_string());
+        assert_eq!(install_failed.code(), "E_TCS_INSTALL_FAILED");
+        assert_eq!(install_failed.exit_code(), 28);
+    }
+
+    #[test]
+    fn render_tcs_skill_md_emits_yaml_safe_frontmatter_for_scoped_id() {
+        let tcs_package = TcsInstallPackage {
+            id: "@codemod/jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate tests: Jest -> Vitest".to_string(),
+        };
+
+        let skill_md = render_tcs_skill_md(&tcs_package);
+        let frontmatter = extract_frontmatter(&skill_md).expect("expected YAML frontmatter");
+        let parsed_frontmatter: serde_yaml::Value =
+            serde_yaml::from_str(frontmatter).expect("frontmatter should be valid YAML");
+
+        assert_eq!(
+            parsed_frontmatter
+                .get("name")
+                .and_then(|value| value.as_str()),
+            Some("@codemod/jest-to-vitest")
+        );
+        assert_eq!(
+            parsed_frontmatter
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some("Migrate tests: Jest -> Vitest")
+        );
     }
 
     #[test]

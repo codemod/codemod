@@ -52,19 +52,19 @@ pub(crate) struct RegistryConfig {
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct TargetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    languages: Option<Vec<String>>,
+    pub(crate) languages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    frameworks: Option<Vec<String>>,
+    pub(crate) frameworks: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    versions: Option<std::collections::HashMap<String, String>>,
+    pub(crate) versions: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct ValidationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    strict: Option<bool>,
+    pub(crate) strict: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    require_tests: Option<bool>,
+    pub(crate) require_tests: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    min_test_coverage: Option<u32>,
+    pub(crate) min_test_coverage: Option<u32>,
 }
