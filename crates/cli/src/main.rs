@@ -79,6 +79,12 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
+    /// AI-native codemod agent workflows and skill lifecycle commands
+    Agent(commands::agent::Command),
+
+    /// Task-specific codemod skill commands
+    Tcs(commands::tcs::Command),
+
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
 }
@@ -155,6 +161,9 @@ fn is_package_name(arg: &str) -> bool {
         "run",
         "unpublish",
         "cache",
+        "agent",
+        "tcs",
+        "mcp",
     ];
 
     !known_commands.contains(&arg)
@@ -327,6 +336,12 @@ async fn main() -> Result<()> {
         Some(Commands::Cache(args)) => {
             commands::cache::handler(args).await?;
         }
+        Some(Commands::Agent(args)) => {
+            commands::agent::handler(args).await?;
+        }
+        Some(Commands::Tcs(args)) => {
+            commands::tcs::handler(args).await?;
+        }
         Some(Commands::Mcp(args)) => {
             args.run().await?;
         }
@@ -348,4 +363,45 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{error::ErrorKind, CommandFactory};
+
+    #[test]
+    fn top_level_help_lists_agent_and_tcs() {
+        let help_text = Cli::command().render_long_help().to_string();
+        assert!(help_text.contains("agent"));
+        assert!(help_text.contains("tcs"));
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_skills_stub() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install-skills"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_tcs_install_stub() {
+        let parse_result = Cli::try_parse_from(["codemod", "tcs", "install", "jest-to-vitest"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn agent_help_lists_stubbed_subcommands() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
+        let error = match parse_result {
+            Err(error) => error,
+            Ok(_) => panic!("expected --help to return clap display help"),
+        };
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+
+        let help_text = error.to_string();
+        assert!(help_text.contains("install-skills"));
+        assert!(help_text.contains("verify-skills"));
+        assert!(help_text.contains("list-skills"));
+        assert!(help_text.contains("run"));
+    }
 }
