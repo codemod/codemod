@@ -56,6 +56,117 @@ npx codemod publish
 
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
+<Info>
+  AI-native CLI commands are in active rollout. `codemod agent install-skills|list-skills|verify-skills`, `codemod tcs install`, and `codemod tcs inspect` are available; `codemod agent run` and `codemod tcs run` remain in scaffold phase.
+</Info>
+
+### `codemod agent`
+
+Manage Master Codemod Skill (MCS) install/verification flows for supported harnesses.
+
+**`agent install-skills`**
+
+Install the `codemod-cli` MCS package and configure Codemod MCP.
+
+```bash
+npx codemod agent install-skills [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--format <table|json|yaml>]
+```
+
+Along with skill files, install writes or updates a Codemod MCP server entry:
+
+```json
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}
+```
+
+MCP config paths by harness and scope:
+- `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
+- `goose`: `./.goose/mcp.json` (project), `~/.goose/mcp.json` (user)
+- `opencode`: `./.opencode/mcp.json` (project), `~/.opencode/mcp.json` (user)
+- `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
+
+If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
+
+**`agent verify-skills` / `agent list-skills`**
+
+Validate installed codemod-managed skills and list installed MCS/TCS entries.
+
+### `codemod tcs`
+
+Manage task-specific Codemod Skills (TCS) as installable skill packages for AI harnesses.
+
+**`tcs install`**
+
+Install a TCS skill from registry metadata into harness skill paths.
+
+```bash
+npx codemod tcs install <tcs-id> [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--format <table|json|yaml>]
+```
+
+<ResponseField name="--harness <VALUE>" type="string">
+  Target harness skill root. `auto` resolves by workspace marker order: `.claude`, `.goose`, `.opencode`, `.cursor`, then Claude fallback.
+</ResponseField>
+
+<ResponseField name="--project | --user" type="boolean">
+  Install scope. `--project` writes to workspace harness roots. `--user` writes to user-level harness roots.
+</ResponseField>
+
+<ResponseField name="--force" type="boolean">
+  Overwrite existing skill content. Without `--force`, install is idempotent when content already matches.
+</ResponseField>
+
+<ResponseField name="--format <table|json|yaml>" type="string">
+  Output contract format.
+</ResponseField>
+
+**Alias install mode**
+
+Use explicit `--skill` mode to install directly from package-style invocation:
+
+```bash
+npx codemod <tcs-id> --skill --harness auto --project
+```
+
+`--skill` is required for alias install routing. Without it, package invocation follows normal `codemod run` behavior.
+
+**`tcs inspect`**
+
+Inspect TCS package metadata resolved from registry.
+
+```bash
+npx codemod tcs inspect <tcs-id> [--format <table|json|yaml>]
+```
+
+Inspect output includes:
+- support metadata (`languages`, `frameworks`, `version_ranges`),
+- constraints (`capabilities`, `requires_tests`, `min_test_coverage`),
+- manifest-derived confidence hints.
+
+**AI-native error codes**
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `E_TCS_NOT_FOUND` | `27` | Unknown TCS id / unresolved package version |
+| `E_TCS_INSTALL_FAILED` | `28` | Registry resolution, metadata parse, or install write failure |
+
+Example machine-readable failure (`--format json`):
+
+```json
+{
+  "ok": false,
+  "code": "E_TCS_NOT_FOUND",
+  "exit_code": 27,
+  "message": "Unknown TCS id: jest-to-vitestx",
+  "hint": "Run `codemod search <migration> --format json` to locate a valid TCS id."
+}
+```
+
 ### `codemod workflow`
 
 Manage and execute [Codemod packages](/package-structure).

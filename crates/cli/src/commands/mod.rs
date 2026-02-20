@@ -1,4 +1,6 @@
+pub mod agent;
 pub mod cache;
+pub mod harness_adapter;
 pub mod init;
 pub mod jssg;
 pub mod login;
@@ -7,6 +9,7 @@ pub mod mcp;
 pub mod publish;
 pub mod run;
 pub mod search;
+pub mod tcs;
 pub mod unpublish;
 pub mod whoami;
 pub mod workflow;
