@@ -44,3 +44,8 @@ Use this guide for creating codemods and applying them.
 Use `agent` and `tcs` when orchestration/routing is needed:
 - `codemod agent run "<intent>" --harness auto --format json`
 - `codemod tcs install <tcs-id> --harness auto --project`
+
+If `agent run` returns `insufficient_metadata` or `no_candidates`, use direct CLI flow:
+- `codemod search "<migration>" --format json`
+- `codemod run <package-name> --dry-run --target <repo-path>`
+- `codemod run <package-name> --target <repo-path>`

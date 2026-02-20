@@ -57,7 +57,7 @@ npx codemod publish
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
 <Info>
-  AI-native CLI commands are in active rollout. `codemod agent install-skills|list-skills|verify-skills`, `codemod tcs install`, and `codemod tcs inspect` are available; `codemod agent run` and `codemod tcs run` remain in scaffold phase.
+  AI-native CLI commands are in active rollout. `codemod agent install-skills|list-skills|verify-skills|run`, `codemod tcs install`, and `codemod tcs inspect` are available. `codemod tcs run` remains in scaffold phase.
 </Info>
 
 ### `codemod agent`
@@ -96,6 +96,28 @@ If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force
 **`agent verify-skills` / `agent list-skills`**
 
 Validate installed codemod-managed skills and list installed MCS/TCS entries.
+
+**`agent run`**
+
+Run AI-native preflight orchestration for a migration intent.
+
+```bash
+npx codemod agent run "<intent>" [--harness <claude|goose|opencode|cursor|auto>] [--session <id>] [--artifacts-dir <path>] [--dry-run-only] [--format <table|json|yaml>]
+```
+
+Current behavior (v1 preflight):
+- runs registry search for the provided intent,
+- evaluates suitability metadata coverage,
+- returns deterministic decision kinds:
+  - `ready_for_threshold_routing`
+  - `insufficient_metadata`
+  - `no_candidates`
+- writes `candidate-evaluation.json` under session artifacts (default: `.codemod-cli/sessions/<session-id>/`).
+
+Recommended fallback when decision is `insufficient_metadata` or `no_candidates`:
+1. `npx codemod search "<migration>" --format json`
+2. `npx codemod run <package-name> --dry-run --target <repo-path>`
+3. `npx codemod run <package-name> --target <repo-path>` after verification
 
 ### `codemod tcs`
 

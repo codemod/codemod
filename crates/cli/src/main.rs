@@ -10,6 +10,7 @@ mod commands;
 mod dirty_git_check;
 mod engine;
 mod progress_bar;
+mod suitability;
 mod utils;
 mod workflow_runner;
 use crate::auth::TokenStorage;
@@ -555,6 +556,24 @@ mod tests {
     fn parser_accepts_agent_install_skills_with_interactive() {
         let parse_result =
             Cli::try_parse_from(["codemod", "agent", "install-skills", "--interactive"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_run_with_artifact_flags() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "agent",
+            "run",
+            "migrate jest to vitest",
+            "--session",
+            "cmod-test",
+            "--artifacts-dir",
+            ".codemod-cli/sessions/cmod-test",
+            "--dry-run-only",
+            "--format",
+            "json",
+        ]);
         assert!(parse_result.is_ok());
     }
 

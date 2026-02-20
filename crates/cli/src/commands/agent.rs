@@ -2,15 +2,21 @@ use crate::commands::harness_adapter::{
     resolve_adapter, resolve_install_scope, Harness, HarnessAdapterError, InstallRequest,
     InstallScope, InstalledSkill, OutputFormat, VerificationCheck, VerificationStatus,
 };
-use anyhow::{bail, Result};
+use crate::suitability::{
+    search_registry, summarize_search_coverage, RegistrySearchRequest, SearchCoverageSummary,
+};
+use anyhow::{Context, Result};
+use chrono::Utc;
 use clap::{Args, Subcommand};
 use inquire::{Confirm, Select};
 use serde::Serialize;
 use std::fmt;
+use std::fs;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tabled::settings::{object::Columns, Alignment, Modify, Style};
 use tabled::{Table, Tabled};
+use uuid::Uuid;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -169,16 +175,16 @@ pub async fn handler(args: &Command) -> Result<()> {
             Ok(())
         }
         AgentAction::Run(command) => {
-            let _ = (
-                &command.intent,
-                command.harness,
-                &command.session,
-                &command.artifacts_dir,
-                command.max_iterations,
-                command.dry_run_only,
-                command.format,
-            );
-            bail!("agent run is not implemented yet")
+            let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
+                exit_adapter_error(error, command.format);
+            });
+            let _ = resolved_adapter.adapter.metadata();
+
+            let output = execute_run(command, resolved_adapter.harness, resolved_adapter.warnings)
+                .await
+                .unwrap_or_else(|error| exit_run_error(error, command.format));
+            print_run_output(&output, command.format)?;
+            Ok(())
         }
     }
 }
@@ -272,6 +278,250 @@ struct VerifySkillRow {
     status: String,
     #[tabled(rename = "Reason")]
     reason: String,
+}
+
+#[derive(Serialize, Clone)]
+struct RunOutput {
+    ok: bool,
+    session_id: String,
+    intent: String,
+    harness: String,
+    registry: String,
+    artifacts_dir: String,
+    decision: RunDecisionOutput,
+    metadata_coverage: SearchCoverageSummary,
+    candidate_evaluation_path: String,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct RunDecisionOutput {
+    kind: String,
+    reason: String,
+    ready_for_threshold_routing: bool,
+    missing_fields: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CandidateEvaluationArtifact {
+    schema_version: String,
+    generated_at: String,
+    session_id: String,
+    intent: String,
+    harness: String,
+    registry: String,
+    decision: RunDecisionOutput,
+    metadata_coverage: SearchCoverageSummary,
+}
+
+#[derive(Serialize)]
+struct RunErrorEnvelope {
+    ok: bool,
+    code: String,
+    exit_code: i32,
+    message: String,
+    hint: String,
+}
+
+#[derive(Tabled)]
+struct RunDecisionRow {
+    #[tabled(rename = "Decision")]
+    kind: String,
+    #[tabled(rename = "Ready")]
+    ready: String,
+    #[tabled(rename = "Reason")]
+    reason: String,
+    #[tabled(rename = "Missing Fields")]
+    missing_fields: String,
+}
+
+async fn execute_run(
+    command: &RunCommand,
+    resolved_harness: Harness,
+    mut warnings: Vec<String>,
+) -> Result<RunOutput> {
+    let search_request = RegistrySearchRequest {
+        query: Some(command.intent.clone()),
+        size: 20,
+        from: 0,
+        ..RegistrySearchRequest::default()
+    };
+    let search_result = search_registry(search_request)
+        .await
+        .context("failed to query registry for agent run preflight")?;
+    let metadata_coverage = summarize_search_coverage(&search_result.response.packages);
+    let decision = build_run_decision(&metadata_coverage);
+
+    if decision.kind == "insufficient_metadata" {
+        warnings.push(
+            "routing degraded: registry payload is missing suitability contract fields".to_string(),
+        );
+    }
+    if command.max_iterations.is_some() {
+        warnings.push(
+            "--max-iterations is accepted, but preflight-only run mode does not execute routing yet"
+                .to_string(),
+        );
+    }
+    if command.dry_run_only {
+        warnings.push(
+            "--dry-run-only acknowledged; current implementation performs preflight only"
+                .to_string(),
+        );
+    }
+
+    let session_id = resolve_session_id(command.session.as_deref());
+    let artifacts_dir = resolve_run_artifacts_dir(command.artifacts_dir.as_deref(), &session_id);
+    fs::create_dir_all(&artifacts_dir).with_context(|| {
+        format!(
+            "failed to create artifacts directory `{}`",
+            artifacts_dir.display()
+        )
+    })?;
+
+    let artifact = CandidateEvaluationArtifact {
+        schema_version: "1.0.0".to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+        session_id: session_id.clone(),
+        intent: command.intent.clone(),
+        harness: resolved_harness.as_str().to_string(),
+        registry: search_result.registry_url.clone(),
+        decision: decision.clone(),
+        metadata_coverage: metadata_coverage.clone(),
+    };
+    let candidate_evaluation_path = write_candidate_evaluation_artifact(&artifacts_dir, &artifact)?;
+
+    Ok(RunOutput {
+        ok: true,
+        session_id,
+        intent: command.intent.clone(),
+        harness: resolved_harness.as_str().to_string(),
+        registry: search_result.registry_url,
+        artifacts_dir: format_output_path(&artifacts_dir),
+        decision,
+        metadata_coverage,
+        candidate_evaluation_path: format_output_path(&candidate_evaluation_path),
+        warnings,
+    })
+}
+
+fn build_run_decision(metadata_coverage: &SearchCoverageSummary) -> RunDecisionOutput {
+    let mut missing_fields = metadata_coverage
+        .missing_field_counts
+        .iter()
+        .filter_map(|(field, count)| (*count > 0).then_some((*field).to_string()))
+        .collect::<Vec<_>>();
+    missing_fields.sort();
+
+    if metadata_coverage.total_packages == 0 {
+        return RunDecisionOutput {
+            kind: "no_candidates".to_string(),
+            reason: "Registry search returned no candidates for the provided intent.".to_string(),
+            ready_for_threshold_routing: false,
+            missing_fields: Vec::new(),
+        };
+    }
+
+    if metadata_coverage.packages_missing_contract_fields > 0 {
+        return RunDecisionOutput {
+            kind: "insufficient_metadata".to_string(),
+            reason: "Registry candidates are missing required suitability contract fields; threshold routing skipped.".to_string(),
+            ready_for_threshold_routing: false,
+            missing_fields,
+        };
+    }
+
+    RunDecisionOutput {
+        kind: "ready_for_threshold_routing".to_string(),
+        reason: "All required suitability fields are present; threshold routing can proceed."
+            .to_string(),
+        ready_for_threshold_routing: true,
+        missing_fields,
+    }
+}
+
+fn resolve_session_id(existing_session: Option<&str>) -> String {
+    if let Some(session) = existing_session {
+        let trimmed = session.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let entropy = Uuid::new_v4().simple().to_string();
+    let suffix = &entropy[..6];
+    format!("cmod-{timestamp}-{suffix}")
+}
+
+fn resolve_run_artifacts_dir(override_dir: Option<&Path>, session_id: &str) -> PathBuf {
+    match override_dir {
+        Some(path) => path.to_path_buf(),
+        None => PathBuf::from(".codemod-cli")
+            .join("sessions")
+            .join(session_id),
+    }
+}
+
+fn write_candidate_evaluation_artifact(
+    artifacts_dir: &Path,
+    artifact: &CandidateEvaluationArtifact,
+) -> Result<PathBuf> {
+    let artifact_path = artifacts_dir.join("candidate-evaluation.json");
+    let payload = serde_json::to_string_pretty(artifact)
+        .context("failed to serialize candidate evaluation artifact")?;
+    fs::write(&artifact_path, format!("{payload}\n")).with_context(|| {
+        format!(
+            "failed to write candidate evaluation artifact `{}`",
+            artifact_path.display()
+        )
+    })?;
+    Ok(artifact_path)
+}
+
+fn print_run_output(output: &RunOutput, format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(output)?),
+        OutputFormat::Yaml => println!("{}", serde_yaml::to_string(output)?),
+        OutputFormat::Table => print_run_output_table(output),
+    }
+    Ok(())
+}
+
+fn print_run_output_table(output: &RunOutput) {
+    println!("Session: {}", output.session_id);
+    println!("Harness: {}", output.harness);
+    println!("Registry: {}", output.registry);
+    println!("Artifacts: {}", output.artifacts_dir);
+
+    let row = RunDecisionRow {
+        kind: output.decision.kind.clone(),
+        ready: output.decision.ready_for_threshold_routing.to_string(),
+        reason: output.decision.reason.clone(),
+        missing_fields: if output.decision.missing_fields.is_empty() {
+            "-".to_string()
+        } else {
+            output.decision.missing_fields.join(", ")
+        },
+    };
+
+    let mut table = Table::new(vec![row]);
+    table
+        .with(Style::rounded())
+        .with(Modify::new(Columns::new(..)).with(Alignment::left()));
+    println!("{table}");
+
+    println!(
+        "Candidate evaluation artifact: {}",
+        output.candidate_evaluation_path
+    );
+
+    if !output.warnings.is_empty() {
+        println!("Warnings:");
+        for warning in &output.warnings {
+            println!("  - {warning}");
+        }
+    }
 }
 
 fn build_install_output(
@@ -523,6 +773,33 @@ fn exit_adapter_error(error: HarnessAdapterError, format: OutputFormat) -> ! {
     std::process::exit(envelope.exit_code);
 }
 
+fn exit_run_error(error: anyhow::Error, format: OutputFormat) -> ! {
+    let envelope = RunErrorEnvelope {
+        ok: false,
+        code: "AICLI_RUN_PREFLIGHT_FAILED".to_string(),
+        exit_code: 25,
+        message: error.to_string(),
+        hint: "Retry with --format json to inspect metadata coverage and missing fields; full threshold routing requires registry suitability contract fields.".to_string(),
+    };
+
+    match format {
+        OutputFormat::Json => match serde_json::to_string_pretty(&envelope) {
+            Ok(json) => println!("{json}"),
+            Err(_) => eprintln!("{}: {}", envelope.code, envelope.message),
+        },
+        OutputFormat::Yaml => match serde_yaml::to_string(&envelope) {
+            Ok(yaml) => println!("{yaml}"),
+            Err(_) => eprintln!("{}: {}", envelope.code, envelope.message),
+        },
+        OutputFormat::Table => {
+            eprintln!("Error [{}]: {}", envelope.code, envelope.message);
+            eprintln!("Hint: {}", envelope.hint);
+        }
+    }
+
+    std::process::exit(envelope.exit_code);
+}
+
 fn format_output_path(path: &std::path::Path) -> String {
     if let Ok(current_dir) = std::env::current_dir() {
         if let Ok(relative_path) = path.strip_prefix(current_dir) {
@@ -673,8 +950,11 @@ fn resolve_install_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::suitability::REQUIRED_SUITABILITY_FIELDS;
     use serde_json::Value;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     #[test]
     fn install_output_json_includes_codemod_mcp_entry() {
@@ -720,5 +1000,92 @@ mod tests {
         );
         assert!(codemod_mcp.get("path").and_then(Value::as_str).is_some());
         assert!(codemod_mcp.get("version").is_some_and(Value::is_null));
+    }
+
+    fn sample_coverage_summary(
+        total_packages: usize,
+        packages_missing_contract_fields: usize,
+        missing_fields: &[&'static str],
+    ) -> SearchCoverageSummary {
+        let mut missing_field_counts: BTreeMap<&'static str, usize> = REQUIRED_SUITABILITY_FIELDS
+            .iter()
+            .map(|field| (*field, 0usize))
+            .collect();
+        for field in missing_fields {
+            missing_field_counts.insert(*field, 1);
+        }
+
+        SearchCoverageSummary {
+            total_packages,
+            required_fields: REQUIRED_SUITABILITY_FIELDS.to_vec(),
+            packages_ready_for_threshold_routing: total_packages
+                .saturating_sub(packages_missing_contract_fields),
+            packages_missing_contract_fields,
+            missing_field_counts,
+        }
+    }
+
+    #[test]
+    fn build_run_decision_returns_insufficient_metadata_when_fields_missing() {
+        let coverage = sample_coverage_summary(2, 2, &["frameworks", "quality_score"]);
+        let decision = build_run_decision(&coverage);
+
+        assert_eq!(decision.kind, "insufficient_metadata");
+        assert!(!decision.ready_for_threshold_routing);
+        assert_eq!(decision.missing_fields, vec!["frameworks", "quality_score"]);
+    }
+
+    #[test]
+    fn build_run_decision_returns_no_candidates_for_empty_search_result() {
+        let coverage = sample_coverage_summary(0, 0, &[]);
+        let decision = build_run_decision(&coverage);
+
+        assert_eq!(decision.kind, "no_candidates");
+        assert!(!decision.ready_for_threshold_routing);
+        assert!(decision.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn write_candidate_evaluation_artifact_writes_expected_contract() {
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let coverage = sample_coverage_summary(1, 1, &["frameworks"]);
+        let decision = build_run_decision(&coverage);
+        let artifact = CandidateEvaluationArtifact {
+            schema_version: "1.0.0".to_string(),
+            generated_at: "2026-02-20T00:00:00Z".to_string(),
+            session_id: "cmod-test-session".to_string(),
+            intent: "migrate jest to vitest".to_string(),
+            harness: "claude".to_string(),
+            registry: "https://app.codemod.com".to_string(),
+            decision,
+            metadata_coverage: coverage,
+        };
+
+        let artifact_path =
+            write_candidate_evaluation_artifact(temp_dir.path(), &artifact).expect("artifact");
+
+        let artifact_raw = std::fs::read_to_string(&artifact_path).expect("artifact should exist");
+        let artifact_json: Value = serde_json::from_str(&artifact_raw).expect("json should parse");
+
+        assert_eq!(
+            artifact_json.get("session_id").and_then(Value::as_str),
+            Some("cmod-test-session")
+        );
+        assert_eq!(
+            artifact_json
+                .get("decision")
+                .and_then(Value::as_object)
+                .and_then(|decision| decision.get("kind"))
+                .and_then(Value::as_str),
+            Some("insufficient_metadata")
+        );
+        assert_eq!(
+            artifact_json
+                .get("metadata_coverage")
+                .and_then(Value::as_object)
+                .and_then(|coverage| coverage.get("packages_missing_contract_fields"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 }

@@ -1,11 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::Args;
-use log::debug;
-use reqwest;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tabled::{Table, Tabled};
 
-use crate::auth::TokenStorage;
+use crate::suitability::{
+    search_registry, summarize_search_coverage, MetadataCoverage, RegistrySearchPackage,
+    RegistrySearchRequest, RegistrySearchResponse, SearchCoverageSummary,
+};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -53,134 +54,45 @@ enum OutputFormat {
     Yaml,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct SearchResponse {
+#[derive(Serialize)]
+struct SearchResponseOutput<'a> {
     total: u32,
-    packages: Vec<Package>,
+    packages: Vec<PackageOutput<'a>>,
+    metadata_coverage: SearchCoverageSummary,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct Package {
-    id: String,
-    name: String,
-    scope: Option<String>,
-    display_name: Option<String>,
-    description: Option<String>,
-    author: String,
-    license: Option<String>,
-    repository: Option<String>,
-    homepage: Option<String>,
-    keywords: Vec<String>,
-    category: Option<String>,
-    latest_version: Option<String>,
-    download_count: u32,
-    star_count: u32,
-    created_at: String,
-    updated_at: Option<String>,
-    owner: PackageOwner,
-    organization: Option<PackageOrganization>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct PackageOwner {
-    id: String,
-    username: String,
-    name: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct PackageOrganization {
-    id: String,
-    name: String,
-    slug: String,
+#[derive(Serialize)]
+struct PackageOutput<'a> {
+    #[serde(flatten)]
+    package: &'a RegistrySearchPackage,
+    metadata_coverage: MetadataCoverage,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
-    let storage = TokenStorage::new()?;
-    let config = storage.load_config()?;
+    let request = RegistrySearchRequest {
+        query: args.query.clone(),
+        language: args.language.clone(),
+        framework: args.framework.clone(),
+        category: args.category.clone(),
+        size: args.size,
+        from: args.from,
+        scope: args.scope.clone(),
+        registry: args.registry.clone(),
+    };
 
-    let registry_url = args
-        .registry
-        .as_ref()
-        .unwrap_or(&config.default_registry)
-        .clone();
-
-    debug!("Searching packages in registry: {registry_url}");
-
-    let client = reqwest::Client::new();
-    let mut url = format!("{registry_url}/api/v1/registry/search");
-    let mut query_params = Vec::new();
-
-    if let Some(query) = &args.query {
-        query_params.push(("q", query.as_str()));
-    }
-
-    if let Some(language) = &args.language {
-        query_params.push(("language", language.as_str()));
-    }
-
-    if let Some(framework) = &args.framework {
-        query_params.push(("framework", framework.as_str()));
-    }
-
-    if let Some(category) = &args.category {
-        query_params.push(("category", category.as_str()));
-    }
-
-    if let Some(scope) = &args.scope {
-        query_params.push(("scope", scope.as_str()));
-    }
-
-    let size_str = args.size.to_string();
-    let from_str = args.from.to_string();
-    query_params.push(("size", &size_str));
-    query_params.push(("from", &from_str));
-
-    if !query_params.is_empty() {
-        url.push('?');
-        let query_string = query_params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
-            .collect::<Vec<_>>()
-            .join("&");
-        url.push_str(&query_string);
-    }
-
-    debug!("Search URL: {url}");
-
-    let mut request = client.get(&url);
-
-    // Add authentication header if available
-    if let Ok(Some(auth)) = storage.get_auth_for_registry(&registry_url) {
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth.tokens.access_token),
-        );
-    }
-
-    let response = request.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "Search failed with status {}: {}",
-            status,
-            error_text
-        ));
-    }
-
-    let search_result: SearchResponse = response.json().await?;
+    let search_result = search_registry(request).await?;
 
     match args.format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&search_result)?);
+            let output = build_search_output(&search_result.response);
+            println!("{}", serde_json::to_string_pretty(&output)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&search_result)?);
+            let output = build_search_output(&search_result.response);
+            println!("{}", serde_yaml::to_string(&output)?);
         }
         OutputFormat::Table => {
-            print_table(&search_result, args)?;
+            print_table(&search_result.response, args)?;
         }
     }
 
@@ -202,7 +114,7 @@ struct PackageRow {
     author: String,
 }
 
-fn print_table(result: &SearchResponse, args: &Command) -> Result<()> {
+fn print_table(result: &RegistrySearchResponse, args: &Command) -> Result<()> {
     use tabled::settings::{object::Columns, Alignment, Modify, Style};
 
     if result.packages.is_empty() {
@@ -237,7 +149,7 @@ fn print_table(result: &SearchResponse, args: &Command) -> Result<()> {
     let mut table = Table::new(rows);
     table
         .with(Style::rounded())
-        .with(Modify::new(Columns::new(..)).with(Alignment::left())); // align all columns left
+        .with(Modify::new(Columns::new(..)).with(Alignment::left()));
 
     println!("{table}");
 
@@ -252,6 +164,22 @@ fn print_table(result: &SearchResponse, args: &Command) -> Result<()> {
 
     Ok(())
 }
+
+fn build_search_output(result: &RegistrySearchResponse) -> SearchResponseOutput<'_> {
+    SearchResponseOutput {
+        total: result.total,
+        packages: result
+            .packages
+            .iter()
+            .map(|package| PackageOutput {
+                package,
+                metadata_coverage: package.metadata_coverage(),
+            })
+            .collect(),
+        metadata_coverage: summarize_search_coverage(&result.packages),
+    }
+}
+
 fn format_number(num: u32) -> String {
     if num >= 1_000_000 {
         format_suffix(num, 1_000_000.0, "M")
@@ -268,5 +196,62 @@ fn format_suffix(num: u32, divisor: f64, suffix: &str) -> String {
         format!("{value:.0}{suffix}")
     } else {
         format!("{value:.1}{suffix}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::suitability::{RegistryPackageOrganization, RegistryPackageOwner};
+
+    #[test]
+    fn build_search_output_embeds_metadata_coverage_summary() {
+        let package = RegistrySearchPackage {
+            id: "pkg-1".to_string(),
+            name: "jest-to-vitest".to_string(),
+            scope: Some("codemod".to_string()),
+            display_name: Some("Jest to Vitest".to_string()),
+            description: Some("Migrate tests".to_string()),
+            author: "codemod".to_string(),
+            license: Some("MIT".to_string()),
+            repository: None,
+            homepage: None,
+            keywords: vec![],
+            category: Some("testing".to_string()),
+            latest_version: Some("1.0.0".to_string()),
+            download_count: 1,
+            star_count: 1,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: None,
+            owner: RegistryPackageOwner {
+                id: "owner".to_string(),
+                username: "codemod".to_string(),
+                name: "Codemod".to_string(),
+            },
+            organization: Some(RegistryPackageOrganization {
+                id: "org".to_string(),
+                name: "Codemod".to_string(),
+                slug: "codemod".to_string(),
+            }),
+            frameworks: None,
+            languages: None,
+            version_ranges: None,
+            confidence_hints: None,
+            known_limits: None,
+            quality_score: None,
+            maintenance_score: None,
+            adoption_score: None,
+            pro_required: None,
+            login_required: None,
+        };
+
+        let response = RegistrySearchResponse {
+            total: 1,
+            packages: vec![package],
+        };
+        let output = build_search_output(&response);
+
+        assert_eq!(output.metadata_coverage.total_packages, 1);
+        assert_eq!(output.metadata_coverage.packages_missing_contract_fields, 1);
     }
 }
