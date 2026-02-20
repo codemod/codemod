@@ -233,6 +233,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 metrics_context: Some(metrics_context_clone.clone()),
                 test_mode: false,
                 target_directory: Some(&target_directory),
+                console_log_collector: None,
             };
 
             // Execute the codemod on this file

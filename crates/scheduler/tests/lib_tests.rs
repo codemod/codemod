@@ -165,6 +165,7 @@ fn create_test_run(workflow: Workflow) -> WorkflowRun {
         started_at: chrono::Utc::now(),
         ended_at: None,
         bundle_path: None,
+        target_path: None,
         capabilities: None,
     }
 }

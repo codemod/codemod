@@ -18,10 +18,14 @@ use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+#[cfg(feature = "native")]
+use gag::BufferRedirect;
 
 /// Default execution timeout in milliseconds (180s)
 const DEFAULT_TIMEOUT_MS: u64 = 180000;
@@ -64,6 +68,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub timeout_ms: Option<u64>,
     /// Memory limit in bytes (default: 64 MB)
     pub memory_limit: Option<usize>,
+    /// Optional console log collector
+    pub console_log_collector: Option<Box<dyn FnMut(String) + Send + Sync>>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -110,10 +116,24 @@ where
 
     let params: HashMap<String, String> = options.params.unwrap_or_default();
 
-    let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
-        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-            message: format!("Failed to create AsyncRuntime: {e}"),
-        },
+    // Wrap console_log_collector in Arc<Mutex<...>> for use in closures
+    let console_log_collector = options
+        .console_log_collector
+        .map(|collector| Arc::new(Mutex::new(collector)));
+
+    // Initialize QuickJS runtime and context
+    let runtime = AsyncRuntime::new().map_err(|e| {
+        let error_msg = format!("Failed to create AsyncRuntime: {e}");
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: error_msg,
+            },
+        }
     })?;
 
     let timeout_ms = options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
@@ -139,6 +159,7 @@ where
     // Use the pre-parsed AST from options (allows AST caching)
     let ast_grep = options.ast;
 
+    // Set up built-in modules
     let module_builder = LlrtModuleBuilder::build();
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
@@ -159,13 +180,22 @@ where
         )
         .await;
 
-    let context = AsyncContext::full(&runtime)
-        .await
-        .map_err(|e| ExecutionError::Runtime {
+    let context = AsyncContext::full(&runtime).await.map_err(|e| {
+        let error_msg = format!("Failed to create AsyncContext: {e}");
+        if let Some(ref collector) = console_log_collector {
+            if let Ok(mut collector) = collector.lock() {
+                collector(format!("ERROR: {}", error_msg));
+            }
+        }
+        ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ContextCreationFailed {
-                message: format!("Failed to create AsyncContext: {e}"),
+                message: error_msg,
             },
-        })?;
+        }
+    })?;
+
+    // Clone Arc for use in closure
+    let console_log_collector_clone = console_log_collector.clone();
 
     // Capture metrics context for use inside async block
     let metrics_context = options.metrics_context.clone();
@@ -173,65 +203,128 @@ where
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
     let result = async_with!(context => |ctx| {
+        let console_log_collector = console_log_collector_clone.clone();
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
+            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| {
+                let error_msg = format!("Failed to store MetricsContext: {:?}", e);
+                if let Some(ref collector) = console_log_collector {
+                    if let Ok(mut collector) = collector.lock() {
+                        collector(format!("ERROR: {}", error_msg));
+                    }
+                }
+                ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: error_msg,
+                }
+            }
             })?;
         }
 
-        global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to attach global modules: {e}"),
-            },
+        global_attachment.attach(&ctx).map_err(|e| {
+            let error_msg = format!("Failed to attach global modules: {e}");
+            if let Some(ref collector) = console_log_collector {
+                if let Ok(mut collector) = collector.lock() {
+                    collector(format!("ERROR: {}", error_msg));
+                }
+            }
+            ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: error_msg,
+                },
+            }
         })?;
 
+        let console_log_collector = console_log_collector.clone();
         let execution = async {
+            // Capture stdout during JSSG execution
+            // Note: This may fail in parallel execution contexts, so we handle it gracefully
+            #[cfg(feature = "native")]
+            let mut redirect = BufferRedirect::stdout().ok();
+
             let module = Module::declare(ctx.clone(), "__codemod_entry.js", js_code)
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: format!("Failed to declare module: {e}"),
-                    },
+                .map_err(|e| {
+                    let error_msg = format!("Failed to declare module: {e}");
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             let (evaluated, _) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to evaluate module: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
+                })?;
 
             while ctx.execute_pending_job() {}
 
             let namespace = evaluated
                 .namespace()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get namespace: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             let parsed_content =
-                SgRootRjs::try_new_with_semantic(ast_grep, options.file_path.map(|p| p.to_string()), options.semantic_provider, options.file_path.map(|p| p.to_string())).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                SgRootRjs::try_new_with_semantic(ast_grep, options.file_path.map(|p| p.to_string()), options.semantic_provider, options.file_path.map(|p| p.to_string())).map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to parse content: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             // Keep a reference to read rename_to after JS execution
             let sg_root_inner = Arc::clone(&parsed_content.inner);
 
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
-                let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                let root_node = parsed_content.root(ctx.clone()).map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get root node: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
                 let ast_matches: Vec<_> = root_node.inner_node.dfs()
                     .filter_map(|node| selector_config.matcher.match_node(node))
@@ -257,39 +350,91 @@ where
                 .map(|(k, v)| (k, serde_json::Value::String(v)))
                 .collect::<HashMap<String, serde_json::Value>>();
 
+            let console_log_collector_options = console_log_collector.clone();
             let run_options_qjs = build_transform_options(
                 &ctx,
                 params_json,
                 &language_str,
                 options.matrix_values,
                 matches,
+                console_log_collector_options
             )?;
 
             let func = namespace
                 .get::<_, Function>("executeCodemod")
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to get executeCodemod function: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
             let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
+                let error_msg = e.to_string();
+                if let Some(ref collector) = console_log_collector {
+                    if let Ok(mut collector) = collector.lock() {
+                        collector(format!("ERROR: Failed to call executeCodemod: {}", error_msg));
+                    }
+                }
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
+                        message: error_msg,
                     },
                 }
             })?;
             let result_obj = maybe_promise(result_obj_promise)
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: Failed to resolve promise: {}", error_msg));
+                        }
+                    }
+                    ExecutionError::Runtime {
+                        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                            message: error_msg,
+                        },
+                    }
                 })?;
 
+            // Flush stdout before reading captured output
+            #[cfg(feature = "native")]
+            if let Some(ref mut redirect) = redirect {
+                std::io::stdout().flush().ok();
+                // Read captured stdout output
+                let mut captured = String::new();
+                if let Err(e) = redirect.read_to_string(&mut captured) {
+                    let error_msg = format!("Failed to read captured stdout: {e}");
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            collector(format!("ERROR: {}", error_msg));
+                        }
+                    }
+                } else if !captured.is_empty() {
+                    // Pass captured stdout to console_log_collector line by line
+                    if let Some(ref collector) = console_log_collector {
+                        if let Ok(mut collector) = collector.lock() {
+                            for line in captured.lines() {
+                                collector(line.to_string());
+                            }
+                            // If captured ends with newline, also send empty line for last newline
+                            if captured.ends_with('\n') {
+                                collector(String::new());
+                            }
+                        }
+                    }
+                }
+            }
             process_transform_result(
                 &result_obj,
                 &sg_root_inner,
@@ -369,6 +514,7 @@ export default function transform(root) {
             metrics_context: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
+            console_log_collector: None,
         });
 
         match result {
@@ -425,6 +571,7 @@ export default function transform(root) {
             metrics_context: None,
             timeout_ms: None,
             memory_limit: None,
+            console_log_collector: None,
         });
 
         match result {

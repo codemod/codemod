@@ -171,6 +171,7 @@ pub fn create_engine(
         diff_collector.map(create_silent_diff_collector)
     };
 
+    // Create a temporary config without progress_callback first
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(Some(progress_callback)),

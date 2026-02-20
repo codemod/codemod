@@ -39,6 +39,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         script_path: &absolute_js_file_path,
         resolver,
         metrics_context: None,
+        console_log_collector: None,
     };
 
     execute_js_with_quickjs(options).await?;
