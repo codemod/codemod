@@ -669,3 +669,56 @@ fn resolve_install_inputs(
         force,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    #[test]
+    fn install_output_json_includes_codemod_mcp_entry() {
+        let output = build_install_output(
+            Harness::Claude,
+            InstallScope::Project,
+            vec![
+                InstalledSkill {
+                    name: "codemod-cli".to_string(),
+                    path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+                    version: Some("1.0.0".to_string()),
+                    scope: Some(InstallScope::Project),
+                },
+                InstalledSkill {
+                    name: "codemod-mcp".to_string(),
+                    path: PathBuf::from("/tmp/.mcp.json"),
+                    version: None,
+                    scope: Some(InstallScope::Project),
+                },
+            ],
+            Vec::new(),
+        );
+
+        let output_json = serde_json::to_value(&output).expect("install output should serialize");
+        let installed = output_json
+            .get("installed")
+            .and_then(Value::as_array)
+            .expect("installed should be an array");
+
+        let codemod_mcp = installed
+            .iter()
+            .find(|entry| entry.get("name").and_then(Value::as_str) == Some("codemod-mcp"))
+            .expect("expected codemod-mcp installed entry");
+
+        assert_eq!(output_json.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            output_json.get("harness").and_then(Value::as_str),
+            Some("claude")
+        );
+        assert_eq!(
+            output_json.get("scope").and_then(Value::as_str),
+            Some("project")
+        );
+        assert!(codemod_mcp.get("path").and_then(Value::as_str).is_some());
+        assert!(codemod_mcp.get("version").is_some_and(Value::is_null));
+    }
+}

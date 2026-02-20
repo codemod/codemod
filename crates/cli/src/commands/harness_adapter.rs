@@ -1,4 +1,5 @@
 use clap::ValueEnum;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -10,12 +11,17 @@ const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
 const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.0.0";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
+const MCP_SERVER_NAME: &str = "codemod";
+const MCP_SERVER_COMMAND: &str = "npx";
+const MCP_SERVER_ARG_PACKAGE: &str = "codemod@latest";
+const MCP_SERVER_ARG_COMMAND: &str = "mcp";
 const MCS_REFERENCE_INDEX_RELATIVE_PATH: &str = "references/index.md";
 const MCS_AI_NATIVE_RECIPES_RELATIVE_PATH: &str = "references/cli-ai-native-recipes.md";
 const MCS_SEARCH_DISCOVERY_RELATIVE_PATH: &str = "references/cli-core-search-and-discovery.md";
 const MCS_SCAFFOLD_RUN_RELATIVE_PATH: &str = "references/cli-core-scaffold-and-run.md";
 const MCS_DRY_RUN_VERIFY_RELATIVE_PATH: &str = "references/cli-core-dry-run-and-verify.md";
 const MCS_TROUBLESHOOTING_RELATIVE_PATH: &str = "references/cli-core-troubleshooting.md";
+const REQUIRED_FRONTMATTER_KEYS: [&str; 3] = ["name:", "description:", "allowed-tools:"];
 const MCS_SKILL_MD: &str = include_str!("../templates/ai-native-cli/codemod-cli/SKILL.md");
 const MCS_REFERENCE_INDEX_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/index.md");
@@ -463,12 +469,22 @@ fn install_mcs_skill_bundle_with_runtime(
         write_skill_file(&skill_root.join(relative_path), content, request.force)?;
     }
 
-    Ok(vec![InstalledSkill {
+    let mut installed = vec![InstalledSkill {
         name: MCS_SKILL_NAME.to_string(),
         path: skill_md_path,
         version: Some(MCS_SKILL_VERSION.to_string()),
         scope: Some(request.scope),
-    }])
+    }];
+
+    let mcp_config_path = install_mcp_server_config(harness, request, runtime_paths)?;
+    installed.push(InstalledSkill {
+        name: "codemod-mcp".to_string(),
+        path: mcp_config_path,
+        version: None,
+        scope: Some(request.scope),
+    });
+
+    Ok(installed)
 }
 
 fn install_tcs_skill_bundle_with_runtime(
@@ -477,7 +493,9 @@ fn install_tcs_skill_bundle_with_runtime(
     request: &InstallRequest,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<InstalledSkill>> {
+    validate_tcs_install_package(package)?;
     let skill_md_content = render_tcs_skill_md(package);
+    validate_rendered_tcs_skill_bundle(&skill_md_content)?;
     let skill_dir_name = skill_directory_name_for_tcs_id(&package.id);
 
     let skill_root =
@@ -543,6 +561,217 @@ Use this task-specific codemod skill with:
         compatibility_marker = TCS_COMPATIBILITY_MARKER_PREFIX,
         version = tcs_package.version.as_str(),
     )
+}
+
+fn validate_tcs_install_package(package: &TcsInstallPackage) -> AdapterResult<()> {
+    let id = package.id.trim();
+    if id.is_empty() {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "TCS id cannot be empty".to_string(),
+        ));
+    }
+
+    if id.chars().any(char::is_whitespace) {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "TCS id cannot contain whitespace".to_string(),
+        ));
+    }
+
+    if package.version.trim().is_empty() {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "TCS version cannot be empty".to_string(),
+        ));
+    }
+
+    if package.description.trim().is_empty() {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "TCS description cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_rendered_tcs_skill_bundle(content: &str) -> AdapterResult<()> {
+    let Some(frontmatter) = extract_frontmatter(content) else {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "Generated TCS SKILL.md is missing YAML frontmatter".to_string(),
+        ));
+    };
+
+    if let Some(required_key) = missing_required_frontmatter_key(frontmatter) {
+        return Err(HarnessAdapterError::TcsInstallFailed(format!(
+            "Generated TCS SKILL.md is missing required frontmatter key: {required_key}"
+        )));
+    }
+
+    serde_yaml::from_str::<serde_yaml::Value>(frontmatter).map_err(|error| {
+        HarnessAdapterError::TcsInstallFailed(format!(
+            "Generated TCS SKILL.md frontmatter is invalid YAML: {error}"
+        ))
+    })?;
+
+    if !content.contains(TCS_COMPATIBILITY_MARKER_PREFIX) {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "Generated TCS SKILL.md is missing compatibility marker".to_string(),
+        ));
+    }
+
+    if !content.contains(CODEMOD_VERSION_MARKER_PREFIX) {
+        return Err(HarnessAdapterError::TcsInstallFailed(
+            "Generated TCS SKILL.md is missing skill version marker".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn install_mcp_server_config(
+    harness: Harness,
+    request: &InstallRequest,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    let mcp_config_path = mcp_config_path_for_harness(harness, request.scope, runtime_paths)?;
+    upsert_codemod_mcp_server(&mcp_config_path, request.force)?;
+    Ok(mcp_config_path)
+}
+
+fn mcp_config_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    match (harness, scope) {
+        (Harness::Claude, InstallScope::Project) => Ok(runtime_paths.cwd.join(".mcp.json")),
+        (Harness::Claude, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| home_dir.join(".mcp.json"))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        (Harness::Goose, InstallScope::Project) => Ok(runtime_paths.cwd.join(".goose/mcp.json")),
+        (Harness::Goose, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| home_dir.join(".goose/mcp.json"))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        (Harness::Opencode, InstallScope::Project) => {
+            Ok(runtime_paths.cwd.join(".opencode/mcp.json"))
+        }
+        (Harness::Opencode, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| home_dir.join(".opencode/mcp.json"))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        (Harness::Cursor, InstallScope::Project) => Ok(runtime_paths.cwd.join(".cursor/mcp.json")),
+        (Harness::Cursor, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| home_dir.join(".cursor/mcp.json"))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        (Harness::Auto, _) => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
+    }
+}
+
+fn expected_codemod_mcp_server_entry() -> Value {
+    json!({
+        "command": MCP_SERVER_COMMAND,
+        "args": [MCP_SERVER_ARG_PACKAGE, MCP_SERVER_ARG_COMMAND]
+    })
+}
+
+fn upsert_codemod_mcp_server(config_path: &Path, force: bool) -> AdapterResult<()> {
+    if let Some(parent_dir) = config_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let expected_entry = expected_codemod_mcp_server_entry();
+    let mut config_root = if config_path.exists() {
+        let existing_content = fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read MCP config {}: {error}",
+                config_path.display()
+            ))
+        })?;
+
+        serde_json::from_str::<Value>(&existing_content).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "MCP config {} is not valid JSON: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let Some(root_object) = config_root.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} must contain a top-level JSON object",
+            config_path.display()
+        )));
+    };
+
+    let mcp_servers_value = root_object
+        .entry("mcpServers".to_string())
+        .or_insert_with(|| json!({}));
+
+    let Some(mcp_servers) = mcp_servers_value.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} has non-object `mcpServers`; update manually or re-run with --force after fixing JSON",
+            config_path.display()
+        )));
+    };
+
+    if let Some(existing_entry) = mcp_servers.get(MCP_SERVER_NAME) {
+        if existing_entry == &expected_entry {
+            return Ok(());
+        }
+
+        if !force {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "MCP server `{MCP_SERVER_NAME}` already exists in {} with different settings. Re-run with --force to overwrite.",
+                config_path.display()
+            )));
+        }
+    }
+
+    mcp_servers.insert(MCP_SERVER_NAME.to_string(), expected_entry);
+
+    let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to write MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    Ok(())
 }
 
 fn list_skills_with_runtime(
@@ -648,15 +877,13 @@ fn verify_installed_skill(skill: &InstalledSkill) -> VerificationCheck {
         }
     };
 
-    for key in ["name:", "description:", "allowed-tools:"] {
-        if !frontmatter.contains(key) {
-            return VerificationCheck {
-                skill: skill.name.clone(),
-                scope,
-                status: VerificationStatus::Fail,
-                reason: Some(format!("missing required frontmatter key: {key}")),
-            };
-        }
+    if let Some(required_key) = missing_required_frontmatter_key(frontmatter) {
+        return VerificationCheck {
+            skill: skill.name.clone(),
+            scope,
+            status: VerificationStatus::Fail,
+            reason: Some(format!("missing required frontmatter key: {required_key}")),
+        };
     }
 
     let validation_profile = detect_skill_validation_profile(&content);
@@ -772,6 +999,13 @@ fn extract_allowed_tools(frontmatter: &str) -> Vec<String> {
     allowed_tools
 }
 
+fn missing_required_frontmatter_key(frontmatter: &str) -> Option<&'static str> {
+    REQUIRED_FRONTMATTER_KEYS
+        .iter()
+        .find(|required_key| !frontmatter.contains(**required_key))
+        .copied()
+}
+
 fn is_safe_allowed_tool(allowed_tool: &str) -> bool {
     allowed_tool.starts_with("Bash(codemod ")
 }
@@ -833,19 +1067,23 @@ fn skill_roots_for_listing(
 }
 
 fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
-    if !MCS_SKILL_MD.starts_with("---") {
+    let Some(frontmatter) = extract_frontmatter(MCS_SKILL_MD) else {
         return Err(HarnessAdapterError::InvalidSkillPackage(
             "SKILL.md is missing YAML frontmatter".to_string(),
         ));
+    };
+
+    if let Some(required_key) = missing_required_frontmatter_key(frontmatter) {
+        return Err(HarnessAdapterError::InvalidSkillPackage(format!(
+            "SKILL.md is missing required frontmatter key: {required_key}"
+        )));
     }
 
-    for required_key in ["name:", "description:", "allowed-tools:"] {
-        if !MCS_SKILL_MD.contains(required_key) {
-            return Err(HarnessAdapterError::InvalidSkillPackage(format!(
-                "SKILL.md is missing required frontmatter key: {required_key}"
-            )));
-        }
-    }
+    serde_yaml::from_str::<serde_yaml::Value>(frontmatter).map_err(|error| {
+        HarnessAdapterError::InvalidSkillPackage(format!(
+            "SKILL.md frontmatter is invalid YAML: {error}"
+        ))
+    })?;
 
     if !MCS_SKILL_MD.contains(MCS_COMPATIBILITY_MARKER) {
         return Err(HarnessAdapterError::InvalidSkillPackage(
@@ -982,6 +1220,33 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    const ALL_HARNESSES: [Harness; 4] = [
+        Harness::Claude,
+        Harness::Goose,
+        Harness::Opencode,
+        Harness::Cursor,
+    ];
+
+    fn harness_hidden_dir_name(harness: Harness) -> &'static str {
+        match harness {
+            Harness::Claude => ".claude",
+            Harness::Goose => ".goose",
+            Harness::Opencode => ".opencode",
+            Harness::Cursor => ".cursor",
+            Harness::Auto => panic!("auto is not valid for harness-specific tests"),
+        }
+    }
+
+    fn expected_project_mcp_path(runtime_paths: &RuntimePaths, harness: Harness) -> PathBuf {
+        match harness {
+            Harness::Claude => runtime_paths.cwd.join(".mcp.json"),
+            Harness::Goose => runtime_paths.cwd.join(".goose/mcp.json"),
+            Harness::Opencode => runtime_paths.cwd.join(".opencode/mcp.json"),
+            Harness::Cursor => runtime_paths.cwd.join(".cursor/mcp.json"),
+            Harness::Auto => panic!("auto is not valid for harness-specific tests"),
+        }
+    }
+
     fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
         let temp_dir = tempdir().unwrap();
         let runtime_paths = RuntimePaths {
@@ -1082,6 +1347,10 @@ mod tests {
         )
         .unwrap();
         let installed_skill = installed.first().unwrap();
+        let mcp_entry = installed
+            .iter()
+            .find(|entry| entry.name == "codemod-mcp")
+            .expect("expected MCP install entry");
 
         assert_eq!(installed_skill.name, MCS_SKILL_NAME);
         assert!(installed_skill.path.exists());
@@ -1102,6 +1371,49 @@ mod tests {
                 "expected installed file to exist: {}",
                 relative_path
             );
+        }
+
+        assert!(mcp_entry.path.exists());
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&mcp_entry.path).unwrap()).unwrap();
+        assert_eq!(
+            config
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
+                .and_then(|server| server.get("command"))
+                .and_then(|command| command.as_str()),
+            Some("npx")
+        );
+    }
+
+    #[test]
+    fn install_mcs_skill_bundle_supports_all_harnesses() {
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        for harness in ALL_HARNESSES {
+            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            let installed =
+                install_mcs_skill_bundle_with_runtime(harness, &install_request, &runtime_paths)
+                    .unwrap();
+            let installed_skill = installed.first().unwrap();
+            let harness_dir = harness_hidden_dir_name(harness);
+            let mcp_entry = installed
+                .iter()
+                .find(|entry| entry.name == "codemod-mcp")
+                .expect("expected MCP install entry");
+
+            assert!(installed_skill
+                .path
+                .to_string_lossy()
+                .contains(&format!("{harness_dir}/skills/codemod-cli/SKILL.md")));
+            assert_eq!(
+                mcp_entry.path,
+                expected_project_mcp_path(&runtime_paths, harness)
+            );
+            assert!(mcp_entry.path.exists());
         }
     }
 
@@ -1195,6 +1507,36 @@ mod tests {
             .path
             .to_string_lossy()
             .contains(".claude/skills/jest-to-vitest/SKILL.md"));
+    }
+
+    #[test]
+    fn install_tcs_skill_bundle_supports_all_harnesses() {
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let tcs_package = TcsInstallPackage {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+        };
+
+        for harness in ALL_HARNESSES {
+            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            let installed = install_tcs_skill_bundle_with_runtime(
+                harness,
+                &tcs_package,
+                &install_request,
+                &runtime_paths,
+            )
+            .unwrap();
+            let harness_dir = harness_hidden_dir_name(harness);
+
+            assert!(installed[0]
+                .path
+                .to_string_lossy()
+                .contains(&format!("{harness_dir}/skills/jest-to-vitest/SKILL.md")));
+        }
     }
 
     #[test]
@@ -1328,6 +1670,24 @@ mod tests {
     }
 
     #[test]
+    fn verify_skills_passes_for_installed_mcs_bundle_on_all_harnesses() {
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        for harness in ALL_HARNESSES {
+            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            install_mcs_skill_bundle_with_runtime(harness, &install_request, &runtime_paths)
+                .unwrap();
+
+            let checks = verify_skills_with_runtime(harness, &runtime_paths).unwrap();
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].status, VerificationStatus::Pass);
+        }
+    }
+
+    #[test]
     fn verify_skills_fails_for_missing_compatibility_marker() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
@@ -1458,6 +1818,156 @@ codemod-skill-version: 0.1.0
             .as_ref()
             .unwrap()
             .contains("unknown or unsafe allowed-tools entry"));
+    }
+
+    #[test]
+    fn install_tcs_skill_bundle_rejects_invalid_package_inputs() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let invalid_tcs_package = TcsInstallPackage {
+            id: " ".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+        };
+
+        let install_result = install_tcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &invalid_tcs_package,
+            &install_request,
+            &runtime_paths,
+        );
+        assert!(matches!(
+            install_result,
+            Err(HarnessAdapterError::TcsInstallFailed(message)) if message.contains("cannot be empty")
+        ));
+    }
+
+    #[test]
+    fn upsert_mcp_server_creates_expected_config() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".mcp.json");
+
+        upsert_codemod_mcp_server(&config_path, false).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
+                .and_then(|server| server.get("args"))
+                .and_then(|args| args.as_array())
+                .map(std::vec::Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn upsert_mcp_server_preserves_existing_non_codemod_entries() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".mcp.json");
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "custom": {
+                    "command": "node",
+                    "args": ["custom-server.js"]
+                }
+            }
+        });
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        upsert_codemod_mcp_server(&config_path, false).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed
+            .get("mcpServers")
+            .and_then(|servers| servers.get("custom"))
+            .is_some());
+        assert!(parsed
+            .get("mcpServers")
+            .and_then(|servers| servers.get("codemod"))
+            .is_some());
+    }
+
+    #[test]
+    fn upsert_mcp_server_requires_force_for_conflicting_codemod_entry() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".mcp.json");
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "codemod": {
+                    "command": "node",
+                    "args": ["local-mcp.js"]
+                }
+            }
+        });
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        let update_result = upsert_codemod_mcp_server(&config_path, false);
+        assert!(matches!(
+            update_result,
+            Err(HarnessAdapterError::InstallFailed(message))
+                if message.contains("already exists") && message.contains("--force")
+        ));
+    }
+
+    #[test]
+    fn upsert_mcp_server_force_overwrites_conflicting_codemod_entry() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".mcp.json");
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "codemod": {
+                    "command": "node",
+                    "args": ["local-mcp.js"]
+                }
+            }
+        });
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        upsert_codemod_mcp_server(&config_path, true).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
+                .and_then(|server| server.get("command"))
+                .and_then(|command| command.as_str()),
+            Some("npx")
+        );
+    }
+
+    #[test]
+    fn mcp_config_path_supports_all_harnesses_for_project_and_user_scope() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in ALL_HARNESSES {
+            let project_path =
+                mcp_config_path_for_harness(harness, InstallScope::Project, &runtime_paths)
+                    .unwrap();
+            let user_path =
+                mcp_config_path_for_harness(harness, InstallScope::User, &runtime_paths).unwrap();
+            assert!(project_path.starts_with(&runtime_paths.cwd));
+            assert!(user_path.starts_with(runtime_paths.home_dir.as_ref().unwrap()));
+        }
     }
 
     #[test]

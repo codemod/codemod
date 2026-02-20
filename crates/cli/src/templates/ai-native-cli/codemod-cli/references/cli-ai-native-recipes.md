@@ -4,14 +4,10 @@ Use this file for AI-native command recipes. For all references, start at `refer
 
 ## AI-Native Entry Commands
 
-- Install MCS skill pack: `codemod agent install-skills --harness auto --project`
+- Install MCS skill pack (also bootstraps Codemod MCP config): `codemod agent install-skills --harness auto --project`
 - Verify installed skills: `codemod agent verify-skills --harness auto --format json`
 - Run orchestration: `codemod agent run "<intent>" --harness auto --format json`
-- Install a specific TCS (planned command): `codemod tcs install <tcs-id> --harness auto --project`
-
-Current fallback while `tcs install` is still being finalized:
-- Route through MCS and let it select/adapt/build TCS paths:
-  - `codemod agent run "<intent>" --harness auto --format json`
+- Install a specific TCS: `codemod tcs install <tcs-id> --harness auto --project`
 
 ## Core CLI Reference Map
 

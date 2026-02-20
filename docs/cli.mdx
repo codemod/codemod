@@ -60,6 +60,43 @@ Codemod CLI is accessible using the `npx codemod` command. The following command
   AI-native CLI commands are in active rollout. `codemod agent install-skills|list-skills|verify-skills`, `codemod tcs install`, and `codemod tcs inspect` are available; `codemod agent run` and `codemod tcs run` remain in scaffold phase.
 </Info>
 
+### `codemod agent`
+
+Manage Master Codemod Skill (MCS) install/verification flows for supported harnesses.
+
+**`agent install-skills`**
+
+Install the `codemod-cli` MCS package and configure Codemod MCP.
+
+```bash
+npx codemod agent install-skills [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--format <table|json|yaml>]
+```
+
+Along with skill files, install writes or updates a Codemod MCP server entry:
+
+```json
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}
+```
+
+MCP config paths by harness and scope:
+- `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
+- `goose`: `./.goose/mcp.json` (project), `~/.goose/mcp.json` (user)
+- `opencode`: `./.opencode/mcp.json` (project), `~/.opencode/mcp.json` (user)
+- `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
+
+If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
+
+**`agent verify-skills` / `agent list-skills`**
+
+Validate installed codemod-managed skills and list installed MCS/TCS entries.
+
 ### `codemod tcs`
 
 Manage task-specific Codemod Skills (TCS) as installable skill packages for AI harnesses.
