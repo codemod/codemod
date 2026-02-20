@@ -212,7 +212,7 @@ where
                     if let Ok(mut collector) = collector.lock() {
                         collector(format!("ERROR: {}", error_msg));
                     }
-                }    
+                }
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: error_msg,

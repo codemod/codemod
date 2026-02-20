@@ -643,7 +643,7 @@ let console_log_collector = console_log_collector_clone.clone();
                         collector(format!("ERROR: {}", error_msg));
                     }
                 }
-    
+
                 ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: error_msg,
