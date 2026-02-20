@@ -348,3 +348,87 @@ jobs:
         run: |
           cd crates/cli/npm
           npm publish --tag ${{ steps.version.outputs.npm_tag }} --provenance
+
+  sync_migrations_template:
+    name: Synchronize Migrations Template
+    needs: [build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout codemod repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download codemod binary
+        uses: actions/download-artifact@v4
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: .
+
+      - name: Make binary executable
+        run: |
+          chmod +x codemod-linux-x86_64-gnu
+          mv codemod-linux-x86_64-gnu codemod
+
+      - name: Checkout migrations-template repo
+        uses: actions/checkout@v4
+        with:
+          repository: codemod/migrations-template
+          path: migrations-template
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove all files except .git and README.md
+        working-directory: migrations-template
+        run: |
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'README.md' -exec rm -rf {} +
+
+      - name: Run codemod init
+        run: |
+          ${{ github.workspace }}/codemod init . \
+            --name my-codemod \
+            --project-type ast-grep-js \
+            --package-manager npm \
+            --language js \
+            --author Codemod \
+            --description "migrations template" \
+            --license MIT \
+            --workspace \
+            --github-action \
+            --no-interactive \
+            --force
+        working-directory: migrations-template
+
+      - name: Configure Git for commits
+        working-directory: migrations-template
+        run: |
+          git config user.email "codemod[bot]@users.noreply.github.com"
+          git config user.name "Codemod Bot"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=$(echo "${{ github.ref_name }}" | sed 's/codemod-cli@//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          path: migrations-template
+          token: ${{ secrets.MIGRATIONS_REPO_TOKEN }}
+          commit-message: "chore: Sync with codemod CLI v${{ steps.version.outputs.version }}"
+          committer: Codemod Bot <codemod[bot]@users.noreply.github.com>
+          author: Codemod Bot <codemod[bot]@users.noreply.github.com>
+          title: "Sync with codemod CLI v${{ steps.version.outputs.version }}"
+          body: |
+            This PR synchronizes the migrations-template repository with the latest codemod CLI release (v${{ steps.version.outputs.version }}).
+            Changes include:
+            - Updated template files from codemod CLI
+            - Synchronized with release tag: ${{ github.ref_name }}
+          branch: sync-codemod-cli-v${{ steps.version.outputs.version }}
+          base: main
+          delete-branch: true
