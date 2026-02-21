@@ -1,23 +1,23 @@
-use std::panic;
+use std::{borrow::Cow, panic};
 
 use ast_grep_config::CombinedScan;
 use ast_grep_core::{replacer::Content, AstGrep, Doc, Language};
 
 use crate::ast_grep::types::{AstGrepError, AstGrepMatch};
 
-pub(crate) struct ScanResult {
+pub(crate) struct ScanResult<'a> {
     pub matches: Vec<AstGrepMatch>,
     pub file_modified: bool,
-    pub new_content: String,
+    pub new_content: Cow<'a, str>,
 }
 
-pub(crate) fn scan_content<D: Doc<Lang = L>, L: Language>(
+pub(crate) fn scan_content<'a, D: Doc<Lang = L>, L: Language>(
     root: &AstGrep<D>,
-    content: &str,
+    content: &'a str,
     file_path: String,
     combined_scan: &CombinedScan<L>,
     apply_fixes: bool,
-) -> Result<ScanResult, AstGrepError>
+) -> Result<ScanResult<'a>, AstGrepError>
 where
     <D as Doc>::Source: Content<Underlying = u8>,
 {
@@ -31,8 +31,8 @@ where
         ))
     })?;
     let mut matches = Vec::new();
-    let mut file_modified = false;
-    let mut new_content = content.to_string();
+    let file_modified = !scan_result.diffs.is_empty();
+    let mut new_content = Cow::Borrowed(content);
 
     // Handle diffs (rules with fixers) when applying fixes
     if apply_fixes && !scan_result.diffs.is_empty() {
@@ -116,10 +116,9 @@ where
                 result_bytes.extend_from_slice(part);
             }
 
-            new_content = String::from_utf8(result_bytes).map_err(|e| {
+            new_content = Cow::Owned(String::from_utf8(result_bytes).map_err(|e| {
                 AstGrepError::Config(format!("Invalid UTF-8 after applying fixes: {e}"))
-            })?;
-            file_modified = true;
+            })?);
         }
     }
 
