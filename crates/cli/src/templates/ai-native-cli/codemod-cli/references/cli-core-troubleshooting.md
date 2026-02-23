@@ -2,6 +2,12 @@
 
 Use these checks when commands fail or produce unexpected output.
 
+## Agent-Safe Defaults
+
+For agents/automation, prefer non-interactive execution:
+- add `--no-interactive` to `codemod workflow run` and `codemod run`.
+- prefer machine output (`--format json`) when commands are parsed by tools.
+
 ## Dirty Git Tree Blocking Execution
 
 Symptom:
@@ -50,11 +56,9 @@ Fix:
 ## Search Returns No Useful Results
 
 Fix:
-- broaden query text, then narrow with filters:
+- broaden query text and increase result size:
   - `codemod search migration --size 50`
-  - `codemod search migration --language typescript --framework nextjs`
-- check alternate registry if relevant:
-  - `codemod search migration --registry https://registry.example.com`
+  - `codemod search "jest vitest migration" --size 50`
 
 ## Output Parsing Issues in Automation
 
