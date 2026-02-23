@@ -1,5 +1,7 @@
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -57,6 +59,8 @@ const SKILL_DISCOVERY_SECTION_BEGIN: &str = "<!-- codemod-skill-discovery:begin 
 const SKILL_DISCOVERY_SECTION_END: &str = "<!-- codemod-skill-discovery:end -->";
 const AGENTS_GUIDE_FILE_NAME: &str = "AGENTS.md";
 const CLAUDE_GUIDE_FILE_NAME: &str = "CLAUDE.md";
+const CODEMOD_MANAGED_STATE_SCHEMA_VERSION: &str = "1";
+const CODEMOD_MANAGED_STATE_RELATIVE_PATH: &str = "codemod/managed-install-state.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillPackageInstallSpec {
@@ -117,6 +121,54 @@ pub struct InstallRequest {
     pub force: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedComponentKind {
+    Skill,
+    McpConfig,
+    DiscoveryGuide,
+}
+
+impl ManagedComponentKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Skill => "skill",
+            Self::McpConfig => "mcp_config",
+            Self::DiscoveryGuide => "discovery_guide",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedComponentSnapshot {
+    pub id: String,
+    pub kind: ManagedComponentKind,
+    pub path: PathBuf,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedStateWriteStatus {
+    Created,
+    Updated,
+    Unchanged,
+}
+
+impl ManagedStateWriteStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedStateWriteResult {
+    pub path: PathBuf,
+    pub status: ManagedStateWriteStatus,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstalledSkill {
     pub name: String,
@@ -146,6 +198,23 @@ pub struct CompatibilityMetadata {
     pub supports_project_scope: bool,
     pub supports_user_scope: bool,
     pub supports_verify: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct ManagedInstallState {
+    schema_version: String,
+    harness: String,
+    scope: String,
+    components: Vec<ManagedInstallStateComponent>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct ManagedInstallStateComponent {
+    id: String,
+    kind: String,
+    path: String,
+    version: Option<String>,
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -476,8 +545,35 @@ pub fn upsert_skill_discovery_guides(
     upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths)
 }
 
+pub fn skill_discovery_guide_paths(
+    harness: Harness,
+    scope: InstallScope,
+) -> AdapterResult<Vec<PathBuf>> {
+    let runtime_paths = RuntimePaths::current()?;
+    discovery_guide_paths_with_runtime(harness, scope, &runtime_paths)
+}
+
 fn upsert_skill_discovery_guides_with_runtime(
     harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
+    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
+    let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
+    let mut updated_files = Vec::new();
+
+    for file_path in discovery_paths {
+        if upsert_discovery_block_in_file(&file_path, &discovery_block)? {
+            updated_files.push(file_path);
+        }
+    }
+
+    Ok(updated_files)
+}
+
+fn discovery_guide_paths_with_runtime(
+    _harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
@@ -490,18 +586,10 @@ fn upsert_skill_discovery_guides_with_runtime(
         })?,
     };
 
-    let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
-    let mut updated_files = Vec::new();
-
-    for file_name in [AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME] {
-        let file_path = docs_root.join(file_name);
-        if upsert_discovery_block_in_file(&file_path, &discovery_block)? {
-            updated_files.push(file_path);
-        }
-    }
-
-    Ok(updated_files)
+    Ok(vec![
+        docs_root.join(AGENTS_GUIDE_FILE_NAME),
+        docs_root.join(CLAUDE_GUIDE_FILE_NAME),
+    ])
 }
 
 fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
@@ -590,6 +678,156 @@ fn upsert_managed_discovery_block(existing: &str, block: &str) -> String {
     updated.push_str(block);
     updated.push('\n');
     updated
+}
+
+pub fn persist_managed_install_state(
+    harness: Harness,
+    scope: InstallScope,
+    components: &[ManagedComponentSnapshot],
+) -> AdapterResult<ManagedStateWriteResult> {
+    let runtime_paths = RuntimePaths::current()?;
+    persist_managed_install_state_with_runtime(harness, scope, components, &runtime_paths)
+}
+
+fn persist_managed_install_state_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    components: &[ManagedComponentSnapshot],
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<ManagedStateWriteResult> {
+    let state_path = managed_state_path_for_harness(harness, scope, runtime_paths)?;
+    let expected_state = build_managed_install_state(harness, scope, components);
+    let existing_state = read_managed_install_state_if_present(&state_path)?;
+
+    if existing_state.as_ref() == Some(&expected_state) {
+        return Ok(ManagedStateWriteResult {
+            path: state_path,
+            status: ManagedStateWriteStatus::Unchanged,
+        });
+    }
+
+    if let Some(parent_dir) = state_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create managed state directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let serialized = serde_json::to_string_pretty(&expected_state).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize managed install state {}: {error}",
+            state_path.display()
+        ))
+    })?;
+
+    fs::write(&state_path, format!("{serialized}\n")).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to write managed install state {}: {error}",
+            state_path.display()
+        ))
+    })?;
+
+    let status = if existing_state.is_some() {
+        ManagedStateWriteStatus::Updated
+    } else {
+        ManagedStateWriteStatus::Created
+    };
+
+    Ok(ManagedStateWriteResult {
+        path: state_path,
+        status,
+    })
+}
+
+fn managed_state_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    let harness_dir = harness_hidden_dir(harness)?;
+    match scope {
+        InstallScope::Project => Ok(runtime_paths
+            .cwd
+            .join(harness_dir)
+            .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)),
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| {
+                home.join(harness_dir)
+                    .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)
+            })
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+    }
+}
+
+fn read_managed_install_state_if_present(
+    path: &Path,
+) -> AdapterResult<Option<ManagedInstallState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read managed install state {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    match serde_json::from_str::<ManagedInstallState>(&content) {
+        Ok(state) => Ok(Some(state)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn build_managed_install_state(
+    harness: Harness,
+    scope: InstallScope,
+    components: &[ManagedComponentSnapshot],
+) -> ManagedInstallState {
+    let mut state_components = components
+        .iter()
+        .map(managed_state_component_from_snapshot)
+        .collect::<Vec<_>>();
+    state_components.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    ManagedInstallState {
+        schema_version: CODEMOD_MANAGED_STATE_SCHEMA_VERSION.to_string(),
+        harness: harness.as_str().to_string(),
+        scope: scope.as_str().to_string(),
+        components: state_components,
+    }
+}
+
+fn managed_state_component_from_snapshot(
+    snapshot: &ManagedComponentSnapshot,
+) -> ManagedInstallStateComponent {
+    ManagedInstallStateComponent {
+        id: snapshot.id.clone(),
+        kind: snapshot.kind.as_str().to_string(),
+        path: snapshot.path.to_string_lossy().to_string(),
+        version: snapshot.version.clone(),
+        fingerprint: content_fingerprint(&snapshot.path),
+    }
+}
+
+fn content_fingerprint(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 fn install_mcs_skill_bundle_with_runtime(
@@ -1490,6 +1728,26 @@ mod tests {
         }
     }
 
+    fn expected_managed_state_path(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> PathBuf {
+        let harness_dir = harness_hidden_dir_name(harness);
+        match scope {
+            InstallScope::Project => runtime_paths
+                .cwd
+                .join(harness_dir)
+                .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .unwrap()
+                .join(harness_dir)
+                .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH),
+        }
+    }
+
     fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
         let temp_dir = tempdir().unwrap();
         let runtime_paths = RuntimePaths {
@@ -1530,6 +1788,41 @@ codemod-skill-version: 0.1.0
 
     fn count_occurrences(haystack: &str, needle: &str) -> usize {
         haystack.matches(needle).count()
+    }
+
+    fn managed_snapshots_from_install(
+        installed: &[InstalledSkill],
+        discovery_paths: &[PathBuf],
+    ) -> Vec<ManagedComponentSnapshot> {
+        let mut snapshots = installed
+            .iter()
+            .map(|entry| ManagedComponentSnapshot {
+                id: entry.name.clone(),
+                kind: if entry.name == "codemod-mcp" {
+                    ManagedComponentKind::McpConfig
+                } else {
+                    ManagedComponentKind::Skill
+                },
+                path: entry.path.clone(),
+                version: entry.version.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        for path in discovery_paths {
+            let id = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| format!("discovery-guide:{name}"))
+                .unwrap_or_else(|| format!("discovery-guide:{}", path.to_string_lossy()));
+            snapshots.push(ManagedComponentSnapshot {
+                id,
+                kind: ManagedComponentKind::DiscoveryGuide,
+                path: path.clone(),
+                version: None,
+            });
+        }
+
+        snapshots
     }
 
     fn create_skill_only_package_layout(
@@ -1810,6 +2103,155 @@ codemod-skill-version: 0.1.0
                 expected_project_mcp_path(&runtime_paths, harness)
             );
             assert!(mcp_entry.path.exists());
+        }
+    }
+
+    #[test]
+    fn persist_managed_install_state_is_created_then_unchanged() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        let installed = install_mcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+        upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let discovery_paths = discovery_guide_paths_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+
+        let first = persist_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &snapshots,
+            &runtime_paths,
+        )
+        .unwrap();
+        let second = persist_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &snapshots,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(first.status, ManagedStateWriteStatus::Created);
+        assert_eq!(second.status, ManagedStateWriteStatus::Unchanged);
+        assert!(first.path.exists());
+    }
+
+    #[test]
+    fn persist_managed_install_state_reports_updated_when_component_changes() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        let installed = install_mcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+        upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let discovery_paths = discovery_guide_paths_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+
+        let first = persist_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &snapshots,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert_eq!(first.status, ManagedStateWriteStatus::Created);
+
+        fs::write(
+            installed
+                .iter()
+                .find(|entry| entry.name == MCS_SKILL_NAME)
+                .unwrap()
+                .path
+                .clone(),
+            format!("{MCS_SKILL_MD}\n# updated\n"),
+        )
+        .unwrap();
+
+        let second = persist_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &snapshots,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert_eq!(second.status, ManagedStateWriteStatus::Updated);
+    }
+
+    #[test]
+    fn persist_managed_install_state_supports_all_harnesses_and_scopes() {
+        for harness in ALL_HARNESSES {
+            for scope in [InstallScope::Project, InstallScope::User] {
+                let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+                let install_request = InstallRequest {
+                    scope,
+                    force: false,
+                };
+
+                let installed = install_mcs_skill_bundle_with_runtime(
+                    harness,
+                    &install_request,
+                    &runtime_paths,
+                )
+                .unwrap();
+                upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths).unwrap();
+                let discovery_paths =
+                    discovery_guide_paths_with_runtime(harness, scope, &runtime_paths).unwrap();
+                let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+
+                let state_write = persist_managed_install_state_with_runtime(
+                    harness,
+                    scope,
+                    &snapshots,
+                    &runtime_paths,
+                )
+                .unwrap();
+
+                assert_eq!(state_write.status, ManagedStateWriteStatus::Created);
+                assert_eq!(
+                    state_write.path,
+                    expected_managed_state_path(&runtime_paths, harness, scope)
+                );
+
+                let state_content = fs::read_to_string(&state_write.path).unwrap();
+                assert!(state_content.contains("\"schema_version\": \"1\""));
+                assert!(state_content.contains(&format!("\"harness\": \"{}\"", harness.as_str())));
+                assert!(state_content.contains(&format!("\"scope\": \"{}\"", scope.as_str())));
+            }
         }
     }
 
