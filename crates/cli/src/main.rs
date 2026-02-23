@@ -84,9 +84,6 @@ enum Commands {
     /// AI-native codemod agent workflows and skill lifecycle commands
     Agent(commands::agent::Command),
 
-    /// Task-specific codemod skill commands
-    Tcs(commands::tcs::Command),
-
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
 }
@@ -164,7 +161,6 @@ fn is_package_name(arg: &str) -> bool {
         "unpublish",
         "cache",
         "agent",
-        "tcs",
         "mcp",
     ];
 
@@ -174,7 +170,7 @@ fn is_package_name(arg: &str) -> bool {
 type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
 
 enum ImplicitRoute {
-    SkillInstallAlias(Vec<String>),
+    DirectSkillInstall(Vec<String>),
     Run(Vec<String>),
 }
 
@@ -188,8 +184,8 @@ fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
         return None;
     }
 
-    if let Some(skill_alias_args) = build_tcs_skill_alias_args(trailing_args) {
-        return Some(ImplicitRoute::SkillInstallAlias(skill_alias_args));
+    if trailing_args.iter().any(|arg| arg == "--skill") {
+        return Some(ImplicitRoute::DirectSkillInstall(trailing_args.to_vec()));
     }
 
     let mut run_args = vec!["codemod".to_string(), "run".to_string()];
@@ -209,14 +205,8 @@ async fn handle_implicit_run_command(
 
     // Re-parse the entire CLI with the run command included
     match route {
-        ImplicitRoute::SkillInstallAlias(alias_args) => {
-            let parsed_alias = Cli::try_parse_from(&alias_args).map_err(anyhow::Error::from)?;
-            if let Some(Commands::Tcs(tcs_args)) = parsed_alias.command {
-                commands::tcs::handler(&tcs_args).await?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+        ImplicitRoute::DirectSkillInstall(skill_args) => {
+            commands::package_skill::handle_direct_install(&skill_args).await
         }
         ImplicitRoute::Run(full_args) => match Cli::try_parse_from(&full_args) {
             Ok(new_cli) => {
@@ -246,30 +236,6 @@ async fn handle_implicit_run_command(
             }
         },
     }
-}
-
-fn build_tcs_skill_alias_args(trailing_args: &[String]) -> Option<Vec<String>> {
-    if trailing_args.is_empty() || !trailing_args.iter().any(|arg| arg == "--skill") {
-        return None;
-    }
-
-    let tcs_id = trailing_args.first()?;
-    let mut alias_args = vec![
-        "codemod".to_string(),
-        "tcs".to_string(),
-        "install".to_string(),
-        tcs_id.clone(),
-    ];
-
-    alias_args.extend(
-        trailing_args
-            .iter()
-            .skip(1)
-            .filter(|arg| arg.as_str() != "--skill")
-            .cloned(),
-    );
-
-    Some(alias_args)
 }
 
 #[tokio::main]
@@ -391,9 +357,6 @@ async fn main() -> Result<()> {
         Some(Commands::Agent(args)) => {
             commands::agent::handler(args).await?;
         }
-        Some(Commands::Tcs(args)) => {
-            commands::tcs::handler(args).await?;
-        }
         Some(Commands::Mcp(args)) => {
             args.run().await?;
         }
@@ -423,33 +386,44 @@ mod tests {
     use clap::{error::ErrorKind, CommandFactory};
 
     #[test]
-    fn top_level_help_lists_agent_and_tcs() {
+    fn top_level_help_lists_agent_and_omits_removed_subcommands() {
         let help_text = Cli::command().render_long_help().to_string();
         assert!(help_text.contains("agent"));
-        assert!(help_text.contains("tcs"));
+        assert!(help_text.contains("mcp"));
     }
 
     #[test]
-    fn parser_accepts_agent_install_skills_stub() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install-skills"]);
+    fn parser_accepts_agent_install() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_tcs_install_stub() {
-        let parse_result = Cli::try_parse_from(["codemod", "tcs", "install", "jest-to-vitest"]);
+    fn parser_accepts_agent_list() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "list"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn classify_implicit_route_prefers_skill_alias_when_flag_present() {
+    fn classify_implicit_route_ignores_non_package_keyword() {
+        let trailing_args = vec![
+            "workflow".to_string(),
+            "install".to_string(),
+            "jest-to-vitest".to_string(),
+        ];
+        let route = classify_implicit_route(&trailing_args);
+        assert!(route.is_none());
+    }
+
+    #[test]
+    fn classify_implicit_route_prefers_direct_skill_mode_when_flag_present() {
         let trailing_args = vec![
             "jest-to-vitest".to_string(),
             "--skill".to_string(),
             "--project".to_string(),
         ];
         let route = classify_implicit_route(&trailing_args);
-        assert!(matches!(route, Some(ImplicitRoute::SkillInstallAlias(_))));
+        assert!(matches!(route, Some(ImplicitRoute::DirectSkillInstall(_))));
     }
 
     #[test]
@@ -460,126 +434,39 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_tcs_inspect_stub() {
-        let parse_result = Cli::try_parse_from(["codemod", "tcs", "inspect", "jest-to-vitest"]);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn skill_alias_builder_returns_none_without_skill_flag() {
-        let trailing_args = vec!["jest-to-vitest".to_string()];
-        let alias_args = build_tcs_skill_alias_args(&trailing_args);
-        assert!(alias_args.is_none());
-    }
-
-    #[test]
-    fn skill_alias_builder_maps_package_to_tcs_install() {
-        let trailing_args = vec![
-            "jest-to-vitest".to_string(),
-            "--skill".to_string(),
-            "--harness".to_string(),
-            "cursor".to_string(),
-            "--user".to_string(),
-        ];
-        let alias_args = build_tcs_skill_alias_args(&trailing_args).unwrap();
-        assert_eq!(
-            alias_args,
-            vec![
-                "codemod".to_string(),
-                "tcs".to_string(),
-                "install".to_string(),
-                "jest-to-vitest".to_string(),
-                "--harness".to_string(),
-                "cursor".to_string(),
-                "--user".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn parser_accepts_skill_alias_transformed_args() {
-        let trailing_args = vec![
-            "jest-to-vitest".to_string(),
-            "--skill".to_string(),
-            "--project".to_string(),
-        ];
-        let alias_args = build_tcs_skill_alias_args(&trailing_args).unwrap();
-        let parse_result = Cli::try_parse_from(alias_args);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn parser_accepts_tcs_install_with_opencode_harness() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "tcs",
-            "install",
-            "jest-to-vitest",
-            "--harness",
-            "opencode",
-        ]);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn parser_accepts_tcs_install_with_cursor_harness() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "tcs",
-            "install",
-            "jest-to-vitest",
-            "--harness",
-            "cursor",
-        ]);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn parser_accepts_agent_install_skills_with_opencode_harness() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "agent",
-            "install-skills",
-            "--harness",
-            "opencode",
-        ]);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn parser_accepts_agent_install_skills_with_cursor_harness() {
+    fn parser_accepts_agent_install_with_opencode_harness() {
         let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install-skills", "--harness", "cursor"]);
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "opencode"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_skills_with_interactive() {
+    fn parser_accepts_agent_install_with_cursor_harness() {
         let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install-skills", "--interactive"]);
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "cursor"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_run_with_artifact_flags() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "agent",
-            "run",
-            "migrate jest to vitest",
-            "--session",
-            "cmod-test",
-            "--artifacts-dir",
-            ".codemod-cli/sessions/cmod-test",
-            "--dry-run-only",
-            "--format",
-            "json",
-        ]);
+    fn parser_accepts_agent_install_with_interactive() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--interactive"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn agent_help_lists_stubbed_subcommands() {
+    fn parser_rejects_agent_verify_skills() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "verify-skills"]);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn parser_rejects_agent_run() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "run", "migrate"]);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn agent_help_lists_install_and_list_only() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
         let error = match parse_result {
             Err(error) => error,
@@ -588,15 +475,15 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::DisplayHelp);
 
         let help_text = error.to_string();
-        assert!(help_text.contains("install-skills"));
-        assert!(help_text.contains("verify-skills"));
-        assert!(help_text.contains("list-skills"));
-        assert!(help_text.contains("run"));
+        assert!(help_text.contains("install"));
+        assert!(help_text.contains("list"));
+        assert!(!help_text.contains("verify-skills"));
+        assert!(!help_text.contains("run"));
     }
 
     #[test]
-    fn install_skills_help_lists_opencode_and_cursor_harnesses() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install-skills", "--help"]);
+    fn install_help_lists_opencode_and_cursor_harnesses() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--help"]);
         let error = match parse_result {
             Err(error) => error,
             Ok(_) => panic!("expected --help to return clap display help"),
@@ -607,20 +494,5 @@ mod tests {
         assert!(help_text.contains("opencode"));
         assert!(help_text.contains("cursor"));
         assert!(help_text.contains("--interactive"));
-    }
-
-    #[test]
-    fn tcs_help_lists_install_inspect_and_run() {
-        let parse_result = Cli::try_parse_from(["codemod", "tcs", "--help"]);
-        let error = match parse_result {
-            Err(error) => error,
-            Ok(_) => panic!("expected --help to return clap display help"),
-        };
-        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
-
-        let help_text = error.to_string();
-        assert!(help_text.contains("install"));
-        assert!(help_text.contains("inspect"));
-        assert!(help_text.contains("run"));
     }
 }

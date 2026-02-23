@@ -33,7 +33,6 @@ impl Default for RegistrySearchRequest {
 
 #[derive(Debug)]
 pub struct RegistrySearchResult {
-    pub registry_url: String,
     pub response: RegistrySearchResponse,
 }
 
@@ -174,7 +173,6 @@ pub async fn search_registry(request: RegistrySearchRequest) -> Result<RegistryS
 
     let response_body: RegistrySearchResponse = response.json().await?;
     Ok(RegistrySearchResult {
-        registry_url,
         response: response_body,
     })
 }

@@ -57,19 +57,19 @@ npx codemod publish
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
 <Info>
-  AI-native CLI commands are in active rollout. `codemod agent install-skills|list-skills|verify-skills|run`, `codemod tcs install`, and `codemod tcs inspect` are available. `codemod tcs run` remains in scaffold phase.
+  AI-native CLI commands are in active rollout. Use `codemod agent install`, `codemod agent list`, and direct package-skill install mode via `npx codemod <package-id> --skill`.
 </Info>
 
 ### `codemod agent`
 
-Manage Master Codemod Skill (MCS) install/verification flows for supported harnesses.
+Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 
-**`agent install-skills`**
+**`agent install`**
 
 Install the `codemod-cli` MCS package and configure Codemod MCP.
 
 ```bash
-npx codemod agent install-skills [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--format <table|json|yaml>]
+npx codemod agent install [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--format <table|json|yaml>]
 ```
 
 Along with skill files, install writes or updates a Codemod MCP server entry:
@@ -93,42 +93,22 @@ MCP config paths by harness and scope:
 
 If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
 
-**`agent verify-skills` / `agent list-skills`**
+**`agent list`**
 
-Validate installed codemod-managed skills and list installed MCS/TCS entries.
-
-**`agent run`**
-
-Run AI-native preflight orchestration for a migration intent.
+List installed codemod-managed skills (MCS and package skills).
 
 ```bash
-npx codemod agent run "<intent>" [--harness <claude|goose|opencode|cursor|auto>] [--session <id>] [--artifacts-dir <path>] [--dry-run-only] [--format <table|json|yaml>]
+npx codemod agent list [--harness <claude|goose|opencode|cursor|auto>] [--format <table|json|yaml>]
 ```
 
-Current behavior (v1 preflight):
-- runs registry search for the provided intent,
-- evaluates suitability metadata coverage,
-- returns deterministic decision kinds:
-  - `ready_for_threshold_routing`
-  - `insufficient_metadata`
-  - `no_candidates`
-- writes `candidate-evaluation.json` under session artifacts (default: `.codemod-cli/sessions/<session-id>/`).
+`agent install` performs internal skill validation checks during install flow.
 
-Recommended fallback when decision is `insufficient_metadata` or `no_candidates`:
-1. `npx codemod search "<migration>" --format json`
-2. `npx codemod run <package-name> --dry-run --target <repo-path>`
-3. `npx codemod run <package-name> --target <repo-path>` after verification
+### Direct package skill install (`--skill`)
 
-### `codemod tcs`
-
-Manage task-specific Codemod Skills (TCS) as installable skill packages for AI harnesses.
-
-**`tcs install`**
-
-Install a TCS skill from registry metadata into harness skill paths.
+Install a package skill from registry metadata into harness skill paths.
 
 ```bash
-npx codemod tcs install <tcs-id> [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--format <table|json|yaml>]
+npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--format <table|json|yaml>]
 ```
 
 <ResponseField name="--harness <VALUE>" type="string">
@@ -147,45 +127,24 @@ npx codemod tcs install <tcs-id> [--harness <claude|goose|opencode|cursor|auto>]
   Output contract format.
 </ResponseField>
 
-**Alias install mode**
-
-Use explicit `--skill` mode to install directly from package-style invocation:
-
-```bash
-npx codemod <tcs-id> --skill --harness auto --project
-```
-
-`--skill` is required for alias install routing. Without it, package invocation follows normal `codemod run` behavior.
-
-**`tcs inspect`**
-
-Inspect TCS package metadata resolved from registry.
-
-```bash
-npx codemod tcs inspect <tcs-id> [--format <table|json|yaml>]
-```
-
-Inspect output includes:
-- support metadata (`languages`, `frameworks`, `version_ranges`),
-- constraints (`capabilities`, `requires_tests`, `min_test_coverage`),
-- manifest-derived confidence hints.
+Without `--skill`, package invocation follows normal `codemod run` behavior.
 
 **AI-native error codes**
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
-| `E_TCS_NOT_FOUND` | `27` | Unknown TCS id / unresolved package version |
-| `E_TCS_INSTALL_FAILED` | `28` | Registry resolution, metadata parse, or install write failure |
+| `E_SKILL_PACKAGE_NOT_FOUND` | `27` | Unknown package id / unresolved package version |
+| `E_SKILL_PACKAGE_INSTALL_FAILED` | `28` | Registry resolution, metadata parse, or install write failure |
 
 Example machine-readable failure (`--format json`):
 
 ```json
 {
   "ok": false,
-  "code": "E_TCS_NOT_FOUND",
+  "code": "E_SKILL_PACKAGE_NOT_FOUND",
   "exit_code": 27,
-  "message": "Unknown TCS id: jest-to-vitestx",
-  "hint": "Run `codemod search <migration> --format json` to locate a valid TCS id."
+  "message": "Unknown skill package id: jest-to-vitestx",
+  "hint": "Run `codemod search <migration> --format json` to locate a valid package id."
 }
 ```
 

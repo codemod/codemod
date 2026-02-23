@@ -18,10 +18,13 @@ use log::info;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+
+const SKILL_FILE_NAME: &str = "SKILL.md";
+const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
 
 /// Represents a file change from legacy codemod JSON output
 #[derive(Debug, Deserialize)]
@@ -174,7 +177,17 @@ pub async fn handler(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let workflow_path = resolved_package.package_dir.join("workflow.yaml");
+    let workflow_path = resolved_package.package_dir.join(WORKFLOW_FILE_NAME);
+    if !workflow_path.exists() {
+        let error = if is_skill_only_package(&resolved_package.package_dir) {
+            skill_only_package_run_error(&args.package, &resolved_package.package_dir)
+        } else {
+            missing_workflow_error(&args.package, &workflow_path)
+        };
+        let error_msg = error.to_string();
+        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        return Err(error);
+    }
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
@@ -303,6 +316,29 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
     anyhow!(
         "Legacy codemod command failed with exit code: {:?}",
         exit_code
+    )
+}
+
+fn is_skill_only_package(package_dir: &Path) -> bool {
+    package_dir.join(SKILL_FILE_NAME).is_file() && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
+}
+
+fn skill_only_package_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
+    anyhow!(
+        "Package `{}` at {} is a skill-only package (found `{}` but no `{}`). `codemod run` requires a workflow package. Install this package as a skill with `npx codemod {} --skill`.",
+        package_id,
+        package_dir.display(),
+        SKILL_FILE_NAME,
+        WORKFLOW_FILE_NAME,
+        package_id
+    )
+}
+
+fn missing_workflow_error(package_id: &str, workflow_path: &Path) -> anyhow::Error {
+    anyhow!(
+        "Package `{}` is missing required workflow file at {}.",
+        package_id,
+        workflow_path.display()
     )
 }
 
@@ -510,6 +546,8 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_legacy_file_change_deserialization() {
@@ -576,5 +614,38 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].kind, "updateFile");
         assert_eq!(changes[0].old_path, "/path/to/test.js");
+    }
+
+    #[test]
+    fn test_is_skill_only_package_detection() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        assert!(is_skill_only_package(temp_dir.path()));
+
+        fs::write(
+            temp_dir.path().join(WORKFLOW_FILE_NAME),
+            "version: \"1\"\nnodes: []\n",
+        )
+        .unwrap();
+        assert!(!is_skill_only_package(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_skill_only_package_run_error_has_guidance() {
+        let error = skill_only_package_run_error("@codemod/mcs", Path::new("/tmp/mcs"));
+        let message = error.to_string();
+
+        assert!(message.contains("skill-only package"));
+        assert!(message.contains("--skill"));
+        assert!(message.contains("@codemod/mcs"));
+    }
+
+    #[test]
+    fn test_missing_workflow_error_mentions_expected_path() {
+        let error = missing_workflow_error("@codemod/any", Path::new("/tmp/any/workflow.yaml"));
+        let message = error.to_string();
+
+        assert!(message.contains("missing required workflow file"));
+        assert!(message.contains("/tmp/any/workflow.yaml"));
     }
 }

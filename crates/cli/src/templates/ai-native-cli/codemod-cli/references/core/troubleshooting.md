@@ -71,11 +71,11 @@ Fix:
 ## AI-Native Harness Resolution
 
 Symptom:
-- `--harness auto` picks an unexpected adapter.
+- `--harness auto` picks an unexpected adapter during package skill install.
 
 Fix:
 - pass harness explicitly:
-  - `codemod agent install-skills --harness claude --project`
-  - `codemod agent install-skills --harness goose --project`
-  - `codemod agent install-skills --harness opencode --project`
-  - `codemod agent install-skills --harness cursor --project`
+  - `npx codemod <package-id> --skill --harness claude --project`
+  - `npx codemod <package-id> --skill --harness goose --project`
+  - `npx codemod <package-id> --skill --harness opencode --project`
+  - `npx codemod <package-id> --skill --harness cursor --project`
