@@ -3,6 +3,7 @@ use crate::commands::harness_adapter::{
     Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill, OutputFormat,
     SkillPackageInstallSpec,
 };
+use crate::commands::output::{exit_adapter_error, format_output_path};
 use crate::engine::create_registry_client;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
@@ -62,15 +63,6 @@ struct InstalledSkillOutput {
     name: String,
     path: String,
     version: Option<String>,
-}
-
-#[derive(Serialize)]
-struct InstallErrorEnvelope {
-    ok: bool,
-    code: String,
-    exit_code: i32,
-    message: String,
-    hint: String,
 }
 
 #[derive(Tabled)]
@@ -234,33 +226,6 @@ fn print_install_output_table(output: &PackageSkillInstallOutput) {
         .with(Style::rounded())
         .with(Modify::new(Columns::new(..)).with(Alignment::left()));
     println!("{table}");
-}
-
-fn exit_adapter_error(error: HarnessAdapterError, format: OutputFormat) -> ! {
-    let envelope = InstallErrorEnvelope {
-        ok: false,
-        code: error.code().to_string(),
-        exit_code: error.exit_code(),
-        message: error.to_string(),
-        hint: error.hint().to_string(),
-    };
-
-    match format {
-        OutputFormat::Json => match serde_json::to_string_pretty(&envelope) {
-            Ok(json) => println!("{json}"),
-            Err(_) => eprintln!("{}: {}", envelope.code, envelope.message),
-        },
-        OutputFormat::Yaml => match serde_yaml::to_string(&envelope) {
-            Ok(yaml) => println!("{yaml}"),
-            Err(_) => eprintln!("{}: {}", envelope.code, envelope.message),
-        },
-        OutputFormat::Table => {
-            eprintln!("Error [{}]: {}", envelope.code, envelope.message);
-            eprintln!("Hint: {}", envelope.hint);
-        }
-    }
-
-    std::process::exit(envelope.exit_code);
 }
 
 async fn resolve_skill_package_for_install(
@@ -437,22 +402,6 @@ fn unsupported_skill_install_error(
             behavior_shape.as_str()
         ),
     }
-}
-
-fn format_output_path(path: &std::path::Path) -> String {
-    if let Ok(current_dir) = std::env::current_dir() {
-        if let Ok(relative_path) = path.strip_prefix(current_dir) {
-            return relative_path.display().to_string();
-        }
-    }
-
-    if let Some(home_dir) = dirs::home_dir() {
-        if let Ok(home_relative_path) = path.strip_prefix(home_dir) {
-            return format!("~/{}", home_relative_path.display());
-        }
-    }
-
-    path.display().to_string()
 }
 
 #[cfg(test)]

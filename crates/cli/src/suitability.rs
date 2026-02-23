@@ -104,6 +104,27 @@ pub const REQUIRED_SUITABILITY_FIELDS: [&str; 10] = [
     "login_required",
 ];
 
+pub const DIRECT_ROUTE_THRESHOLD: u8 = 95;
+pub const ADAPT_ROUTE_THRESHOLD: u8 = 80;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SuitabilityRouteBand {
+    Direct,
+    Adapt,
+    Build,
+    Degraded,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SuitabilityRouteDecision {
+    pub band: SuitabilityRouteBand,
+    pub score: Option<u8>,
+    pub reason: String,
+    pub package_id: Option<String>,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct MetadataCoverage {
     pub required_fields: Vec<&'static str>,
@@ -204,6 +225,77 @@ pub fn summarize_search_coverage(packages: &[RegistrySearchPackage]) -> SearchCo
         packages_missing_contract_fields: packages.len() - packages_ready_for_threshold_routing,
         missing_field_counts,
     }
+}
+
+pub fn evaluate_threshold_route(packages: &[RegistrySearchPackage]) -> SuitabilityRouteDecision {
+    if packages.is_empty() {
+        return SuitabilityRouteDecision {
+            band: SuitabilityRouteBand::Degraded,
+            score: None,
+            reason: "no_candidates".to_string(),
+            package_id: None,
+        };
+    }
+
+    let mut scored_candidates = packages
+        .iter()
+        .filter_map(|package| {
+            score_package_for_threshold_route(package).map(|score| (package, score))
+        })
+        .collect::<Vec<_>>();
+
+    if scored_candidates.is_empty() {
+        return SuitabilityRouteDecision {
+            band: SuitabilityRouteBand::Degraded,
+            score: None,
+            reason: "insufficient_metadata".to_string(),
+            package_id: None,
+        };
+    }
+
+    scored_candidates.sort_by(|(left_package, left_score), (right_package, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| {
+                right_package
+                    .download_count
+                    .cmp(&left_package.download_count)
+            })
+            .then_with(|| right_package.star_count.cmp(&left_package.star_count))
+            .then_with(|| left_package.id.cmp(&right_package.id))
+    });
+    let (best_package, best_score) = scored_candidates[0];
+
+    let band = if best_score >= DIRECT_ROUTE_THRESHOLD {
+        SuitabilityRouteBand::Direct
+    } else if best_score >= ADAPT_ROUTE_THRESHOLD {
+        SuitabilityRouteBand::Adapt
+    } else {
+        SuitabilityRouteBand::Build
+    };
+
+    SuitabilityRouteDecision {
+        band,
+        score: Some(best_score),
+        reason: format!(
+            "best_candidate:{} score:{} thresholds:direct>={} adapt>={}",
+            best_package.id, best_score, DIRECT_ROUTE_THRESHOLD, ADAPT_ROUTE_THRESHOLD
+        ),
+        package_id: Some(best_package.id.clone()),
+    }
+}
+
+fn score_package_for_threshold_route(package: &RegistrySearchPackage) -> Option<u8> {
+    if !package.metadata_coverage().ready_for_threshold_routing {
+        return None;
+    }
+
+    let quality = package.quality_score?;
+    let maintenance = package.maintenance_score?;
+    let adoption = package.adoption_score?;
+
+    let average = ((quality + maintenance + adoption) / 3.0) * 100.0;
+    Some(average.round().clamp(0.0, 100.0) as u8)
 }
 
 impl RegistrySearchPackage {
@@ -360,5 +452,65 @@ mod tests {
         assert_eq!(summary.packages_missing_contract_fields, 1);
         assert_eq!(summary.missing_field_counts["frameworks"], 1);
         assert_eq!(summary.missing_field_counts["login_required"], 1);
+    }
+
+    #[test]
+    fn evaluate_threshold_route_returns_degraded_when_no_candidates() {
+        let decision = evaluate_threshold_route(&[]);
+        assert_eq!(decision.band, SuitabilityRouteBand::Degraded);
+        assert_eq!(decision.reason, "no_candidates");
+        assert_eq!(decision.score, None);
+        assert_eq!(decision.package_id, None);
+    }
+
+    #[test]
+    fn evaluate_threshold_route_returns_degraded_when_metadata_is_missing() {
+        let decision = evaluate_threshold_route(&[sample_package()]);
+        assert_eq!(decision.band, SuitabilityRouteBand::Degraded);
+        assert_eq!(decision.reason, "insufficient_metadata");
+        assert_eq!(decision.score, None);
+        assert_eq!(decision.package_id, None);
+    }
+
+    #[test]
+    fn evaluate_threshold_route_maps_score_bands() {
+        let mut direct = sample_package();
+        direct.id = "pkg-direct".to_string();
+        direct.frameworks = Some(vec!["react".to_string()]);
+        direct.languages = Some(vec!["typescript".to_string()]);
+        direct.version_ranges = Some(vec!["react=>=18".to_string()]);
+        direct.confidence_hints = Some(vec!["high confidence".to_string()]);
+        direct.known_limits = Some(vec!["none".to_string()]);
+        direct.quality_score = Some(0.99);
+        direct.maintenance_score = Some(0.98);
+        direct.adoption_score = Some(0.97);
+        direct.pro_required = Some(false);
+        direct.login_required = Some(false);
+
+        let mut adapt = direct.clone();
+        adapt.id = "pkg-adapt".to_string();
+        adapt.quality_score = Some(0.85);
+        adapt.maintenance_score = Some(0.82);
+        adapt.adoption_score = Some(0.80);
+
+        let mut build = direct.clone();
+        build.id = "pkg-build".to_string();
+        build.quality_score = Some(0.70);
+        build.maintenance_score = Some(0.68);
+        build.adoption_score = Some(0.66);
+
+        let direct_decision = evaluate_threshold_route(&[direct]);
+        assert_eq!(direct_decision.band, SuitabilityRouteBand::Direct);
+        assert!(direct_decision.score.is_some_and(|score| score >= 95));
+
+        let adapt_decision = evaluate_threshold_route(&[adapt]);
+        assert_eq!(adapt_decision.band, SuitabilityRouteBand::Adapt);
+        assert!(adapt_decision
+            .score
+            .is_some_and(|score| (80..95).contains(&score)));
+
+        let build_decision = evaluate_threshold_route(&[build]);
+        assert_eq!(build_decision.band, SuitabilityRouteBand::Build);
+        assert!(build_decision.score.is_some_and(|score| score < 80));
     }
 }

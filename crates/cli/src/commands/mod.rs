@@ -6,6 +6,7 @@ pub mod jssg;
 pub mod login;
 pub mod logout;
 pub mod mcp;
+pub mod output;
 pub mod package_skill;
 pub mod publish;
 pub mod run;

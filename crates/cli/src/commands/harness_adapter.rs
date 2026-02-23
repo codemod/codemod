@@ -1117,7 +1117,11 @@ fn extract_allowed_tools(frontmatter: &str) -> Vec<String> {
 fn missing_required_frontmatter_key(frontmatter: &str) -> Option<&'static str> {
     REQUIRED_FRONTMATTER_KEYS
         .iter()
-        .find(|required_key| !frontmatter.contains(**required_key))
+        .find(|required_key| {
+            !frontmatter
+                .lines()
+                .any(|line| line.trim().starts_with(**required_key))
+        })
         .copied()
 }
 
@@ -1334,7 +1338,13 @@ fn copy_directory_recursive(source_dir: &Path, destination_dir: &Path) -> Adapte
         ))
     })?;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            HarnessAdapterError::SkillPackageInstallFailed(format!(
+                "Failed to read entry in source skill directory {}: {error}",
+                source_dir.display()
+            ))
+        })?;
         let source_path = entry.path();
         let destination_path = destination_dir.join(entry.file_name());
 
@@ -1415,7 +1425,13 @@ fn collect_relative_files_recursive(
         ))
     })?;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            HarnessAdapterError::SkillPackageInstallFailed(format!(
+                "Failed to read entry in skill directory {}: {error}",
+                current_dir.display()
+            ))
+        })?;
         let path = entry.path();
         if path.is_dir() {
             collect_relative_files_recursive(root_dir, &path, files)?;
@@ -1439,6 +1455,11 @@ fn collect_relative_files_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::manifest::CodemodManifest;
+    use crate::utils::package_validation::validate_skill_behavior;
+    use crate::utils::skill_layout::{
+        derive_skill_name_from_package_name, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+    };
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -1509,6 +1530,55 @@ codemod-skill-version: 0.1.0
 
     fn count_occurrences(haystack: &str, needle: &str) -> usize {
         haystack.matches(needle).count()
+    }
+
+    fn create_skill_only_package_layout(
+        base_dir: &Path,
+        package_name: &str,
+    ) -> (CodemodManifest, PathBuf) {
+        let package_root = base_dir.join(package_name);
+        fs::create_dir_all(&package_root).unwrap();
+
+        let manifest_yaml = format!(
+            r#"schema_version: "1.0"
+name: "{package_name}"
+version: "0.1.0"
+description: "Skill-only package for harness install tests"
+author: "Codemod Team <team@codemod.com>"
+license: "MIT"
+provides:
+  - skill
+"#
+        );
+        fs::write(package_root.join("codemod.yaml"), &manifest_yaml).unwrap();
+        let manifest: CodemodManifest = serde_yaml::from_str(&manifest_yaml).unwrap();
+
+        let skill_name = derive_skill_name_from_package_name(package_name);
+        let skill_dir = package_root
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join(skill_name);
+        fs::create_dir_all(skill_dir.join("references")).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: "sample-skill"
+description: "Installable skill package"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+"#,
+        )
+        .unwrap();
+        fs::write(
+            skill_dir.join("references/index.md"),
+            "- [Usage](./usage.md)\n",
+        )
+        .unwrap();
+        fs::write(skill_dir.join("references/usage.md"), "# Usage\n").unwrap();
+
+        (manifest, skill_dir)
     }
 
     #[test]
@@ -1918,6 +1988,48 @@ codemod-skill-version: 0.1.0
                 .path
                 .to_string_lossy()
                 .contains(&format!("{harness_dir}/skills/jest-to-vitest/SKILL.md")));
+        }
+    }
+
+    #[test]
+    fn skill_only_package_validate_then_install_flow_works_across_harnesses() {
+        let package_temp_dir = tempdir().unwrap();
+        let (manifest, skill_source_dir) =
+            create_skill_only_package_layout(package_temp_dir.path(), "sample-skill");
+        let package_root = package_temp_dir.path().join("sample-skill");
+
+        let validation_summary = validate_skill_behavior(&package_root, &manifest)
+            .expect("skill-only package layout should pass shared validation");
+        assert_eq!(validation_summary.linked_reference_count, 1);
+
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let package_skill = SkillPackageInstallSpec {
+            id: "sample-skill".to_string(),
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
+            source_dir: skill_source_dir,
+        };
+
+        for harness in ALL_HARNESSES {
+            let (runtime_paths, _runtime_temp) = runtime_paths_with_temp_roots();
+            let installed = install_package_skill_bundle_with_runtime(
+                harness,
+                &package_skill,
+                &install_request,
+                &runtime_paths,
+            )
+            .unwrap();
+            assert_eq!(installed.len(), 1);
+
+            let listed = list_skills_with_runtime(harness, &runtime_paths).unwrap();
+            assert!(listed.iter().any(|skill| skill.name == "sample-skill"));
+
+            let checks = verify_skills_with_runtime(harness, &runtime_paths).unwrap();
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].status, VerificationStatus::Pass);
         }
     }
 

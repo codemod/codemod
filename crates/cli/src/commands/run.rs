@@ -233,8 +233,10 @@ pub async fn handler(
         None,
     );
 
-    // Always collect diffs so we can offer report interactively
-    let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
+    // Collect diffs only when a report may be shown (--report or interactive prompt path).
+    let should_collect_diffs =
+        args.report || crate::utils::metrics::can_prompt_for_report(args.no_interactive);
+    let diff_collector = should_collect_diffs.then(|| Arc::new(Mutex::new(Vec::<FileDiff>::new())));
 
     let started = std::time::Instant::now();
 

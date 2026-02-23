@@ -1598,6 +1598,8 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::manifest::CodemodManifest;
+    use crate::utils::package_validation::validate_skill_behavior;
     use tempfile::tempdir;
 
     fn skill_project_config(workspace: bool) -> ProjectConfig {
@@ -1643,6 +1645,9 @@ mod tests {
         assert!(manifest.contains("provides:"));
         assert!(manifest.contains("- skill"));
         assert!(!manifest.contains("workflow:"));
+        let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
+        let validation = validate_skill_behavior(&project_path, &parsed_manifest).unwrap();
+        assert_eq!(validation.linked_reference_count, 1);
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
         assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));
@@ -1666,6 +1671,10 @@ mod tests {
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
         assert!(!codemod_path.join("workflow.yaml").exists());
+        let manifest = fs::read_to_string(codemod_path.join("codemod.yaml")).unwrap();
+        let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
+        let validation = validate_skill_behavior(&codemod_path, &parsed_manifest).unwrap();
+        assert_eq!(validation.linked_reference_count, 1);
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
         assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));

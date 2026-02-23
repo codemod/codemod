@@ -1,3 +1,4 @@
+use log::warn;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -48,12 +49,23 @@ pub(crate) fn has_any_authored_skill(package_dir: &Path) -> bool {
 
 pub(crate) fn find_all_authored_skill_dirs(package_dir: &Path) -> Vec<PathBuf> {
     let skill_root = package_dir.join(AGENTS_SKILL_ROOT_RELATIVE_PATH);
-    let Ok(entries) = fs::read_dir(skill_root) else {
+    let Ok(entries) = fs::read_dir(&skill_root) else {
         return Vec::new();
     };
 
     let mut skill_dirs = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warn!(
+                    "Failed to read entry in authored skill directory {}: {}",
+                    skill_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         if !path.is_dir() {
             continue;

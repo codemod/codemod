@@ -4,8 +4,9 @@ use serde::Serialize;
 use tabled::{Table, Tabled};
 
 use crate::suitability::{
-    search_registry, summarize_search_coverage, MetadataCoverage, RegistrySearchPackage,
-    RegistrySearchRequest, RegistrySearchResponse, SearchCoverageSummary,
+    evaluate_threshold_route, search_registry, summarize_search_coverage, MetadataCoverage,
+    RegistrySearchPackage, RegistrySearchRequest, RegistrySearchResponse, SearchCoverageSummary,
+    SuitabilityRouteDecision,
 };
 
 #[derive(Args, Debug)]
@@ -59,6 +60,7 @@ struct SearchResponseOutput<'a> {
     total: u32,
     packages: Vec<PackageOutput<'a>>,
     metadata_coverage: SearchCoverageSummary,
+    threshold_route_preview: SuitabilityRouteDecision,
 }
 
 #[derive(Serialize)]
@@ -177,6 +179,7 @@ fn build_search_output(result: &RegistrySearchResponse) -> SearchResponseOutput<
             })
             .collect(),
         metadata_coverage: summarize_search_coverage(&result.packages),
+        threshold_route_preview: evaluate_threshold_route(&result.packages),
     }
 }
 
@@ -253,5 +256,9 @@ mod tests {
 
         assert_eq!(output.metadata_coverage.total_packages, 1);
         assert_eq!(output.metadata_coverage.packages_missing_contract_fields, 1);
+        assert_eq!(
+            output.threshold_route_preview.reason,
+            "insufficient_metadata"
+        );
     }
 }
