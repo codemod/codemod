@@ -179,4 +179,33 @@ nodes:
 
         assert!(result.is_ok(), "expected workflow to validate: {result:?}");
     }
+
+    #[test]
+    fn validates_workflow_when_directory_is_hybrid_package() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        let workflow_path = temp_dir.path().join(WORKFLOW_FILE_NAME);
+        fs::write(
+            workflow_path,
+            r#"
+version: "1"
+nodes:
+  - id: setup
+    name: Setup
+    type: automatic
+    steps:
+      - id: init
+        name: Initialize
+        run: echo hello
+"#,
+        )
+        .unwrap();
+
+        let result = validate_workflow(temp_dir.path());
+
+        assert!(
+            result.is_ok(),
+            "expected hybrid package workflow to validate: {result:?}"
+        );
+    }
 }
