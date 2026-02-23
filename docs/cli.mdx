@@ -250,14 +250,14 @@ Validate a workflow file.
 npx codemod workflow validate -w <workflow.yaml>
 ```
 
-If the target path is a skill-only package (`agents/skill/<skill-name>/SKILL.md` without `workflow.yaml`), validation returns actionable guidance to use direct install mode:
+`workflow validate` is capability-aware for codemod packages:
 
-```bash
-npx codemod <package-id> --skill
-```
+- **Workflow-only** package: validates workflow behavior.
+- **Skill-only** package: validates skill behavior (`agents/skill/<skill-name>/...`).
+- **Hybrid** package: validates both workflow and skill behavior.
 
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
-  Path to workflow file.
+  Path to workflow file or codemod package directory.
 </ResponseField>
 
 | Check                       | Ensures                                |
@@ -278,7 +278,7 @@ npx codemod <package-id> --skill
 </Info>
 
 <Accordion title="Validation vs. Logical Correctness">
-  The `workflow validate` command ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
+  For workflow behavior, `workflow validate` ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
 
   - **Logical correctness**: Whether your workflow does what you intend
   - **Runtime behavior**: How your workflow behaves with real data

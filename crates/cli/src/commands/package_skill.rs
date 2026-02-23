@@ -5,6 +5,9 @@ use crate::commands::harness_adapter::{
 };
 use crate::engine::create_registry_client;
 use crate::utils::manifest::CodemodManifest;
+use crate::utils::package_validation::{
+    detect_package_behavior_shape_with_manifest_hint, PackageBehaviorShape,
+};
 use crate::utils::skill_layout::{expected_authored_skill_file, find_authored_skill_dir};
 use anyhow::Result;
 use butterflow_core::registry::RegistryError;
@@ -18,10 +21,6 @@ use tabled::{Table, Tabled};
 
 #[cfg(test)]
 use crate::utils::skill_layout::SKILL_FILE_NAME;
-
-const DEFAULT_WORKFLOW_FILE_NAME: &str = "workflow.yaml";
-const SKILL_PROVIDES_NAMES: [&str; 1] = ["skill"];
-const WORKFLOW_PROVIDES_NAMES: [&str; 1] = ["workflow"];
 
 #[derive(Parser, Debug)]
 struct DirectSkillInstallCommand {
@@ -82,38 +81,6 @@ struct InstalledSkillRow {
     version: String,
     #[tabled(rename = "Path")]
     path: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PackageBehaviorShape {
-    WorkflowOnly,
-    SkillOnly,
-    Hybrid,
-    Missing,
-}
-
-impl PackageBehaviorShape {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::WorkflowOnly => "workflow-only",
-            Self::SkillOnly => "skill-only",
-            Self::Hybrid => "hybrid",
-            Self::Missing => "missing-behavior",
-        }
-    }
-
-    fn supports_skill(self) -> bool {
-        matches!(self, Self::SkillOnly | Self::Hybrid)
-    }
-
-    fn install_warning(self, package_id: &str) -> Option<String> {
-        match self {
-            Self::SkillOnly => Some(format!(
-                "Detected skill-only package behavior for `{package_id}`. Installing this package as a harness skill."
-            )),
-            _ => None,
-        }
-    }
 }
 
 pub async fn handle_direct_install(trailing_args: &[String]) -> Result<bool> {
@@ -300,7 +267,7 @@ async fn resolve_skill_package_for_install(
     package_id: &str,
 ) -> std::result::Result<(SkillPackageInstallSpec, Vec<String>), HarnessAdapterError> {
     let resolved_package = resolve_skill_package(package_id).await?;
-    if !resolved_package.behavior_shape.supports_skill() {
+    if !resolved_package.behavior_shape.includes_skill() {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
             unsupported_skill_install_error(
                 &resolved_package.id,
@@ -320,9 +287,8 @@ async fn resolve_skill_package_for_install(
     })?;
 
     let mut warnings = Vec::new();
-    if let Some(warning) = resolved_package
-        .behavior_shape
-        .install_warning(&resolved_package.id)
+    if let Some(warning) =
+        install_warning_for_shape(resolved_package.behavior_shape, &resolved_package.id)
     {
         warnings.push(warning);
     }
@@ -380,10 +346,10 @@ async fn resolve_skill_package(
         .unwrap_or(resolved_package.spec.name.as_str());
     let skill_source_dir =
         find_authored_skill_dir(&resolved_package.package_dir, Some(manifest_name));
-    let behavior_shape = detect_package_behavior_shape(
+    let behavior_shape = detect_package_behavior_shape_with_manifest_hint(
         &resolved_package.package_dir,
         manifest.as_ref(),
-        skill_source_dir.as_ref(),
+        Some(manifest_name),
     );
 
     Ok(ResolvedSkillPackage {
@@ -435,53 +401,16 @@ fn format_registry_id(scope: &Option<String>, name: &str) -> String {
     }
 }
 
-fn detect_package_behavior_shape(
-    package_dir: &Path,
-    manifest: Option<&CodemodManifest>,
-    authored_skill_dir: Option<&PathBuf>,
-) -> PackageBehaviorShape {
-    let has_skill_file = authored_skill_dir.is_some()
-        || find_authored_skill_dir(package_dir, manifest.map(|manifest| manifest.name.as_str()))
-            .is_some();
-    let has_workflow_file = has_workflow_file(package_dir, manifest);
-    let declares_skill = manifest
-        .is_some_and(|manifest| manifest_declares_provides(manifest, &SKILL_PROVIDES_NAMES));
-    let declares_workflow = manifest
-        .is_some_and(|manifest| manifest_declares_provides(manifest, &WORKFLOW_PROVIDES_NAMES));
-
-    let supports_skill = has_skill_file || declares_skill;
-    let supports_workflow = has_workflow_file || declares_workflow;
-
-    match (supports_workflow, supports_skill) {
-        (true, true) => PackageBehaviorShape::Hybrid,
-        (true, false) => PackageBehaviorShape::WorkflowOnly,
-        (false, true) => PackageBehaviorShape::SkillOnly,
-        (false, false) => PackageBehaviorShape::Missing,
+fn install_warning_for_shape(
+    behavior_shape: PackageBehaviorShape,
+    package_id: &str,
+) -> Option<String> {
+    match behavior_shape {
+        PackageBehaviorShape::SkillOnly => Some(format!(
+            "Detected skill-only package behavior for `{package_id}`. Installing this package as a harness skill."
+        )),
+        _ => None,
     }
-}
-
-fn has_workflow_file(package_dir: &Path, manifest: Option<&CodemodManifest>) -> bool {
-    let has_default_workflow = package_dir.join(DEFAULT_WORKFLOW_FILE_NAME).is_file();
-    let has_manifest_workflow = manifest
-        .and_then(|manifest| manifest.workflow.as_deref())
-        .map(str::trim)
-        .filter(|workflow_path| !workflow_path.is_empty())
-        .is_some_and(|workflow_path| package_dir.join(workflow_path).is_file());
-
-    has_default_workflow || has_manifest_workflow
-}
-
-fn manifest_declares_provides(manifest: &CodemodManifest, expected: &[&str]) -> bool {
-    manifest.provides.as_ref().is_some_and(|provides| {
-        provides
-            .iter()
-            .map(|provide| normalize_provide_name(provide))
-            .any(|provide| expected.contains(&provide.as_str()))
-    })
-}
-
-fn normalize_provide_name(raw_provide: &str) -> String {
-    raw_provide.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 fn unsupported_skill_install_error(
@@ -594,17 +523,13 @@ mod tests {
         fs::create_dir_all(&authored_skill_dir).unwrap();
         fs::write(authored_skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
         assert_eq!(
-            detect_package_behavior_shape(package_dir, None, None),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
             PackageBehaviorShape::SkillOnly
         );
 
-        fs::write(
-            package_dir.join(DEFAULT_WORKFLOW_FILE_NAME),
-            "version: \"1\"\n",
-        )
-        .unwrap();
+        fs::write(package_dir.join("workflow.yaml"), "version: \"1\"\n").unwrap();
         assert_eq!(
-            detect_package_behavior_shape(package_dir, None, None),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
             PackageBehaviorShape::Hybrid
         );
     }
@@ -613,14 +538,10 @@ mod tests {
     fn detect_package_behavior_shape_workflow_only_when_skill_missing() {
         let temp_dir = tempdir().unwrap();
         let package_dir = temp_dir.path();
-        fs::write(
-            package_dir.join(DEFAULT_WORKFLOW_FILE_NAME),
-            "version: \"1\"\n",
-        )
-        .unwrap();
+        fs::write(package_dir.join("workflow.yaml"), "version: \"1\"\n").unwrap();
 
         assert_eq!(
-            detect_package_behavior_shape(package_dir, None, None),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
             PackageBehaviorShape::WorkflowOnly
         );
     }
@@ -637,14 +558,22 @@ mod tests {
         let hybrid_manifest =
             manifest_with("custom-workflow.yaml", Some(vec!["Skill", "workflow"]));
         assert_eq!(
-            detect_package_behavior_shape(package_dir, Some(&hybrid_manifest), None),
+            detect_package_behavior_shape_with_manifest_hint(
+                package_dir,
+                Some(&hybrid_manifest),
+                Some("example"),
+            ),
             PackageBehaviorShape::Hybrid
         );
 
-        let skill_manifest = manifest_with("custom-workflow.yaml", Some(vec!["skill"]));
+        let skill_manifest = manifest_with("", Some(vec!["skill"]));
         fs::remove_file(package_dir.join("custom-workflow.yaml")).unwrap();
         assert_eq!(
-            detect_package_behavior_shape(package_dir, Some(&skill_manifest), None),
+            detect_package_behavior_shape_with_manifest_hint(
+                package_dir,
+                Some(&skill_manifest),
+                Some("example"),
+            ),
             PackageBehaviorShape::SkillOnly
         );
     }
@@ -674,9 +603,9 @@ mod tests {
 
     #[test]
     fn install_warning_is_emitted_for_skill_only_packages() {
-        let warning = PackageBehaviorShape::SkillOnly
-            .install_warning("@codemod/skill-only")
-            .expect("skill-only should produce warning");
+        let warning =
+            install_warning_for_shape(PackageBehaviorShape::SkillOnly, "@codemod/skill-only")
+                .expect("skill-only should produce warning");
         assert!(warning.contains("skill-only package behavior"));
         assert!(warning.contains("@codemod/skill-only"));
     }

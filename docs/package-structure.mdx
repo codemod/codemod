@@ -64,7 +64,10 @@ Current CLI behavior:
 - `codemod init --skill` scaffolds skill-only packages.
 - `codemod init --with-skill` scaffolds hybrid packages.
 - `codemod publish` supports workflow-only, skill-only, and hybrid packages (at least one `provides` value must be present).
-- If a package is skill-only, `codemod run` and `codemod workflow validate` return actionable guidance to use `--skill`.
+- `codemod workflow validate -w <package-root>` validates declared package behaviors:
+  - workflow-only: workflow checks
+  - skill-only: skill structure/frontmatter/reference checks
+  - hybrid: both workflow and skill checks
 
 Skill-capable packages should keep authored skill content under:
 

@@ -1,8 +1,10 @@
 use crate::utils::manifest::CodemodManifest;
-use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
-use crate::utils::skill_layout::{
-    expected_authored_skill_file, find_authored_skill_dir, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+use crate::utils::package_validation::{
+    detect_package_behavior_shape, expected_workflow_path, validate_manifest_provides_declarations,
+    validate_skill_behavior, PackageBehaviorShape, DEFAULT_WORKFLOW_FILE_NAME,
 };
+use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
+use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
@@ -20,13 +22,12 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
+#[cfg(test)]
+use crate::utils::skill_layout::expected_authored_skill_file;
+
 use crate::auth::TokenStorage;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
-
-const DEFAULT_WORKFLOW_FILE_NAME: &str = "workflow.yaml";
-const SKILL_PROVIDES_NAMES: [&str; 1] = ["skill"];
-const WORKFLOW_PROVIDES_NAMES: [&str; 1] = ["workflow"];
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -48,29 +49,6 @@ struct PublishedPackage {
     version: String,
     scope: Option<String>,
     published_at: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PackageBehaviorShape {
-    WorkflowOnly,
-    SkillOnly,
-    Hybrid,
-    Missing,
-}
-
-impl PackageBehaviorShape {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::WorkflowOnly => "workflow-only",
-            Self::SkillOnly => "skill-only",
-            Self::Hybrid => "hybrid",
-            Self::Missing => "missing-behavior",
-        }
-    }
-
-    fn includes_workflow(self) -> bool {
-        matches!(self, Self::WorkflowOnly | Self::Hybrid)
-    }
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -250,6 +228,10 @@ fn validate_package_structure(
         ));
     }
 
+    if behavior_shape.includes_skill() {
+        validate_skill_behavior(package_path, manifest)?;
+    }
+
     if !behavior_shape.includes_workflow() {
         info!("Skill-only package validation successful");
         info!(
@@ -259,8 +241,7 @@ fn validate_package_structure(
         return Ok(Vec::new());
     }
 
-    let workflow_path = resolve_workflow_path(package_path, manifest)
-        .unwrap_or_else(|| expected_workflow_path(package_path, manifest));
+    let workflow_path = expected_workflow_path(package_path, manifest);
     if !workflow_path.exists() {
         return Err(anyhow!(
             "Workflow behavior declared but workflow file not found: {}",
@@ -275,34 +256,6 @@ fn validate_package_structure(
         behavior_shape.as_str()
     );
     Ok(js_files)
-}
-
-fn validate_manifest_provides_declarations(
-    package_path: &Path,
-    manifest: &CodemodManifest,
-) -> Result<()> {
-    let declares_skill = manifest_declares_provides(manifest, &SKILL_PROVIDES_NAMES);
-    let declares_workflow = manifest_declares_provides(manifest, &WORKFLOW_PROVIDES_NAMES)
-        || configured_workflow_path(manifest).is_some();
-    let has_skill_file = find_authored_skill_dir(package_path, Some(&manifest.name)).is_some();
-    let has_workflow_file = workflow_file_exists(package_path, manifest);
-
-    if declares_skill && !has_skill_file {
-        return Err(anyhow!(
-            "`provides: [skill]` declared in codemod.yaml but `{}` is missing at {}.",
-            AGENTS_SKILL_ROOT_RELATIVE_PATH,
-            expected_authored_skill_file(package_path, &manifest.name).display()
-        ));
-    }
-
-    if declares_workflow && !has_workflow_file {
-        return Err(anyhow!(
-            "`provides: [workflow]` declared in codemod.yaml but workflow file is missing at {}.",
-            expected_workflow_path(package_path, manifest).display()
-        ));
-    }
-
-    Ok(())
 }
 
 fn validate_common_package_metadata(package_path: &Path, manifest: &CodemodManifest) -> Result<()> {
@@ -355,66 +308,6 @@ fn validate_workflow_behavior(package_path: &Path, workflow_path: &Path) -> Resu
 
     // Find all JS AST grep steps that need bundling
     find_js_files_in_workflow(&workflow, package_path)
-}
-
-fn detect_package_behavior_shape(
-    package_path: &Path,
-    manifest: &CodemodManifest,
-) -> PackageBehaviorShape {
-    let has_skill = find_authored_skill_dir(package_path, Some(&manifest.name)).is_some();
-    let has_workflow = workflow_file_exists(package_path, manifest);
-    let declares_skill = manifest_declares_provides(manifest, &SKILL_PROVIDES_NAMES);
-    let declares_workflow = manifest_declares_provides(manifest, &WORKFLOW_PROVIDES_NAMES)
-        || configured_workflow_path(manifest).is_some();
-
-    let supports_skill = has_skill || declares_skill;
-    let includes_workflow = has_workflow || declares_workflow;
-
-    match (includes_workflow, supports_skill) {
-        (true, true) => PackageBehaviorShape::Hybrid,
-        (true, false) => PackageBehaviorShape::WorkflowOnly,
-        (false, true) => PackageBehaviorShape::SkillOnly,
-        (false, false) => PackageBehaviorShape::Missing,
-    }
-}
-
-fn workflow_file_exists(package_path: &Path, manifest: &CodemodManifest) -> bool {
-    expected_workflow_path(package_path, manifest).is_file()
-}
-
-fn expected_workflow_path(package_path: &Path, manifest: &CodemodManifest) -> PathBuf {
-    let workflow_file = configured_workflow_path(manifest).unwrap_or(DEFAULT_WORKFLOW_FILE_NAME);
-    package_path.join(workflow_file)
-}
-
-fn resolve_workflow_path(package_path: &Path, manifest: &CodemodManifest) -> Option<PathBuf> {
-    let workflow_path = expected_workflow_path(package_path, manifest);
-    if workflow_path.is_file() {
-        Some(workflow_path)
-    } else {
-        None
-    }
-}
-
-fn configured_workflow_path(manifest: &CodemodManifest) -> Option<&str> {
-    manifest
-        .workflow
-        .as_deref()
-        .map(str::trim)
-        .filter(|workflow| !workflow.is_empty())
-}
-
-fn manifest_declares_provides(manifest: &CodemodManifest, expected: &[&str]) -> bool {
-    manifest.provides.as_ref().is_some_and(|provides| {
-        provides
-            .iter()
-            .map(|provided_value| normalize_provided_value(provided_value))
-            .any(|provided_value| expected.contains(&provided_value.as_str()))
-    })
-}
-
-fn normalize_provided_value(provided_value: &str) -> String {
-    provided_value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 async fn create_package_bundle(
@@ -690,10 +583,57 @@ mod tests {
     fn create_authored_skill_bundle(package_path: &Path, package_name: &str) {
         let skill_file = expected_authored_skill_file(package_path, package_name);
         fs::create_dir_all(skill_file.parent().unwrap().join("references")).unwrap();
-        fs::write(&skill_file, "# Skill\n").unwrap();
+        fs::write(
+            &skill_file,
+            r#"---
+name: "example"
+description: "description"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+"#,
+        )
+        .unwrap();
         fs::write(
             skill_file.parent().unwrap().join("references/index.md"),
-            "# References\n",
+            "- [Usage](./usage.md)\n",
+        )
+        .unwrap();
+        fs::write(
+            skill_file.parent().unwrap().join("references/usage.md"),
+            "# Usage\n",
+        )
+        .unwrap();
+    }
+
+    fn create_invalid_authored_skill_bundle_missing_marker(
+        package_path: &Path,
+        package_name: &str,
+    ) {
+        let skill_file = expected_authored_skill_file(package_path, package_name);
+        fs::create_dir_all(skill_file.parent().unwrap().join("references")).unwrap();
+        fs::write(
+            &skill_file,
+            r#"---
+name: "example"
+description: "description"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-skill-version: 0.1.0
+"#,
+        )
+        .unwrap();
+        fs::write(
+            skill_file.parent().unwrap().join("references/index.md"),
+            "- [Usage](./usage.md)\n",
+        )
+        .unwrap();
+        fs::write(
+            skill_file.parent().unwrap().join("references/usage.md"),
+            "# Usage\n",
         )
         .unwrap();
     }
@@ -839,5 +779,15 @@ nodes:
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("Invalid package name"));
+    }
+
+    #[test]
+    fn skill_publish_fails_when_skill_markers_are_missing() {
+        let temp_dir = tempdir().unwrap();
+        create_invalid_authored_skill_bundle_missing_marker(temp_dir.path(), "example");
+        let manifest = manifest_with(None, Some(vec!["skill"]), "example");
+
+        let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
+        assert!(error.to_string().contains("missing compatibility marker"));
     }
 }
