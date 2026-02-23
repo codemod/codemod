@@ -1665,7 +1665,6 @@ mod tests {
 
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
         assert!(manifest.contains("capabilities:"));
-        assert!(!manifest.contains("provides:"));
         assert!(manifest.contains("workflow: \"workflow.yaml\""));
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
         let validation = validate_skill_behavior(&project_path, &parsed_manifest).unwrap();
@@ -1708,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn create_manifest_for_workflow_projects_has_workflow_and_no_provides() {
+    fn create_manifest_for_workflow_projects_has_required_workflow_fields() {
         let temp_dir = tempdir().unwrap();
         let project_path = temp_dir.path().join("workflow-project");
         fs::create_dir_all(&project_path).unwrap();
@@ -1733,7 +1732,6 @@ mod tests {
 
         assert!(manifest.contains("workflow: \"workflow.yaml\""));
         assert!(manifest.contains("capabilities: []"));
-        assert!(!manifest.contains("provides:"));
     }
 
     #[test]
@@ -1767,7 +1765,6 @@ mod tests {
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
         assert!(manifest.contains("workflow: \"workflow.yaml\""));
-        assert!(!manifest.contains("provides:"));
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("install-skill:"));
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));

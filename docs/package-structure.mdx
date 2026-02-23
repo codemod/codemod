@@ -54,17 +54,17 @@ The `scripts/` and `rules/` folders are conventional, not required—use any pat
 
 ## Package Behavior
 
-Codemod packages can provide:
-- **Workflow** (`workflow.yaml`) for `codemod run` / `codemod workflow run`
-- **Skill** (`agents/skill/<skill-name>/SKILL.md` + references) installable with `npx codemod <package-id> --skill`
-- **Hybrid** (both workflow + skill)
+Codemod packages use a workflow-first model and can be:
+- **Workflow-only**: `workflow.yaml` has executable steps and no `install-skill` steps.
+- **Skill-only**: `workflow.yaml` has `install-skill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Hybrid**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
 
 Current CLI behavior:
 - `codemod init` (default) scaffolds workflow-only packages.
 - `codemod init --skill` scaffolds skill-only packages.
 - `codemod init --with-skill` scaffolds hybrid packages.
-- `codemod publish` supports workflow-only, skill-only, and hybrid packages (at least one `provides` value must be present).
-- `codemod workflow validate -w <package-root>` validates declared package behaviors:
+- `codemod publish` supports workflow-only, skill-only, and hybrid packages by validating workflow behavior and skill layout.
+- `codemod workflow validate -w <package-root>` validates package behavior:
   - workflow-only: workflow checks
   - skill-only: skill structure/frontmatter/reference checks
   - hybrid: both workflow and skill checks
@@ -102,12 +102,9 @@ keywords: ["upgrade", "breaking-change", "react", "v17-to-v18"]
 registry:
   access: "public"
   visibility: "public"
-
-provides:
-  - workflow
 ```
 
-For skill-only packages, omit `workflow`, include `provides: ["skill"]`, and author skill content under `agents/skill/<skill-name>/`.
+For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
 
 **Available fields:**
 
@@ -143,8 +140,8 @@ Author name and email, e.g., `Jane Doe <jane@example.com>`.
 License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
-<ParamField path="workflow" type="string" default="workflow.yaml">
-Relative path to your workflow file (required for workflow-capable packages, optional for skill-only packages).
+<ParamField path="workflow" type="string" required default="workflow.yaml">
+Relative path to your workflow file (required for workflow-only, skill-only, and hybrid packages).
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">
@@ -261,13 +258,6 @@ Visibility controls who can see the package in the Registry (search, listings, a
 <Info>
 During scaffolding, the CLI sets <code>public</code>/<code>private</code> based on <code>--private</code>. You can change to any supported value above when publishing.
 </Info>
-</ParamField>
-
-<ParamField path="provides" type="string[]" default='["workflow"]'>
-Array of package behavior tags.
-
-- `workflow` - Package provides executable workflow support (`workflow.yaml`)
-- `skill` - Package provides installable skill support (`agents/skill/<skill-name>/SKILL.md`)
 </ParamField>
 
 <ParamField path="capabilities" type="string[]">
