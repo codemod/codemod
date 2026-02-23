@@ -1,5 +1,6 @@
 packages:
   - crates/cli/npm
+  - crates/cli/report-ui
   - crates/cli/npm/platforms/*
   - crates/scheduler/npm
   - crates/codemod-sandbox

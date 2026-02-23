@@ -6,8 +6,9 @@ use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
-use butterflow_core::diff::{generate_unified_diff, DiffConfig};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::registry::RegistryError;
+use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
@@ -20,6 +21,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 /// Represents a file change from legacy codemod JSON output
 #[derive(Debug, Deserialize)]
@@ -79,6 +81,10 @@ pub struct Command {
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
+
+    /// Open a web-based execution report after the run completes
+    #[arg(long)]
+    report: bool,
 }
 
 async fn send_failure_event(
@@ -196,10 +202,15 @@ pub async fn handler(
         None,
     );
 
+    // Always collect diffs so we can offer report interactively
+    let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
+
+    let started = std::time::Instant::now();
+
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(
         workflow_path,
-        target_path,
+        target_path.clone(),
         args.dry_run,
         args.allow_dirty,
         params,
@@ -207,6 +218,7 @@ pub async fn handler(
         Some(capabilities),
         args.no_interactive,
         args.no_color,
+        diff_collector.clone(),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {
@@ -215,9 +227,11 @@ pub async fn handler(
         return Err(e);
     }
 
-    crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
+    let duration_ms = started.elapsed().as_millis() as f64;
 
-    let stats = engine.execution_stats;
+    let metrics_data = engine.metrics_context.get_all();
+
+    let stats = engine.execution_stats.clone();
     let files_modified = stats.files_modified.load(Ordering::Relaxed);
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
@@ -233,7 +247,33 @@ pub async fn handler(
     } else {
         println!("\n📝 Modified files: {files_modified}");
         println!("✅ Unmodified files: {files_unmodified}");
-        println!("❌ Files with errors: {files_with_errors}");
+        if files_with_errors > 0 {
+            println!("❌ Files with errors: {files_with_errors}");
+        }
+    }
+
+    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let report = ExecutionReport::build(
+            args.package.clone(),
+            None,
+            duration_ms,
+            args.dry_run,
+            target_path.display().to_string(),
+            CLI_VERSION.to_string(),
+            files_modified,
+            files_unmodified,
+            files_with_errors,
+            convert_metrics(&metrics_data),
+            convert_diffs(&collected_diffs, &target_path.display().to_string()),
+        );
+
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     let execution_id = generate_execution_id();

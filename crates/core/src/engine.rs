@@ -1928,6 +1928,23 @@ impl Engine {
                                             change_path.display()
                                         );
                                     } else {
+                                        // Capture diff for report before writing (original content is still on disk)
+                                        if let Some(callback) =
+                                            &self.workflow_run_config.dry_run_callback
+                                        {
+                                            let original = if change_path == file_path {
+                                                content.clone()
+                                            } else {
+                                                std::fs::read_to_string(change_path)
+                                                    .unwrap_or_default()
+                                            };
+                                            callback(DryRunChange {
+                                                file_path: change_path.to_path_buf(),
+                                                original_content: original,
+                                                new_content: modified.content.clone(),
+                                            });
+                                        }
+
                                         // Use async file writing to avoid blocking the thread
                                         let write_result = runtime_handle.block_on(async {
                                             file_writer
