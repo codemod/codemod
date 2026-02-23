@@ -52,6 +52,30 @@ npx codemod init
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
 </Info>
 
+## Package Behavior
+
+Codemod packages can provide:
+- **Workflow** (`workflow.yaml`) for `codemod run` / `codemod workflow run`
+- **Skill** (`agents/skill/<skill-name>/SKILL.md` + references) installable with `npx codemod <package-id> --skill`
+- **Hybrid** (both workflow + skill)
+
+Current CLI behavior:
+- `codemod init` (default) scaffolds workflow-only packages.
+- `codemod init --skill` scaffolds skill-only packages.
+- `codemod init --with-skill` scaffolds hybrid packages.
+- `codemod publish` supports workflow-only, skill-only, and hybrid packages (at least one `provides` value must be present).
+- If a package is skill-only, `codemod run` and `codemod workflow validate` return actionable guidance to use `--skill`.
+
+Skill-capable packages should keep authored skill content under:
+
+```text
+agents/skill/<skill-name>/
+  SKILL.md
+  references/
+```
+
+All files in this authored skill directory are treated as install payload and copied recursively during `npx codemod <package-id> --skill`.
+
 ## Package Metadata (codemod.yaml)
 
 The `codemod.yaml` file defines your package's metadata and configuration.
@@ -75,7 +99,12 @@ keywords: ["upgrade", "breaking-change", "react", "v17-to-v18"]
 registry:
   access: "public"
   visibility: "public"
+
+provides:
+  - workflow
 ```
+
+For skill-only packages, omit `workflow`, include `provides: ["skill"]`, and author skill content under `agents/skill/<skill-name>/`.
 
 **Available fields:**
 
@@ -111,8 +140,8 @@ Author name and email, e.g., `Jane Doe <jane@example.com>`.
 License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
-<ParamField path="workflow" type="string" required default="workflow.yaml">
-Relative path to your workflow file.
+<ParamField path="workflow" type="string" default="workflow.yaml">
+Relative path to your workflow file (required for workflow-capable packages, optional for skill-only packages).
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">
@@ -231,16 +260,22 @@ During scaffolding, the CLI sets <code>public</code>/<code>private</code> based 
 </Info>
 </ParamField>
 
-<ParamField path="capabilities" type="string[]" default="[]">
-Array of capabilities required by this codemod for accessing sensitive operations.
+<ParamField path="provides" type="string[]" default='["workflow"]'>
+Array of package behavior tags.
 
-**Available capabilities:**
+- `workflow` - Package provides executable workflow support (`workflow.yaml`)
+- `skill` - Package provides installable skill support (`agents/skill/<skill-name>/SKILL.md`)
+</ParamField>
+
+<ParamField path="capabilities" type="string[]">
+Optional runtime permission tags for JSSG execution.
+
 - `fs` - File system access (`fs`, `fs/promises`)
 - `fetch` - Network requests (global `fetch`)
 - `child_process` - Process spawning (`child_process`)
 
 <Warning>
-Only enable capabilities your codemod actually needs. Each capability increases security risk for untrusted codemods.
+Only enable capabilities your codemod actually needs. Runtime permission capabilities increase security risk for untrusted codemods.
 </Warning>
 
 <Tip>

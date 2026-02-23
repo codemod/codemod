@@ -93,6 +93,9 @@ MCP config paths by harness and scope:
 
 If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
 
+`agent install` also upserts a managed Codemod discovery section in `AGENTS.md` and `CLAUDE.md` (project root for `--project`, home directory for `--user`) without duplicating entries.
+After install, restart or reload your harness session so newly installed skills and MCP config are picked up.
+
 **`agent list`**
 
 List installed codemod-managed skills (MCS and package skills).
@@ -106,6 +109,8 @@ npx codemod agent list [--harness <claude|goose|opencode|cursor|auto>] [--format
 ### Direct package skill install (`--skill`)
 
 Install a package skill from registry metadata into harness skill paths.
+The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
+This flow also updates managed Codemod discovery hints in `AGENTS.md` and `CLAUDE.md` without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
 npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--format <table|json|yaml>]
@@ -128,6 +133,14 @@ npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>]
 </ResponseField>
 
 Without `--skill`, package invocation follows normal `codemod run` behavior.
+
+<Info>
+  Behavior-aware package runtime:
+
+  - **Workflow-only package**: `npx codemod <package-id>` runs the workflow behavior.
+  - **Skill-only package**: `npx codemod <package-id>` does not run a no-op workflow. It returns install guidance and, in interactive terminals, can prompt to install the skill.
+  - **Hybrid package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
+</Info>
 
 **AI-native error codes**
 
@@ -235,6 +248,12 @@ Validate a workflow file.
 
 ```bash
 npx codemod workflow validate -w <workflow.yaml>
+```
+
+If the target path is a skill-only package (`agents/skill/<skill-name>/SKILL.md` without `workflow.yaml`), validation returns actionable guidance to use direct install mode:
+
+```bash
+npx codemod <package-id> --skill
 ```
 
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
@@ -526,12 +545,20 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
-  Project type: `ast-grep-js`.
+  Workflow project type: `ast-grep-js` or `hybrid`.
 
   <Accordion title="More package types (advanced)">
     - `shell`: Shell script-based codemods
     - `ast-grep-yaml`: YAML-based ast-grep codemods
   </Accordion>
+</ResponseField>
+
+<ResponseField name="--skill" type="boolean">
+  Scaffold a skill-only package (no `workflow.yaml`) with authored files under `agents/skill/<skill-name>/`.
+</ResponseField>
+
+<ResponseField name="--with-skill" type="boolean">
+  Scaffold a hybrid package (workflow + skill). This keeps workflow files and also creates authored skill files under `agents/skill/<skill-name>/`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">

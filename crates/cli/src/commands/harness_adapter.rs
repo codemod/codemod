@@ -53,12 +53,17 @@ const MCS_INDEX_LINKED_REFERENCE_PATHS: [&str; 5] = [
     MCS_DRY_RUN_VERIFY_RELATIVE_PATH,
     MCS_TROUBLESHOOTING_RELATIVE_PATH,
 ];
+const SKILL_DISCOVERY_SECTION_BEGIN: &str = "<!-- codemod-skill-discovery:begin -->";
+const SKILL_DISCOVERY_SECTION_END: &str = "<!-- codemod-skill-discovery:end -->";
+const AGENTS_GUIDE_FILE_NAME: &str = "AGENTS.md";
+const CLAUDE_GUIDE_FILE_NAME: &str = "CLAUDE.md";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillPackageInstallSpec {
     pub id: String,
     pub version: String,
     pub description: String,
+    pub source_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -456,6 +461,137 @@ pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<Install
     }
 }
 
+pub fn install_restart_hint(harness: Harness) -> String {
+    format!(
+        "Restart or reload your {} session so newly installed skills and MCP config are picked up.",
+        harness.as_str()
+    )
+}
+
+pub fn upsert_skill_discovery_guides(
+    harness: Harness,
+    scope: InstallScope,
+) -> AdapterResult<Vec<PathBuf>> {
+    let runtime_paths = RuntimePaths::current()?;
+    upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths)
+}
+
+fn upsert_skill_discovery_guides_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    let docs_root = match scope {
+        InstallScope::Project => runtime_paths.cwd.clone(),
+        InstallScope::User => runtime_paths.home_dir.clone().ok_or_else(|| {
+            HarnessAdapterError::InstallFailed(
+                "Could not determine home directory for --user install".to_string(),
+            )
+        })?,
+    };
+
+    let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
+    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
+    let mut updated_files = Vec::new();
+
+    for file_name in [AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME] {
+        let file_path = docs_root.join(file_name);
+        if upsert_discovery_block_in_file(&file_path, &discovery_block)? {
+            updated_files.push(file_path);
+        }
+    }
+
+    Ok(updated_files)
+}
+
+fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
+    let harness_dir = harness_hidden_dir(harness)?;
+    Ok(match scope {
+        InstallScope::Project => format!("{harness_dir}/skills"),
+        InstallScope::User => format!("~/{harness_dir}/skills"),
+    })
+}
+
+fn render_skill_discovery_block(harness: Harness, skill_root_hint: &str) -> String {
+    format!(
+        "{SKILL_DISCOVERY_SECTION_BEGIN}
+## Codemod Skill Discovery
+This section is managed by `codemod` CLI.
+
+- Installed Codemod skills root: `{skill_root_hint}`
+- MCS entry skill: `{skill_root_hint}/{MCS_SKILL_NAME}/SKILL.md`
+- Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
+- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+
+{}
+{SKILL_DISCOVERY_SECTION_END}",
+        harness.as_str(),
+        install_restart_hint(harness)
+    )
+}
+
+fn upsert_discovery_block_in_file(file_path: &Path, block: &str) -> AdapterResult<bool> {
+    let existing = if file_path.exists() {
+        fs::read_to_string(file_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read {}: {error}",
+                file_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let updated = upsert_managed_discovery_block(&existing, block);
+    if updated == existing {
+        return Ok(false);
+    }
+
+    if let Some(parent_dir) = file_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    fs::write(file_path, updated).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to write {}: {error}",
+            file_path.display()
+        ))
+    })?;
+
+    Ok(true)
+}
+
+fn upsert_managed_discovery_block(existing: &str, block: &str) -> String {
+    if let (Some(begin_index), Some(end_start)) = (
+        existing.find(SKILL_DISCOVERY_SECTION_BEGIN),
+        existing.find(SKILL_DISCOVERY_SECTION_END),
+    ) {
+        if end_start >= begin_index {
+            let end_index = end_start + SKILL_DISCOVERY_SECTION_END.len();
+            let mut updated = String::new();
+            updated.push_str(&existing[..begin_index]);
+            updated.push_str(block);
+            updated.push_str(&existing[end_index..]);
+            return updated;
+        }
+    }
+
+    if existing.trim().is_empty() {
+        return format!("{block}\n");
+    }
+
+    let mut updated = existing.trim_end_matches('\n').to_string();
+    updated.push_str("\n\n");
+    updated.push_str(block);
+    updated.push('\n');
+    updated
+}
+
 fn install_mcs_skill_bundle_with_runtime(
     harness: Harness,
     request: &InstallRequest,
@@ -497,15 +633,13 @@ fn install_package_skill_bundle_with_runtime(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<InstalledSkill>> {
     validate_skill_package_install_spec(package)?;
-    let skill_md_content = render_package_skill_md(package);
-    validate_rendered_package_skill_bundle(&skill_md_content)?;
     let skill_dir_name = skill_directory_name_for_package_id(&package.id);
 
     let skill_root =
         skills_root_for_harness(harness, request.scope, runtime_paths)?.join(skill_dir_name);
     let skill_md_path = skill_root.join("SKILL.md");
 
-    write_package_skill_file(&skill_md_path, &skill_md_content, request.force)?;
+    write_package_skill_directory(&package.source_dir, &skill_root, request.force)?;
 
     Ok(vec![InstalledSkill {
         name: package.id.clone(),
@@ -519,53 +653,6 @@ fn skill_directory_name_for_package_id(package_id: &str) -> String {
     package_id
         .trim_start_matches('@')
         .replace(['/', '\\'], "__")
-}
-
-fn yaml_double_quoted_scalar(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for character in value.chars() {
-        match character {
-            '\\' => quoted.push_str("\\\\"),
-            '"' => quoted.push_str("\\\""),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            _ => quoted.push(character),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-
-fn render_package_skill_md(package_skill: &SkillPackageInstallSpec) -> String {
-    let name_yaml = yaml_double_quoted_scalar(&package_skill.id);
-    let description_yaml = yaml_double_quoted_scalar(&package_skill.description);
-
-    format!(
-        r#"---
-name: {name_yaml}
-description: {description_yaml}
-allowed-tools:
-  - Bash(codemod *)
-argument-hint: "<target-repo-or-path>"
----
-
-# {name}
-
-{compatibility_marker}
-codemod-skill-version: {version}
-
-Use this task-specific codemod skill with:
-- `npx codemod {name} --skill`
-- `codemod run {name} --target <path> --dry-run`
-"#,
-        name = package_skill.id.as_str(),
-        name_yaml = name_yaml,
-        description_yaml = description_yaml,
-        compatibility_marker = SKILL_PACKAGE_COMPATIBILITY_MARKER,
-        version = package_skill.version.as_str(),
-    )
 }
 
 fn validate_skill_package_install_spec(package: &SkillPackageInstallSpec) -> AdapterResult<()> {
@@ -594,37 +681,60 @@ fn validate_skill_package_install_spec(package: &SkillPackageInstallSpec) -> Ada
         ));
     }
 
+    if !package.source_dir.is_dir() {
+        return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Authored skill directory is missing: {}",
+            package.source_dir.display()
+        )));
+    }
+
+    let skill_md_path = package.source_dir.join("SKILL.md");
+    if !skill_md_path.is_file() {
+        return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Authored skill file is missing: {}",
+            skill_md_path.display()
+        )));
+    }
+
+    let skill_md_content = fs::read_to_string(&skill_md_path).map_err(|error| {
+        HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Failed to read authored skill file {}: {error}",
+            skill_md_path.display()
+        ))
+    })?;
+    validate_skill_content_for_install(&skill_md_content)?;
+
     Ok(())
 }
 
-fn validate_rendered_package_skill_bundle(content: &str) -> AdapterResult<()> {
+fn validate_skill_content_for_install(content: &str) -> AdapterResult<()> {
     let Some(frontmatter) = extract_frontmatter(content) else {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
-            "Generated package SKILL.md is missing YAML frontmatter".to_string(),
+            "Authored package SKILL.md is missing YAML frontmatter".to_string(),
         ));
     };
 
     if let Some(required_key) = missing_required_frontmatter_key(frontmatter) {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
-            "Generated package SKILL.md is missing required frontmatter key: {required_key}"
+            "Authored package SKILL.md is missing required frontmatter key: {required_key}"
         )));
     }
 
     serde_yaml::from_str::<serde_yaml::Value>(frontmatter).map_err(|error| {
         HarnessAdapterError::SkillPackageInstallFailed(format!(
-            "Generated package SKILL.md frontmatter is invalid YAML: {error}"
+            "Authored package SKILL.md frontmatter is invalid YAML: {error}"
         ))
     })?;
 
     if !content.contains(SKILL_PACKAGE_COMPATIBILITY_MARKER) {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
-            "Generated package SKILL.md is missing compatibility marker".to_string(),
+            "Authored package SKILL.md is missing compatibility marker".to_string(),
         ));
     }
 
     if !content.contains(CODEMOD_VERSION_MARKER_PREFIX) {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
-            "Generated package SKILL.md is missing skill version marker".to_string(),
+            "Authored package SKILL.md is missing skill version marker".to_string(),
         ));
     }
 
@@ -1182,50 +1292,154 @@ fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()
     Ok(())
 }
 
-fn write_package_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()> {
-    if path.exists() {
+fn write_package_skill_directory(
+    source_dir: &Path,
+    destination_dir: &Path,
+    force: bool,
+) -> AdapterResult<()> {
+    if destination_dir.exists() {
         if force {
-            return write_skill_file(path, content, true)
-                .map_err(map_skill_install_error_as_skill_package_install_error);
-        }
-
-        let existing_content = fs::read_to_string(path).map_err(|error| {
-            HarnessAdapterError::SkillPackageInstallFailed(format!(
-                "Failed to read existing skill file {}: {error}",
-                path.display()
-            ))
-        })?;
-
-        if existing_content == content {
-            // Idempotent install: existing file already matches expected content.
+            fs::remove_dir_all(destination_dir).map_err(|error| {
+                HarnessAdapterError::SkillPackageInstallFailed(format!(
+                    "Failed to remove existing skill directory {}: {error}",
+                    destination_dir.display()
+                ))
+            })?;
+        } else if package_skill_directories_match(source_dir, destination_dir)? {
+            // Idempotent install: existing files already match authored skill content.
             return Ok(());
+        } else {
+            return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
+                "Skill directory already exists at {} with different content. Re-run with --force to overwrite.",
+                destination_dir.display()
+            )));
         }
-
-        return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
-            "Skill file already exists at {} with different content. Re-run with --force to overwrite.",
-            path.display()
-        )));
     }
 
-    write_skill_file(path, content, force)
-        .map_err(map_skill_install_error_as_skill_package_install_error)
+    copy_directory_recursive(source_dir, destination_dir)
 }
 
-fn map_skill_install_error_as_skill_package_install_error(
-    error: HarnessAdapterError,
-) -> HarnessAdapterError {
-    match error {
-        HarnessAdapterError::InstallFailed(message)
-        | HarnessAdapterError::InvalidSkillPackage(message) => {
-            HarnessAdapterError::SkillPackageInstallFailed(message)
+fn copy_directory_recursive(source_dir: &Path, destination_dir: &Path) -> AdapterResult<()> {
+    fs::create_dir_all(destination_dir).map_err(|error| {
+        HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Failed to create destination skill directory {}: {error}",
+            destination_dir.display()
+        ))
+    })?;
+
+    let entries = fs::read_dir(source_dir).map_err(|error| {
+        HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Failed to read source skill directory {}: {error}",
+            source_dir.display()
+        ))
+    })?;
+
+    for entry in entries.flatten() {
+        let source_path = entry.path();
+        let destination_path = destination_dir.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_directory_recursive(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            if let Some(parent_dir) = destination_path.parent() {
+                fs::create_dir_all(parent_dir).map_err(|error| {
+                    HarnessAdapterError::SkillPackageInstallFailed(format!(
+                        "Failed to create destination directory {}: {error}",
+                        parent_dir.display()
+                    ))
+                })?;
+            }
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                HarnessAdapterError::SkillPackageInstallFailed(format!(
+                    "Failed to copy skill file {} -> {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                ))
+            })?;
         }
-        other_error => other_error,
     }
+
+    Ok(())
+}
+
+fn package_skill_directories_match(
+    source_dir: &Path,
+    destination_dir: &Path,
+) -> AdapterResult<bool> {
+    let source_files = collect_relative_files(source_dir)?;
+    let destination_files = collect_relative_files(destination_dir)?;
+
+    if source_files != destination_files {
+        return Ok(false);
+    }
+
+    for relative_path in source_files {
+        let source_content = fs::read(source_dir.join(&relative_path)).map_err(|error| {
+            HarnessAdapterError::SkillPackageInstallFailed(format!(
+                "Failed to read source skill file {}: {error}",
+                source_dir.join(&relative_path).display()
+            ))
+        })?;
+        let destination_content =
+            fs::read(destination_dir.join(&relative_path)).map_err(|error| {
+                HarnessAdapterError::SkillPackageInstallFailed(format!(
+                    "Failed to read destination skill file {}: {error}",
+                    destination_dir.join(&relative_path).display()
+                ))
+            })?;
+
+        if source_content != destination_content {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn collect_relative_files(root_dir: &Path) -> AdapterResult<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_relative_files_recursive(root_dir, root_dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_relative_files_recursive(
+    root_dir: &Path,
+    current_dir: &Path,
+    files: &mut Vec<PathBuf>,
+) -> AdapterResult<()> {
+    let entries = fs::read_dir(current_dir).map_err(|error| {
+        HarnessAdapterError::SkillPackageInstallFailed(format!(
+            "Failed to read skill directory {}: {error}",
+            current_dir.display()
+        ))
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_relative_files_recursive(root_dir, &path, files)?;
+            continue;
+        }
+
+        if path.is_file() {
+            let relative_path = path.strip_prefix(root_dir).map_err(|error| {
+                HarnessAdapterError::SkillPackageInstallFailed(format!(
+                    "Failed to normalize skill file path {}: {error}",
+                    path.display()
+                ))
+            })?;
+            files.push(relative_path.to_path_buf());
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
 
     const ALL_HARNESSES: [Harness; 4] = [
@@ -1266,6 +1480,37 @@ mod tests {
         (runtime_paths, temp_dir)
     }
 
+    fn create_authored_skill_source(base_dir: &Path, package_id: &str) -> PathBuf {
+        let source_dir = base_dir
+            .join("authored-skill")
+            .join(skill_directory_name_for_package_id(package_id));
+        fs::create_dir_all(source_dir.join("references")).unwrap();
+        let skill_md = format!(
+            r#"---
+name: "{package_id}"
+description: "Migrate Jest test suites to Vitest."
+allowed-tools:
+  - Bash(codemod *)
+---
+{compatibility_marker}
+codemod-skill-version: 0.1.0
+"#,
+            compatibility_marker = SKILL_PACKAGE_COMPATIBILITY_MARKER
+        );
+        fs::write(source_dir.join("SKILL.md"), skill_md).unwrap();
+        fs::write(
+            source_dir.join("references/index.md"),
+            "# References\n\n- [Usage](./usage.md)\n",
+        )
+        .unwrap();
+        fs::write(source_dir.join("references/usage.md"), "# Usage\n").unwrap();
+        source_dir
+    }
+
+    fn count_occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
     #[test]
     fn resolve_adapter_returns_known_harnesses() {
         assert_eq!(
@@ -1284,6 +1529,79 @@ mod tests {
             resolve_adapter(Harness::Cursor).unwrap().harness,
             Harness::Cursor
         );
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_creates_agents_and_claude_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 2);
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        assert!(agents_path.exists());
+        assert!(claude_path.exists());
+
+        let agents_content = fs::read_to_string(&agents_path).unwrap();
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
+        assert!(agents_content.contains(".claude/skills/codemod-cli/SKILL.md"));
+        assert!(agents_content.contains("Restart or reload your claude session"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_is_idempotent_without_duplication() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        fs::write(&agents_path, "# Existing guidance\n").unwrap();
+
+        let first_update = upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(!first_update.is_empty());
+
+        let second_update = upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(second_update.is_empty());
+
+        let content = fs::read_to_string(&agents_path).unwrap();
+        assert!(content.contains("# Existing guidance"));
+        assert_eq!(
+            count_occurrences(&content, SKILL_DISCOVERY_SECTION_BEGIN),
+            1
+        );
+        assert_eq!(count_occurrences(&content, SKILL_DISCOVERY_SECTION_END), 1);
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_writes_user_scope_files_under_home() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Cursor,
+            InstallScope::User,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 2);
+        let agents_path = runtime_paths.home_dir.as_ref().unwrap().join("AGENTS.md");
+        let content = fs::read_to_string(&agents_path).unwrap();
+        assert!(content.contains("~/.cursor/skills/codemod-cli/SKILL.md"));
+        assert!(content.contains("npx codemod agent list --harness cursor --format json"));
     }
 
     #[test]
@@ -1487,15 +1805,17 @@ mod tests {
 
     #[test]
     fn install_package_skill_bundle_writes_expected_skill_file() {
-        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
             scope: InstallScope::Project,
             force: false,
         };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
         let package_skill = SkillPackageInstallSpec {
             id: "jest-to-vitest".to_string(),
             version: "0.1.0".to_string(),
             description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir,
         };
 
         let installed = install_package_skill_bundle_with_runtime(
@@ -1518,19 +1838,73 @@ mod tests {
     }
 
     #[test]
+    fn install_package_skill_bundle_copies_all_authored_files_recursively() {
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
+        fs::create_dir_all(source_dir.join("references/deep")).unwrap();
+        fs::write(
+            source_dir.join("references/deep/additional.md"),
+            "# Extra guidance\n\nCustom guidance.\n",
+        )
+        .unwrap();
+        fs::write(source_dir.join("notes.md"), "author note\n").unwrap();
+        let authored_skill = fs::read_to_string(source_dir.join("SKILL.md")).unwrap();
+        fs::write(
+            source_dir.join("SKILL.md"),
+            format!("{authored_skill}\n# custom-authored\n"),
+        )
+        .unwrap();
+
+        let package_skill = SkillPackageInstallSpec {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir: source_dir.clone(),
+        };
+
+        let installed = install_package_skill_bundle_with_runtime(
+            Harness::Claude,
+            &package_skill,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+        let installed_skill_root = installed[0].path.parent().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(installed_skill_root.join("SKILL.md")).unwrap(),
+            fs::read_to_string(source_dir.join("SKILL.md")).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(installed_skill_root.join("notes.md")).unwrap(),
+            "author note\n"
+        );
+        assert_eq!(
+            fs::read_to_string(installed_skill_root.join("references/deep/additional.md")).unwrap(),
+            "# Extra guidance\n\nCustom guidance.\n"
+        );
+    }
+
+    #[test]
     fn install_package_skill_bundle_supports_all_harnesses() {
         let install_request = InstallRequest {
             scope: InstallScope::Project,
             force: false,
         };
-        let package_skill = SkillPackageInstallSpec {
-            id: "jest-to-vitest".to_string(),
-            version: "0.1.0".to_string(),
-            description: "Migrate Jest test suites to Vitest.".to_string(),
-        };
 
         for harness in ALL_HARNESSES {
-            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+            let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
+            let package_skill = SkillPackageInstallSpec {
+                id: "jest-to-vitest".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Migrate Jest test suites to Vitest.".to_string(),
+                source_dir,
+            };
             let installed = install_package_skill_bundle_with_runtime(
                 harness,
                 &package_skill,
@@ -1549,15 +1923,17 @@ mod tests {
 
     #[test]
     fn install_package_skill_bundle_is_idempotent_without_force() {
-        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
             scope: InstallScope::Project,
             force: false,
         };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
         let package_skill = SkillPackageInstallSpec {
             id: "jest-to-vitest".to_string(),
             version: "0.1.0".to_string(),
             description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir,
         };
 
         let first_install = install_package_skill_bundle_with_runtime(
@@ -1581,6 +1957,45 @@ mod tests {
     }
 
     #[test]
+    fn install_package_skill_bundle_requires_force_when_authored_content_changes() {
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
+        let package_skill = SkillPackageInstallSpec {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir: source_dir.clone(),
+        };
+
+        install_package_skill_bundle_with_runtime(
+            Harness::Claude,
+            &package_skill,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        fs::write(source_dir.join("references/new-notes.md"), "# New notes\n").unwrap();
+
+        let second_install = install_package_skill_bundle_with_runtime(
+            Harness::Claude,
+            &package_skill,
+            &install_request,
+            &runtime_paths,
+        );
+
+        assert!(matches!(
+            second_install,
+            Err(HarnessAdapterError::SkillPackageInstallFailed(message))
+                if message.contains("--force")
+        ));
+    }
+
+    #[test]
     fn package_skill_directory_name_sanitizes_scoped_ids() {
         let scoped_name = skill_directory_name_for_package_id("@codemod/jest-to-vitest");
         assert_eq!(scoped_name, "codemod__jest-to-vitest");
@@ -1599,30 +2014,18 @@ mod tests {
     }
 
     #[test]
-    fn render_package_skill_md_emits_yaml_safe_frontmatter_for_scoped_id() {
+    fn validate_skill_package_install_spec_accepts_authored_skill_bundle() {
+        let temp_dir = tempdir().unwrap();
+        let source_dir = create_authored_skill_source(temp_dir.path(), "@codemod/jest-to-vitest");
         let package_skill = SkillPackageInstallSpec {
             id: "@codemod/jest-to-vitest".to_string(),
             version: "0.1.0".to_string(),
             description: "Migrate tests: Jest -> Vitest".to_string(),
+            source_dir,
         };
 
-        let skill_md = render_package_skill_md(&package_skill);
-        let frontmatter = extract_frontmatter(&skill_md).expect("expected YAML frontmatter");
-        let parsed_frontmatter: serde_yaml::Value =
-            serde_yaml::from_str(frontmatter).expect("frontmatter should be valid YAML");
-
-        assert_eq!(
-            parsed_frontmatter
-                .get("name")
-                .and_then(|value| value.as_str()),
-            Some("@codemod/jest-to-vitest")
-        );
-        assert_eq!(
-            parsed_frontmatter
-                .get("description")
-                .and_then(|value| value.as_str()),
-            Some("Migrate tests: Jest -> Vitest")
-        );
+        let validation = validate_skill_package_install_spec(&package_skill);
+        assert!(validation.is_ok());
     }
 
     #[test]
@@ -1840,6 +2243,7 @@ codemod-skill-version: 0.1.0
             id: " ".to_string(),
             version: "0.1.0".to_string(),
             description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir: PathBuf::from("/tmp/missing-skill-source"),
         };
 
         let install_result = install_package_skill_bundle_with_runtime(

@@ -1,10 +1,12 @@
+use crate::utils::skill_layout::{
+    has_any_authored_skill, AGENTS_SKILL_ROOT_RELATIVE_PATH, SKILL_FILE_NAME,
+};
 use anyhow::{Context, Result};
 use butterflow_core::utils;
 use butterflow_models::step::StepAction;
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-const SKILL_FILE_NAME: &str = "SKILL.md";
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
 
 #[derive(Args, Debug)]
@@ -111,14 +113,14 @@ fn is_workflow_file_path(path: &Path) -> bool {
 }
 
 fn is_skill_only_package(package_dir: &Path) -> bool {
-    package_dir.join(SKILL_FILE_NAME).is_file() && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
+    has_any_authored_skill(package_dir) && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
 }
 
 fn skill_only_validation_error(package_dir: &Path) -> anyhow::Error {
     anyhow::anyhow!(
         "❌ Skill-only package detected at {} (found `{}` but no `{}`). `codemod workflow validate` requires a workflow package. Install this package as a skill with `npx codemod <package-id> --skill`.",
         package_dir.display(),
-        SKILL_FILE_NAME,
+        AGENTS_SKILL_ROOT_RELATIVE_PATH,
         WORKFLOW_FILE_NAME
     )
 }
@@ -132,7 +134,12 @@ mod tests {
     #[test]
     fn returns_skill_only_error_when_input_is_skill_file() {
         let temp_dir = tempdir().unwrap();
-        let skill_path = temp_dir.path().join(SKILL_FILE_NAME);
+        let skill_path = temp_dir
+            .path()
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill")
+            .join(SKILL_FILE_NAME);
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
         fs::write(&skill_path, "# Skill\n").unwrap();
 
         let err = validate_workflow(&skill_path).unwrap_err();
@@ -145,7 +152,13 @@ mod tests {
     #[test]
     fn returns_skill_only_error_when_workflow_is_missing() {
         let temp_dir = tempdir().unwrap();
-        fs::write(temp_dir.path().join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        let skill_path = temp_dir
+            .path()
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill")
+            .join(SKILL_FILE_NAME);
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(skill_path, "# Skill\n").unwrap();
 
         let missing_workflow_path = temp_dir.path().join(WORKFLOW_FILE_NAME);
         let err = validate_workflow(&missing_workflow_path).unwrap_err();
@@ -183,7 +196,13 @@ nodes:
     #[test]
     fn validates_workflow_when_directory_is_hybrid_package() {
         let temp_dir = tempdir().unwrap();
-        fs::write(temp_dir.path().join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        let skill_path = temp_dir
+            .path()
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill")
+            .join(SKILL_FILE_NAME);
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(skill_path, "# Skill\n").unwrap();
         let workflow_path = temp_dir.path().join(WORKFLOW_FILE_NAME);
         fs::write(
             workflow_path,

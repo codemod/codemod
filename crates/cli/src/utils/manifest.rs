@@ -19,7 +19,8 @@ pub(crate) struct CodemodManifest {
     pub(crate) bugs: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) registry: Option<RegistryConfig>,
-    pub(crate) workflow: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) workflow: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) targets: Option<TargetConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,6 +37,8 @@ pub(crate) struct CodemodManifest {
     pub(crate) documentation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) validation: Option<ValidationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) provides: Option<Vec<String>>,
     pub(crate) capabilities: Option<Vec<String>>,
 }
 

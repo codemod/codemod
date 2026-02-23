@@ -454,6 +454,57 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_init_skill_flag() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "init",
+            "my-skill",
+            "--no-interactive",
+            "--skill",
+            "--language",
+            "typescript",
+            "--description",
+            "Skill package",
+            "--author",
+            "Author <author@example.com>",
+            "--license",
+            "MIT",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_init_skill_project_type() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "init", "my-skill", "--project-type", "skill"]);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn parser_accepts_init_with_skill_flag() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "init",
+            "my-hybrid",
+            "--no-interactive",
+            "--project-type",
+            "ast-grep-js",
+            "--with-skill",
+            "--language",
+            "typescript",
+            "--description",
+            "Hybrid package",
+            "--author",
+            "Author <author@example.com>",
+            "--license",
+            "MIT",
+            "--package-manager",
+            "npm",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn parser_rejects_agent_verify_skills() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "verify-skills"]);
         assert!(parse_result.is_err());

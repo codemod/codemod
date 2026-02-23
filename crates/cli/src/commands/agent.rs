@@ -1,6 +1,7 @@
 use crate::commands::harness_adapter::{
-    resolve_adapter, resolve_install_scope, Harness, HarnessAdapterError, InstallRequest,
-    InstallScope, InstalledSkill, OutputFormat, VerificationStatus,
+    install_restart_hint, resolve_adapter, resolve_install_scope, upsert_skill_discovery_guides,
+    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill, OutputFormat,
+    VerificationStatus,
 };
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -104,11 +105,28 @@ pub async fn handler(args: &Command) -> Result<()> {
                 );
             }
 
+            let mut warnings = resolved_adapter.warnings;
+            match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
+                Ok(updated_files) if !updated_files.is_empty() => warnings.push(format!(
+                    "Updated discovery hints in: {}",
+                    updated_files
+                        .iter()
+                        .map(|path| format_output_path(path))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+                Ok(_) => {}
+                Err(error) => warnings.push(format!(
+                    "Installed skills, but failed to update AGENTS.md/CLAUDE.md discovery hints: {error}"
+                )),
+            }
+            warnings.push(install_restart_hint(resolved_adapter.harness));
+
             let output = build_install_output(
                 resolved_adapter.harness,
                 install_inputs.scope,
                 installed,
-                resolved_adapter.warnings,
+                warnings,
             );
             print_install_output(&output, command.format)?;
             Ok(())

@@ -2,6 +2,7 @@ use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::skill_layout::{has_any_authored_skill, AGENTS_SKILL_ROOT_RELATIVE_PATH};
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
@@ -14,17 +15,25 @@ use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use console::{strip_ansi_codes, style};
+use inquire::Confirm;
 use log::info;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-const SKILL_FILE_NAME: &str = "SKILL.md";
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
+const SKILL_INSTALL_PROJECT_FLAG: &str = "--project";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SkillInstallOfferContext {
+    SkillOnly,
+    HybridPostRun,
+}
 
 /// Represents a file change from legacy codemod JSON output
 #[derive(Debug, Deserialize)]
@@ -180,6 +189,15 @@ pub async fn handler(
     let workflow_path = resolved_package.package_dir.join(WORKFLOW_FILE_NAME);
     if !workflow_path.exists() {
         let error = if is_skill_only_package(&resolved_package.package_dir) {
+            if maybe_offer_skill_install(
+                args,
+                &resolved_package.package_dir,
+                SkillInstallOfferContext::SkillOnly,
+            )
+            .await?
+            {
+                return Ok(());
+            }
             skill_only_package_run_error(&args.package, &resolved_package.package_dir)
         } else {
             missing_workflow_error(&args.package, &workflow_path)
@@ -308,6 +326,15 @@ pub async fn handler(
         )
         .await;
 
+    if is_hybrid_package(&resolved_package.package_dir) {
+        let _ = maybe_offer_skill_install(
+            args,
+            &resolved_package.package_dir,
+            SkillInstallOfferContext::HybridPostRun,
+        )
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -320,17 +347,120 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
 }
 
 fn is_skill_only_package(package_dir: &Path) -> bool {
-    package_dir.join(SKILL_FILE_NAME).is_file() && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
+    has_skill_behavior(package_dir) && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
+}
+
+fn is_hybrid_package(package_dir: &Path) -> bool {
+    has_skill_behavior(package_dir) && package_dir.join(WORKFLOW_FILE_NAME).is_file()
+}
+
+fn has_skill_behavior(package_dir: &Path) -> bool {
+    has_any_authored_skill(package_dir)
+}
+
+fn should_prompt_for_skill_install(no_interactive: bool) -> bool {
+    should_prompt_for_skill_install_with_tty(
+        no_interactive,
+        io::stdin().is_terminal(),
+        io::stdout().is_terminal(),
+    )
+}
+
+fn should_prompt_for_skill_install_with_tty(
+    no_interactive: bool,
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+) -> bool {
+    !no_interactive && stdin_is_tty && stdout_is_tty
+}
+
+fn skill_install_command(package_id: &str) -> String {
+    format!("npx codemod {package_id} --skill {SKILL_INSTALL_PROJECT_FLAG}")
+}
+
+fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static str {
+    match context {
+        SkillInstallOfferContext::SkillOnly => {
+            "Install this package skill now so your harness can execute it?"
+        }
+        SkillInstallOfferContext::HybridPostRun => {
+            "Install this package skill now for harness-assisted follow-up workflows?"
+        }
+    }
+}
+
+async fn maybe_offer_skill_install(
+    args: &Command,
+    package_dir: &Path,
+    context: SkillInstallOfferContext,
+) -> Result<bool> {
+    if !has_skill_behavior(package_dir) {
+        return Ok(false);
+    }
+
+    let install_command = skill_install_command(&args.package);
+    match context {
+        SkillInstallOfferContext::SkillOnly => {
+            println!(
+                "\nℹ️ Package `{}` is skill-only (found `{}` but no `{}`).",
+                args.package, AGENTS_SKILL_ROOT_RELATIVE_PATH, WORKFLOW_FILE_NAME
+            );
+        }
+        SkillInstallOfferContext::HybridPostRun => {
+            println!(
+                "\nℹ️ Package `{}` also includes skill behavior under `{}`.",
+                args.package, AGENTS_SKILL_ROOT_RELATIVE_PATH
+            );
+        }
+    }
+
+    if !should_prompt_for_skill_install(args.no_interactive) {
+        println!("Install skill with: `{install_command}`");
+        return Ok(false);
+    }
+
+    let should_install = match Confirm::new(skill_install_prompt_message(context))
+        .with_default(true)
+        .prompt()
+    {
+        Ok(answer) => answer,
+        Err(error) => {
+            println!(
+                "Skipped skill install prompt ({error}). Install later with: `{install_command}`"
+            );
+            return Ok(false);
+        }
+    };
+
+    if !should_install {
+        println!("Skipped skill install. You can install later with: `{install_command}`");
+        return Ok(false);
+    }
+
+    let install_args = vec![
+        args.package.clone(),
+        "--skill".to_string(),
+        SKILL_INSTALL_PROJECT_FLAG.to_string(),
+    ];
+    let handled = crate::commands::package_skill::handle_direct_install(&install_args).await?;
+    if !handled {
+        return Err(anyhow!(
+            "Failed to invoke package skill install for `{}`.",
+            args.package
+        ));
+    }
+
+    Ok(true)
 }
 
 fn skill_only_package_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
     anyhow!(
-        "Package `{}` at {} is a skill-only package (found `{}` but no `{}`). `codemod run` requires a workflow package. Install this package as a skill with `npx codemod {} --skill`.",
+        "Package `{}` at {} is a skill-only package (found `{}` but no `{}`). `codemod run` requires a workflow package. Install this package as a skill with `{}`.",
         package_id,
         package_dir.display(),
-        SKILL_FILE_NAME,
+        AGENTS_SKILL_ROOT_RELATIVE_PATH,
         WORKFLOW_FILE_NAME,
-        package_id
+        skill_install_command(package_id)
     )
 }
 
@@ -619,8 +749,14 @@ mod tests {
     #[test]
     fn test_is_skill_only_package_detection() {
         let temp_dir = tempdir().unwrap();
-        fs::write(temp_dir.path().join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        let authored_skill_dir = temp_dir
+            .path()
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill");
+        fs::create_dir_all(&authored_skill_dir).unwrap();
+        fs::write(authored_skill_dir.join("SKILL.md"), "# Skill\n").unwrap();
         assert!(is_skill_only_package(temp_dir.path()));
+        assert!(!is_hybrid_package(temp_dir.path()));
 
         fs::write(
             temp_dir.path().join(WORKFLOW_FILE_NAME),
@@ -628,6 +764,7 @@ mod tests {
         )
         .unwrap();
         assert!(!is_skill_only_package(temp_dir.path()));
+        assert!(is_hybrid_package(temp_dir.path()));
     }
 
     #[test]
@@ -637,6 +774,7 @@ mod tests {
 
         assert!(message.contains("skill-only package"));
         assert!(message.contains("--skill"));
+        assert!(message.contains("--project"));
         assert!(message.contains("@codemod/mcs"));
     }
 
@@ -647,5 +785,46 @@ mod tests {
 
         assert!(message.contains("missing required workflow file"));
         assert!(message.contains("/tmp/any/workflow.yaml"));
+    }
+
+    #[test]
+    fn test_skill_install_command_defaults_to_project_scope() {
+        let command = skill_install_command("@codemod/jest-to-vitest");
+        assert_eq!(
+            command,
+            "npx codemod @codemod/jest-to-vitest --skill --project"
+        );
+    }
+
+    #[test]
+    fn test_should_prompt_for_skill_install_disables_when_no_interactive() {
+        assert!(!should_prompt_for_skill_install(true));
+    }
+
+    #[test]
+    fn test_should_prompt_for_skill_install_with_tty_truth_table() {
+        assert!(should_prompt_for_skill_install_with_tty(false, true, true));
+        assert!(!should_prompt_for_skill_install_with_tty(true, true, true));
+        assert!(!should_prompt_for_skill_install_with_tty(
+            false, false, true
+        ));
+        assert!(!should_prompt_for_skill_install_with_tty(
+            false, true, false
+        ));
+        assert!(!should_prompt_for_skill_install_with_tty(
+            false, false, false
+        ));
+    }
+
+    #[test]
+    fn test_skill_install_prompt_message_by_context() {
+        assert!(
+            skill_install_prompt_message(SkillInstallOfferContext::SkillOnly)
+                .contains("harness can execute")
+        );
+        assert!(
+            skill_install_prompt_message(SkillInstallOfferContext::HybridPostRun)
+                .contains("follow-up workflows")
+        );
     }
 }

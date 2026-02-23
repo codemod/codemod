@@ -5,13 +5,12 @@ version: "0.1.0"
 description: "{description}"
 author: "{author}"
 license: "{license}"
-workflow: "workflow.yaml"
 {repository}
 
 targets:
   languages: ["{language}"]
 
-keywords: ["transformation", "migration"]
+keywords: ["transformation", "migration", "skill"]
 
 registry:
   access: "{access}"

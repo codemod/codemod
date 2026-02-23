@@ -3,3 +3,4 @@ pub(crate) mod manifest;
 pub(crate) mod metrics;
 pub(crate) mod resolve_capabilities;
 pub(crate) mod rolldown_bundler;
+pub(crate) mod skill_layout;
