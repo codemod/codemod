@@ -17,5 +17,4 @@ registry:
   access: "{access}"
   visibility: "{visibility}"
 
-provides:
-{provides_entries}
+capabilities: []

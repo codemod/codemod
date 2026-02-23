@@ -16,7 +16,7 @@ Use this skill to orchestrate migration execution.
 Recommended runtime flow:
 1. Discover candidates with `codemod search`.
 2. Run workflow-capable packages with `codemod run --dry-run` before apply.
-3. Install package-specific skills with `npx codemod <package-id> --skill` for skill-only packages or when package-specific execution guidance is needed.
+3. Install package-specific skills with `npx codemod <package-id> --skill` when a package exposes installable skill behavior (required for skill-only packages).
 4. Enforce verification with tests and dry-run summaries before apply.
 
 For command-level guidance:

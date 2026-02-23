@@ -1,7 +1,7 @@
 use crate::utils::ancestor_search::find_in_ancestors;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_path, validate_manifest_provides_declarations,
+    detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape, DEFAULT_WORKFLOW_FILE_NAME,
 };
 use anyhow::{anyhow, Context, Result};
@@ -49,12 +49,12 @@ fn resolve_package_root(input_path: &Path) -> Option<PathBuf> {
 
 fn validate_package(package_root: &Path) -> Result<()> {
     let manifest = load_manifest(package_root)?;
-    validate_manifest_provides_declarations(package_root, &manifest)?;
+    validate_package_behavior_structure(package_root, &manifest)?;
 
     let behavior_shape = detect_package_behavior_shape(package_root, &manifest);
     if behavior_shape == PackageBehaviorShape::Missing {
         return Err(anyhow!(
-            "❌ Package at {} must declare at least one behavior in `provides` (`workflow` and/or `skill`).",
+            "❌ Package at {} must include executable workflow steps and/or skill installation steps.",
             package_root.display()
         ));
     }
@@ -191,14 +191,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn write_manifest(package_dir: &Path, provides: &[&str], workflow: Option<&str>, name: &str) {
-        let workflow_line = workflow
-            .map(|value| format!("workflow: \"{value}\"\n"))
-            .unwrap_or_default();
-        let provides_lines = provides
-            .iter()
-            .map(|value| format!("  - {value}\n"))
-            .collect::<String>();
+    fn write_manifest(package_dir: &Path, workflow: &str, name: &str) {
         let manifest = format!(
             r#"schema_version: "1.0"
 name: "{name}"
@@ -206,8 +199,8 @@ version: "1.0.0"
 description: "description"
 author: "author"
 license: "MIT"
-{workflow_line}provides:
-{provides_lines}"#
+workflow: "{workflow}"
+capabilities: []"#
         );
         fs::write(package_dir.join("codemod.yaml"), manifest).unwrap();
     }
@@ -239,8 +232,24 @@ codemod-skill-version: 0.1.0
     #[test]
     fn validates_skill_only_package_when_structure_is_valid() {
         let temp_dir = tempdir().unwrap();
-        write_manifest(temp_dir.path(), &["skill"], None, "sample-skill");
+        write_manifest(temp_dir.path(), DEFAULT_WORKFLOW_FILE_NAME, "sample-skill");
         write_valid_skill_bundle(temp_dir.path(), "sample-skill");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/sample-skill"
+"#,
+        )
+        .unwrap();
 
         let result = validate_target(temp_dir.path());
         assert!(
@@ -252,8 +261,24 @@ codemod-skill-version: 0.1.0
     #[test]
     fn fails_skill_validation_when_reference_link_is_missing() {
         let temp_dir = tempdir().unwrap();
-        write_manifest(temp_dir.path(), &["skill"], None, "sample-skill");
+        write_manifest(temp_dir.path(), DEFAULT_WORKFLOW_FILE_NAME, "sample-skill");
         write_valid_skill_bundle(temp_dir.path(), "sample-skill");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/sample-skill"
+"#,
+        )
+        .unwrap();
         fs::write(
             temp_dir
                 .path()
@@ -293,12 +318,7 @@ nodes:
     #[test]
     fn validates_workflow_when_directory_is_hybrid_package() {
         let temp_dir = tempdir().unwrap();
-        write_manifest(
-            temp_dir.path(),
-            &["workflow", "skill"],
-            Some(DEFAULT_WORKFLOW_FILE_NAME),
-            "sample-skill",
-        );
+        write_manifest(temp_dir.path(), DEFAULT_WORKFLOW_FILE_NAME, "sample-skill");
         write_valid_skill_bundle(temp_dir.path(), "sample-skill");
         let workflow_path = temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME);
         fs::write(
@@ -313,6 +333,14 @@ nodes:
       - id: init
         name: Initialize
         run: echo hello
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/sample-skill"
 "#,
         )
         .unwrap();

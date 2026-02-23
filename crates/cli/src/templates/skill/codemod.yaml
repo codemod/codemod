@@ -16,5 +16,6 @@ registry:
   access: "{access}"
   visibility: "{visibility}"
 
-provides:
-{provides_entries}
+workflow: "workflow.yaml"
+
+capabilities: []

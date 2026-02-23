@@ -42,6 +42,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         false,
         false,
         None,
+        false,
     )?;
 
     // Get workflow runs

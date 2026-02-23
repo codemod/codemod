@@ -192,14 +192,6 @@ pub struct VerificationCheck {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompatibilityMetadata {
-    pub harness: Harness,
-    pub supports_project_scope: bool,
-    pub supports_user_scope: bool,
-    pub supports_verify: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct ManagedInstallState {
     schema_version: String,
@@ -272,7 +264,6 @@ impl HarnessAdapterError {
 pub type AdapterResult<T> = std::result::Result<T, HarnessAdapterError>;
 
 pub trait HarnessAdapter: Send + Sync {
-    fn metadata(&self) -> CompatibilityMetadata;
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>>;
     fn install_package_skill(
         &self,
@@ -314,15 +305,6 @@ impl RuntimePaths {
 pub struct ClaudeHarnessAdapter;
 
 impl HarnessAdapter for ClaudeHarnessAdapter {
-    fn metadata(&self) -> CompatibilityMetadata {
-        CompatibilityMetadata {
-            harness: Harness::Claude,
-            supports_project_scope: true,
-            supports_user_scope: true,
-            supports_verify: true,
-        }
-    }
-
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Claude, request, &runtime_paths)
@@ -352,15 +334,6 @@ impl HarnessAdapter for ClaudeHarnessAdapter {
 pub struct GooseHarnessAdapter;
 
 impl HarnessAdapter for GooseHarnessAdapter {
-    fn metadata(&self) -> CompatibilityMetadata {
-        CompatibilityMetadata {
-            harness: Harness::Goose,
-            supports_project_scope: true,
-            supports_user_scope: true,
-            supports_verify: true,
-        }
-    }
-
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Goose, request, &runtime_paths)
@@ -390,15 +363,6 @@ impl HarnessAdapter for GooseHarnessAdapter {
 pub struct OpencodeHarnessAdapter;
 
 impl HarnessAdapter for OpencodeHarnessAdapter {
-    fn metadata(&self) -> CompatibilityMetadata {
-        CompatibilityMetadata {
-            harness: Harness::Opencode,
-            supports_project_scope: true,
-            supports_user_scope: true,
-            supports_verify: true,
-        }
-    }
-
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Opencode, request, &runtime_paths)
@@ -433,15 +397,6 @@ impl HarnessAdapter for OpencodeHarnessAdapter {
 pub struct CursorHarnessAdapter;
 
 impl HarnessAdapter for CursorHarnessAdapter {
-    fn metadata(&self) -> CompatibilityMetadata {
-        CompatibilityMetadata {
-            harness: Harness::Cursor,
-            supports_project_scope: true,
-            supports_user_scope: true,
-            supports_verify: true,
-        }
-    }
-
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Cursor, request, &runtime_paths)
@@ -1839,12 +1794,30 @@ version: "0.1.0"
 description: "Skill-only package for harness install tests"
 author: "Codemod Team <team@codemod.com>"
 license: "MIT"
-provides:
-  - skill
+workflow: "workflow.yaml"
+capabilities: []
 "#
         );
         fs::write(package_root.join("codemod.yaml"), &manifest_yaml).unwrap();
         let manifest: CodemodManifest = serde_yaml::from_str(&manifest_yaml).unwrap();
+        fs::write(
+            package_root.join("workflow.yaml"),
+            format!(
+                r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "{package_name}"
+"#
+            ),
+        )
+        .unwrap();
 
         let skill_name = derive_skill_name_from_package_name(package_name);
         let skill_dir = package_root

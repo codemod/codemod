@@ -26,7 +26,7 @@ pub struct Command {
     #[arg(long)]
     project_type: Option<ProjectType>,
 
-    /// Scaffold a skill-only package (no workflow files)
+    /// Scaffold a skill-focused package with an install-skill workflow
     #[arg(long, conflicts_with = "with_skill")]
     skill: bool,
 
@@ -127,6 +127,7 @@ const JS_ASTGREP_WORKFLOW_TEMPLATE: &str = include_str!("../templates/js-astgrep
 const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
     include_str!("../templates/astgrep-yaml/workflow.yaml");
 const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
+const SKILL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/skill/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
 const SKILL_README_TEMPLATE: &str = include_str!("../templates/skill/README.md");
@@ -138,6 +139,17 @@ const SKILL_REFERENCES_INDEX_TEMPLATE: &str =
     include_str!("../templates/skill/references/index.md");
 const SKILL_REFERENCES_USAGE_TEMPLATE: &str =
     include_str!("../templates/skill/references/usage.md");
+const INSTALL_SKILL_NODE_TEMPLATE: &str = r#"
+
+  - id: install-package-skill
+    name: Install Package Skill
+    type: automatic
+    steps:
+      - id: install-package-skill
+        name: Install package skill
+        install-skill:
+          package: "{name}"
+"#;
 
 // Shell project templates
 const SHELL_SETUP_SCRIPT: &str = include_str!("../templates/shell/scripts/setup.sh");
@@ -689,10 +701,8 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     // Create codemod.yaml
     create_manifest(project_path, config)?;
 
-    // Create workflow.yaml for workflow-capable packages
-    if config.package_behavior.includes_workflow() {
-        create_workflow(project_path, config)?;
-    }
+    // Always create workflow.yaml (workflow-first package model)
+    create_workflow(project_path, config)?;
 
     // Create workflow project structure
     if config.package_behavior.includes_workflow() {
@@ -735,12 +745,6 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         CODEMOD_TEMPLATE
     };
 
-    let provides_entries = match config.package_behavior {
-        PackageBehavior::WorkflowOnly => "  - workflow",
-        PackageBehavior::SkillOnly => "  - skill",
-        PackageBehavior::Hybrid => "  - workflow\n  - skill",
-    };
-
     let manifest_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
@@ -755,7 +759,6 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             "{visibility}",
             if config.private { "private" } else { "public" },
         )
-        .replace("{provides_entries}", provides_entries)
         .replace("{repository}", &repository_line);
 
     fs::write(project_path.join("codemod.yaml"), manifest_content)?;
@@ -763,13 +766,21 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let workflow_content = match config.project_type {
-        ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
-        ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
-        ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
-        ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
+    let mut workflow_content = if config.package_behavior == PackageBehavior::SkillOnly {
+        SKILL_WORKFLOW_TEMPLATE.replace("{name}", &config.name)
+    } else {
+        match config.project_type {
+            ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
+            ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
+            ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
+            ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
+        }
+        .replace("{language}", &config.language)
+    };
+
+    if config.package_behavior == PackageBehavior::Hybrid {
+        workflow_content.push_str(&INSTALL_SKILL_NODE_TEMPLATE.replace("{name}", &config.name));
     }
-    .replace("{language}", &config.language);
 
     fs::write(project_path.join("workflow.yaml"), workflow_content)?;
     Ok(())
@@ -1184,12 +1195,25 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         README_TEMPLATE
     };
 
-    let readme_content = template
+    let mut readme_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{language}", &config.language)
         .replace("{test_command}", &test_command)
         .replace("{license}", &config.license);
+
+    if config.package_behavior == PackageBehavior::Hybrid {
+        readme_content.push_str(&format!(
+            r#"
+## Skill Installation
+
+```bash
+npx codemod@latest {} --skill --project
+```
+"#,
+            config.name
+        ));
+    }
 
     fs::write(project_path.join("README.md"), readme_content)?;
     Ok(())
@@ -1242,10 +1266,8 @@ fn create_codemod_in_workspace(codemod_path: &Path, config: &ProjectConfig) -> R
     // Create codemod.yaml
     create_manifest(codemod_path, config)?;
 
-    // Create workflow.yaml for workflow-capable packages
-    if config.package_behavior.includes_workflow() {
-        create_workflow(codemod_path, config)?;
-    }
+    // Always create workflow.yaml (workflow-first package model)
+    create_workflow(codemod_path, config)?;
 
     // Create workflow project structure
     if config.package_behavior.includes_workflow() {
@@ -1624,7 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn create_project_skill_only_generates_skill_files_without_workflow() {
+    fn create_project_skill_only_generates_skill_files_with_install_workflow() {
         let temp_dir = tempdir().unwrap();
         let project_path = temp_dir.path().join("sample-skill");
         let config = skill_project_config(false);
@@ -1639,15 +1661,18 @@ mod tests {
         assert!(skill_root.join("references/index.md").is_file());
         assert!(skill_root.join("references/usage.md").is_file());
         assert!(project_path.join("README.md").is_file());
-        assert!(!project_path.join("workflow.yaml").exists());
+        assert!(project_path.join("workflow.yaml").is_file());
 
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
-        assert!(manifest.contains("provides:"));
-        assert!(manifest.contains("- skill"));
-        assert!(!manifest.contains("workflow:"));
+        assert!(manifest.contains("capabilities:"));
+        assert!(!manifest.contains("provides:"));
+        assert!(manifest.contains("workflow: \"workflow.yaml\""));
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
         let validation = validate_skill_behavior(&project_path, &parsed_manifest).unwrap();
         assert_eq!(validation.linked_reference_count, 1);
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("package: \"@codemod/sample-skill\""));
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
         assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));
@@ -1670,18 +1695,20 @@ mod tests {
         assert!(codemod_path.join("codemod.yaml").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
-        assert!(!codemod_path.join("workflow.yaml").exists());
+        assert!(codemod_path.join("workflow.yaml").is_file());
         let manifest = fs::read_to_string(codemod_path.join("codemod.yaml")).unwrap();
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
         let validation = validate_skill_behavior(&codemod_path, &parsed_manifest).unwrap();
         assert_eq!(validation.linked_reference_count, 1);
+        let workflow = fs::read_to_string(codemod_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
         assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));
     }
 
     #[test]
-    fn create_manifest_for_workflow_projects_includes_workflow_provides() {
+    fn create_manifest_for_workflow_projects_has_workflow_and_no_provides() {
         let temp_dir = tempdir().unwrap();
         let project_path = temp_dir.path().join("workflow-project");
         fs::create_dir_all(&project_path).unwrap();
@@ -1704,19 +1731,18 @@ mod tests {
         create_manifest(&project_path, &config).unwrap();
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
 
-        assert!(manifest.contains("provides:"));
-        assert!(manifest.contains("- workflow"));
-        assert!(!manifest.contains("- skill"));
+        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        assert!(manifest.contains("capabilities: []"));
+        assert!(!manifest.contains("provides:"));
     }
 
     #[test]
-    fn create_manifest_for_hybrid_behavior_includes_workflow_and_skill_provides() {
+    fn create_project_with_skill_generates_workflow_and_skill_assets() {
         let temp_dir = tempdir().unwrap();
-        let project_path = temp_dir.path().join("hybrid-behavior-project");
-        fs::create_dir_all(&project_path).unwrap();
+        let project_path = temp_dir.path().join("hybrid-project");
 
         let config = ProjectConfig {
-            name: "hybrid-behavior-project".to_string(),
+            name: "@codemod/hybrid-project".to_string(),
             description: "Hybrid package".to_string(),
             author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
@@ -1730,11 +1756,22 @@ mod tests {
             workspace: false,
         };
 
-        create_manifest(&project_path, &config).unwrap();
+        create_project(&project_path, &config).unwrap();
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
+        let skill_root = project_path
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("hybrid-project");
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
-        assert!(manifest.contains("provides:"));
-        assert!(manifest.contains("- workflow"));
-        assert!(manifest.contains("- skill"));
+        assert!(project_path.join("workflow.yaml").is_file());
+        assert!(skill_root.join("SKILL.md").is_file());
+        assert!(skill_root.join("references/index.md").is_file());
+        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        assert!(!manifest.contains("provides:"));
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
+        assert!(readme.contains("## Skill Installation"));
+        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project --skill --project"));
     }
 }

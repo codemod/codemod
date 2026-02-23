@@ -19,8 +19,7 @@ pub(crate) struct CodemodManifest {
     pub(crate) bugs: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) registry: Option<RegistryConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) workflow: Option<String>,
+    pub(crate) workflow: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) targets: Option<TargetConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,8 +36,6 @@ pub(crate) struct CodemodManifest {
     pub(crate) documentation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) validation: Option<ValidationConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) provides: Option<Vec<String>>,
     pub(crate) capabilities: Option<Vec<String>>,
 }
 
@@ -55,19 +52,19 @@ pub(crate) struct RegistryConfig {
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct TargetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) languages: Option<Vec<String>>,
+    languages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) frameworks: Option<Vec<String>>,
+    frameworks: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) versions: Option<std::collections::HashMap<String, String>>,
+    versions: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct ValidationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) strict: Option<bool>,
+    strict: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) require_tests: Option<bool>,
+    require_tests: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) min_test_coverage: Option<u32>,
+    min_test_coverage: Option<u32>,
 }

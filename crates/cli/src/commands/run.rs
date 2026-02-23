@@ -1,8 +1,11 @@
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
+use crate::utils::package_validation::{
+    detect_package_behavior_shape_with_manifest_hint, expected_workflow_path, PackageBehaviorShape,
+};
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::utils::skill_layout::{has_any_authored_skill, AGENTS_SKILL_ROOT_RELATIVE_PATH};
+use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
@@ -186,22 +189,35 @@ pub async fn handler(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let workflow_path = resolved_package.package_dir.join(WORKFLOW_FILE_NAME);
+    let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
+    let codemod_config = load_codemod_manifest(&codemod_config_path)?;
+
+    let package_behavior_shape = detect_package_behavior_shape_for_run(
+        &resolved_package.package_dir,
+        codemod_config.as_ref(),
+    );
+
+    if package_behavior_shape == PackageBehaviorShape::SkillOnly {
+        if maybe_offer_skill_install(args, SkillInstallOfferContext::SkillOnly).await? {
+            return Ok(());
+        }
+        let error = skill_only_package_run_error(&args.package, &resolved_package.package_dir);
+        let error_msg = error.to_string();
+        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        return Err(error);
+    }
+
+    if package_behavior_shape == PackageBehaviorShape::Missing {
+        let error = missing_behavior_run_error(&args.package, &resolved_package.package_dir);
+        let error_msg = error.to_string();
+        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        return Err(error);
+    }
+
+    let workflow_path =
+        workflow_path_for_run(&resolved_package.package_dir, codemod_config.as_ref());
     if !workflow_path.exists() {
-        let error = if is_skill_only_package(&resolved_package.package_dir) {
-            if maybe_offer_skill_install(
-                args,
-                &resolved_package.package_dir,
-                SkillInstallOfferContext::SkillOnly,
-            )
-            .await?
-            {
-                return Ok(());
-            }
-            skill_only_package_run_error(&args.package, &resolved_package.package_dir)
-        } else {
-            missing_workflow_error(&args.package, &workflow_path)
-        };
+        let error = missing_workflow_error(&args.package, &workflow_path);
         let error_msg = error.to_string();
         send_failure_event(&telemetry, &args.package, &error_msg).await;
         return Err(error);
@@ -209,19 +225,6 @@ pub async fn handler(
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
-
-    let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
-
-    let codemod_config: Option<CodemodManifest> = if codemod_config_path.exists() {
-        let codemod_config_content = fs::read_to_string(&codemod_config_path)?;
-
-        let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
-            .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
-
-        Some(codemod_config)
-    } else {
-        None
-    };
 
     let capabilities = resolve_capabilities(
         ResolveCapabilitiesArgs {
@@ -252,6 +255,7 @@ pub async fn handler(
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
+        package_behavior_shape.includes_skill(),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {
@@ -328,13 +332,8 @@ pub async fn handler(
         )
         .await;
 
-    if is_hybrid_package(&resolved_package.package_dir) {
-        let _ = maybe_offer_skill_install(
-            args,
-            &resolved_package.package_dir,
-            SkillInstallOfferContext::HybridPostRun,
-        )
-        .await?;
+    if package_behavior_shape == PackageBehaviorShape::Hybrid {
+        let _ = maybe_offer_skill_install(args, SkillInstallOfferContext::HybridPostRun).await?;
     }
 
     Ok(())
@@ -348,16 +347,30 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
     )
 }
 
-fn is_skill_only_package(package_dir: &Path) -> bool {
-    has_skill_behavior(package_dir) && !package_dir.join(WORKFLOW_FILE_NAME).is_file()
+fn load_codemod_manifest(codemod_config_path: &Path) -> Result<Option<CodemodManifest>> {
+    if !codemod_config_path.exists() {
+        return Ok(None);
+    }
+
+    let codemod_config_content = fs::read_to_string(codemod_config_path)?;
+    let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
+        .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
+    Ok(Some(codemod_config))
 }
 
-fn is_hybrid_package(package_dir: &Path) -> bool {
-    has_skill_behavior(package_dir) && package_dir.join(WORKFLOW_FILE_NAME).is_file()
+fn detect_package_behavior_shape_for_run(
+    package_dir: &Path,
+    manifest: Option<&CodemodManifest>,
+) -> PackageBehaviorShape {
+    detect_package_behavior_shape_with_manifest_hint(package_dir, manifest)
 }
 
-fn has_skill_behavior(package_dir: &Path) -> bool {
-    has_any_authored_skill(package_dir)
+fn workflow_path_for_run(package_dir: &Path, manifest: Option<&CodemodManifest>) -> PathBuf {
+    if let Some(manifest) = manifest {
+        return expected_workflow_path(package_dir, manifest);
+    }
+
+    package_dir.join(WORKFLOW_FILE_NAME)
 }
 
 fn should_prompt_for_skill_install(no_interactive: bool) -> bool {
@@ -393,19 +406,14 @@ fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static s
 
 async fn maybe_offer_skill_install(
     args: &Command,
-    package_dir: &Path,
     context: SkillInstallOfferContext,
 ) -> Result<bool> {
-    if !has_skill_behavior(package_dir) {
-        return Ok(false);
-    }
-
     let install_command = skill_install_command(&args.package);
     match context {
         SkillInstallOfferContext::SkillOnly => {
             println!(
-                "\nℹ️ Package `{}` is skill-only (found `{}` but no `{}`).",
-                args.package, AGENTS_SKILL_ROOT_RELATIVE_PATH, WORKFLOW_FILE_NAME
+                "\nℹ️ Package `{}` is skill-only (workflow contains `install-skill` steps but no executable steps).",
+                args.package
             );
         }
         SkillInstallOfferContext::HybridPostRun => {
@@ -457,12 +465,19 @@ async fn maybe_offer_skill_install(
 
 fn skill_only_package_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
     anyhow!(
-        "Package `{}` at {} is a skill-only package (found `{}` but no `{}`). `codemod run` requires a workflow package. Install this package as a skill with `{}`.",
+        "Package `{}` at {} is a skill-only package (workflow contains `install-skill` steps but no executable steps). `codemod run` executes workflow behavior only. Install this package as a skill with `{}`.",
+        package_id,
+        package_dir.display(),
+        skill_install_command(package_id)
+    )
+}
+
+fn missing_behavior_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
+    anyhow!(
+        "Package `{}` at {} has no executable workflow steps and no installable skill behavior. Add executable workflow steps, or add `install-skill` plus authored files under `{}`.",
         package_id,
         package_dir.display(),
         AGENTS_SKILL_ROOT_RELATIVE_PATH,
-        WORKFLOW_FILE_NAME,
-        skill_install_command(package_id)
     )
 }
 
@@ -681,6 +696,32 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    fn manifest_with_workflow(workflow: &str) -> CodemodManifest {
+        CodemodManifest {
+            schema_version: "1.0".to_string(),
+            name: "sample".to_string(),
+            version: "0.1.0".to_string(),
+            description: "sample".to_string(),
+            author: "codemod".to_string(),
+            license: None,
+            copyright: None,
+            repository: None,
+            homepage: None,
+            bugs: None,
+            registry: None,
+            workflow: workflow.to_string(),
+            targets: None,
+            dependencies: None,
+            keywords: None,
+            category: None,
+            readme: None,
+            changelog: None,
+            documentation: None,
+            validation: None,
+            capabilities: None,
+        }
+    }
+
     #[test]
     fn test_legacy_file_change_deserialization() {
         let json = r#"{
@@ -749,24 +790,44 @@ mod tests {
     }
 
     #[test]
-    fn test_is_skill_only_package_detection() {
+    fn test_detect_package_behavior_shape_for_run() {
         let temp_dir = tempdir().unwrap();
-        let authored_skill_dir = temp_dir
-            .path()
-            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
-            .join("sample-skill");
-        fs::create_dir_all(&authored_skill_dir).unwrap();
-        fs::write(authored_skill_dir.join("SKILL.md"), "# Skill\n").unwrap();
-        assert!(is_skill_only_package(temp_dir.path()));
-        assert!(!is_hybrid_package(temp_dir.path()));
-
         fs::write(
             temp_dir.path().join(WORKFLOW_FILE_NAME),
-            "version: \"1\"\nnodes: []\n",
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install
+        install-skill:
+          package: "@codemod/sample"
+"#,
         )
         .unwrap();
-        assert!(!is_skill_only_package(temp_dir.path()));
-        assert!(is_hybrid_package(temp_dir.path()));
+
+        let shape = detect_package_behavior_shape_for_run(temp_dir.path(), None);
+        assert_eq!(shape, PackageBehaviorShape::SkillOnly);
+    }
+
+    #[test]
+    fn test_detect_package_behavior_shape_for_run_missing_without_workflow() {
+        let temp_dir = tempdir().unwrap();
+
+        let shape = detect_package_behavior_shape_for_run(temp_dir.path(), None);
+        assert_eq!(shape, PackageBehaviorShape::Missing);
+    }
+
+    #[test]
+    fn test_workflow_path_for_run_prefers_manifest_workflow_path() {
+        let package_dir = Path::new("/tmp/sample");
+        let manifest = manifest_with_workflow("custom/workflow.yaml");
+
+        let workflow_path = workflow_path_for_run(package_dir, Some(&manifest));
+        assert_eq!(workflow_path, package_dir.join("custom/workflow.yaml"));
     }
 
     #[test]
@@ -775,6 +836,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(message.contains("skill-only package"));
+        assert!(message.contains("install-skill"));
         assert!(message.contains("--skill"));
         assert!(message.contains("--project"));
         assert!(message.contains("@codemod/mcs"));
@@ -787,6 +849,16 @@ mod tests {
 
         assert!(message.contains("missing required workflow file"));
         assert!(message.contains("/tmp/any/workflow.yaml"));
+    }
+
+    #[test]
+    fn test_missing_behavior_error_mentions_install_skill_and_authored_dir() {
+        let error = missing_behavior_run_error("@codemod/any", Path::new("/tmp/any"));
+        let message = error.to_string();
+
+        assert!(message.contains("no executable workflow steps"));
+        assert!(message.contains("install-skill"));
+        assert!(message.contains(AGENTS_SKILL_ROOT_RELATIVE_PATH));
     }
 
     #[test]

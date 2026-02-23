@@ -95,6 +95,13 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                         ast_file_path.display()
                     )));
                 }
+            } else if let StepAction::InstallSkill(install_skill) = &step.action {
+                if install_skill.package.trim().is_empty() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step {} in node {} has invalid install-skill package value",
+                        step.name, node.id
+                    )));
+                }
             }
         }
     }

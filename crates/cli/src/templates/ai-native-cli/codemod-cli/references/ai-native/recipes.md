@@ -15,7 +15,7 @@ Use this file for AI-native orchestration patterns. For command syntax and full 
 
 1. Discover migration candidates with `references/core/search-and-discovery.md`.
 2. Execute dry-run and apply flow with `references/core/dry-run-and-verify.md`.
-3. Use `npx codemod <package-id> --skill` when the package provides an installable skill (required for skill-only packages), or when package-specific execution guidance is needed.
+3. Use `npx codemod <package-id> --skill` when the package exposes installable skill behavior (required for skill-only packages).
 4. Use `references/core/troubleshooting.md` when harness or execution issues appear.
 
 ## Operational Defaults

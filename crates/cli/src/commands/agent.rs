@@ -102,7 +102,6 @@ pub async fn handler(args: &Command) -> Result<()> {
                 resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
                     exit_adapter_error(error, command.format);
                 });
-            let _ = resolved_adapter.adapter.metadata();
             let request = InstallRequest {
                 scope: install_inputs.scope,
                 force: install_inputs.force,
@@ -208,7 +207,6 @@ pub async fn handler(args: &Command) -> Result<()> {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
             });
-            let _ = resolved_adapter.adapter.metadata();
             let listed_skills = resolved_adapter
                 .adapter
                 .list_skills()

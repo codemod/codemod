@@ -43,10 +43,6 @@ pub(crate) fn find_authored_skill_dir(
     }
 }
 
-pub(crate) fn has_any_authored_skill(package_dir: &Path) -> bool {
-    !find_all_authored_skill_dirs(package_dir).is_empty()
-}
-
 pub(crate) fn find_all_authored_skill_dirs(package_dir: &Path) -> Vec<PathBuf> {
     let skill_root = package_dir.join(AGENTS_SKILL_ROOT_RELATIVE_PATH);
     let Ok(entries) = fs::read_dir(&skill_root) else {

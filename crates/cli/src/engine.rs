@@ -145,6 +145,7 @@ pub fn create_engine(
     no_interactive: bool,
     no_color: bool,
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
+    skip_install_skill_steps: bool,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -184,6 +185,7 @@ pub fn create_engine(
         capabilities,
         no_interactive,
         dry_run_callback,
+        skip_install_skill_steps,
         ..WorkflowRunConfig::default()
     };
 

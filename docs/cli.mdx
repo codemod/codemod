@@ -253,8 +253,8 @@ npx codemod workflow validate -w <workflow.yaml>
 `workflow validate` is capability-aware for codemod packages:
 
 - **Workflow-only** package: validates workflow behavior.
-- **Skill-only** package: validates skill behavior (`agents/skill/<skill-name>/...`).
-- **Hybrid** package: validates both workflow and skill behavior.
+- **Skill-only** package: validates workflow `install-skill` behavior plus authored skill layout (`agents/skill/<skill-name>/...`).
+- **Hybrid** package: validates both executable workflow and authored skill behavior.
 
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
   Path to workflow file or codemod package directory.
@@ -554,11 +554,11 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 </ResponseField>
 
 <ResponseField name="--skill" type="boolean">
-  Scaffold a skill-only package (no `workflow.yaml`) with authored files under `agents/skill/<skill-name>/`.
+  Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
 </ResponseField>
 
 <ResponseField name="--with-skill" type="boolean">
-  Scaffold a hybrid package (workflow + skill). This keeps workflow files and also creates authored skill files under `agents/skill/<skill-name>/`.
+  Scaffold a hybrid package (workflow + skill). This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">

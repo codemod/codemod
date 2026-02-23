@@ -1,7 +1,7 @@
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_path, validate_manifest_provides_declarations,
-    validate_skill_behavior, PackageBehaviorShape, DEFAULT_WORKFLOW_FILE_NAME,
+    detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
+    validate_skill_behavior, PackageBehaviorShape,
 };
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
 use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
+#[cfg(test)]
+use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 #[cfg(test)]
 use crate::utils::skill_layout::expected_authored_skill_file;
 
@@ -215,20 +217,28 @@ fn validate_package_structure(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<Vec<String>> {
-    validate_manifest_provides_declarations(package_path, manifest)?;
+    validate_package_behavior_structure(package_path, manifest)?;
     validate_common_package_metadata(package_path, manifest)?;
 
     let behavior_shape = detect_package_behavior_shape(package_path, manifest);
     if behavior_shape == PackageBehaviorShape::Missing {
         return Err(anyhow!(
-            "Invalid package structure in {}: package must declare at least one `provides` value. Add `skill` with authored files under `{}` for skill packages or `workflow` with `{}` for executable packages.",
+            "Invalid package structure in {}: package must include executable workflow steps and/or skill installation steps with authored files under `{}`.",
             package_path.display(),
             AGENTS_SKILL_ROOT_RELATIVE_PATH,
-            DEFAULT_WORKFLOW_FILE_NAME,
         ));
     }
 
-    if behavior_shape.includes_skill() {
+    let workflow_path = expected_workflow_path(package_path, manifest);
+    if !workflow_path.exists() {
+        return Err(anyhow!(
+            "Workflow file not found: {}",
+            workflow_path.display()
+        ));
+    }
+    let js_files = validate_workflow_behavior(package_path, &workflow_path)?;
+
+    if behavior_shape.includes_skill() || behavior_shape == PackageBehaviorShape::SkillOnly {
         validate_skill_behavior(package_path, manifest)?;
     }
 
@@ -238,18 +248,8 @@ fn validate_package_structure(
             "Package validation successful ({})",
             behavior_shape.as_str()
         );
-        return Ok(Vec::new());
+        return Ok(js_files);
     }
-
-    let workflow_path = expected_workflow_path(package_path, manifest);
-    if !workflow_path.exists() {
-        return Err(anyhow!(
-            "Workflow behavior declared but workflow file not found: {}",
-            workflow_path.display()
-        ));
-    }
-
-    let js_files = validate_workflow_behavior(package_path, &workflow_path)?;
 
     info!(
         "Package validation successful ({})",
@@ -638,11 +638,7 @@ codemod-skill-version: 0.1.0
         .unwrap();
     }
 
-    fn manifest_with(
-        workflow: Option<&str>,
-        provides: Option<Vec<&str>>,
-        name: &str,
-    ) -> CodemodManifest {
+    fn manifest_with(workflow: &str, name: &str) -> CodemodManifest {
         CodemodManifest {
             schema_version: "1".to_string(),
             name: name.to_string(),
@@ -655,7 +651,7 @@ codemod-skill-version: 0.1.0
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: workflow.map(str::to_string),
+            workflow: workflow.to_string(),
             targets: None,
             dependencies: None,
             keywords: None,
@@ -664,16 +660,31 @@ codemod-skill-version: 0.1.0
             changelog: None,
             documentation: None,
             validation: None,
-            provides: provides.map(|entries| entries.into_iter().map(str::to_string).collect()),
             capabilities: None,
         }
     }
 
     #[test]
-    fn skill_only_package_validates_without_workflow_file() {
+    fn skill_only_package_validates_with_install_skill_workflow() {
         let temp_dir = tempdir().unwrap();
-        let manifest = manifest_with(None, Some(vec!["skill"]), "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
         create_authored_skill_bundle(temp_dir.path(), &manifest.name);
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
 
         let validation = validate_package_structure(temp_dir.path(), &manifest);
 
@@ -682,25 +693,37 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn declared_skill_requires_skill_file() {
+    fn install_skill_workflow_requires_authored_skill_file() {
         let temp_dir = tempdir().unwrap();
-        let manifest = manifest_with(None, Some(vec!["skill"]), "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("`provides: [skill]` declared in codemod.yaml"));
+        assert!(error.to_string().contains("install-skill"));
     }
 
     #[test]
-    fn declared_workflow_requires_workflow_file() {
+    fn workflow_file_is_required() {
         let temp_dir = tempdir().unwrap();
-        let manifest = manifest_with(Some("workflow.yaml"), Some(vec!["workflow"]), "example");
+        let manifest = manifest_with("workflow.yaml", "example");
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("`provides: [workflow]` declared in codemod.yaml"));
+        assert!(error.to_string().contains("Workflow file is missing"));
     }
 
     #[test]
@@ -721,7 +744,7 @@ nodes:
 "#,
         )
         .unwrap();
-        let manifest = manifest_with(Some(DEFAULT_WORKFLOW_FILE_NAME), None, "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
 
         let validation = validate_package_structure(temp_dir.path(), &manifest);
 
@@ -729,29 +752,25 @@ nodes:
     }
 
     #[test]
-    fn package_without_any_behavior_is_rejected() {
+    fn package_without_executable_or_install_skill_behavior_is_rejected() {
         let temp_dir = tempdir().unwrap();
-        let manifest = manifest_with(None, None, "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes: []
+"#,
+        )
+        .unwrap();
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("must declare at least one `provides` value"));
-    }
-
-    #[test]
-    fn expected_workflow_path_uses_default_when_workflow_not_set() {
-        let manifest = manifest_with(None, None, "example");
-        let path = expected_workflow_path(Path::new("/tmp/test"), &manifest);
-        assert_eq!(
-            path,
-            Path::new("/tmp/test").join(DEFAULT_WORKFLOW_FILE_NAME)
-        );
+        assert!(error.to_string().contains("Invalid package structure"));
     }
 
     #[test]
     fn expected_workflow_path_uses_manifest_value_when_set() {
-        let manifest = manifest_with(Some("custom-workflow.yaml"), None, "example");
+        let manifest = manifest_with("custom-workflow.yaml", "example");
         let path = expected_workflow_path(Path::new("/tmp/test"), &manifest);
         assert_eq!(path, Path::new("/tmp/test").join("custom-workflow.yaml"));
     }
@@ -762,10 +781,28 @@ nodes:
         create_authored_skill_bundle(temp_dir.path(), "example");
         fs::write(
             temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
-            "version: \"1\"\nnodes: []\n",
+            r#"
+version: "1"
+nodes:
+  - id: run
+    name: Run
+    type: automatic
+    steps:
+      - id: run
+        name: Run
+        run: echo hello
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
         )
         .unwrap();
-        let manifest = manifest_with(Some(DEFAULT_WORKFLOW_FILE_NAME), None, "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
 
         let shape = detect_package_behavior_shape(temp_dir.path(), &manifest);
         assert_eq!(shape, PackageBehaviorShape::Hybrid);
@@ -775,7 +812,23 @@ nodes:
     fn invalid_package_name_fails_validation() {
         let temp_dir = tempdir().unwrap();
         create_authored_skill_bundle(temp_dir.path(), "Invalid Name");
-        let manifest = manifest_with(None, Some(vec!["skill"]), "Invalid Name");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "Invalid Name");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/invalid-name"
+"#,
+        )
+        .unwrap();
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("Invalid package name"));
@@ -785,7 +838,23 @@ nodes:
     fn skill_publish_fails_when_skill_markers_are_missing() {
         let temp_dir = tempdir().unwrap();
         create_invalid_authored_skill_bundle_missing_marker(temp_dir.path(), "example");
-        let manifest = manifest_with(None, Some(vec!["skill"]), "example");
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("missing compatibility marker"));

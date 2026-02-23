@@ -48,6 +48,8 @@ pub struct WorkflowRunConfig {
     pub no_interactive: bool,
     /// Callback for reporting changes in dry-run mode
     pub dry_run_callback: Option<DryRunCallback>,
+    /// Skip executing install-skill steps at runtime (used by package run UX)
+    pub skip_install_skill_steps: bool,
 }
 
 impl Default for WorkflowRunConfig {
@@ -66,6 +68,7 @@ impl Default for WorkflowRunConfig {
             capabilities_security_callback: None,
             no_interactive: false,
             dry_run_callback: None,
+            skip_install_skill_steps: false,
         }
     }
 }

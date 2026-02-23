@@ -98,6 +98,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         args.no_interactive,
         false,
         None,
+        false,
     )?;
 
     if args.trigger_all {

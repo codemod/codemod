@@ -32,8 +32,8 @@ use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 
 use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseCodemod,
-    UseJSAstGrep,
+    InstallSkillHarness, InstallSkillScope, SemanticAnalysisConfig, SemanticAnalysisMode,
+    StepAction, UseAI, UseAstGrep, UseCodemod, UseInstallSkill, UseJSAstGrep,
 };
 use butterflow_models::{
     evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
@@ -84,6 +84,40 @@ impl Drop for TaskCleanupGuard {
             self.notify.notify_one();
         }
     }
+}
+
+fn build_install_skill_command(config: &UseInstallSkill) -> String {
+    let mut command = vec![
+        "npx".to_string(),
+        "codemod".to_string(),
+        config.package.clone(),
+        "--skill".to_string(),
+    ];
+
+    match config.scope.clone().unwrap_or(InstallSkillScope::Project) {
+        InstallSkillScope::Project => command.push("--project".to_string()),
+        InstallSkillScope::User => command.push("--user".to_string()),
+    }
+
+    if config.force.unwrap_or(false) {
+        command.push("--force".to_string());
+    }
+
+    if let Some(harness) = &config.harness {
+        command.push("--harness".to_string());
+        command.push(
+            match harness {
+                InstallSkillHarness::Auto => "auto",
+                InstallSkillHarness::Claude => "claude",
+                InstallSkillHarness::Goose => "goose",
+                InstallSkillHarness::Opencode => "opencode",
+                InstallSkillHarness::Cursor => "cursor",
+            }
+            .to_string(),
+        );
+    }
+
+    command.join(" ")
 }
 
 /// Workflow engine
@@ -1571,6 +1605,36 @@ impl Engine {
             StepAction::AI(ai_config) => {
                 self.execute_ai_step(ai_config, step_env, node, task, params, state)
                     .await
+            }
+            StepAction::InstallSkill(install_skill) => {
+                if self.workflow_run_config.skip_install_skill_steps {
+                    eprintln!(
+                        "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
+                        install_skill.package
+                    );
+                    return Ok(());
+                }
+
+                if self.workflow_run_config.dry_run {
+                    eprintln!(
+                        "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
+                        install_skill.package
+                    );
+                    return Ok(());
+                }
+
+                let command = build_install_skill_command(install_skill);
+                self.execute_run_script_step(
+                    runner,
+                    &command,
+                    step_env,
+                    node,
+                    task,
+                    params,
+                    state,
+                    bundle_path,
+                )
+                .await
             }
         }
     }

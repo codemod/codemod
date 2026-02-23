@@ -314,7 +314,6 @@ async fn resolve_skill_package(
     let behavior_shape = detect_package_behavior_shape_with_manifest_hint(
         &resolved_package.package_dir,
         manifest.as_ref(),
-        Some(manifest_name),
     );
 
     Ok(ResolvedSkillPackage {
@@ -410,7 +409,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn manifest_with(workflow: &str, provides: Option<Vec<&str>>) -> CodemodManifest {
+    fn manifest_with(workflow: &str) -> CodemodManifest {
         CodemodManifest {
             schema_version: "1".to_string(),
             name: "example".to_string(),
@@ -423,7 +422,7 @@ mod tests {
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: Some(workflow.to_string()),
+            workflow: workflow.to_string(),
             targets: None,
             dependencies: None,
             keywords: None,
@@ -432,7 +431,6 @@ mod tests {
             changelog: None,
             documentation: None,
             validation: None,
-            provides: provides.map(|entries| entries.into_iter().map(str::to_string).collect()),
             capabilities: None,
         }
     }
@@ -471,14 +469,52 @@ mod tests {
         let authored_skill_dir = package_dir.join("agents/skill").join("example");
         fs::create_dir_all(&authored_skill_dir).unwrap();
         fs::write(authored_skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+        fs::write(
+            package_dir.join("workflow.yaml"),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None),
             PackageBehaviorShape::SkillOnly
         );
 
-        fs::write(package_dir.join("workflow.yaml"), "version: \"1\"\n").unwrap();
+        fs::write(
+            package_dir.join("workflow.yaml"),
+            r#"
+version: "1"
+nodes:
+  - id: run
+    name: Run
+    type: automatic
+    steps:
+      - id: run
+        name: Run
+        run: echo hello
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None),
             PackageBehaviorShape::Hybrid
         );
     }
@@ -487,42 +523,85 @@ mod tests {
     fn detect_package_behavior_shape_workflow_only_when_skill_missing() {
         let temp_dir = tempdir().unwrap();
         let package_dir = temp_dir.path();
-        fs::write(package_dir.join("workflow.yaml"), "version: \"1\"\n").unwrap();
+        fs::write(
+            package_dir.join("workflow.yaml"),
+            r#"
+version: "1"
+nodes:
+  - id: run
+    name: Run
+    type: automatic
+    steps:
+      - id: run
+        name: Run
+        run: echo hello
+"#,
+        )
+        .unwrap();
 
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(package_dir, None, Some("example")),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, None),
             PackageBehaviorShape::WorkflowOnly
         );
     }
 
     #[test]
-    fn detect_package_behavior_shape_uses_manifest_provides_hints() {
+    fn detect_package_behavior_shape_uses_manifest_workflow_and_layout() {
         let temp_dir = tempdir().unwrap();
         let package_dir = temp_dir.path();
-        fs::write(package_dir.join("custom-workflow.yaml"), "version: \"1\"\n").unwrap();
+        fs::write(
+            package_dir.join("custom-workflow.yaml"),
+            r#"
+version: "1"
+nodes:
+  - id: run
+    name: Run
+    type: automatic
+    steps:
+      - id: run
+        name: Run
+        run: echo hello
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
         let authored_skill_dir = package_dir.join("agents/skill").join("example");
         fs::create_dir_all(&authored_skill_dir).unwrap();
         fs::write(authored_skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
 
-        let hybrid_manifest =
-            manifest_with("custom-workflow.yaml", Some(vec!["Skill", "workflow"]));
+        let hybrid_manifest = manifest_with("custom-workflow.yaml");
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(
-                package_dir,
-                Some(&hybrid_manifest),
-                Some("example"),
-            ),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&hybrid_manifest)),
             PackageBehaviorShape::Hybrid
         );
 
-        let skill_manifest = manifest_with("", Some(vec!["skill"]));
+        let skill_manifest = manifest_with("");
         fs::remove_file(package_dir.join("custom-workflow.yaml")).unwrap();
+        fs::write(
+            package_dir.join("workflow.yaml"),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(
-                package_dir,
-                Some(&skill_manifest),
-                Some("example"),
-            ),
+            detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&skill_manifest)),
             PackageBehaviorShape::SkillOnly
         );
     }
