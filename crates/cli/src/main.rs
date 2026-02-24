@@ -206,7 +206,7 @@ async fn handle_implicit_run_command(
     // Re-parse the entire CLI with the run command included
     match route {
         ImplicitRoute::DirectSkillInstall(skill_args) => {
-            commands::package_skill::handle_direct_install(&skill_args).await
+            commands::package_skill::handle_direct_install(&skill_args, &telemetry_sender).await
         }
         ImplicitRoute::Run(full_args) => match Cli::try_parse_from(&full_args) {
             Ok(new_cli) => {
@@ -355,7 +355,7 @@ async fn main() -> Result<()> {
             commands::cache::handler(args).await?;
         }
         Some(Commands::Agent(args)) => {
-            commands::agent::handler(args).await?;
+            commands::agent::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Mcp(args)) => {
             args.run().await?;

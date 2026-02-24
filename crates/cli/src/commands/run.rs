@@ -198,7 +198,7 @@ pub async fn handler(
     );
 
     if package_behavior_shape == PackageBehaviorShape::SkillOnly {
-        if maybe_offer_skill_install(args, SkillInstallOfferContext::SkillOnly).await? {
+        if maybe_offer_skill_install(args, SkillInstallOfferContext::SkillOnly, &telemetry).await? {
             return Ok(());
         }
         let error = skill_only_package_run_error(&args.package, &resolved_package.package_dir);
@@ -331,7 +331,9 @@ pub async fn handler(
         .await;
 
     if package_behavior_shape == PackageBehaviorShape::Hybrid {
-        let _ = maybe_offer_skill_install(args, SkillInstallOfferContext::HybridPostRun).await?;
+        let _ =
+            maybe_offer_skill_install(args, SkillInstallOfferContext::HybridPostRun, &telemetry)
+                .await?;
     }
 
     Ok(())
@@ -405,6 +407,7 @@ fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static s
 async fn maybe_offer_skill_install(
     args: &Command,
     context: SkillInstallOfferContext,
+    telemetry: &TelemetrySenderMutex,
 ) -> Result<bool> {
     let install_command = skill_install_command(&args.package);
     match context {
@@ -450,7 +453,8 @@ async fn maybe_offer_skill_install(
         "--skill".to_string(),
         SKILL_INSTALL_PROJECT_FLAG.to_string(),
     ];
-    let handled = crate::commands::package_skill::handle_direct_install(&install_args).await?;
+    let handled =
+        crate::commands::package_skill::handle_direct_install(&install_args, telemetry).await?;
     if !handled {
         return Err(anyhow!(
             "Failed to invoke package skill install for `{}`.",

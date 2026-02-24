@@ -10,11 +10,14 @@ use crate::utils::package_validation::{
     detect_package_behavior_shape_with_manifest_hint, PackageBehaviorShape,
 };
 use crate::utils::skill_layout::{expected_authored_skill_file, find_authored_skill_dir};
+use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use butterflow_core::registry::RegistryError;
 use clap::error::ErrorKind;
 use clap::Parser;
+use codemod_telemetry::send_event::BaseEvent;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tabled::settings::{object::Columns, Alignment, Modify, Style};
@@ -75,7 +78,10 @@ struct InstalledSkillRow {
     path: String,
 }
 
-pub async fn handle_direct_install(trailing_args: &[String]) -> Result<bool> {
+pub async fn handle_direct_install(
+    trailing_args: &[String],
+    telemetry: &TelemetrySenderMutex,
+) -> Result<bool> {
     if trailing_args.is_empty() || !trailing_args.iter().any(|arg| arg == "--skill") {
         return Ok(false);
     }
@@ -154,8 +160,94 @@ pub async fn handle_direct_install(trailing_args: &[String]) -> Result<bool> {
         warnings,
     );
     print_install_output(&output, command.format)?;
+    send_package_skill_install_event(
+        telemetry,
+        &PackageSkillInstallTelemetryInput {
+            requested_harness: command.harness,
+            resolved_harness: resolved_adapter.harness,
+            scope,
+            force: command.force,
+            format: command.format,
+            package: &package,
+            output: &output,
+        },
+    )
+    .await;
 
     Ok(true)
+}
+
+struct PackageSkillInstallTelemetryInput<'a> {
+    requested_harness: Harness,
+    resolved_harness: Harness,
+    scope: InstallScope,
+    force: bool,
+    format: OutputFormat,
+    package: &'a SkillPackageInstallSpec,
+    output: &'a PackageSkillInstallOutput,
+}
+
+async fn send_package_skill_install_event(
+    telemetry: &TelemetrySenderMutex,
+    input: &PackageSkillInstallTelemetryInput<'_>,
+) {
+    let PackageSkillInstallTelemetryInput {
+        requested_harness,
+        resolved_harness,
+        scope,
+        force,
+        format,
+        package,
+        output,
+    } = input;
+
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "packageSkillInstalled".to_string(),
+                properties: HashMap::from([
+                    (
+                        "commandName".to_string(),
+                        "codemod.packageSkill.install".to_string(),
+                    ),
+                    ("packageId".to_string(), package.id.clone()),
+                    ("packageVersion".to_string(), package.version.clone()),
+                    (
+                        "requestedHarness".to_string(),
+                        requested_harness.as_str().to_string(),
+                    ),
+                    (
+                        "resolvedHarness".to_string(),
+                        resolved_harness.as_str().to_string(),
+                    ),
+                    ("scope".to_string(), scope.as_str().to_string()),
+                    ("force".to_string(), force.to_string()),
+                    ("format".to_string(), format.as_str().to_string()),
+                    (
+                        "installedCount".to_string(),
+                        output.installed.len().to_string(),
+                    ),
+                    (
+                        "installedNames".to_string(),
+                        output
+                            .installed
+                            .iter()
+                            .map(|entry| entry.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                    (
+                        "warningsCount".to_string(),
+                        output.warnings.len().to_string(),
+                    ),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
 }
 
 fn build_install_output(

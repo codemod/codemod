@@ -6,9 +6,12 @@ use crate::commands::harness_adapter::{
     VerificationStatus,
 };
 use crate::commands::output::{exit_adapter_error, format_output_path};
+use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use codemod_telemetry::send_event::BaseEvent;
 use inquire::{Confirm, Select};
+use std::collections::HashMap;
 use std::fmt;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -24,7 +27,7 @@ use update::policy::{
     resolve_update_policy_context, UpdatePolicyResolveOptions, DEFAULT_UPDATE_SOURCE,
 };
 use update::reconcile::{build_component_reconcile_decisions, update_policy_runtime_message};
-use update::types::UpdatePolicyMode;
+use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 #[derive(Args, Debug)]
 pub struct Command {
     #[command(subcommand)]
@@ -86,7 +89,7 @@ struct ListCommand {
     format: OutputFormat,
 }
 
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     match &args.action {
         AgentAction::Install(command) => {
             let install_inputs = resolve_install_inputs(command).unwrap_or_else(|error| {
@@ -261,6 +264,15 @@ pub async fn handler(args: &Command) -> Result<()> {
                 warnings,
             });
             print_install_output(&output, command.format)?;
+            send_agent_install_event(
+                &telemetry,
+                command.harness,
+                resolved_adapter.harness,
+                command,
+                &install_inputs,
+                &output,
+            )
+            .await;
             Ok(())
         }
         AgentAction::List(command) => {
@@ -279,9 +291,174 @@ pub async fn handler(args: &Command) -> Result<()> {
                 resolved_adapter.warnings,
             );
             print_list_output(&output, command.format)?;
+            send_agent_list_event(
+                &telemetry,
+                command.harness,
+                resolved_adapter.harness,
+                command.format,
+                output.skills.len(),
+                output.warnings.len(),
+            )
+            .await;
             Ok(())
         }
     }
+}
+
+async fn send_agent_install_event(
+    telemetry: &TelemetrySenderMutex,
+    requested_harness: Harness,
+    resolved_harness: Harness,
+    command: &InstallCommand,
+    inputs: &InstallInputs,
+    output: &update::output::InstallSkillsOutput,
+) {
+    let auto_safe = output.update_policy.auto_safe_apply.as_ref();
+    let require_signed_manifest = match inputs.require_signed_manifest {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "default",
+    };
+    let update_source_kind =
+        if output.update_policy.remote_source == MANAGED_UPDATE_POLICY_LOCAL_SOURCE {
+            "local"
+        } else if output.update_policy.remote_source.starts_with("registry:") {
+            "registry"
+        } else if output.update_policy.remote_source.starts_with("url:") {
+            "url"
+        } else {
+            "unknown"
+        };
+
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "agentMcsInstalled".to_string(),
+                properties: HashMap::from([
+                    (
+                        "commandName".to_string(),
+                        "codemod.agent.install".to_string(),
+                    ),
+                    (
+                        "requestedHarness".to_string(),
+                        requested_harness.as_str().to_string(),
+                    ),
+                    (
+                        "resolvedHarness".to_string(),
+                        resolved_harness.as_str().to_string(),
+                    ),
+                    ("scope".to_string(), inputs.scope.as_str().to_string()),
+                    ("interactive".to_string(), command.interactive.to_string()),
+                    ("force".to_string(), inputs.force.to_string()),
+                    (
+                        "periodicPolicy".to_string(),
+                        inputs.periodic_policy.as_str().to_string(),
+                    ),
+                    (
+                        "updatePolicy".to_string(),
+                        inputs.update_policy.as_str().to_string(),
+                    ),
+                    (
+                        "requireSignedManifest".to_string(),
+                        require_signed_manifest.to_string(),
+                    ),
+                    (
+                        "updateSourceKind".to_string(),
+                        update_source_kind.to_string(),
+                    ),
+                    (
+                        "remoteManifestAvailable".to_string(),
+                        output.update_policy.remote_manifest.is_some().to_string(),
+                    ),
+                    (
+                        "fallbackApplied".to_string(),
+                        output.update_policy.fallback_applied.to_string(),
+                    ),
+                    (
+                        "installedCount".to_string(),
+                        output.installed.len().to_string(),
+                    ),
+                    (
+                        "mcsInstalled".to_string(),
+                        output
+                            .installed
+                            .iter()
+                            .any(|entry| entry.name == "codemod-cli")
+                            .to_string(),
+                    ),
+                    (
+                        "mcpInstalled".to_string(),
+                        output
+                            .installed
+                            .iter()
+                            .any(|entry| entry.name == "codemod-mcp")
+                            .to_string(),
+                    ),
+                    (
+                        "autoSafeAttempted".to_string(),
+                        auto_safe
+                            .map(|result| result.attempted.to_string())
+                            .unwrap_or_else(|| "0".to_string()),
+                    ),
+                    (
+                        "autoSafeApplied".to_string(),
+                        auto_safe
+                            .map(|result| result.applied.to_string())
+                            .unwrap_or_else(|| "0".to_string()),
+                    ),
+                    (
+                        "autoSafeFailed".to_string(),
+                        auto_safe
+                            .map(|result| result.failed.to_string())
+                            .unwrap_or_else(|| "0".to_string()),
+                    ),
+                    (
+                        "warningsCount".to_string(),
+                        output.warnings.len().to_string(),
+                    ),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
+}
+
+async fn send_agent_list_event(
+    telemetry: &TelemetrySenderMutex,
+    requested_harness: Harness,
+    resolved_harness: Harness,
+    format: OutputFormat,
+    listed_count: usize,
+    warnings_count: usize,
+) {
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "agentSkillsListed".to_string(),
+                properties: HashMap::from([
+                    ("commandName".to_string(), "codemod.agent.list".to_string()),
+                    (
+                        "requestedHarness".to_string(),
+                        requested_harness.as_str().to_string(),
+                    ),
+                    (
+                        "resolvedHarness".to_string(),
+                        resolved_harness.as_str().to_string(),
+                    ),
+                    ("format".to_string(), format.as_str().to_string()),
+                    ("listedCount".to_string(), listed_count.to_string()),
+                    ("warningsCount".to_string(), warnings_count.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
 }
 
 fn managed_components_from_install(

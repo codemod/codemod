@@ -125,6 +125,16 @@ pub enum OutputFormat {
     Yaml,
 }
 
+impl OutputFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Json => "json",
+            Self::Yaml => "yaml",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum PeriodicUpdatePolicy {
     Manual,
