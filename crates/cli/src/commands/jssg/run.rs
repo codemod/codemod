@@ -23,7 +23,7 @@ use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
 use std::sync::{Arc, Mutex};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -85,26 +85,6 @@ pub struct Command {
     /// Open a web-based execution report after the run completes
     #[arg(long)]
     pub report: bool,
-}
-
-fn collect_plain_diff(
-    collector: &Option<Arc<Mutex<Vec<FileDiff>>>>,
-    path: &Path,
-    original: &str,
-    new_content: &str,
-) {
-    let Some(collector) = collector else {
-        return;
-    };
-
-    let plain_config = DiffConfig {
-        color: false,
-        ..DiffConfig::default()
-    };
-    let plain_diff = generate_unified_diff(path, original, new_content, &plain_config);
-    if let Ok(mut diffs) = collector.lock() {
-        diffs.push(plain_diff);
-    }
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -214,10 +194,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Create diff config for dry-run mode
     let diff_config = DiffConfig::with_color_control(args.no_color);
 
-    // Collect diffs only when a report may be shown (--report or interactive prompt path).
-    let should_collect_diffs =
-        args.report || crate::utils::metrics::can_prompt_for_report(args.no_interactive);
-    let diff_collector = should_collect_diffs.then(|| Arc::new(Mutex::new(Vec::new())));
+    // Always collect diffs so we can offer report interactively
+    let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
     let diff_collector_clone = diff_collector.clone();
 
     // Clone target_directory for use after the closure moves it
@@ -278,22 +256,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                         if let ExecutionResult::Modified(ref modified) = change_result {
                             let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
                             if !config.dry_run {
-                                if diff_collector_clone.is_some() {
-                                    let original_for_report = if change_path == file_path {
-                                        content.clone()
-                                    } else {
-                                        tokio::fs::read_to_string(change_path)
-                                            .await
-                                            .unwrap_or_default()
-                                    };
-                                    collect_plain_diff(
-                                        &diff_collector_clone,
-                                        change_path,
-                                        &original_for_report,
-                                        &modified.content,
-                                    );
-                                }
-
                                 if let Err(e) =
                                     tokio::fs::write(write_path, &modified.content).await
                                 {
@@ -353,12 +315,23 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     &diff_config,
                                 );
                                 diff.print();
-                                collect_plain_diff(
-                                    &diff_collector_clone,
-                                    change_path,
-                                    &original,
-                                    &modified.content,
-                                );
+
+                                // Collect plain-text diff for report
+                                if let Some(ref collector) = diff_collector_clone {
+                                    let plain_config = DiffConfig {
+                                        color: false,
+                                        ..DiffConfig::default()
+                                    };
+                                    let plain_diff = generate_unified_diff(
+                                        change_path,
+                                        &original,
+                                        &modified.content,
+                                        &plain_config,
+                                    );
+                                    if let Ok(mut diffs) = collector.lock() {
+                                        diffs.push(plain_diff);
+                                    }
+                                }
 
                                 debug!("Would modify file (dry run): {}", change_path.display());
                             }
@@ -387,11 +360,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();
 
-        let files_modified = collected_diffs
-            .iter()
-            .map(|diff| diff.path.as_str())
-            .collect::<HashSet<_>>()
-            .len();
+        let files_modified = collected_diffs.len();
 
         let report = ExecutionReport::build(
             args.js_file.clone(),

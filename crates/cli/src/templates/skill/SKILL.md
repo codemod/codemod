@@ -15,5 +15,5 @@ Use `references/index.md` as the primary instruction index for this package.
 ## Execution Contract
 
 1. Load package-specific guidance from `references/index.md`.
-2. Apply the package strategy to the current repository context.
+2. Apply the package strategy to the current repository context using Codemod CLI commands.
 3. Report what changed, what was skipped, and any manual follow-ups.

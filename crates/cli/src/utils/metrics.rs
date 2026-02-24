@@ -1,15 +1,9 @@
 use codemod_sandbox::MetricsData;
 use inquire::Confirm;
-use std::io::IsTerminal;
 
 /// Count the total number of metric entries across all metric names
 fn count_metric_entries(metrics: &MetricsData) -> usize {
     metrics.values().map(|entries| entries.len()).sum()
-}
-
-/// Whether we can prompt the user for report display.
-pub fn can_prompt_for_report(no_interactive: bool) -> bool {
-    !no_interactive && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 /// Determine whether the user wants to view the report.
@@ -21,7 +15,7 @@ pub fn should_show_report(report_flag: bool, no_interactive: bool, metrics: &Met
     if report_flag {
         return true;
     }
-    if !can_prompt_for_report(no_interactive) {
+    if no_interactive {
         return false;
     }
 

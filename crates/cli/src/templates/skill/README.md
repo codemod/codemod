@@ -12,7 +12,7 @@ npx codemod@latest {name} --skill --project
 ## Usage
 
 This package is skill-oriented and includes `workflow.yaml` with an `install-skill` step.
-After installation, run the skill through your harness.
+After installation, reload your harness session so the new skill is discoverable.
 
 ## Development
 

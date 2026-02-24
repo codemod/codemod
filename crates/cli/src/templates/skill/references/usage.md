@@ -1,6 +1,6 @@
 # Usage
 
-This package provides skill behavior (`agents/skill/<skill-name>/SKILL.md`) and package references.
+This package includes authored skill behavior (`agents/skill/<skill-name>/SKILL.md`) and package references.
 
 Suggested flow:
 
