@@ -57,17 +57,19 @@ The `scripts/` and `rules/` folders are conventional, not required—use any pat
 Codemod packages use a workflow-first model and can be:
 - **Workflow-only**: `workflow.yaml` has executable steps and no `install-skill` steps.
 - **Skill-only**: `workflow.yaml` has `install-skill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
-- **Hybrid**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Workflow + skill**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
 
 Current CLI behavior:
 - `codemod init` (default) scaffolds workflow-only packages.
 - `codemod init --skill` scaffolds skill-only packages.
-- `codemod init --with-skill` scaffolds hybrid packages.
-- `codemod publish` supports workflow-only, skill-only, and hybrid packages by validating workflow behavior and skill layout.
+- `codemod init --with-skill` scaffolds workflow + skill packages.
+- `--skill` and `--with-skill` are mutually exclusive.
+- `--skill` and `--project-type` are mutually exclusive.
+- `codemod publish` supports workflow-only, skill-only, and workflow + skill packages by validating workflow behavior and skill layout.
 - `codemod workflow validate -w <package-root>` validates package behavior:
   - workflow-only: workflow checks
   - skill-only: skill structure/frontmatter/reference checks
-  - hybrid: both workflow and skill checks
+  - workflow + skill: both workflow and skill checks
 
 Skill-capable packages should keep authored skill content under:
 
@@ -141,7 +143,7 @@ License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
 <ParamField path="workflow" type="string" required default="workflow.yaml">
-Relative path to your workflow file (required for workflow-only, skill-only, and hybrid packages).
+Relative path to your workflow file (required for workflow-only, skill-only, and workflow + skill packages).
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">

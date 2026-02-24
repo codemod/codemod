@@ -839,7 +839,7 @@ nodes:
         .unwrap();
         assert_eq!(
             detect_package_behavior_shape_with_manifest_hint(package_dir, None),
-            PackageBehaviorShape::Hybrid
+            PackageBehaviorShape::WorkflowAndSkill
         );
     }
 
@@ -900,10 +900,13 @@ nodes:
         fs::create_dir_all(&authored_skill_dir).unwrap();
         fs::write(authored_skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
 
-        let hybrid_manifest = manifest_with("custom-workflow.yaml");
+        let workflow_and_skill_manifest = manifest_with("custom-workflow.yaml");
         assert_eq!(
-            detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&hybrid_manifest)),
-            PackageBehaviorShape::Hybrid
+            detect_package_behavior_shape_with_manifest_hint(
+                package_dir,
+                Some(&workflow_and_skill_manifest),
+            ),
+            PackageBehaviorShape::WorkflowAndSkill
         );
 
         let skill_manifest = manifest_with("");

@@ -776,7 +776,7 @@ nodes: []
     }
 
     #[test]
-    fn detect_behavior_shape_identifies_hybrid_packages() {
+    fn detect_behavior_shape_identifies_workflow_and_skill_packages() {
         let temp_dir = tempdir().unwrap();
         create_authored_skill_bundle(temp_dir.path(), "example");
         fs::write(
@@ -805,7 +805,7 @@ nodes:
         let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
 
         let shape = detect_package_behavior_shape(temp_dir.path(), &manifest);
-        assert_eq!(shape, PackageBehaviorShape::Hybrid);
+        assert_eq!(shape, PackageBehaviorShape::WorkflowAndSkill);
     }
 
     #[test]

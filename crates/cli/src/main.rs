@@ -526,7 +526,7 @@ mod tests {
         let parse_result = Cli::try_parse_from([
             "codemod",
             "init",
-            "my-hybrid",
+            "my-with-skill",
             "--no-interactive",
             "--project-type",
             "ast-grep-js",
@@ -534,7 +534,7 @@ mod tests {
             "--language",
             "typescript",
             "--description",
-            "Hybrid package",
+            "With skill package",
             "--author",
             "Author <author@example.com>",
             "--license",

@@ -35,7 +35,7 @@ const SKILL_INSTALL_PROJECT_FLAG: &str = "--project";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SkillInstallOfferContext {
     SkillOnly,
-    HybridPostRun,
+    WorkflowAndSkillPostRun,
 }
 
 /// Represents a file change from legacy codemod JSON output
@@ -330,10 +330,13 @@ pub async fn handler(
         )
         .await;
 
-    if package_behavior_shape == PackageBehaviorShape::Hybrid {
-        let _ =
-            maybe_offer_skill_install(args, SkillInstallOfferContext::HybridPostRun, &telemetry)
-                .await?;
+    if package_behavior_shape == PackageBehaviorShape::WorkflowAndSkill {
+        let _ = maybe_offer_skill_install(
+            args,
+            SkillInstallOfferContext::WorkflowAndSkillPostRun,
+            &telemetry,
+        )
+        .await?;
     }
 
     Ok(())
@@ -398,7 +401,7 @@ fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static s
         SkillInstallOfferContext::SkillOnly => {
             "Install this package skill now so your harness can execute it?"
         }
-        SkillInstallOfferContext::HybridPostRun => {
+        SkillInstallOfferContext::WorkflowAndSkillPostRun => {
             "Install this package skill now for harness-assisted follow-up workflows?"
         }
     }
@@ -417,7 +420,7 @@ async fn maybe_offer_skill_install(
                 args.package
             );
         }
-        SkillInstallOfferContext::HybridPostRun => {
+        SkillInstallOfferContext::WorkflowAndSkillPostRun => {
             println!(
                 "\nℹ️ Package `{}` also includes skill behavior under `{}`.",
                 args.package, AGENTS_SKILL_ROOT_RELATIVE_PATH
@@ -899,7 +902,7 @@ nodes:
                 .contains("harness can execute")
         );
         assert!(
-            skill_install_prompt_message(SkillInstallOfferContext::HybridPostRun)
+            skill_install_prompt_message(SkillInstallOfferContext::WorkflowAndSkillPostRun)
                 .contains("follow-up workflows")
         );
     }

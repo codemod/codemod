@@ -316,7 +316,7 @@ nodes:
     }
 
     #[test]
-    fn validates_workflow_when_directory_is_hybrid_package() {
+    fn validates_workflow_when_directory_has_workflow_and_skill_behavior() {
         let temp_dir = tempdir().unwrap();
         write_manifest(temp_dir.path(), DEFAULT_WORKFLOW_FILE_NAME, "sample-skill");
         write_valid_skill_bundle(temp_dir.path(), "sample-skill");
@@ -348,7 +348,7 @@ nodes:
         let result = validate_target(temp_dir.path());
         assert!(
             result.is_ok(),
-            "expected hybrid package workflow to validate: {result:?}"
+            "expected workflow-and-skill package workflow to validate: {result:?}"
         );
     }
 

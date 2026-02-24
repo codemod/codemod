@@ -91,16 +91,16 @@ enum ProjectType {
 enum PackageBehavior {
     WorkflowOnly,
     SkillOnly,
-    Hybrid,
+    WorkflowAndSkill,
 }
 
 impl PackageBehavior {
     fn includes_workflow(self) -> bool {
-        matches!(self, Self::WorkflowOnly | Self::Hybrid)
+        matches!(self, Self::WorkflowOnly | Self::WorkflowAndSkill)
     }
 
     fn includes_skill(self) -> bool {
-        matches!(self, Self::SkillOnly | Self::Hybrid)
+        matches!(self, Self::SkillOnly | Self::WorkflowAndSkill)
     }
 }
 
@@ -365,26 +365,26 @@ pub fn handler(args: &Command) -> Result<()> {
             args.workspace,
         ) {
             (
-                PackageBehavior::WorkflowOnly | PackageBehavior::Hybrid,
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
                 ProjectType::AstGrepJs,
                 Some(pm),
                 _,
             )
             | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::Hybrid,
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
                 ProjectType::Hybrid,
                 Some(pm),
                 _,
             )
             | (_, _, Some(pm), true) => Some(pm),
             (
-                PackageBehavior::WorkflowOnly | PackageBehavior::Hybrid,
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
                 ProjectType::AstGrepJs,
                 None,
                 _,
             )
             | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::Hybrid,
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
                 ProjectType::Hybrid,
                 None,
                 _,
@@ -466,7 +466,7 @@ fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageB
     match (skill, with_skill) {
         (true, true) => Err(anyhow!("--skill and --with-skill cannot be used together")),
         (true, false) => Ok(PackageBehavior::SkillOnly),
-        (false, true) => Ok(PackageBehavior::Hybrid),
+        (false, true) => Ok(PackageBehavior::WorkflowAndSkill),
         (false, false) => Ok(PackageBehavior::WorkflowOnly),
     }
 }
@@ -778,7 +778,7 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         .replace("{language}", &config.language)
     };
 
-    if config.package_behavior == PackageBehavior::Hybrid {
+    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
         workflow_content.push_str(&INSTALL_SKILL_NODE_TEMPLATE.replace("{name}", &config.name));
     }
 
@@ -1202,7 +1202,7 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         .replace("{test_command}", &test_command)
         .replace("{license}", &config.license);
 
-    if config.package_behavior == PackageBehavior::Hybrid {
+    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
         readme_content.push_str(&format!(
             r#"
 ## Skill Installation
@@ -1745,7 +1745,7 @@ mod tests {
             author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
-            package_behavior: PackageBehavior::Hybrid,
+            package_behavior: PackageBehavior::WorkflowAndSkill,
             language: "typescript".to_string(),
             private: false,
             package_manager: Some("npm".to_string()),

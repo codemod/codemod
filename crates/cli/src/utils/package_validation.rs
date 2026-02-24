@@ -22,7 +22,7 @@ const REFERENCES_INDEX_FILE_NAME: &str = "index.md";
 pub(crate) enum PackageBehaviorShape {
     WorkflowOnly,
     SkillOnly,
-    Hybrid,
+    WorkflowAndSkill,
     Missing,
 }
 
@@ -31,17 +31,17 @@ impl PackageBehaviorShape {
         match self {
             Self::WorkflowOnly => "workflow-only",
             Self::SkillOnly => "skill-only",
-            Self::Hybrid => "hybrid",
+            Self::WorkflowAndSkill => "workflow-and-skill",
             Self::Missing => "missing-behavior",
         }
     }
 
     pub(crate) fn includes_workflow(self) -> bool {
-        matches!(self, Self::WorkflowOnly | Self::Hybrid)
+        matches!(self, Self::WorkflowOnly | Self::WorkflowAndSkill)
     }
 
     pub(crate) fn includes_skill(self) -> bool {
-        matches!(self, Self::SkillOnly | Self::Hybrid)
+        matches!(self, Self::SkillOnly | Self::WorkflowAndSkill)
     }
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn detect_package_behavior_shape(
     let supports_workflow = workflow_summary.has_executable_steps;
 
     match (supports_workflow, supports_skill) {
-        (true, true) => PackageBehaviorShape::Hybrid,
+        (true, true) => PackageBehaviorShape::WorkflowAndSkill,
         (true, false) => PackageBehaviorShape::WorkflowOnly,
         (false, true) => PackageBehaviorShape::SkillOnly,
         (false, false) => PackageBehaviorShape::Missing,
@@ -130,7 +130,7 @@ pub(crate) fn detect_package_behavior_shape_with_manifest_hint(
     let supports_workflow = workflow_summary.has_executable_steps;
 
     match (supports_workflow, supports_skill) {
-        (true, true) => PackageBehaviorShape::Hybrid,
+        (true, true) => PackageBehaviorShape::WorkflowAndSkill,
         (true, false) => PackageBehaviorShape::WorkflowOnly,
         (false, true) => PackageBehaviorShape::SkillOnly,
         (false, false) => PackageBehaviorShape::Missing,
@@ -546,7 +546,7 @@ nodes:
     }
 
     #[test]
-    fn detect_package_behavior_shape_identifies_hybrid() {
+    fn detect_package_behavior_shape_identifies_workflow_and_skill() {
         let temp_dir = tempdir().unwrap();
         let manifest = manifest_with("example");
         write_valid_skill_bundle(temp_dir.path(), "example");
@@ -573,7 +573,7 @@ nodes:
 
         assert_eq!(
             detect_package_behavior_shape(temp_dir.path(), &manifest),
-            PackageBehaviorShape::Hybrid
+            PackageBehaviorShape::WorkflowAndSkill
         );
     }
 

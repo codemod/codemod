@@ -156,7 +156,7 @@ Without `--skill`, package invocation follows normal `codemod run` behavior.
 
   - **Workflow-only package**: `npx codemod <package-id>` runs the workflow behavior.
   - **Skill-only package**: `npx codemod <package-id>` does not run a no-op workflow. It returns install guidance and, in interactive terminals, can prompt to install the skill.
-  - **Hybrid package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
+  - **Workflow + skill package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
 </Info>
 
 **AI-native error codes**
@@ -271,7 +271,7 @@ npx codemod workflow validate -w <workflow.yaml>
 
 - **Workflow-only** package: validates workflow behavior.
 - **Skill-only** package: validates workflow `install-skill` behavior plus authored skill layout (`agents/skill/<skill-name>/...`).
-- **Hybrid** package: validates both executable workflow and authored skill behavior.
+- **Workflow + skill** package: validates both executable workflow and authored skill behavior.
 
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
   Path to workflow file or codemod package directory.
@@ -563,6 +563,7 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
   Workflow project type: `ast-grep-js` or `hybrid`.
+  Mutually exclusive with `--skill`.
 
   <Accordion title="More package types (advanced)">
     - `shell`: Shell script-based codemods
@@ -572,10 +573,12 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--skill" type="boolean">
   Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+  Mutually exclusive with `--with-skill` and `--project-type`.
 </ResponseField>
 
 <ResponseField name="--with-skill" type="boolean">
-  Scaffold a hybrid package (workflow + skill). This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+  Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+  Mutually exclusive with `--skill`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">
