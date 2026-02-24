@@ -2,7 +2,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub(in crate::commands::agent) const MANAGED_UPDATE_POLICY_TRIGGER: &str = "agent_install";
+pub(in crate::commands::agent) const MANAGED_UPDATE_POLICY_TRIGGER: &str = "install_and_periodic";
 pub(in crate::commands::agent) const MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR: &str =
     "CODEMOD_AGENT_UPDATE_MANIFEST_PUBLIC_KEY";
 pub(in crate::commands::agent) const MANAGED_UPDATE_POLICY_LOCAL_SOURCE: &str =

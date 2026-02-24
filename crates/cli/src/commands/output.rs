@@ -29,7 +29,7 @@ pub(crate) fn exit_adapter_error(error: HarnessAdapterError, format: OutputForma
             Ok(yaml) => println!("{yaml}"),
             Err(_) => eprintln!("{}: {}", envelope.code, envelope.message),
         },
-        OutputFormat::Table => {
+        OutputFormat::Logs | OutputFormat::Table => {
             eprintln!("Error [{}]: {}", envelope.code, envelope.message);
             eprintln!("Hint: {}", envelope.hint);
         }

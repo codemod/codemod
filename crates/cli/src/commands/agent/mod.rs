@@ -47,9 +47,9 @@ struct InstallCommand {
     /// Target harness adapter
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
     harness: Harness,
-    /// Prompt for missing install options in an interactive wizard
+    /// Disable interactive install wizard prompts
     #[arg(long)]
-    interactive: bool,
+    no_interactive: bool,
     /// Install into current repo workspace
     #[arg(long, conflicts_with = "user")]
     project: bool,
@@ -59,11 +59,8 @@ struct InstallCommand {
     /// Overwrite existing skill files
     #[arg(long)]
     force: bool,
-    /// Periodic update policy used by installed harness hooks/plugins
-    #[arg(long, value_enum, default_value_t = PeriodicUpdatePolicy::AutoSafe)]
-    periodic_policy: PeriodicUpdatePolicy,
-    /// Update policy for this install execution
-    #[arg(long, value_enum, default_value_t = UpdatePolicyMode::Manual)]
+    /// Managed update policy for this install and periodic harness checks
+    #[arg(long, value_enum, default_value_t = UpdatePolicyMode::AutoSafe)]
     update_policy: UpdatePolicyMode,
     /// Remote source for managed update metadata: local, registry, or absolute URL
     #[arg(long, default_value = DEFAULT_UPDATE_SOURCE)]
@@ -75,7 +72,7 @@ struct InstallCommand {
     #[arg(long, conflicts_with = "require_signed_manifest")]
     allow_unsigned_manifest: bool,
     /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
     format: OutputFormat,
 }
 
@@ -85,7 +82,7 @@ struct ListCommand {
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
     harness: Harness,
     /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
     format: OutputFormat,
 }
 
@@ -150,10 +147,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 )
             });
             let mut warnings = resolved_adapter.warnings;
+            let mut messages = Vec::new();
             warnings.extend(update_policy.warnings.iter().cloned());
 
             match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
-                Ok(updated_files) if !updated_files.is_empty() => warnings.push(format!(
+                Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
                     "Updated discovery hints in: {}",
                     updated_files
                         .iter()
@@ -163,7 +161,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 )),
                 Ok(_) => {}
                 Err(error) => warnings.push(format!(
-                    "Installed skills, but failed to update AGENTS.md/CLAUDE.md discovery hints: {error}"
+                    "Installed skills, but failed to update harness discovery hints: {error}"
                 )),
             }
 
@@ -174,7 +172,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 Ok(paths) => paths,
                 Err(error) => {
                     warnings.push(format!(
-                            "Installed skills, but failed to resolve AGENTS.md/CLAUDE.md paths for managed-state tracking: {error}"
+                            "Installed skills, but failed to resolve harness discovery hint paths for managed-state tracking: {error}"
                         ));
                     Vec::new()
                 }
@@ -183,23 +181,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             let periodic_trigger = match upsert_periodic_update_trigger(
                 resolved_adapter.harness,
                 install_inputs.scope,
-                install_inputs.periodic_policy,
+                periodic_policy_from_update_mode(install_inputs.update_policy),
             ) {
-                Ok(result) => {
-                    if !result.updated_paths.is_empty() {
-                        warnings.push(format!(
-                            "Updated periodic update trigger artifacts in: {}",
-                            result
-                                .updated_paths
-                                .iter()
-                                .map(|path| format_output_path(path))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                    warnings.extend(result.notes.iter().cloned());
-                    Some(result)
-                }
+                Ok(result) => Some(result),
                 Err(error) => {
                     warnings.push(format!(
                         "Installed skills, but failed to upsert periodic update triggers: {error}"
@@ -248,10 +232,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 managed_state.as_ref(),
                 auto_safe_apply.result.as_ref(),
             ) {
-                warnings.push(policy_runtime_message);
+                messages.push(policy_runtime_message);
             }
-
-            warnings.push(install_restart_hint(resolved_adapter.harness));
 
             let output = build_install_output(BuildInstallOutputInput {
                 harness: resolved_adapter.harness,
@@ -261,14 +243,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 update_policy: &update_policy,
                 component_decisions,
                 auto_safe_apply: auto_safe_apply.result,
+                notes: messages,
                 warnings,
+                restart_hint: Some(install_restart_hint(resolved_adapter.harness)),
             });
             print_install_output(&output, command.format)?;
             send_agent_install_event(
                 &telemetry,
                 command.harness,
                 resolved_adapter.harness,
-                command,
                 &install_inputs,
                 &output,
             )
@@ -309,7 +292,6 @@ async fn send_agent_install_event(
     telemetry: &TelemetrySenderMutex,
     requested_harness: Harness,
     resolved_harness: Harness,
-    command: &InstallCommand,
     inputs: &InstallInputs,
     output: &update::output::InstallSkillsOutput,
 ) {
@@ -348,12 +330,8 @@ async fn send_agent_install_event(
                         resolved_harness.as_str().to_string(),
                     ),
                     ("scope".to_string(), inputs.scope.as_str().to_string()),
-                    ("interactive".to_string(), command.interactive.to_string()),
+                    ("interactive".to_string(), inputs.interactive.to_string()),
                     ("force".to_string(), inputs.force.to_string()),
-                    (
-                        "periodicPolicy".to_string(),
-                        inputs.periodic_policy.as_str().to_string(),
-                    ),
                     (
                         "updatePolicy".to_string(),
                         inputs.update_policy.as_str().to_string(),
@@ -383,7 +361,7 @@ async fn send_agent_install_event(
                         output
                             .installed
                             .iter()
-                            .any(|entry| entry.name == "codemod-cli")
+                            .any(|entry| entry.name == "codemod")
                             .to_string(),
                     ),
                     (
@@ -522,7 +500,7 @@ struct InstallInputs {
     harness: Harness,
     scope: InstallScope,
     force: bool,
-    periodic_policy: PeriodicUpdatePolicy,
+    interactive: bool,
     update_policy: UpdatePolicyMode,
     update_source: String,
     require_signed_manifest: Option<bool>,
@@ -540,28 +518,32 @@ impl fmt::Display for HarnessPromptOption {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ScopePromptOption {
     scope: InstallScope,
-    label: &'static str,
+    label: String,
 }
 
 impl fmt::Display for ScopePromptOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label)
+        formatter.write_str(&self.label)
     }
 }
 
 fn resolve_install_inputs(
     command: &InstallCommand,
 ) -> std::result::Result<InstallInputs, HarnessAdapterError> {
-    if !command.interactive {
+    let interactive = !command.no_interactive
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+
+    if !interactive {
         let scope = resolve_install_scope(command.project, command.user)?;
         return Ok(InstallInputs {
             harness: command.harness,
             scope,
             force: command.force,
-            periodic_policy: command.periodic_policy,
+            interactive,
             update_policy: command.update_policy,
             update_source: command.update_source.clone(),
             require_signed_manifest: resolve_signed_manifest_override(
@@ -569,12 +551,6 @@ fn resolve_install_inputs(
                 command.allow_unsigned_manifest,
             ),
         });
-    }
-
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Err(HarnessAdapterError::InstallFailed(
-            "--interactive requires a TTY terminal; re-run without --interactive in CI/headless environments".to_string(),
-        ));
     }
 
     let harness = if command.harness != Harness::Auto {
@@ -602,9 +578,12 @@ fn resolve_install_inputs(
                 label: "cursor",
             },
         ];
+        let starting_cursor = detected_harness_for_interactive_prompt()
+            .and_then(|detected| options.iter().position(|option| option.harness == detected))
+            .unwrap_or(0);
 
         Select::new("Choose harness adapter:", options)
-            .with_starting_cursor(0)
+            .with_starting_cursor(starting_cursor)
             .prompt()
             .map_err(|error| {
                 HarnessAdapterError::InstallFailed(format!(
@@ -617,14 +596,15 @@ fn resolve_install_inputs(
     let scope = if command.project || command.user {
         resolve_install_scope(command.project, command.user)?
     } else {
+        let user_scope_label = interactive_user_scope_label(harness);
         let options = vec![
             ScopePromptOption {
                 scope: InstallScope::Project,
-                label: "project (current workspace)",
+                label: "project (current workspace)".to_string(),
             },
             ScopePromptOption {
                 scope: InstallScope::User,
-                label: "user (~/.<harness>/skills)",
+                label: user_scope_label,
             },
         ];
 
@@ -656,7 +636,7 @@ fn resolve_install_inputs(
         harness,
         scope,
         force,
-        periodic_policy: command.periodic_policy,
+        interactive,
         update_policy: command.update_policy,
         update_source: command.update_source.clone(),
         require_signed_manifest: resolve_signed_manifest_override(
@@ -666,6 +646,40 @@ fn resolve_install_inputs(
     })
 }
 
+fn detected_harness_for_interactive_prompt() -> Option<Harness> {
+    let resolved = resolve_adapter(Harness::Auto).ok()?;
+    if resolved.warnings.is_empty() {
+        Some(resolved.harness)
+    } else {
+        None
+    }
+}
+
+fn scope_label_harness(harness: Harness) -> Harness {
+    match harness {
+        Harness::Auto => Harness::Claude,
+        resolved => resolved,
+    }
+}
+
+fn user_skills_root_hint_for_harness(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Claude | Harness::Auto => "~/.claude/skills",
+        Harness::Goose => "~/.goose/skills",
+        Harness::Opencode => "~/.opencode/skills",
+        Harness::Cursor => "~/.cursor/skills",
+    }
+}
+
+fn interactive_user_scope_label(harness: Harness) -> String {
+    let label_harness = scope_label_harness(harness);
+    format!(
+        "user ({}: {})",
+        label_harness.as_str(),
+        user_skills_root_hint_for_harness(label_harness)
+    )
+}
+
 fn resolve_signed_manifest_override(require_signed: bool, allow_unsigned: bool) -> Option<bool> {
     if require_signed {
         Some(true)
@@ -673,6 +687,14 @@ fn resolve_signed_manifest_override(require_signed: bool, allow_unsigned: bool) 
         Some(false)
     } else {
         None
+    }
+}
+
+fn periodic_policy_from_update_mode(mode: UpdatePolicyMode) -> PeriodicUpdatePolicy {
+    match mode {
+        UpdatePolicyMode::Manual => PeriodicUpdatePolicy::Manual,
+        UpdatePolicyMode::Notify => PeriodicUpdatePolicy::Notify,
+        UpdatePolicyMode::AutoSafe => PeriodicUpdatePolicy::AutoSafe,
     }
 }
 

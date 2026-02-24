@@ -1,4 +1,3 @@
-use super::managed_components_from_install;
 use super::update::auto_safe::extract_skill_archive_writes;
 use super::update::auto_safe::{apply_staged_component_updates, maybe_apply_auto_safe_updates};
 use super::update::output::{
@@ -18,6 +17,7 @@ use super::update::types::{
     MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR, MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER,
     MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
 };
+use super::{interactive_user_scope_label, managed_components_from_install};
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
     ManagedStateWriteResult,
@@ -176,8 +176,24 @@ fn harness_skill_path(root: &std::path::Path, harness: Harness) -> PathBuf {
     };
     root.join(harness_dir)
         .join("skills")
-        .join("codemod-cli")
+        .join("codemod")
         .join("SKILL.md")
+}
+
+#[test]
+fn interactive_user_scope_label_defaults_auto_to_claude_path() {
+    assert_eq!(
+        interactive_user_scope_label(Harness::Auto),
+        "user (claude: ~/.claude/skills)"
+    );
+}
+
+#[test]
+fn interactive_user_scope_label_uses_explicit_harness_path() {
+    assert_eq!(
+        interactive_user_scope_label(Harness::Opencode),
+        "user (opencode: ~/.opencode/skills)"
+    );
 }
 
 #[test]
@@ -191,8 +207,8 @@ fn install_output_json_includes_codemod_mcp_entry() {
     };
     let installed = vec![
         InstalledSkill {
-            name: "codemod-cli".to_string(),
-            path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+            name: "codemod".to_string(),
+            path: PathBuf::from("/tmp/.claude/skills/codemod/SKILL.md"),
             version: Some("1.0.0".to_string()),
             scope: Some(InstallScope::Project),
         },
@@ -217,7 +233,9 @@ fn install_output_json_includes_codemod_mcp_entry() {
         update_policy: &update_policy,
         component_decisions,
         auto_safe_apply: None,
+        notes: Vec::new(),
         warnings: Vec::new(),
+        restart_hint: Some("Restart now".to_string()),
     });
 
     let output_json = serde_json::to_value(&output).expect("install output should serialize");
@@ -280,18 +298,25 @@ fn install_output_json_includes_codemod_mcp_entry() {
             .get("update_policy")
             .and_then(|value| value.get("trigger"))
             .and_then(Value::as_str),
-        Some("agent_install")
+        Some("install_and_periodic")
+    );
+    assert_eq!(
+        output_json.get("restart_hint").and_then(Value::as_str),
+        Some("Restart now")
     );
     assert!(codemod_mcp.get("path").and_then(Value::as_str).is_some());
-    assert!(codemod_mcp.get("version").is_some_and(Value::is_null));
+    assert_eq!(
+        codemod_mcp.get("version").and_then(Value::as_str),
+        Some("latest")
+    );
 }
 
 #[test]
 fn managed_components_include_discovery_guides_and_mcp_kind() {
     let installed = vec![
         InstalledSkill {
-            name: "codemod-cli".to_string(),
-            path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+            name: "codemod".to_string(),
+            path: PathBuf::from("/tmp/.claude/skills/codemod/SKILL.md"),
             version: Some("1.0.0".to_string()),
             scope: Some(InstallScope::Project),
         },
@@ -396,6 +421,21 @@ fn update_policy_runtime_message_notify_reflects_state_status() {
     )
     .unwrap()
     .contains("attempted 2"));
+    assert!(update_policy_runtime_message(
+        &autosafe_context,
+        None,
+        Some(&AutoSafeApplyResult {
+            attempted: 0,
+            applied: 0,
+            skipped: 0,
+            failed: 0,
+            rolled_back: false,
+            rollback_reason: Some("remote_manifest_unavailable".to_string()),
+            components: Vec::new(),
+        }),
+    )
+    .is_none());
+    assert!(update_policy_runtime_message(&autosafe_context, None, None).is_none());
     assert!(update_policy_runtime_message(&manual_context, None, None).is_none());
 }
 
@@ -457,23 +497,23 @@ fn validate_remote_update_manifest_rejects_duplicate_component_ids() {
         generated_at: None,
         components: vec![
             ManagedUpdateManifestComponent {
-                id: "codemod-cli".to_string(),
+                id: "codemod".to_string(),
                 kind: "skill".to_string(),
                 version: "1.0.0".to_string(),
                 checksum_sha256: "d8b538f9f4a4e4f8d2832de45ffac4f8df2cd1bd4fd6ca1672b353d7dbdb3a92"
                     .to_string(),
-                source_url: "https://updates.codemod.com/codemod-cli.tar.gz".to_string(),
+                source_url: "https://updates.codemod.com/codemod.tar.gz".to_string(),
                 min_cli_version: None,
                 max_cli_version: None,
                 harnesses: None,
             },
             ManagedUpdateManifestComponent {
-                id: "codemod-cli".to_string(),
+                id: "codemod".to_string(),
                 kind: "skill".to_string(),
                 version: "1.0.1".to_string(),
                 checksum_sha256: "b8b538f9f4a4e4f8d2832de45ffac4f8df2cd1bd4fd6ca1672b353d7dbdb3a92"
                     .to_string(),
-                source_url: "https://updates.codemod.com/codemod-cli-v101.tar.gz".to_string(),
+                source_url: "https://updates.codemod.com/codemod-v101.tar.gz".to_string(),
                 min_cli_version: None,
                 max_cli_version: None,
                 harnesses: None,
@@ -499,13 +539,13 @@ fn build_update_policy_output_includes_remote_manifest_when_available() {
                 generated_at: None,
                 components: vec![
                     ManagedUpdateManifestComponent {
-                        id: "codemod-cli".to_string(),
+                        id: "codemod".to_string(),
                         kind: "skill".to_string(),
                         version: "1.1.0".to_string(),
                         checksum_sha256:
                             "d8b538f9f4a4e4f8d2832de45ffac4f8df2cd1bd4fd6ca1672b353d7dbdb3a92"
                                 .to_string(),
-                        source_url: "https://updates.codemod.com/codemod-cli.tar.gz".to_string(),
+                        source_url: "https://updates.codemod.com/codemod.tar.gz".to_string(),
                         min_cli_version: None,
                         max_cli_version: None,
                         harnesses: None,
@@ -541,9 +581,9 @@ fn build_update_policy_output_includes_remote_manifest_when_available() {
     };
 
     let managed_components = vec![ManagedComponentSnapshot {
-        id: "codemod-cli".to_string(),
+        id: "codemod".to_string(),
         kind: ManagedComponentKind::Skill,
-        path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+        path: PathBuf::from("/tmp/.claude/skills/codemod/SKILL.md"),
         version: Some("1.0.0".to_string()),
     }];
     let component_decisions =
@@ -574,13 +614,13 @@ fn build_component_reconcile_decisions_classifies_statuses_with_reasons() {
                 generated_at: None,
                 components: vec![
                     ManagedUpdateManifestComponent {
-                        id: "codemod-cli".to_string(),
+                        id: "codemod".to_string(),
                         kind: "skill".to_string(),
                         version: "1.1.0".to_string(),
                         checksum_sha256:
                             "d8b538f9f4a4e4f8d2832de45ffac4f8df2cd1bd4fd6ca1672b353d7dbdb3a92"
                                 .to_string(),
-                        source_url: "https://updates.codemod.com/codemod-cli.tar.gz".to_string(),
+                        source_url: "https://updates.codemod.com/codemod.tar.gz".to_string(),
                         min_cli_version: None,
                         max_cli_version: None,
                         harnesses: Some(vec!["claude".to_string()]),
@@ -616,9 +656,9 @@ fn build_component_reconcile_decisions_classifies_statuses_with_reasons() {
     };
     let local_components = vec![
         ManagedComponentSnapshot {
-            id: "codemod-cli".to_string(),
+            id: "codemod".to_string(),
             kind: ManagedComponentKind::Skill,
-            path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+            path: PathBuf::from("/tmp/.claude/skills/codemod/SKILL.md"),
             version: Some("1.0.0".to_string()),
         },
         ManagedComponentSnapshot {
@@ -641,8 +681,8 @@ fn build_component_reconcile_decisions_classifies_statuses_with_reasons() {
 
     let cli_decision = decisions
         .iter()
-        .find(|decision| decision.id == "codemod-cli")
-        .expect("expected codemod-cli decision");
+        .find(|decision| decision.id == "codemod")
+        .expect("expected codemod decision");
     assert_eq!(
         cli_decision.status,
         ReconcileDecisionStatus::UpdateAvailable
@@ -687,9 +727,9 @@ fn build_component_reconcile_decisions_without_remote_manifest_are_unverifiable(
         warnings: Vec::new(),
     };
     let local_components = vec![ManagedComponentSnapshot {
-        id: "codemod-cli".to_string(),
+        id: "codemod".to_string(),
         kind: ManagedComponentKind::Skill,
-        path: PathBuf::from("/tmp/.claude/skills/codemod-cli/SKILL.md"),
+        path: PathBuf::from("/tmp/.claude/skills/codemod/SKILL.md"),
         version: Some("1.0.0".to_string()),
     }];
 
@@ -743,7 +783,7 @@ fn apply_staged_component_updates_rolls_back_on_write_failure() {
 #[test]
 fn extract_skill_archive_writes_supports_single_root_folder() {
     let temp_dir = tempfile::tempdir().expect("expected temp dir");
-    let skill_root = temp_dir.path().join("codemod-cli");
+    let skill_root = temp_dir.path().join("codemod");
     let mut tar_bytes = Vec::new();
 
     {
@@ -752,16 +792,12 @@ fn extract_skill_archive_writes_supports_single_root_folder() {
         let mut builder = tar::Builder::new(gz_encoder);
 
         let mut skill_header = tar::Header::new_gnu();
-        let skill_content = b"---\nname: codemod-cli\n---\n";
+        let skill_content = b"---\nname: codemod\n---\n";
         skill_header.set_size(skill_content.len() as u64);
         skill_header.set_mode(0o644);
         skill_header.set_cksum();
         builder
-            .append_data(
-                &mut skill_header,
-                "codemod-cli/SKILL.md",
-                &skill_content[..],
-            )
+            .append_data(&mut skill_header, "codemod/SKILL.md", &skill_content[..])
             .expect("expected skill entry");
 
         let mut recipe_header = tar::Header::new_gnu();
@@ -772,7 +808,7 @@ fn extract_skill_archive_writes_supports_single_root_folder() {
         builder
             .append_data(
                 &mut recipe_header,
-                "codemod-cli/references/core/search-and-discovery.md",
+                "codemod/references/core/search-and-discovery.md",
                 &recipe_content[..],
             )
             .expect("expected reference entry");
@@ -784,7 +820,7 @@ fn extract_skill_archive_writes_supports_single_root_folder() {
     let writes = extract_skill_archive_writes(
         &skill_root,
         &tar_bytes,
-        "https://updates.codemod.com/codemod-cli.tar.gz",
+        "https://updates.codemod.com/codemod.tar.gz",
     )
     .expect("expected staged writes");
 
@@ -818,17 +854,17 @@ fn remote_auto_safe_update_end_to_end_across_supported_harnesses() {
             fs::write(&skill_path, b"old-skill-content").expect("expected old skill content");
 
             let harness_name = harness.as_str().to_string();
-            let artifact_path = format!("/artifacts/{harness_name}/codemod-cli.md");
+            let artifact_path = format!("/artifacts/{harness_name}/codemod.md");
             let manifest_path = format!("/manifest/{harness_name}");
             let artifact_bytes =
-                format!("---\nname: codemod-cli\nharness: {harness_name}\n---\n").into_bytes();
+                format!("---\nname: codemod\nharness: {harness_name}\n---\n").into_bytes();
 
             let server = TestHttpServer::start_with_builder(|base_url| {
                 let manifest = ManagedUpdateManifest {
                     schema_version: "1".to_string(),
                     generated_at: None,
                     components: vec![ManagedUpdateManifestComponent {
-                        id: "codemod-cli".to_string(),
+                        id: "codemod".to_string(),
                         kind: "skill".to_string(),
                         version: "2.0.0".to_string(),
                         checksum_sha256: sha256_hex(&artifact_bytes),
@@ -894,7 +930,7 @@ fn remote_auto_safe_update_end_to_end_across_supported_harnesses() {
             assert!(snapshot.authenticity_verified);
 
             let local_components = vec![ManagedComponentSnapshot {
-                id: "codemod-cli".to_string(),
+                id: "codemod".to_string(),
                 kind: ManagedComponentKind::Skill,
                 path: skill_path.clone(),
                 version: Some("1.0.0".to_string()),
@@ -938,7 +974,7 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
             .expect("expected skill dir");
         fs::write(&skill_path, b"old-skill-content").expect("expected old skill content");
 
-        let artifact_path = "/artifacts/codemod-cli.md".to_string();
+        let artifact_path = "/artifacts/codemod.md".to_string();
         let manifest_path = "/manifest/claude".to_string();
         let artifact_bytes = b"new-skill-content".to_vec();
 
@@ -947,7 +983,7 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
                 schema_version: "1".to_string(),
                 generated_at: None,
                 components: vec![ManagedUpdateManifestComponent {
-                    id: "codemod-cli".to_string(),
+                    id: "codemod".to_string(),
                     kind: "skill".to_string(),
                     version: "2.0.0".to_string(),
                     checksum_sha256:
@@ -1007,7 +1043,7 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
         .await
         .expect("expected update policy context");
         let local_components = vec![ManagedComponentSnapshot {
-            id: "codemod-cli".to_string(),
+            id: "codemod".to_string(),
             kind: ManagedComponentKind::Skill,
             path: skill_path.clone(),
             version: Some("1.0.0".to_string()),
@@ -1047,7 +1083,7 @@ fn remote_auto_safe_update_skips_incompatible_components() {
             .expect("expected skill dir");
         fs::write(&skill_path, b"old-skill-content").expect("expected old skill content");
 
-        let artifact_path = "/artifacts/codemod-cli.md".to_string();
+        let artifact_path = "/artifacts/codemod.md".to_string();
         let manifest_path = "/manifest/claude".to_string();
         let artifact_bytes = b"new-skill-content".to_vec();
 
@@ -1056,7 +1092,7 @@ fn remote_auto_safe_update_skips_incompatible_components() {
                 schema_version: "1".to_string(),
                 generated_at: None,
                 components: vec![ManagedUpdateManifestComponent {
-                    id: "codemod-cli".to_string(),
+                    id: "codemod".to_string(),
                     kind: "skill".to_string(),
                     version: "2.0.0".to_string(),
                     checksum_sha256: sha256_hex(&artifact_bytes),
@@ -1114,7 +1150,7 @@ fn remote_auto_safe_update_skips_incompatible_components() {
         .await
         .expect("expected update policy context");
         let local_components = vec![ManagedComponentSnapshot {
-            id: "codemod-cli".to_string(),
+            id: "codemod".to_string(),
             kind: ManagedComponentKind::Skill,
             path: skill_path.clone(),
             version: Some("1.0.0".to_string()),
@@ -1151,7 +1187,7 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
             .expect("expected skill dir");
         fs::write(&skill_path, b"old-skill-content").expect("expected old skill content");
 
-        let artifact_path = "/artifacts/codemod-cli.md".to_string();
+        let artifact_path = "/artifacts/codemod.md".to_string();
         let manifest_path = "/manifest/claude".to_string();
         let artifact_bytes = b"new-skill-content".to_vec();
 
@@ -1160,7 +1196,7 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
                 schema_version: "1".to_string(),
                 generated_at: None,
                 components: vec![ManagedUpdateManifestComponent {
-                    id: "codemod-cli".to_string(),
+                    id: "codemod".to_string(),
                     kind: "skill".to_string(),
                     version: "2.0.0".to_string(),
                     checksum_sha256: sha256_hex(&artifact_bytes),
@@ -1235,7 +1271,7 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
         .await
         .expect("expected update policy context");
         let local_components = vec![ManagedComponentSnapshot {
-            id: "codemod-cli".to_string(),
+            id: "codemod".to_string(),
             kind: ManagedComponentKind::Skill,
             path: skill_path.clone(),
             version: Some("1.0.0".to_string()),

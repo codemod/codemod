@@ -16,9 +16,12 @@ use butterflow_core::registry::RegistryError;
 use clap::error::ErrorKind;
 use clap::Parser;
 use codemod_telemetry::send_event::BaseEvent;
+use inquire::{Confirm, Select};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tabled::settings::{object::Columns, Alignment, Modify, Style};
 use tabled::{Table, Tabled};
@@ -37,6 +40,9 @@ struct DirectSkillInstallCommand {
     /// Target harness adapter
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
     harness: Harness,
+    /// Disable interactive install wizard prompts
+    #[arg(long)]
+    no_interactive: bool,
     /// Install into current repo workspace
     #[arg(long, conflicts_with = "user")]
     project: bool,
@@ -47,7 +53,7 @@ struct DirectSkillInstallCommand {
     #[arg(long)]
     force: bool,
     /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
     format: OutputFormat,
 }
 
@@ -58,7 +64,9 @@ struct PackageSkillInstallOutput {
     harness: String,
     scope: String,
     installed: Vec<InstalledSkillOutput>,
+    notes: Vec<String>,
     warnings: Vec<String>,
+    restart_hint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -76,6 +84,37 @@ struct InstalledSkillRow {
     version: String,
     #[tabled(rename = "Path")]
     path: String,
+}
+
+#[derive(Clone, Copy)]
+struct SkillInstallInputs {
+    harness: Harness,
+    scope: InstallScope,
+    force: bool,
+}
+
+#[derive(Clone, Copy)]
+struct HarnessPromptOption {
+    harness: Harness,
+    label: &'static str,
+}
+
+impl fmt::Display for HarnessPromptOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label)
+    }
+}
+
+#[derive(Clone)]
+struct ScopePromptOption {
+    scope: InstallScope,
+    label: String,
+}
+
+impl fmt::Display for ScopePromptOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label)
+    }
 }
 
 pub async fn handle_direct_install(
@@ -108,17 +147,17 @@ pub async fn handle_direct_install(
         return Ok(false);
     }
 
-    let scope = resolve_install_scope(command.project, command.user).unwrap_or_else(|error| {
+    let install_inputs = resolve_install_inputs(&command).unwrap_or_else(|error| {
         exit_adapter_error(error, command.format);
     });
 
-    let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
+    let resolved_adapter = resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
         exit_adapter_error(error, command.format);
     });
 
     let request = InstallRequest {
-        scope,
-        force: command.force,
+        scope: install_inputs.scope,
+        force: install_inputs.force,
     };
 
     let (package, mut package_warnings) = resolve_skill_package_for_install(&command.package_id)
@@ -135,9 +174,10 @@ pub async fn handle_direct_install(
         });
 
     let mut warnings = resolved_adapter.warnings;
+    let mut notes = Vec::new();
     warnings.append(&mut package_warnings);
-    match upsert_skill_discovery_guides(resolved_adapter.harness, scope) {
-        Ok(updated_files) if !updated_files.is_empty() => warnings.push(format!(
+    match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
+        Ok(updated_files) if !updated_files.is_empty() => notes.push(format!(
             "Updated discovery hints in: {}",
             updated_files
                 .iter()
@@ -147,17 +187,19 @@ pub async fn handle_direct_install(
         )),
         Ok(_) => {}
         Err(error) => warnings.push(format!(
-            "Installed skill, but failed to update AGENTS.md/CLAUDE.md discovery hints: {error}"
+            "Installed skill, but failed to update harness discovery hints: {error}"
         )),
     }
-    warnings.push(install_restart_hint(resolved_adapter.harness));
+    let restart_hint = Some(install_restart_hint(resolved_adapter.harness));
 
     let output = build_install_output(
         &package.id,
         resolved_adapter.harness,
-        scope,
+        install_inputs.scope,
         installed,
+        notes,
         warnings,
+        restart_hint,
     );
     print_install_output(&output, command.format)?;
     send_package_skill_install_event(
@@ -165,8 +207,8 @@ pub async fn handle_direct_install(
         &PackageSkillInstallTelemetryInput {
             requested_harness: command.harness,
             resolved_harness: resolved_adapter.harness,
-            scope,
-            force: command.force,
+            scope: install_inputs.scope,
+            force: install_inputs.force,
             format: command.format,
             package: &package,
             output: &output,
@@ -175,6 +217,141 @@ pub async fn handle_direct_install(
     .await;
 
     Ok(true)
+}
+
+fn resolve_install_inputs(
+    command: &DirectSkillInstallCommand,
+) -> std::result::Result<SkillInstallInputs, HarnessAdapterError> {
+    let interactive = !command.no_interactive
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+
+    if !interactive {
+        let scope = resolve_install_scope(command.project, command.user)?;
+        return Ok(SkillInstallInputs {
+            harness: command.harness,
+            scope,
+            force: command.force,
+        });
+    }
+
+    let harness = if command.harness != Harness::Auto {
+        command.harness
+    } else {
+        let options = vec![
+            HarnessPromptOption {
+                harness: Harness::Auto,
+                label: "auto (recommended)",
+            },
+            HarnessPromptOption {
+                harness: Harness::Claude,
+                label: "claude",
+            },
+            HarnessPromptOption {
+                harness: Harness::Goose,
+                label: "goose",
+            },
+            HarnessPromptOption {
+                harness: Harness::Opencode,
+                label: "opencode",
+            },
+            HarnessPromptOption {
+                harness: Harness::Cursor,
+                label: "cursor",
+            },
+        ];
+        let starting_cursor = detected_harness_for_interactive_prompt()
+            .and_then(|detected| options.iter().position(|option| option.harness == detected))
+            .unwrap_or(0);
+
+        Select::new("Choose harness adapter:", options)
+            .with_starting_cursor(starting_cursor)
+            .prompt()
+            .map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "interactive harness prompt failed: {error}"
+                ))
+            })?
+            .harness
+    };
+
+    let scope = if command.project || command.user {
+        resolve_install_scope(command.project, command.user)?
+    } else {
+        let options = vec![
+            ScopePromptOption {
+                scope: InstallScope::Project,
+                label: "project (current workspace)".to_string(),
+            },
+            ScopePromptOption {
+                scope: InstallScope::User,
+                label: interactive_user_scope_label(harness),
+            },
+        ];
+
+        Select::new("Choose install scope:", options)
+            .with_starting_cursor(0)
+            .prompt()
+            .map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "interactive scope prompt failed: {error}"
+                ))
+            })?
+            .scope
+    };
+
+    let force = if command.force {
+        true
+    } else {
+        Confirm::new("Overwrite existing skill files if they already exist?")
+            .with_default(false)
+            .prompt()
+            .map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "interactive overwrite prompt failed: {error}"
+                ))
+            })?
+    };
+
+    Ok(SkillInstallInputs {
+        harness,
+        scope,
+        force,
+    })
+}
+
+fn detected_harness_for_interactive_prompt() -> Option<Harness> {
+    let resolved = resolve_adapter(Harness::Auto).ok()?;
+    if resolved.warnings.is_empty() {
+        Some(resolved.harness)
+    } else {
+        None
+    }
+}
+
+fn scope_label_harness(harness: Harness) -> Harness {
+    match harness {
+        Harness::Auto => Harness::Claude,
+        resolved => resolved,
+    }
+}
+
+fn user_skills_root_hint_for_harness(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Claude | Harness::Auto => "~/.claude/skills",
+        Harness::Goose => "~/.goose/skills",
+        Harness::Opencode => "~/.opencode/skills",
+        Harness::Cursor => "~/.cursor/skills",
+    }
+}
+
+fn interactive_user_scope_label(harness: Harness) -> String {
+    let label_harness = scope_label_harness(harness);
+    format!(
+        "user ({}: {})",
+        label_harness.as_str(),
+        user_skills_root_hint_for_harness(label_harness)
+    )
 }
 
 struct PackageSkillInstallTelemetryInput<'a> {
@@ -255,7 +432,9 @@ fn build_install_output(
     harness: Harness,
     scope: InstallScope,
     installed: Vec<InstalledSkill>,
+    notes: Vec<String>,
     warnings: Vec<String>,
+    restart_hint: Option<String>,
 ) -> PackageSkillInstallOutput {
     PackageSkillInstallOutput {
         ok: true,
@@ -270,12 +449,15 @@ fn build_install_output(
                 version: skill.version,
             })
             .collect(),
+        notes,
         warnings,
+        restart_hint,
     }
 }
 
 fn print_install_output(output: &PackageSkillInstallOutput, format: OutputFormat) -> Result<()> {
     match format {
+        OutputFormat::Logs => print_install_output_logs(output),
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(output)?),
         OutputFormat::Yaml => println!("{}", serde_yaml::to_string(output)?),
         OutputFormat::Table => print_install_output_table(output),
@@ -284,10 +466,32 @@ fn print_install_output(output: &PackageSkillInstallOutput, format: OutputFormat
     Ok(())
 }
 
-fn print_install_output_table(output: &PackageSkillInstallOutput) {
-    println!("Package: {}", output.package_id);
-    println!("Harness: {}", output.harness);
-    println!("Scope: {}", output.scope);
+fn print_install_output_logs(output: &PackageSkillInstallOutput) {
+    println!(
+        "Installed package skill `{}` for `{}` ({})",
+        output.package_id, output.harness, output.scope
+    );
+
+    if output.installed.is_empty() {
+        println!("No skills were installed.");
+    } else {
+        println!("Installed components:");
+        for installed_skill in &output.installed {
+            let version = installed_skill.version.as_deref().unwrap_or("n/a");
+            println!(
+                "  - {}@{} -> {}",
+                installed_skill.name, version, installed_skill.path
+            );
+        }
+    }
+
+    if !output.notes.is_empty() {
+        println!("Notes:");
+        for note in &output.notes {
+            println!("  - {note}");
+        }
+    }
+
     if !output.warnings.is_empty() {
         println!("Warnings:");
         for warning in &output.warnings {
@@ -295,8 +499,20 @@ fn print_install_output_table(output: &PackageSkillInstallOutput) {
         }
     }
 
+    if let Some(restart_hint) = &output.restart_hint {
+        println!("🎉 {restart_hint}");
+    }
+}
+
+fn print_install_output_table(output: &PackageSkillInstallOutput) {
+    println!("Package: {}", output.package_id);
+    println!("Harness: {}", output.harness);
+    println!("Scope: {}", output.scope);
     if output.installed.is_empty() {
         println!("No skills were installed.");
+        if let Some(restart_hint) = &output.restart_hint {
+            println!("🎉 {restart_hint}");
+        }
         return;
     }
 
@@ -308,7 +524,7 @@ fn print_install_output_table(output: &PackageSkillInstallOutput) {
             version: installed_skill
                 .version
                 .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
+                .unwrap_or_else(|| "n/a".to_string()),
             path: installed_skill.path.clone(),
         })
         .collect::<Vec<_>>();
@@ -318,6 +534,22 @@ fn print_install_output_table(output: &PackageSkillInstallOutput) {
         .with(Style::rounded())
         .with(Modify::new(Columns::new(..)).with(Alignment::left()));
     println!("{table}");
+
+    if !output.notes.is_empty() {
+        println!("Notes:");
+        for note in &output.notes {
+            println!("  - {note}");
+        }
+    }
+    if !output.warnings.is_empty() {
+        println!("Warnings:");
+        for warning in &output.warnings {
+            println!("  - {warning}");
+        }
+    }
+    if let Some(restart_hint) = &output.restart_hint {
+        println!("🎉 {restart_hint}");
+    }
 }
 
 async fn resolve_skill_package_for_install(
@@ -728,5 +960,21 @@ nodes:
                 .expect("skill-only should produce warning");
         assert!(warning.contains("skill-only package behavior"));
         assert!(warning.contains("@codemod/skill-only"));
+    }
+
+    #[test]
+    fn interactive_user_scope_label_defaults_auto_to_claude_path() {
+        assert_eq!(
+            interactive_user_scope_label(Harness::Auto),
+            "user (claude: ~/.claude/skills)"
+        );
+    }
+
+    #[test]
+    fn interactive_user_scope_label_uses_explicit_harness_path() {
+        assert_eq!(
+            interactive_user_scope_label(Harness::Cursor),
+            "user (cursor: ~/.cursor/skills)"
+        );
     }
 }

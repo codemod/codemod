@@ -448,16 +448,23 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_interactive() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--interactive"]);
+    fn parser_accepts_agent_install_with_no_interactive() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--no-interactive"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_manual_periodic_policy() {
+    fn parser_accepts_agent_install_with_manual_update_policy() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--update-policy", "manual"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_agent_install_with_periodic_policy_flag() {
         let parse_result =
             Cli::try_parse_from(["codemod", "agent", "install", "--periodic-policy", "manual"]);
-        assert!(parse_result.is_ok());
+        assert!(parse_result.is_err());
     }
 
     #[test]
@@ -472,6 +479,18 @@ mod tests {
             "registry",
             "--require-signed-manifest",
         ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--format", "logs"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_list_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "list", "--format", "logs"]);
         assert!(parse_result.is_ok());
     }
 
@@ -566,11 +585,12 @@ mod tests {
         let help_text = error.to_string();
         assert!(help_text.contains("opencode"));
         assert!(help_text.contains("cursor"));
-        assert!(help_text.contains("--interactive"));
-        assert!(help_text.contains("--periodic-policy"));
+        assert!(help_text.contains("--no-interactive"));
+        assert!(!help_text.contains("--periodic-policy"));
         assert!(help_text.contains("--update-policy"));
         assert!(help_text.contains("--update-source"));
         assert!(help_text.contains("--require-signed-manifest"));
         assert!(help_text.contains("auto-safe"));
+        assert!(help_text.contains("logs"));
     }
 }

@@ -66,11 +66,13 @@ Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 
 **`agent install`**
 
-Install the `codemod-cli` MCS package and configure Codemod MCP.
+Install the `codemod` MCS skill package and configure Codemod MCP.
 
 ```bash
-npx codemod agent install [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--periodic-policy <manual|notify|auto-safe>] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <table|json|yaml>]
+npx codemod agent install [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
+
+Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
 
 Along with skill files, install writes or updates a Codemod MCP server entry:
 
@@ -93,16 +95,16 @@ MCP config paths by harness and scope:
 
 If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
 
-`agent install` also upserts a managed Codemod discovery section in `AGENTS.md` and `CLAUDE.md` (project root for `--project`, home directory for `--user`) without duplicating entries.
+`agent install` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
+- `claude`: `CLAUDE.md`
+- `goose`, `opencode`, `cursor`: `AGENTS.md` and `CLAUDE.md`
 `agent install` also wires a periodic, cooldown-protected update check trigger:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
 - `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
 - `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.goosehints` (user) as fallback guidance
-Periodic update policy is install-flag driven:
-- `--periodic-policy <manual|notify|auto-safe>` (default: `auto-safe`)
-Install-time managed update policy is also flag-driven:
-- `--update-policy <manual|notify|auto-safe>` (default: `manual`)
+Managed update policy is install-flag driven and shared by install-time reconciliation and periodic checks:
+- `--update-policy <manual|notify|auto-safe>` (default: `auto-safe`)
 - `--update-source <local|registry|URL>` (default: `registry`)
 - `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
   `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
@@ -114,7 +116,7 @@ After install, restart or reload your harness session so newly installed skills 
 List installed codemod-managed skills (MCS and package skills).
 
 ```bash
-npx codemod agent list [--harness <claude|goose|opencode|cursor|auto>] [--format <table|json|yaml>]
+npx codemod agent list [--harness <claude|goose|opencode|cursor|auto>] [--format <logs|table|json|yaml>]
 ```
 
 `agent install` performs internal skill validation checks during install flow.
@@ -123,11 +125,13 @@ npx codemod agent list [--harness <claude|goose|opencode|cursor|auto>] [--format
 
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
-This flow also updates managed Codemod discovery hints in `AGENTS.md` and `CLAUDE.md` without duplication, then prompts you to restart/reload the harness session.
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/OpenCode/Cursor) without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
-npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--format <table|json|yaml>]
+npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--no-interactive] [--format <logs|table|json|yaml>]
 ```
+
+Direct skill install also runs interactively by default in TTY sessions; pass `--no-interactive` for non-interactive execution.
 
 <ResponseField name="--harness <VALUE>" type="string">
   Target harness skill root. `auto` resolves by workspace marker order: `.claude`, `.goose`, `.opencode`, `.cursor`, then Claude fallback.
@@ -141,8 +145,8 @@ npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|auto>]
   Overwrite existing skill content. Without `--force`, install is idempotent when content already matches.
 </ResponseField>
 
-<ResponseField name="--format <table|json|yaml>" type="string">
-  Output contract format.
+<ResponseField name="--format <logs|table|json|yaml>" type="string">
+  Output contract format. Default: `logs` (human-readable).
 </ResponseField>
 
 Without `--skill`, package invocation follows normal `codemod run` behavior.

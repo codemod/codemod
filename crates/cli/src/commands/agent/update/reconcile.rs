@@ -361,15 +361,19 @@ pub(in crate::commands::agent) fn update_policy_runtime_message(
             }
             None => "Update policy notify: managed state is unavailable; change notifications are limited.".to_string(),
         }),
-        UpdatePolicyMode::AutoSafe => Some(match auto_safe_apply {
-            Some(result) => format!(
-                "Update policy auto-safe: attempted {}, applied {}, skipped {}, failed {}, rolled_back={}.",
-                result.attempted, result.applied, result.skipped, result.failed, result.rolled_back
-            ),
-            None => format!(
-                "Update policy auto-safe: no component updates were attempted (remote source hint: {}).",
-                context.remote_source
-            ),
-        }),
+        UpdatePolicyMode::AutoSafe => match auto_safe_apply {
+            Some(result)
+                if result.attempted > 0
+                    || result.applied > 0
+                    || result.skipped > 0
+                    || result.failed > 0 =>
+            {
+                Some(format!(
+                    "Update policy auto-safe: attempted {}, applied {}, skipped {}, failed {}, rolled_back={}.",
+                    result.attempted, result.applied, result.skipped, result.failed, result.rolled_back
+                ))
+            }
+            _ => None,
+        },
     }
 }

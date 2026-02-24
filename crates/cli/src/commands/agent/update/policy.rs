@@ -733,13 +733,13 @@ mod tests {
                 schema_version: "1".to_string(),
                 generated_at: None,
                 components: vec![ManagedUpdateManifestComponent {
-                    id: "codemod-cli".to_string(),
+                    id: "codemod".to_string(),
                     kind: "skill".to_string(),
                     version: version.to_string(),
                     checksum_sha256:
                         "d8b538f9f4a4e4f8d2832de45ffac4f8df2cd1bd4fd6ca1672b353d7dbdb3a92"
                             .to_string(),
-                    source_url: "https://updates.codemod.com/codemod-cli.tar.gz".to_string(),
+                    source_url: "https://updates.codemod.com/codemod.tar.gz".to_string(),
                     min_cli_version: None,
                     max_cli_version: None,
                     harnesses: None,

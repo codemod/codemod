@@ -12,7 +12,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const MCS_SKILL_NAME: &str = "codemod-cli";
+const MCS_SKILL_COMPONENT_ID: &str = "codemod";
+const MCS_SKILL_DIR_NAME: &str = "codemod";
 const MCS_SKILL_VERSION: &str = "1.0.0";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
@@ -20,7 +21,8 @@ const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
 const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.0.0";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
-const MCP_SERVER_COMMAND: &str = "npx";
+const CODEMOD_CLI_COMMAND: &str = "codemod";
+const NPX_COMMAND: &str = "npx";
 const MCP_SERVER_ARG_PACKAGE: &str = "codemod@latest";
 const MCP_SERVER_ARG_COMMAND: &str = "mcp";
 const MCS_REFERENCE_INDEX_RELATIVE_PATH: &str = "references/index.md";
@@ -74,7 +76,6 @@ const CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR: &str = "codemod/periodic-update";
 const CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME: &str = "check-updates.sh";
 const CODEMOD_PERIODIC_UPDATE_STATE_FILE_NAME: &str = "last-check-epoch-secs";
 const CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS: u64 = 21_600;
-const CODEMOD_PERIODIC_UPDATE_DEFAULT_POLICY: &str = "auto-safe";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME: &str = ".goosehints";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN: &str = "<!-- codemod-periodic-update:begin -->";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
@@ -120,6 +121,7 @@ impl Harness {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     #[default]
+    Logs,
     Table,
     Json,
     Yaml,
@@ -128,6 +130,7 @@ pub enum OutputFormat {
 impl OutputFormat {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Logs => "logs",
             Self::Table => "table",
             Self::Json => "json",
             Self::Yaml => "yaml",
@@ -418,6 +421,7 @@ pub struct ResolvedAdapter {
 struct RuntimePaths {
     cwd: PathBuf,
     home_dir: Option<PathBuf>,
+    current_executable: Option<PathBuf>,
 }
 
 impl RuntimePaths {
@@ -431,7 +435,22 @@ impl RuntimePaths {
         Ok(Self {
             cwd,
             home_dir: dirs::home_dir(),
+            current_executable: std::env::current_exe().ok(),
         })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CodemodCliInvocation {
+    command: String,
+    args_prefix: Vec<String>,
+}
+
+impl CodemodCliInvocation {
+    fn with_args(&self, additional_args: &[String]) -> Vec<String> {
+        let mut args = self.args_prefix.clone();
+        args.extend_from_slice(additional_args);
+        args
     }
 }
 
@@ -677,6 +696,7 @@ fn upsert_periodic_update_trigger_with_runtime(
         periodic_policy,
         &runner_path,
         &state_path,
+        runtime_paths,
     )?;
     if runner_updated {
         updated_paths.push(runner_path.clone());
@@ -690,10 +710,6 @@ fn upsert_periodic_update_trigger_with_runtime(
         notes.push(format!(
             "Installed periodic update runner: {}",
             runner_path.display()
-        ));
-        notes.push(format!(
-            "Periodic update policy configured as `{}` (change with `codemod agent install --periodic-policy <manual|notify|auto-safe>`).",
-            periodic_policy.as_str(),
         ));
         notes.push(
             "Periodic update manifest signature verification is enforced (`--require-signed-manifest` is baked into periodic runner command).".to_string(),
@@ -825,13 +841,19 @@ fn write_periodic_update_runner_script(
     periodic_policy: PeriodicUpdatePolicy,
     runner_path: &Path,
     state_path: &Path,
+    runtime_paths: &RuntimePaths,
 ) -> AdapterResult<bool> {
     let scope_flag = match scope {
         InstallScope::Project => "--project",
         InstallScope::User => "--user",
     };
-    let script =
-        build_periodic_update_runner_script(harness, scope_flag, periodic_policy, state_path);
+    let script = build_periodic_update_runner_script(
+        harness,
+        scope_flag,
+        periodic_policy,
+        state_path,
+        runtime_paths,
+    );
     let updated = write_file_if_changed(runner_path, script.as_bytes())?;
     #[cfg(unix)]
     {
@@ -845,8 +867,26 @@ fn build_periodic_update_runner_script(
     scope_flag: &str,
     periodic_policy: PeriodicUpdatePolicy,
     state_path: &Path,
+    runtime_paths: &RuntimePaths,
 ) -> String {
     let quoted_state_path = shell_single_quote(&state_path.to_string_lossy());
+    let install_args = vec![
+        "agent".to_string(),
+        "install".to_string(),
+        "--harness".to_string(),
+        harness.as_str().to_string(),
+        scope_flag.to_string(),
+        "--update-policy".to_string(),
+        periodic_policy.as_str().to_string(),
+        "--require-signed-manifest".to_string(),
+        "--format".to_string(),
+        "json".to_string(),
+    ];
+    let invocation_attempts = codemod_cli_invocation_candidates(runtime_paths)
+        .iter()
+        .map(|invocation| render_shell_invocation_attempt(invocation, &install_args))
+        .collect::<Vec<_>>()
+        .join("\n\n");
     format!(
         r#"#!/bin/sh
 set -eu
@@ -873,15 +913,18 @@ fi
 mkdir -p "$(dirname "$STATE_FILE")"
 printf '%s\n' "$NOW" > "$STATE_FILE"
 
-OUTPUT="$(npx codemod agent install --harness {harness_name} {scope_flag} --update-policy {policy} --require-signed-manifest --format json 2>&1 || true)"
+OUTPUT="$(
+{{
+{invocation_attempts}
+  exit 127
+}} 2>&1 || true
+)"
 if printf '%s' "$OUTPUT" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"update_available"|"rolled_back"[[:space:]]*:[[:space:]]*true|"failed"[[:space:]]*:[[:space:]]*[1-9]'; then
   printf '%s\n' "$OUTPUT"
 fi
 "#,
         default_interval = CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS,
-        policy = periodic_policy.as_str(),
-        harness_name = harness.as_str(),
-        scope_flag = scope_flag,
+        invocation_attempts = invocation_attempts,
     )
 }
 
@@ -1117,6 +1160,78 @@ fn upsert_opencode_periodic_update_plugin(
     write_file_if_changed(plugin_path, content.as_bytes())
 }
 
+fn codemod_cli_invocation_candidates(runtime_paths: &RuntimePaths) -> Vec<CodemodCliInvocation> {
+    let mut invocations = Vec::new();
+    if let Some(current_executable) = runtime_paths.current_executable.as_ref() {
+        invocations.push(CodemodCliInvocation {
+            command: current_executable.to_string_lossy().to_string(),
+            args_prefix: Vec::new(),
+        });
+    }
+    invocations.push(CodemodCliInvocation {
+        command: CODEMOD_CLI_COMMAND.to_string(),
+        args_prefix: Vec::new(),
+    });
+    invocations.push(codemod_cli_npx_invocation());
+    invocations
+}
+
+fn codemod_cli_npx_invocation() -> CodemodCliInvocation {
+    CodemodCliInvocation {
+        command: NPX_COMMAND.to_string(),
+        args_prefix: vec![MCP_SERVER_ARG_PACKAGE.to_string()],
+    }
+}
+
+fn codemod_cli_invocation_for_mcp(runtime_paths: &RuntimePaths) -> CodemodCliInvocation {
+    codemod_cli_invocation_candidates(runtime_paths)
+        .into_iter()
+        .find(codemod_cli_invocation_available)
+        .unwrap_or_else(codemod_cli_npx_invocation)
+}
+
+fn codemod_cli_invocation_available(invocation: &CodemodCliInvocation) -> bool {
+    if is_explicit_command_path(&invocation.command) {
+        return Path::new(&invocation.command).exists();
+    }
+
+    command_exists_in_path(&invocation.command)
+}
+
+fn command_exists_in_path(command: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(command);
+                candidate.is_file()
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn is_explicit_command_path(command: &str) -> bool {
+    command.contains('/') || command.contains('\\')
+}
+
+fn render_shell_invocation_attempt(invocation: &CodemodCliInvocation, args: &[String]) -> String {
+    let command_line = shell_command_line(&invocation.command, &invocation.with_args(args));
+    let quoted_command = shell_single_quote(&invocation.command);
+    if is_explicit_command_path(&invocation.command) {
+        format!("if [ -x {quoted_command} ]; then\n  {command_line}\n  exit $?\nfi")
+    } else {
+        format!(
+            "if command -v {quoted_command} >/dev/null 2>&1; then\n  {command_line}\n  exit $?\nfi"
+        )
+    }
+}
+
+fn shell_command_line(command: &str, args: &[String]) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(shell_single_quote(command));
+    parts.extend(args.iter().map(|arg| shell_single_quote(arg)));
+    parts.join(" ")
+}
+
 fn shell_single_quote(value: &str) -> String {
     let escaped = value.replace('\'', "'\"'\"'");
     format!("'{escaped}'")
@@ -1175,9 +1290,7 @@ fn upsert_skill_discovery_guides_with_runtime(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
     let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let periodic_runner_hint = periodic_runner_hint_for_scope(harness, scope)?;
-    let discovery_block =
-        render_skill_discovery_block(harness, &skill_root_hint, &periodic_runner_hint);
+    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
     let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
     let mut updated_files = Vec::new();
 
@@ -1191,7 +1304,7 @@ fn upsert_skill_discovery_guides_with_runtime(
 }
 
 fn discovery_guide_paths_with_runtime(
-    _harness: Harness,
+    harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
@@ -1204,10 +1317,15 @@ fn discovery_guide_paths_with_runtime(
         })?,
     };
 
-    Ok(vec![
-        docs_root.join(AGENTS_GUIDE_FILE_NAME),
-        docs_root.join(CLAUDE_GUIDE_FILE_NAME),
-    ])
+    let file_names = match harness {
+        Harness::Claude => vec![CLAUDE_GUIDE_FILE_NAME],
+        _ => vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME],
+    };
+
+    Ok(file_names
+        .into_iter()
+        .map(|file_name| docs_root.join(file_name))
+        .collect())
 }
 
 fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
@@ -1218,40 +1336,18 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
     })
 }
 
-fn periodic_runner_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
-    let harness_dir = harness_hidden_dir(harness)?;
-    Ok(match scope {
-        InstallScope::Project => format!(
-            "{harness_dir}/{CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR}/{CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME}"
-        ),
-        InstallScope::User => format!(
-            "~/{harness_dir}/{CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR}/{CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME}"
-        ),
-    })
-}
-
-fn render_skill_discovery_block(
-    harness: Harness,
-    skill_root_hint: &str,
-    periodic_runner_hint: &str,
-) -> String {
+fn render_skill_discovery_block(harness: Harness, skill_root_hint: &str) -> String {
     format!(
         "{SKILL_DISCOVERY_SECTION_BEGIN}
 ## Codemod Skill Discovery
 This section is managed by `codemod` CLI.
 
-- Installed Codemod skills root: `{skill_root_hint}`
-- MCS entry skill: `{skill_root_hint}/{MCS_SKILL_NAME}/SKILL.md`
+- Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
 - List installed Codemod skills: `npx codemod agent list --harness {} --format json`
-- Periodic update runner: `{periodic_runner_hint}` (contains cooldown + quiet no-update behavior)
-- Configure periodic update policy with install flag: `npx codemod agent install --periodic-policy <manual|notify|auto-safe>` (default `{CODEMOD_PERIODIC_UPDATE_DEFAULT_POLICY}`)
-- Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the runner command
 
-{}
 {SKILL_DISCOVERY_SECTION_END}",
-        harness.as_str(),
-        install_restart_hint(harness)
+        harness.as_str()
     )
 }
 
@@ -1722,7 +1818,7 @@ fn install_mcs_skill_bundle_with_runtime(
     validate_embedded_mcs_bundle()?;
 
     let skill_root =
-        skills_root_for_harness(harness, request.scope, runtime_paths)?.join(MCS_SKILL_NAME);
+        skills_root_for_harness(harness, request.scope, runtime_paths)?.join(MCS_SKILL_DIR_NAME);
     let skill_md_path = skill_root.join("SKILL.md");
 
     write_skill_file(&skill_md_path, MCS_SKILL_MD, request.force)?;
@@ -1731,7 +1827,7 @@ fn install_mcs_skill_bundle_with_runtime(
     }
 
     let mut installed = vec![InstalledSkill {
-        name: MCS_SKILL_NAME.to_string(),
+        name: MCS_SKILL_COMPONENT_ID.to_string(),
         path: skill_md_path,
         version: Some(MCS_SKILL_VERSION.to_string()),
         scope: Some(request.scope),
@@ -1869,7 +1965,7 @@ fn install_mcp_server_config(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<PathBuf> {
     let mcp_config_path = mcp_config_path_for_harness(harness, request.scope, runtime_paths)?;
-    upsert_codemod_mcp_server(&mcp_config_path, request.force)?;
+    upsert_codemod_mcp_server(&mcp_config_path, request.force, runtime_paths)?;
     Ok(mcp_config_path)
 }
 
@@ -1925,14 +2021,21 @@ fn mcp_config_path_for_harness(
     }
 }
 
-fn expected_codemod_mcp_server_entry() -> Value {
+fn expected_codemod_mcp_server_entry(runtime_paths: &RuntimePaths) -> Value {
+    let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
+    let mut args = invocation.args_prefix;
+    args.push(MCP_SERVER_ARG_COMMAND.to_string());
     json!({
-        "command": MCP_SERVER_COMMAND,
-        "args": [MCP_SERVER_ARG_PACKAGE, MCP_SERVER_ARG_COMMAND]
+        "command": invocation.command,
+        "args": args
     })
 }
 
-fn upsert_codemod_mcp_server(config_path: &Path, force: bool) -> AdapterResult<()> {
+fn upsert_codemod_mcp_server(
+    config_path: &Path,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
     if let Some(parent_dir) = config_path.parent() {
         fs::create_dir_all(parent_dir).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
@@ -1942,7 +2045,7 @@ fn upsert_codemod_mcp_server(config_path: &Path, force: bool) -> AdapterResult<(
         })?;
     }
 
-    let expected_entry = expected_codemod_mcp_server_entry();
+    let expected_entry = expected_codemod_mcp_server_entry(runtime_paths);
     let mut config_root = if config_path.exists() {
         let existing_content = fs::read_to_string(config_path).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
@@ -2667,9 +2770,21 @@ mod tests {
 
     fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
         let temp_dir = tempdir().unwrap();
+        let bin_dir = temp_dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let codemod_executable = bin_dir.join("codemod");
+        fs::write(&codemod_executable, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&codemod_executable).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&codemod_executable, permissions).unwrap();
+        }
+
         let runtime_paths = RuntimePaths {
             cwd: temp_dir.path().join("workspace"),
             home_dir: Some(temp_dir.path().join("home")),
+            current_executable: Some(codemod_executable),
         };
         std::fs::create_dir_all(&runtime_paths.cwd).unwrap();
         std::fs::create_dir_all(runtime_paths.home_dir.as_ref().unwrap()).unwrap();
@@ -2830,7 +2945,7 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn upsert_skill_discovery_guides_creates_agents_and_claude_files() {
+    fn upsert_skill_discovery_guides_for_claude_only_writes_claude_file() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
 
         let updated_files = upsert_skill_discovery_guides_with_runtime(
@@ -2840,24 +2955,26 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        assert_eq!(updated_files.len(), 2);
+        assert_eq!(updated_files.len(), 1);
         let agents_path = runtime_paths.cwd.join("AGENTS.md");
         let claude_path = runtime_paths.cwd.join("CLAUDE.md");
-        assert!(agents_path.exists());
+        assert!(!agents_path.exists());
         assert!(claude_path.exists());
 
-        let agents_content = fs::read_to_string(&agents_path).unwrap();
-        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
-        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
-        assert!(agents_content.contains(".claude/skills/codemod-cli/SKILL.md"));
-        assert!(agents_content.contains("Restart or reload your claude session"));
+        let claude_content = fs::read_to_string(&claude_path).unwrap();
+        assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
+        assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_END));
+        assert!(claude_content.contains("Core skill: `.claude/skills/codemod/SKILL.md`"));
+        assert!(claude_content.contains(".claude/skills/codemod/SKILL.md"));
+        assert!(!claude_content.contains("Installed Codemod skills root"));
+        assert!(!claude_content.contains("Restart or reload your claude session"));
     }
 
     #[test]
     fn upsert_skill_discovery_guides_is_idempotent_without_duplication() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let agents_path = runtime_paths.cwd.join("AGENTS.md");
-        fs::write(&agents_path, "# Existing guidance\n").unwrap();
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        fs::write(&claude_path, "# Existing guidance\n").unwrap();
 
         let first_update = upsert_skill_discovery_guides_with_runtime(
             Harness::Claude,
@@ -2875,7 +2992,7 @@ codemod-skill-version: 0.1.0
         .unwrap();
         assert!(second_update.is_empty());
 
-        let content = fs::read_to_string(&agents_path).unwrap();
+        let content = fs::read_to_string(&claude_path).unwrap();
         assert!(content.contains("# Existing guidance"));
         assert_eq!(
             count_occurrences(&content, SKILL_DISCOVERY_SECTION_BEGIN),
@@ -2898,7 +3015,7 @@ codemod-skill-version: 0.1.0
         assert_eq!(updated_files.len(), 2);
         let agents_path = runtime_paths.home_dir.as_ref().unwrap().join("AGENTS.md");
         let content = fs::read_to_string(&agents_path).unwrap();
-        assert!(content.contains("~/.cursor/skills/codemod-cli/SKILL.md"));
+        assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
         assert!(content.contains("npx codemod agent list --harness cursor --format json"));
     }
 
@@ -2983,24 +3100,33 @@ codemod-skill-version: 0.1.0
 
     #[test]
     fn periodic_update_runner_script_embeds_selected_policy_and_signed_manifest_default() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let state_path = PathBuf::from("/tmp/codemod/periodic-update/state");
         let auto_safe = build_periodic_update_runner_script(
             Harness::Claude,
             "--project",
             PeriodicUpdatePolicy::AutoSafe,
             &state_path,
+            &runtime_paths,
         );
-        assert!(
-            auto_safe.contains("--update-policy auto-safe --require-signed-manifest --format json")
-        );
+        assert!(auto_safe.contains("--update-policy"));
+        assert!(auto_safe.contains("auto-safe"));
+        assert!(auto_safe.contains("--require-signed-manifest"));
+        assert!(auto_safe.contains("--format"));
+        assert!(auto_safe.contains("json"));
 
         let manual = build_periodic_update_runner_script(
             Harness::Claude,
             "--project",
             PeriodicUpdatePolicy::Manual,
             &state_path,
+            &runtime_paths,
         );
-        assert!(manual.contains("--update-policy manual --require-signed-manifest --format json"));
+        assert!(manual.contains("--update-policy"));
+        assert!(manual.contains("manual"));
+        assert!(manual.contains("--require-signed-manifest"));
+        assert!(manual.contains("--format"));
+        assert!(manual.contains("json"));
     }
 
     #[test]
@@ -3206,18 +3332,18 @@ codemod-skill-version: 0.1.0
             .find(|entry| entry.name == "codemod-mcp")
             .expect("expected MCP install entry");
 
-        assert_eq!(installed_skill.name, MCS_SKILL_NAME);
+        assert_eq!(installed_skill.name, MCS_SKILL_COMPONENT_ID);
         assert!(installed_skill.path.exists());
         assert!(installed_skill
             .path
             .to_string_lossy()
-            .contains(".claude/skills/codemod-cli/SKILL.md"));
+            .contains(".claude/skills/codemod/SKILL.md"));
 
         let skill_root = runtime_paths
             .cwd
             .join(".claude")
             .join("skills")
-            .join("codemod-cli");
+            .join("codemod");
 
         for (relative_path, _) in MCS_REFERENCE_FILES {
             assert!(
@@ -3230,14 +3356,27 @@ codemod-skill-version: 0.1.0
         assert!(mcp_entry.path.exists());
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&mcp_entry.path).unwrap()).unwrap();
+        let command = config
+            .get("mcpServers")
+            .and_then(|servers| servers.get("codemod"))
+            .and_then(|server| server.get("command"))
+            .and_then(|value| value.as_str())
+            .unwrap();
+        let args = config
+            .get("mcpServers")
+            .and_then(|servers| servers.get("codemod"))
+            .and_then(|server| server.get("args"))
+            .and_then(|value| value.as_array())
+            .unwrap();
         assert_eq!(
-            config
-                .get("mcpServers")
-                .and_then(|servers| servers.get("codemod"))
-                .and_then(|server| server.get("command"))
-                .and_then(|command| command.as_str()),
-            Some("npx")
+            command,
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
         );
+        assert_eq!(args.last().and_then(|value| value.as_str()), Some("mcp"));
     }
 
     #[test]
@@ -3262,7 +3401,7 @@ codemod-skill-version: 0.1.0
             assert!(installed_skill
                 .path
                 .to_string_lossy()
-                .contains(&format!("{harness_dir}/skills/codemod-cli/SKILL.md")));
+                .contains(&format!("{harness_dir}/skills/codemod/SKILL.md")));
             assert_eq!(
                 mcp_entry.path,
                 expected_project_mcp_path(&runtime_paths, harness)
@@ -3361,7 +3500,7 @@ codemod-skill-version: 0.1.0
         fs::write(
             installed
                 .iter()
-                .find(|entry| entry.name == MCS_SKILL_NAME)
+                .find(|entry| entry.name == MCS_SKILL_COMPONENT_ID)
                 .unwrap()
                 .path
                 .clone(),
@@ -4037,10 +4176,10 @@ codemod-skill-version: 0.1.0
 
     #[test]
     fn upsert_mcp_server_creates_expected_config() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join(".mcp.json");
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".mcp.json");
 
-        upsert_codemod_mcp_server(&config_path, false).unwrap();
+        upsert_codemod_mcp_server(&config_path, false, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4048,17 +4187,30 @@ codemod-skill-version: 0.1.0
             parsed
                 .get("mcpServers")
                 .and_then(|servers| servers.get("codemod"))
+                .and_then(|server| server.get("command"))
+                .and_then(|value| value.as_str()),
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .as_deref()
+        );
+        assert_eq!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
                 .and_then(|server| server.get("args"))
                 .and_then(|args| args.as_array())
-                .map(std::vec::Vec::len),
-            Some(2)
+                .and_then(|args| args.last())
+                .and_then(|value| value.as_str()),
+            Some("mcp")
         );
     }
 
     #[test]
     fn upsert_mcp_server_preserves_existing_non_codemod_entries() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join(".mcp.json");
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".mcp.json");
         let existing = serde_json::json!({
             "mcpServers": {
                 "custom": {
@@ -4073,7 +4225,7 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        upsert_codemod_mcp_server(&config_path, false).unwrap();
+        upsert_codemod_mcp_server(&config_path, false, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4089,8 +4241,8 @@ codemod-skill-version: 0.1.0
 
     #[test]
     fn upsert_mcp_server_requires_force_for_conflicting_codemod_entry() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join(".mcp.json");
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".mcp.json");
         let existing = serde_json::json!({
             "mcpServers": {
                 "codemod": {
@@ -4105,7 +4257,7 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        let update_result = upsert_codemod_mcp_server(&config_path, false);
+        let update_result = upsert_codemod_mcp_server(&config_path, false, &runtime_paths);
         assert!(matches!(
             update_result,
             Err(HarnessAdapterError::InstallFailed(message))
@@ -4115,8 +4267,8 @@ codemod-skill-version: 0.1.0
 
     #[test]
     fn upsert_mcp_server_force_overwrites_conflicting_codemod_entry() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join(".mcp.json");
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".mcp.json");
         let existing = serde_json::json!({
             "mcpServers": {
                 "codemod": {
@@ -4131,7 +4283,7 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        upsert_codemod_mcp_server(&config_path, true).unwrap();
+        upsert_codemod_mcp_server(&config_path, true, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4140,8 +4292,22 @@ codemod-skill-version: 0.1.0
                 .get("mcpServers")
                 .and_then(|servers| servers.get("codemod"))
                 .and_then(|server| server.get("command"))
-                .and_then(|command| command.as_str()),
-            Some("npx")
+                .and_then(|value| value.as_str()),
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .as_deref()
+        );
+        assert_eq!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
+                .and_then(|server| server.get("args"))
+                .and_then(|args| args.as_array())
+                .and_then(|args| args.last())
+                .and_then(|value| value.as_str()),
+            Some("mcp")
         );
     }
 
