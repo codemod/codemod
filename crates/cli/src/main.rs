@@ -454,6 +454,28 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_agent_install_with_manual_periodic_policy() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--periodic-policy", "manual"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_runtime_update_policy_flags() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "agent",
+            "install",
+            "--update-policy",
+            "notify",
+            "--update-source",
+            "registry",
+            "--require-signed-manifest",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn parser_accepts_init_skill_flag() {
         let parse_result = Cli::try_parse_from([
             "codemod",
@@ -545,5 +567,10 @@ mod tests {
         assert!(help_text.contains("opencode"));
         assert!(help_text.contains("cursor"));
         assert!(help_text.contains("--interactive"));
+        assert!(help_text.contains("--periodic-policy"));
+        assert!(help_text.contains("--update-policy"));
+        assert!(help_text.contains("--update-source"));
+        assert!(help_text.contains("--require-signed-manifest"));
+        assert!(help_text.contains("auto-safe"));
     }
 }

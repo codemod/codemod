@@ -2,8 +2,14 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 const MCS_SKILL_NAME: &str = "codemod-cli";
@@ -61,6 +67,25 @@ const AGENTS_GUIDE_FILE_NAME: &str = "AGENTS.md";
 const CLAUDE_GUIDE_FILE_NAME: &str = "CLAUDE.md";
 const CODEMOD_MANAGED_STATE_SCHEMA_VERSION: &str = "1";
 const CODEMOD_MANAGED_STATE_RELATIVE_PATH: &str = "codemod/managed-install-state.json";
+const CODEMOD_MANAGED_STATE_LOCK_TIMEOUT_MILLIS: u64 = 3_000;
+const CODEMOD_MANAGED_STATE_LOCK_RETRY_MILLIS: u64 = 200;
+const CODEMOD_MANAGED_STATE_LOCK_STALE_SECS: u64 = 600;
+const CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR: &str = "codemod/periodic-update";
+const CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME: &str = "check-updates.sh";
+const CODEMOD_PERIODIC_UPDATE_STATE_FILE_NAME: &str = "last-check-epoch-secs";
+const CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS: u64 = 21_600;
+const CODEMOD_PERIODIC_UPDATE_DEFAULT_POLICY: &str = "auto-safe";
+const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME: &str = ".goosehints";
+const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN: &str = "<!-- codemod-periodic-update:begin -->";
+const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
+const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME: &str = "hooks.json";
+const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME: &str = "afterAgentResponse";
+const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME: &str = "plugins";
+const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME: &str = "codemod-periodic-update.js";
+const CODEMOD_PERIODIC_TRIGGER_OPENCODE_USER_CONFIG_RELATIVE_DIR: &str = ".config/opencode";
+const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_EVENT_NAME: &str = "session.idle";
+const CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
+const CODEMOD_PERIODIC_TRIGGER_CLAUDE_SESSION_START_EVENT: &str = "SessionStart";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillPackageInstallSpec {
@@ -98,6 +123,29 @@ pub enum OutputFormat {
     Table,
     Json,
     Yaml,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PeriodicUpdatePolicy {
+    Manual,
+    Notify,
+    AutoSafe,
+}
+
+impl Default for PeriodicUpdatePolicy {
+    fn default() -> Self {
+        Self::AutoSafe
+    }
+}
+
+impl PeriodicUpdatePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Notify => "notify",
+            Self::AutoSafe => "auto-safe",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,6 +218,37 @@ pub struct ManagedStateWriteResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeriodicUpdateTriggerUpsertResult {
+    pub tracked_paths: Vec<PathBuf>,
+    pub updated_paths: Vec<PathBuf>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PeriodicUpdateIntegrationKind {
+    Hook,
+    Plugin,
+    Guidance,
+}
+
+impl PeriodicUpdateIntegrationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hook => "hook",
+            Self::Plugin => "plugin",
+            Self::Guidance => "guidance",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PeriodicUpdateTriggerStrategy {
+    integration_path: PathBuf,
+    integration_kind: PeriodicUpdateIntegrationKind,
+    upsert: fn(&Path, &Path) -> AdapterResult<bool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstalledSkill {
     pub name: String,
     pub path: PathBuf,
@@ -207,6 +286,51 @@ struct ManagedInstallStateComponent {
     path: String,
     version: Option<String>,
     fingerprint: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ManagedStateLockPolicy {
+    timeout: Duration,
+    retry_interval: Duration,
+    stale_after: Duration,
+}
+
+impl ManagedStateLockPolicy {
+    fn default_policy() -> Self {
+        Self {
+            timeout: Duration::from_millis(CODEMOD_MANAGED_STATE_LOCK_TIMEOUT_MILLIS),
+            retry_interval: Duration::from_millis(CODEMOD_MANAGED_STATE_LOCK_RETRY_MILLIS),
+            stale_after: Duration::from_secs(CODEMOD_MANAGED_STATE_LOCK_STALE_SECS),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct ManagedStateLockMetadata {
+    pid: u32,
+    acquired_at_epoch_secs: u64,
+}
+
+#[derive(Debug)]
+struct ManagedStateLockGuard {
+    path: PathBuf,
+    released: bool,
+}
+
+impl ManagedStateLockGuard {
+    fn release(mut self) {
+        self.released = true;
+        let _ = release_managed_state_lock(&self.path);
+    }
+}
+
+impl Drop for ManagedStateLockGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let _ = release_managed_state_lock(&self.path);
+    }
 }
 
 #[derive(Debug, Error)]
@@ -508,13 +632,542 @@ pub fn skill_discovery_guide_paths(
     discovery_guide_paths_with_runtime(harness, scope, &runtime_paths)
 }
 
+pub fn upsert_periodic_update_trigger(
+    harness: Harness,
+    scope: InstallScope,
+    periodic_policy: PeriodicUpdatePolicy,
+) -> AdapterResult<PeriodicUpdateTriggerUpsertResult> {
+    let runtime_paths = RuntimePaths::current()?;
+    upsert_periodic_update_trigger_with_runtime(harness, scope, periodic_policy, &runtime_paths)
+}
+
+fn upsert_periodic_update_trigger_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    periodic_policy: PeriodicUpdatePolicy,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PeriodicUpdateTriggerUpsertResult> {
+    let harness_root = harness_root_for_scope(harness, scope, runtime_paths)?;
+    let trigger_strategy =
+        periodic_update_trigger_strategy(harness, scope, runtime_paths, &harness_root)?;
+    let periodic_root = harness_root.join(CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR);
+    let runner_path = periodic_root.join(CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME);
+    let state_path = periodic_root.join(CODEMOD_PERIODIC_UPDATE_STATE_FILE_NAME);
+
+    let tracked_paths = vec![
+        runner_path.clone(),
+        trigger_strategy.integration_path.clone(),
+    ];
+    let mut updated_paths = Vec::new();
+    let mut notes = Vec::new();
+
+    let runner_updated = write_periodic_update_runner_script(
+        harness,
+        scope,
+        periodic_policy,
+        &runner_path,
+        &state_path,
+    )?;
+    if runner_updated {
+        updated_paths.push(runner_path.clone());
+    }
+
+    if (trigger_strategy.upsert)(&trigger_strategy.integration_path, &runner_path)? {
+        updated_paths.push(trigger_strategy.integration_path.clone());
+    }
+
+    if runner_updated {
+        notes.push(format!(
+            "Installed periodic update runner: {}",
+            runner_path.display()
+        ));
+        notes.push(format!(
+            "Periodic update policy configured as `{}` (change with `codemod agent install --periodic-policy <manual|notify|auto-safe>`).",
+            periodic_policy.as_str(),
+        ));
+        notes.push(
+            "Periodic update manifest signature verification is enforced (`--require-signed-manifest` is baked into periodic runner command).".to_string(),
+        );
+    }
+    if updated_paths
+        .iter()
+        .any(|path| path == &trigger_strategy.integration_path)
+    {
+        notes.push(format!(
+            "Updated periodic update {}: {}",
+            trigger_strategy.integration_kind.as_str(),
+            trigger_strategy.integration_path.display()
+        ));
+    }
+
+    Ok(PeriodicUpdateTriggerUpsertResult {
+        tracked_paths,
+        updated_paths,
+        notes,
+    })
+}
+
+fn harness_root_for_scope(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    let harness_dir = harness_hidden_dir(harness)?;
+    match scope {
+        InstallScope::Project => Ok(runtime_paths.cwd.join(harness_dir)),
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| home.join(harness_dir))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+    }
+}
+
+fn periodic_update_trigger_strategy(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+    harness_root: &Path,
+) -> AdapterResult<PeriodicUpdateTriggerStrategy> {
+    match harness {
+        Harness::Claude => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: harness_root.join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME),
+            integration_kind: PeriodicUpdateIntegrationKind::Hook,
+            upsert: upsert_claude_session_start_periodic_hook,
+        }),
+        Harness::Goose => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: goose_hints_path_for_scope(scope, runtime_paths)?,
+            integration_kind: PeriodicUpdateIntegrationKind::Guidance,
+            upsert: upsert_goose_periodic_update_hints,
+        }),
+        Harness::Cursor => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: harness_root.join(CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME),
+            integration_kind: PeriodicUpdateIntegrationKind::Hook,
+            upsert: upsert_cursor_periodic_update_hook,
+        }),
+        Harness::Opencode => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: opencode_periodic_plugin_path_for_scope(
+                scope,
+                runtime_paths,
+                harness_root,
+            )?,
+            integration_kind: PeriodicUpdateIntegrationKind::Plugin,
+            upsert: upsert_opencode_periodic_update_plugin,
+        }),
+        Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness(
+            "auto is not valid for periodic trigger upsert".to_string(),
+        )),
+    }
+}
+
+fn goose_hints_path_for_scope(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    match scope {
+        InstallScope::Project => Ok(runtime_paths
+            .cwd
+            .join(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME)),
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| home.join(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+    }
+}
+
+fn opencode_periodic_plugin_path_for_scope(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+    harness_root: &Path,
+) -> AdapterResult<PathBuf> {
+    match scope {
+        InstallScope::Project => Ok(harness_root
+            .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME)
+            .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME)),
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| {
+                home.join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_USER_CONFIG_RELATIVE_DIR)
+                    .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME)
+                    .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME)
+            })
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+    }
+}
+
+fn write_periodic_update_runner_script(
+    harness: Harness,
+    scope: InstallScope,
+    periodic_policy: PeriodicUpdatePolicy,
+    runner_path: &Path,
+    state_path: &Path,
+) -> AdapterResult<bool> {
+    let scope_flag = match scope {
+        InstallScope::Project => "--project",
+        InstallScope::User => "--user",
+    };
+    let script =
+        build_periodic_update_runner_script(harness, scope_flag, periodic_policy, state_path);
+    let updated = write_file_if_changed(runner_path, script.as_bytes())?;
+    #[cfg(unix)]
+    {
+        ensure_executable_permissions(runner_path)?;
+    }
+    Ok(updated)
+}
+
+fn build_periodic_update_runner_script(
+    harness: Harness,
+    scope_flag: &str,
+    periodic_policy: PeriodicUpdatePolicy,
+    state_path: &Path,
+) -> String {
+    let quoted_state_path = shell_single_quote(&state_path.to_string_lossy());
+    format!(
+        r#"#!/bin/sh
+set -eu
+STATE_FILE={quoted_state_path}
+INTERVAL={default_interval}
+
+NOW="$(date +%s 2>/dev/null || printf '0')"
+if [ "$NOW" = "0" ]; then
+  exit 0
+fi
+
+LAST=0
+if [ -f "$STATE_FILE" ]; then
+  LAST="$(cat "$STATE_FILE" 2>/dev/null || printf '0')"
+  case "$LAST" in
+    ''|*[!0-9]*) LAST=0 ;;
+  esac
+fi
+
+if [ "$LAST" -gt 0 ] && [ $((NOW - LAST)) -lt "$INTERVAL" ]; then
+  exit 0
+fi
+
+mkdir -p "$(dirname "$STATE_FILE")"
+printf '%s\n' "$NOW" > "$STATE_FILE"
+
+OUTPUT="$(npx codemod agent install --harness {harness_name} {scope_flag} --update-policy {policy} --require-signed-manifest --format json 2>&1 || true)"
+if printf '%s' "$OUTPUT" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"update_available"|"rolled_back"[[:space:]]*:[[:space:]]*true|"failed"[[:space:]]*:[[:space:]]*[1-9]'; then
+  printf '%s\n' "$OUTPUT"
+fi
+"#,
+        default_interval = CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS,
+        policy = periodic_policy.as_str(),
+        harness_name = harness.as_str(),
+        scope_flag = scope_flag,
+    )
+}
+
+fn upsert_claude_session_start_periodic_hook(
+    settings_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    let existing = if settings_path.exists() {
+        fs::read_to_string(settings_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Claude settings {}: {error}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut settings: Value = serde_json::from_str(&existing).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Claude settings {} are not valid JSON: {error}",
+            settings_path.display()
+        ))
+    })?;
+
+    let Some(root_object) = settings.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Claude settings {} must contain a top-level JSON object",
+            settings_path.display()
+        )));
+    };
+
+    let hooks_value = root_object
+        .entry("hooks".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(hooks_object) = hooks_value.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Claude settings {} have non-object `hooks` entry",
+            settings_path.display()
+        )));
+    };
+
+    let session_start_value = hooks_object
+        .entry(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SESSION_START_EVENT.to_string())
+        .or_insert_with(|| json!([]));
+    let Some(session_start_hooks) = session_start_value.as_array_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Claude settings {} have non-array `hooks.{}` entry",
+            settings_path.display(),
+            CODEMOD_PERIODIC_TRIGGER_CLAUDE_SESSION_START_EVENT
+        )));
+    };
+
+    let command = runner_path.to_string_lossy().to_string();
+    let already_present = session_start_hooks.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|hooks| {
+                hooks.iter().any(|hook| {
+                    hook.get("type").and_then(Value::as_str) == Some("command")
+                        && hook.get("command").and_then(Value::as_str) == Some(command.as_str())
+                })
+            })
+    });
+
+    if !already_present {
+        session_start_hooks.push(json!({
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command
+                }
+            ]
+        }));
+    }
+
+    let serialized = serde_json::to_string_pretty(&settings).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize Claude settings {}: {error}",
+            settings_path.display()
+        ))
+    })?;
+    write_file_if_changed(settings_path, format!("{serialized}\n").as_bytes())
+}
+
+fn upsert_goose_periodic_update_hints(
+    hints_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    let existing = if hints_path.exists() {
+        fs::read_to_string(hints_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Goose hints file {}: {error}",
+                hints_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let block = render_goose_periodic_update_block(runner_path);
+    let updated = upsert_managed_block(
+        &existing,
+        CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN,
+        CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END,
+        &block,
+    );
+    if updated == existing {
+        return Ok(false);
+    }
+
+    write_file_if_changed(hints_path, updated.as_bytes())
+}
+
+fn render_goose_periodic_update_block(runner_path: &Path) -> String {
+    format!(
+        r#"{begin}
+Run this command once when a session starts to keep codemod-managed assets fresh (the command has cooldown + no-update quiet behavior):
+`{runner_path}`
+{end}"#,
+        begin = CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN,
+        runner_path = runner_path.display(),
+        end = CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END,
+    )
+}
+
+fn upsert_cursor_periodic_update_hook(
+    hooks_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    let mut hooks = if hooks_path.exists() {
+        let content = fs::read_to_string(hooks_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Cursor hooks {}: {error}",
+                hooks_path.display()
+            ))
+        })?;
+        serde_json::from_str::<Value>(&content).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Cursor hooks {} are not valid JSON: {error}",
+                hooks_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let Some(root_object) = hooks.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Cursor hooks {} must contain a top-level JSON object",
+            hooks_path.display()
+        )));
+    };
+
+    root_object
+        .entry("version".to_string())
+        .or_insert_with(|| json!(1));
+    let hooks_value = root_object
+        .entry("hooks".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(hooks_object) = hooks_value.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Cursor hooks {} have non-object `hooks` entry",
+            hooks_path.display()
+        )));
+    };
+
+    let event_value = hooks_object
+        .entry(CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME.to_string())
+        .or_insert_with(|| json!([]));
+    let Some(event_hooks) = event_value.as_array_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Cursor hooks {} have non-array `hooks.{}` entry",
+            hooks_path.display(),
+            CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME
+        )));
+    };
+
+    let command = runner_path.to_string_lossy().to_string();
+    let already_present = event_hooks.iter().any(|entry| {
+        entry
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|existing| existing == command)
+    });
+
+    if !already_present {
+        event_hooks.push(json!({ "command": command }));
+    }
+
+    let serialized = serde_json::to_string_pretty(&hooks).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize Cursor hooks {}: {error}",
+            hooks_path.display()
+        ))
+    })?;
+    write_file_if_changed(hooks_path, format!("{serialized}\n").as_bytes())
+}
+
+fn upsert_opencode_periodic_update_plugin(
+    plugin_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    let runner_literal =
+        serde_json::to_string(&runner_path.to_string_lossy()).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to encode OpenCode runner path {}: {error}",
+                runner_path.display()
+            ))
+        })?;
+    let content = format!(
+        r#"export async function CodemodPeriodicUpdate() {{
+  const runnerPath = {runner_literal};
+  return {{
+    event: async ({{ event, $ }}) => {{
+      if (event?.type !== "{event_name}") {{
+        return;
+      }}
+
+      try {{
+        await $`sh ${{runnerPath}}`;
+      }} catch {{
+        // Best-effort only: keep startup non-blocking.
+      }}
+    }},
+  }};
+}}
+"#,
+        event_name = CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_EVENT_NAME,
+        runner_literal = runner_literal,
+    );
+    write_file_if_changed(plugin_path, content.as_bytes())
+}
+
+fn shell_single_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
+}
+
+fn write_file_if_changed(path: &Path, bytes: &[u8]) -> AdapterResult<bool> {
+    if let Some(parent_dir) = path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    if path.exists() {
+        let existing = fs::read(path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read {}: {error}",
+                path.display()
+            ))
+        })?;
+        if existing == bytes {
+            return Ok(false);
+        }
+    }
+
+    fs::write(path, bytes).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!("Failed to write {}: {error}", path.display()))
+    })?;
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn ensure_executable_permissions(path: &Path) -> AdapterResult<()> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read file metadata {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to set executable permissions on {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
 fn upsert_skill_discovery_guides_with_runtime(
     harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
     let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
+    let periodic_runner_hint = periodic_runner_hint_for_scope(harness, scope)?;
+    let discovery_block =
+        render_skill_discovery_block(harness, &skill_root_hint, &periodic_runner_hint);
     let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
     let mut updated_files = Vec::new();
 
@@ -555,7 +1208,23 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
     })
 }
 
-fn render_skill_discovery_block(harness: Harness, skill_root_hint: &str) -> String {
+fn periodic_runner_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
+    let harness_dir = harness_hidden_dir(harness)?;
+    Ok(match scope {
+        InstallScope::Project => format!(
+            "{harness_dir}/{CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR}/{CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME}"
+        ),
+        InstallScope::User => format!(
+            "~/{harness_dir}/{CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR}/{CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME}"
+        ),
+    })
+}
+
+fn render_skill_discovery_block(
+    harness: Harness,
+    skill_root_hint: &str,
+    periodic_runner_hint: &str,
+) -> String {
     format!(
         "{SKILL_DISCOVERY_SECTION_BEGIN}
 ## Codemod Skill Discovery
@@ -565,6 +1234,9 @@ This section is managed by `codemod` CLI.
 - MCS entry skill: `{skill_root_hint}/{MCS_SKILL_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
 - List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+- Periodic update runner: `{periodic_runner_hint}` (contains cooldown + quiet no-update behavior)
+- Configure periodic update policy with install flag: `npx codemod agent install --periodic-policy <manual|notify|auto-safe>` (default `{CODEMOD_PERIODIC_UPDATE_DEFAULT_POLICY}`)
+- Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the runner command
 
 {}
 {SKILL_DISCOVERY_SECTION_END}",
@@ -610,12 +1282,25 @@ fn upsert_discovery_block_in_file(file_path: &Path, block: &str) -> AdapterResul
 }
 
 fn upsert_managed_discovery_block(existing: &str, block: &str) -> String {
-    if let (Some(begin_index), Some(end_start)) = (
-        existing.find(SKILL_DISCOVERY_SECTION_BEGIN),
-        existing.find(SKILL_DISCOVERY_SECTION_END),
-    ) {
+    upsert_managed_block(
+        existing,
+        SKILL_DISCOVERY_SECTION_BEGIN,
+        SKILL_DISCOVERY_SECTION_END,
+        block,
+    )
+}
+
+fn upsert_managed_block(
+    existing: &str,
+    begin_marker: &str,
+    end_marker: &str,
+    block: &str,
+) -> String {
+    if let (Some(begin_index), Some(end_start)) =
+        (existing.find(begin_marker), existing.find(end_marker))
+    {
         if end_start >= begin_index {
-            let end_index = end_start + SKILL_DISCOVERY_SECTION_END.len();
+            let end_index = end_start + end_marker.len();
             let mut updated = String::new();
             updated.push_str(&existing[..begin_index]);
             updated.push_str(block);
@@ -651,12 +1336,22 @@ fn persist_managed_install_state_with_runtime(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<ManagedStateWriteResult> {
     let state_path = managed_state_path_for_harness(harness, scope, runtime_paths)?;
+    let lock_guard = acquire_managed_state_lock(&state_path)?;
     let expected_state = build_managed_install_state(harness, scope, components);
-    let existing_state = read_managed_install_state_if_present(&state_path)?;
+    let result = persist_managed_install_state_locked(&state_path, &expected_state);
+    lock_guard.release();
+    result
+}
 
-    if existing_state.as_ref() == Some(&expected_state) {
+fn persist_managed_install_state_locked(
+    state_path: &Path,
+    expected_state: &ManagedInstallState,
+) -> AdapterResult<ManagedStateWriteResult> {
+    let existing_state = read_managed_install_state_if_present(state_path)?;
+
+    if existing_state.as_ref() == Some(expected_state) {
         return Ok(ManagedStateWriteResult {
-            path: state_path,
+            path: state_path.to_path_buf(),
             status: ManagedStateWriteStatus::Unchanged,
         });
     }
@@ -670,19 +1365,14 @@ fn persist_managed_install_state_with_runtime(
         })?;
     }
 
-    let serialized = serde_json::to_string_pretty(&expected_state).map_err(|error| {
+    let serialized = serde_json::to_string_pretty(expected_state).map_err(|error| {
         HarnessAdapterError::InstallFailed(format!(
             "Failed to serialize managed install state {}: {error}",
             state_path.display()
         ))
     })?;
 
-    fs::write(&state_path, format!("{serialized}\n")).map_err(|error| {
-        HarnessAdapterError::InstallFailed(format!(
-            "Failed to write managed install state {}: {error}",
-            state_path.display()
-        ))
-    })?;
+    write_atomic(state_path, format!("{serialized}\n").as_bytes())?;
 
     let status = if existing_state.is_some() {
         ManagedStateWriteStatus::Updated
@@ -691,7 +1381,7 @@ fn persist_managed_install_state_with_runtime(
     };
 
     Ok(ManagedStateWriteResult {
-        path: state_path,
+        path: state_path.to_path_buf(),
         status,
     })
 }
@@ -720,6 +1410,235 @@ fn managed_state_path_for_harness(
                 )
             }),
     }
+}
+
+fn acquire_managed_state_lock(state_path: &Path) -> AdapterResult<ManagedStateLockGuard> {
+    acquire_managed_state_lock_with_policy(state_path, ManagedStateLockPolicy::default_policy())
+}
+
+fn acquire_managed_state_lock_with_policy(
+    state_path: &Path,
+    policy: ManagedStateLockPolicy,
+) -> AdapterResult<ManagedStateLockGuard> {
+    let lock_path = managed_state_lock_path(state_path)?;
+    if let Some(parent_dir) = lock_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create managed state lock directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let started_at = Instant::now();
+    loop {
+        match try_create_managed_state_lock(&lock_path) {
+            Ok(()) => {
+                return Ok(ManagedStateLockGuard {
+                    path: lock_path,
+                    released: false,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if maybe_recover_stale_managed_state_lock(&lock_path, policy.stale_after)? {
+                    continue;
+                }
+                if started_at.elapsed() >= policy.timeout {
+                    return Err(HarnessAdapterError::InstallFailed(format!(
+                        "Managed state lock acquisition timed out after {}ms (retry {}ms) for {}",
+                        policy.timeout.as_millis(),
+                        policy.retry_interval.as_millis(),
+                        state_path.display()
+                    )));
+                }
+                sleep(policy.retry_interval);
+            }
+            Err(error) => {
+                return Err(HarnessAdapterError::InstallFailed(format!(
+                    "Failed to acquire managed state lock {}: {error}",
+                    lock_path.display()
+                )));
+            }
+        }
+    }
+}
+
+fn managed_state_lock_path(state_path: &Path) -> AdapterResult<PathBuf> {
+    let parent_dir = state_path.parent().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Managed state path {} is missing a parent directory",
+            state_path.display()
+        ))
+    })?;
+    let file_name = state_path.file_name().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Managed state path {} is missing a file name",
+            state_path.display()
+        ))
+    })?;
+    let mut lock_name: OsString = file_name.to_os_string();
+    lock_name.push(".lock");
+    Ok(parent_dir.join(lock_name))
+}
+
+fn try_create_managed_state_lock(lock_path: &Path) -> std::io::Result<()> {
+    let mut lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)?;
+    let metadata = ManagedStateLockMetadata {
+        pid: std::process::id(),
+        acquired_at_epoch_secs: now_epoch_secs(),
+    };
+    let serialized = serde_json::to_vec(&metadata).map_err(std::io::Error::other)?;
+    lock_file.write_all(&serialized)?;
+    lock_file.flush()?;
+    Ok(())
+}
+
+fn maybe_recover_stale_managed_state_lock(
+    lock_path: &Path,
+    stale_after: Duration,
+) -> AdapterResult<bool> {
+    let is_stale = is_managed_state_lock_stale(lock_path, stale_after)?;
+    if !is_stale {
+        return Ok(false);
+    }
+
+    fs::remove_file(lock_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to remove stale managed state lock {}: {error}",
+            lock_path.display()
+        ))
+    })?;
+    Ok(true)
+}
+
+fn is_managed_state_lock_stale(lock_path: &Path, stale_after: Duration) -> AdapterResult<bool> {
+    let payload = fs::read(lock_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read managed state lock {}: {error}",
+            lock_path.display()
+        ))
+    })?;
+
+    match serde_json::from_slice::<ManagedStateLockMetadata>(&payload) {
+        Ok(metadata) => {
+            let age_secs = now_epoch_secs().saturating_sub(metadata.acquired_at_epoch_secs);
+            Ok(age_secs > stale_after.as_secs())
+        }
+        Err(_) => {
+            let metadata = fs::metadata(lock_path).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to inspect managed state lock {}: {error}",
+                    lock_path.display()
+                ))
+            })?;
+            let modified_at = metadata.modified().map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to read managed state lock timestamp {}: {error}",
+                    lock_path.display()
+                ))
+            })?;
+            let age_secs = age_from_system_time_secs(modified_at);
+            Ok(age_secs > stale_after.as_secs())
+        }
+    }
+}
+
+fn release_managed_state_lock(lock_path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(lock_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> AdapterResult<()> {
+    let parent_dir = path.parent().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Managed state path {} is missing a parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent_dir).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to create directory {}: {error}",
+            parent_dir.display()
+        ))
+    })?;
+
+    let temp_path = atomic_temp_path(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to open temp file {} for atomic write: {error}",
+                temp_path.display()
+            ))
+        })?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Failed to write temp file {} for atomic write: {error}",
+            temp_path.display()
+        )));
+    }
+    drop(file);
+
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to atomically replace managed state file {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn atomic_temp_path(path: &Path) -> AdapterResult<PathBuf> {
+    let parent_dir = path.parent().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Managed state path {} is missing a parent directory",
+            path.display()
+        ))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Managed state path {} is missing a file name",
+            path.display()
+        ))
+    })?;
+    let mut temp_name: OsString = file_name.to_os_string();
+    temp_name.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        now_epoch_millis()
+    ));
+    Ok(parent_dir.join(temp_name))
+}
+
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn now_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn age_from_system_time_secs(system_time: SystemTime) -> u64 {
+    SystemTime::now()
+        .duration_since(system_time)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn read_managed_install_state_if_present(
@@ -1703,6 +2622,39 @@ mod tests {
         }
     }
 
+    fn expected_harness_root(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> PathBuf {
+        let harness_dir = harness_hidden_dir_name(harness);
+        match scope {
+            InstallScope::Project => runtime_paths.cwd.join(harness_dir),
+            InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(harness_dir),
+        }
+    }
+
+    fn expected_periodic_runner_path(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> PathBuf {
+        expected_harness_root(runtime_paths, harness, scope)
+            .join(CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR)
+            .join(CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME)
+    }
+
+    fn expected_periodic_integration_path(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> PathBuf {
+        let harness_root = expected_harness_root(runtime_paths, harness, scope);
+        periodic_update_trigger_strategy(harness, scope, runtime_paths, &harness_root)
+            .unwrap()
+            .integration_path
+    }
+
     fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
         let temp_dir = tempdir().unwrap();
         let runtime_paths = RuntimePaths {
@@ -1941,6 +2893,236 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn upsert_periodic_update_trigger_supports_all_harnesses() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in ALL_HARNESSES {
+            let result = upsert_periodic_update_trigger_with_runtime(
+                harness,
+                InstallScope::Project,
+                PeriodicUpdatePolicy::AutoSafe,
+                &runtime_paths,
+            )
+            .unwrap();
+            let runner_path =
+                expected_periodic_runner_path(&runtime_paths, harness, InstallScope::Project);
+            let integration_path =
+                expected_periodic_integration_path(&runtime_paths, harness, InstallScope::Project);
+            assert!(runner_path.exists());
+            assert!(result.tracked_paths.contains(&runner_path));
+            assert!(integration_path.exists());
+            assert!(result.tracked_paths.contains(&integration_path));
+
+            match harness {
+                Harness::Claude => {
+                    let settings_path = expected_harness_root(
+                        &runtime_paths,
+                        Harness::Claude,
+                        InstallScope::Project,
+                    )
+                    .join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME);
+                    let settings = fs::read_to_string(&settings_path).unwrap();
+                    assert!(settings.contains(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SESSION_START_EVENT));
+                    assert!(settings.contains(&runner_path.to_string_lossy().to_string()));
+                }
+                Harness::Goose => {
+                    let hints_path = runtime_paths
+                        .cwd
+                        .join(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME);
+                    let hints = fs::read_to_string(&hints_path).unwrap();
+                    assert!(hints.contains(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN));
+                    assert!(hints.contains(&runner_path.to_string_lossy().to_string()));
+                }
+                Harness::Cursor => {
+                    let hooks_path = expected_harness_root(
+                        &runtime_paths,
+                        Harness::Cursor,
+                        InstallScope::Project,
+                    )
+                    .join(CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME);
+                    let hooks_content = fs::read_to_string(&hooks_path).unwrap();
+                    let hooks_json: Value = serde_json::from_str(&hooks_content).unwrap();
+                    assert_eq!(hooks_json["version"], json!(1));
+                    let commands = hooks_json["hooks"]
+                        [CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME]
+                        .as_array()
+                        .unwrap();
+                    assert!(commands.iter().any(|entry| {
+                        entry["command"]
+                            .as_str()
+                            .is_some_and(|command| command == runner_path.to_string_lossy())
+                    }));
+                }
+                Harness::Opencode => {
+                    let plugin_path = expected_harness_root(
+                        &runtime_paths,
+                        Harness::Opencode,
+                        InstallScope::Project,
+                    )
+                    .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME)
+                    .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME);
+                    let plugin = fs::read_to_string(&plugin_path).unwrap();
+                    assert!(plugin.contains("export async function CodemodPeriodicUpdate"));
+                    assert!(plugin.contains(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_EVENT_NAME));
+                    assert!(plugin.contains(&runner_path.to_string_lossy().to_string()));
+                }
+                Harness::Auto => unreachable!("auto is not part of ALL_HARNESSES"),
+            }
+        }
+    }
+
+    #[test]
+    fn periodic_update_runner_script_embeds_selected_policy_and_signed_manifest_default() {
+        let state_path = PathBuf::from("/tmp/codemod/periodic-update/state");
+        let auto_safe = build_periodic_update_runner_script(
+            Harness::Claude,
+            "--project",
+            PeriodicUpdatePolicy::AutoSafe,
+            &state_path,
+        );
+        assert!(
+            auto_safe.contains("--update-policy auto-safe --require-signed-manifest --format json")
+        );
+
+        let manual = build_periodic_update_runner_script(
+            Harness::Claude,
+            "--project",
+            PeriodicUpdatePolicy::Manual,
+            &state_path,
+        );
+        assert!(manual.contains("--update-policy manual --require-signed-manifest --format json"));
+    }
+
+    #[test]
+    fn periodic_update_strategy_uses_opencode_user_plugin_config_dir() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let harness_root =
+            expected_harness_root(&runtime_paths, Harness::Opencode, InstallScope::User);
+        let strategy = periodic_update_trigger_strategy(
+            Harness::Opencode,
+            InstallScope::User,
+            &runtime_paths,
+            &harness_root,
+        )
+        .unwrap();
+
+        assert!(strategy
+            .integration_path
+            .ends_with(".config/opencode/plugins/codemod-periodic-update.js"));
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_is_idempotent_for_claude_hook() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let first = upsert_periodic_update_trigger_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(!first.updated_paths.is_empty());
+
+        let second = upsert_periodic_update_trigger_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(second.updated_paths.is_empty());
+
+        let runner_path =
+            expected_periodic_runner_path(&runtime_paths, Harness::Claude, InstallScope::Project);
+        let settings_path =
+            expected_harness_root(&runtime_paths, Harness::Claude, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME);
+        let settings = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(
+            count_occurrences(&settings, &runner_path.to_string_lossy()),
+            1
+        );
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_is_idempotent_for_cursor_hook() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let first = upsert_periodic_update_trigger_with_runtime(
+            Harness::Cursor,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(!first.updated_paths.is_empty());
+
+        let second = upsert_periodic_update_trigger_with_runtime(
+            Harness::Cursor,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(second.updated_paths.is_empty());
+
+        let runner_path =
+            expected_periodic_runner_path(&runtime_paths, Harness::Cursor, InstallScope::Project);
+        let hooks_path =
+            expected_harness_root(&runtime_paths, Harness::Cursor, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME);
+        let hooks: Value = serde_json::from_str(&fs::read_to_string(hooks_path).unwrap()).unwrap();
+        let entries = hooks["hooks"][CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry["command"]
+                        .as_str()
+                        .is_some_and(|command| command == runner_path.to_string_lossy())
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_is_idempotent_for_opencode_plugin() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let first = upsert_periodic_update_trigger_with_runtime(
+            Harness::Opencode,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(!first.updated_paths.is_empty());
+
+        let second = upsert_periodic_update_trigger_with_runtime(
+            Harness::Opencode,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        assert!(second.updated_paths.is_empty());
+
+        let plugin_path =
+            expected_harness_root(&runtime_paths, Harness::Opencode, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME)
+                .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME);
+        let plugin = fs::read_to_string(plugin_path).unwrap();
+        assert_eq!(
+            count_occurrences(&plugin, "export async function CodemodPeriodicUpdate"),
+            1
+        );
+    }
+
+    #[test]
     fn resolve_install_scope_rejects_conflicting_flags() {
         assert!(resolve_install_scope(true, true).is_err());
     }
@@ -2125,6 +3307,8 @@ codemod-skill-version: 0.1.0
         assert_eq!(first.status, ManagedStateWriteStatus::Created);
         assert_eq!(second.status, ManagedStateWriteStatus::Unchanged);
         assert!(first.path.exists());
+        let lock_path = managed_state_lock_path(&first.path).unwrap();
+        assert!(!lock_path.exists());
     }
 
     #[test]
@@ -2226,6 +3410,62 @@ codemod-skill-version: 0.1.0
                 assert!(state_content.contains(&format!("\"scope\": \"{}\"", scope.as_str())));
             }
         }
+    }
+
+    #[test]
+    fn managed_state_lock_recovery_removes_stale_lock() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let state_path =
+            expected_managed_state_path(&runtime_paths, Harness::Claude, InstallScope::Project);
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        let lock_path = managed_state_lock_path(&state_path).unwrap();
+        let stale_lock = ManagedStateLockMetadata {
+            pid: 9999,
+            acquired_at_epoch_secs: now_epoch_secs().saturating_sub(120),
+        };
+        fs::write(&lock_path, serde_json::to_vec(&stale_lock).unwrap()).unwrap();
+
+        let guard = acquire_managed_state_lock_with_policy(
+            &state_path,
+            ManagedStateLockPolicy {
+                timeout: Duration::from_millis(40),
+                retry_interval: Duration::from_millis(10),
+                stale_after: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        assert!(lock_path.exists());
+        guard.release();
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn managed_state_lock_timeout_is_deterministic() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let state_path =
+            expected_managed_state_path(&runtime_paths, Harness::Claude, InstallScope::Project);
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        let lock_path = managed_state_lock_path(&state_path).unwrap();
+        try_create_managed_state_lock(&lock_path).unwrap();
+
+        let lock_error = acquire_managed_state_lock_with_policy(
+            &state_path,
+            ManagedStateLockPolicy {
+                timeout: Duration::from_millis(40),
+                retry_interval: Duration::from_millis(10),
+                stale_after: Duration::from_secs(600),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            lock_error,
+            HarnessAdapterError::InstallFailed(message)
+                if message.contains("timed out")
+                    && message.contains("40ms")
+                    && message.contains("10ms")
+        ));
+        let _ = release_managed_state_lock(&lock_path);
     }
 
     #[test]

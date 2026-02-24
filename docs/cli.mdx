@@ -69,7 +69,7 @@ Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 Install the `codemod-cli` MCS package and configure Codemod MCP.
 
 ```bash
-npx codemod agent install [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--format <table|json|yaml>]
+npx codemod agent install [--harness <claude|goose|opencode|cursor|auto>] [--project|--user] [--force] [--interactive] [--periodic-policy <manual|notify|auto-safe>] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <table|json|yaml>]
 ```
 
 Along with skill files, install writes or updates a Codemod MCP server entry:
@@ -94,6 +94,19 @@ MCP config paths by harness and scope:
 If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
 
 `agent install` also upserts a managed Codemod discovery section in `AGENTS.md` and `CLAUDE.md` (project root for `--project`, home directory for `--user`) without duplicating entries.
+`agent install` also wires a periodic, cooldown-protected update check trigger:
+- `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
+- `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
+- `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
+- `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.goosehints` (user) as fallback guidance
+Periodic update policy is install-flag driven:
+- `--periodic-policy <manual|notify|auto-safe>` (default: `auto-safe`)
+Install-time managed update policy is also flag-driven:
+- `--update-policy <manual|notify|auto-safe>` (default: `manual`)
+- `--update-source <local|registry|URL>` (default: `registry`)
+- `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
+  `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
+Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
 After install, restart or reload your harness session so newly installed skills and MCP config are picked up.
 
 **`agent list`**
