@@ -89,7 +89,7 @@ impl<'js> SgRootRjs<'js> {
     }
 
     pub fn source(&self) -> Result<String> {
-        Ok(self.inner.grep.source().to_string())
+        Ok(self.inner.grep.root().text().to_string())
     }
 
     /// Write content to this file.
@@ -146,47 +146,57 @@ impl<'js> SgRootRjs<'js> {
         Ok(())
     }
 
-    #[cfg(feature = "native")]
     pub fn write(&self, content: String, ctx: Ctx<'js>) -> Result<()> {
-        let file_path = match &self.inner.filename {
-            Some(f) => f,
-            None => {
-                return Err(Exception::throw_message(
-                    &ctx,
-                    "Cannot write: file has no path",
-                ))
-            }
-        };
-
-        if let Some(current_file) = &self.inner.current_file_path {
-            let file_path_normalized = std::path::Path::new(file_path)
-                .canonicalize()
-                .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
-            let current_file_normalized = std::path::Path::new(current_file)
-                .canonicalize()
-                .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
-
-            if file_path_normalized == current_file_normalized {
-                return Err(Exception::throw_message(
-                    &ctx,
-                    "Cannot call write() on the current file. Return the modified content from transform() instead.",
-                ));
-            }
-        }
-
-        let path = std::path::Path::new(file_path);
-        std::fs::write(path, &content).map_err(|e| {
-            Exception::throw_message(
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = content;
+            return Err(Exception::throw_message(
                 &ctx,
-                &format!("Failed to write file '{}': {}", file_path, e),
-            )
-        })?;
-
-        if let Some(ref provider) = self.inner.semantic_provider {
-            let _ = provider.notify_file_processed(path, &content);
+                "write() is only available in native mode",
+            ));
         }
+        #[cfg(feature = "native")]
+        {
+            let file_path = match &self.inner.filename {
+                Some(f) => f,
+                None => {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        "Cannot write: file has no path",
+                    ))
+                }
+            };
 
-        Ok(())
+            if let Some(current_file) = &self.inner.current_file_path {
+                let file_path_normalized = std::path::Path::new(file_path)
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
+                let current_file_normalized = std::path::Path::new(current_file)
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
+
+                if file_path_normalized == current_file_normalized {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        "Cannot call write() on the current file. Return the modified content from transform() instead.",
+                    ));
+                }
+            }
+
+            let path = std::path::Path::new(file_path);
+            std::fs::write(path, &content).map_err(|e| {
+                Exception::throw_message(
+                    &ctx,
+                    &format!("Failed to write file '{}': {}", file_path, e),
+                )
+            })?;
+
+            if let Some(ref provider) = self.inner.semantic_provider {
+                let _ = provider.notify_file_processed(path, &content);
+            }
+
+            Ok(())
+        }
     }
 }
 
@@ -800,89 +810,54 @@ impl<'js> SgNodeRjs<'js> {
     /// - No semantic provider is configured
     /// - No symbol is found at this position
     /// - The definition cannot be resolved (e.g., external symbol)
-    #[cfg(feature = "native")]
     #[qjs(rename = "definition")]
     pub fn definition(
         &self,
         ctx: Ctx<'js>,
         options: Opt<rquickjs::Object<'js>>,
     ) -> Result<Value<'js>> {
-        let provider = match &self.root.semantic_provider {
-            Some(p) => p,
-            None => return Ok(Value::new_null(ctx)),
-        };
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = options;
+            return Ok(Value::new_null(ctx));
+        }
+        #[cfg(feature = "native")]
+        {
+            let provider = match &self.root.semantic_provider {
+                Some(p) => p,
+                None => return Ok(Value::new_null(ctx)),
+            };
 
-        let file_path = match &self.root.filename {
-            Some(f) => std::path::PathBuf::from(f),
-            None => return Ok(Value::new_null(ctx)),
-        };
+            let file_path = match &self.root.filename {
+                Some(f) => std::path::PathBuf::from(f),
+                None => return Ok(Value::new_null(ctx)),
+            };
 
-        // Parse options
-        let resolve_external = if let Some(opts) = options.0 {
-            opts.get::<_, Option<bool>>("resolveExternal")?
-                .unwrap_or(true)
-        } else {
-            true
-        };
+            // Parse options
+            let resolve_external = if let Some(opts) = options.0 {
+                opts.get::<_, Option<bool>>("resolveExternal")?
+                    .unwrap_or(true)
+            } else {
+                true
+            };
 
-        let def_options = language_core::DefinitionOptions { resolve_external };
+            let def_options = language_core::DefinitionOptions { resolve_external };
 
-        let byte_range = self.inner_node.range();
-        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+            let byte_range = self.inner_node.range();
+            let range =
+                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
 
-        match provider.get_definition(&file_path, range, def_options) {
-            Ok(Some(def_result)) => {
-                let is_same_file = def_result.location.file_path == file_path;
-                let loc = &def_result.location;
+            match provider.get_definition(&file_path, range, def_options) {
+                Ok(Some(def_result)) => {
+                    let is_same_file = def_result.location.file_path == file_path;
+                    let loc = &def_result.location;
 
-                // Convert DefinitionKind to string for JS
-                let kind_str = def_result.kind.as_str();
+                    // Convert DefinitionKind to string for JS
+                    let kind_str = def_result.kind.as_str();
 
-                if is_same_file {
-                    // Definition is in the same file, use existing root
-                    let root_node = self.root.grep.root();
-                    if let Some(node) = find_node_at_range(
-                        &root_node,
-                        loc.range.start as usize,
-                        loc.range.end as usize,
-                    ) {
-                        let node_match: NodeMatch<_> = node.into();
-                        let static_node_match: NodeMatch<'static, TSDoc> =
-                            unsafe { std::mem::transmute(node_match) };
-
-                        let result_obj = rquickjs::Object::new(ctx.clone())?;
-
-                        let sg_node = SgNodeRjs {
-                            root: Arc::clone(&self.root),
-                            inner_node: static_node_match,
-                            _phantom: PhantomData,
-                        };
-                        result_obj.set("node", sg_node)?;
-
-                        let sg_root = SgRootRjs {
-                            inner: Arc::clone(&self.root),
-                            _phantom: PhantomData,
-                        };
-                        result_obj.set("root", sg_root)?;
-                        result_obj.set("kind", kind_str)?;
-
-                        return result_obj.into_js(&ctx);
-                    }
-                } else {
-                    // Definition is in a different file, create new root
-                    let lang_str = detect_language_from_path(&def_result.location.file_path);
-                    let lang = Lang::from_str(&lang_str).map_err(|e| {
-                        Exception::throw_message(&ctx, &format!("Unsupported language: {}", e))
-                    })?;
-                    let grep = AstGrep::new(def_result.content.clone(), lang);
-
-                    if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
-                        grep,
-                        Some(def_result.location.file_path.to_string_lossy().to_string()),
-                        self.root.semantic_provider.clone(),
-                        self.root.current_file_path.clone(),
-                    ) {
-                        let root_node = new_root.inner.grep.root();
+                    if is_same_file {
+                        // Definition is in the same file, use existing root
+                        let root_node = self.root.grep.root();
                         if let Some(node) = find_node_at_range(
                             &root_node,
                             loc.range.start as usize,
@@ -895,26 +870,78 @@ impl<'js> SgNodeRjs<'js> {
                             let result_obj = rquickjs::Object::new(ctx.clone())?;
 
                             let sg_node = SgNodeRjs {
-                                root: Arc::clone(&new_root.inner),
+                                root: Arc::clone(&self.root),
                                 inner_node: static_node_match,
                                 _phantom: PhantomData,
                             };
                             result_obj.set("node", sg_node)?;
-                            result_obj.set("root", new_root)?;
+
+                            let sg_root = SgRootRjs {
+                                inner: Arc::clone(&self.root),
+                                _phantom: PhantomData,
+                            };
+                            result_obj.set("root", sg_root)?;
                             result_obj.set("kind", kind_str)?;
 
                             return result_obj.into_js(&ctx);
                         }
-                    }
-                }
+                    } else {
+                        // Definition is in a different file, create new root
+                        let lang_str = detect_language_from_path(&def_result.location.file_path);
+                        let lang = Lang::from_str(&lang_str).map_err(|e| {
+                            Exception::throw_message(
+                                &ctx,
+                                &format!("Unsupported language: {}", e),
+                            )
+                        })?;
+                        let grep = AstGrep::new(def_result.content.clone(), lang);
 
-                Ok(Value::new_null(ctx))
+                        if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
+                            grep,
+                            Some(
+                                def_result
+                                    .location
+                                    .file_path
+                                    .to_string_lossy()
+                                    .to_string(),
+                            ),
+                            self.root.semantic_provider.clone(),
+                            self.root.current_file_path.clone(),
+                        ) {
+                            let root_node = new_root.inner.grep.root();
+                            if let Some(node) = find_node_at_range(
+                                &root_node,
+                                loc.range.start as usize,
+                                loc.range.end as usize,
+                            ) {
+                                let node_match: NodeMatch<_> = node.into();
+                                let static_node_match: NodeMatch<'static, TSDoc> =
+                                    unsafe { std::mem::transmute(node_match) };
+
+                                let result_obj = rquickjs::Object::new(ctx.clone())?;
+
+                                let sg_node = SgNodeRjs {
+                                    root: Arc::clone(&new_root.inner),
+                                    inner_node: static_node_match,
+                                    _phantom: PhantomData,
+                                };
+                                result_obj.set("node", sg_node)?;
+                                result_obj.set("root", new_root)?;
+                                result_obj.set("kind", kind_str)?;
+
+                                return result_obj.into_js(&ctx);
+                            }
+                        }
+                    }
+
+                    Ok(Value::new_null(ctx))
+                }
+                Ok(None) => Ok(Value::new_null(ctx)),
+                Err(e) => Err(Exception::throw_message(
+                    &ctx,
+                    &format!("Failed to get definition: {}", e),
+                )),
             }
-            Ok(None) => Ok(Value::new_null(ctx)),
-            Err(e) => Err(Exception::throw_message(
-                &ctx,
-                &format!("Failed to get definition: {}", e),
-            )),
         }
     }
 
@@ -930,82 +957,48 @@ impl<'js> SgNodeRjs<'js> {
     ///
     /// In lightweight mode, this only searches files that have been processed.
     /// In accurate mode, this searches the entire workspace.
-    #[cfg(feature = "native")]
     #[qjs(rename = "references")]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        let provider = match &self.root.semantic_provider {
-            Some(p) => p,
-            None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
-        };
+        #[cfg(not(feature = "native"))]
+        {
+            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+        }
+        #[cfg(feature = "native")]
+        {
+            let provider = match &self.root.semantic_provider {
+                Some(p) => p,
+                None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
+            };
 
-        let file_path = match &self.root.filename {
-            Some(f) => std::path::PathBuf::from(f),
-            None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
-        };
+            let file_path = match &self.root.filename {
+                Some(f) => std::path::PathBuf::from(f),
+                None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
+            };
 
-        let byte_range = self.inner_node.range();
-        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+            let byte_range = self.inner_node.range();
+            let range =
+                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
 
-        match provider.find_references(&file_path, range) {
-            Ok(refs_result) => {
-                let result_array = rquickjs::Array::new(ctx.clone())?;
+            match provider.find_references(&file_path, range) {
+                Ok(refs_result) => {
+                    let result_array = rquickjs::Array::new(ctx.clone())?;
 
-                for (idx, file_refs) in refs_result.files.iter().enumerate() {
-                    let is_same_file = file_refs.file_path == file_path;
+                    for (idx, file_refs) in refs_result.files.iter().enumerate() {
+                        let is_same_file = file_refs.file_path == file_path;
 
-                    let file_obj = rquickjs::Object::new(ctx.clone())?;
+                        let file_obj = rquickjs::Object::new(ctx.clone())?;
 
-                    if is_same_file {
-                        // Use existing root for same file
-                        let sg_root = SgRootRjs {
-                            inner: Arc::clone(&self.root),
-                            _phantom: PhantomData,
-                        };
-                        file_obj.set("root", sg_root)?;
-
-                        // Find nodes for each location
-                        let nodes_array = rquickjs::Array::new(ctx.clone())?;
-                        let root_node = self.root.grep.root();
-
-                        for (node_idx, loc) in file_refs.locations.iter().enumerate() {
-                            if let Some(node) = find_node_at_range(
-                                &root_node,
-                                loc.range.start as usize,
-                                loc.range.end as usize,
-                            ) {
-                                let node_match: NodeMatch<_> = node.into();
-                                let static_node_match: NodeMatch<'static, TSDoc> =
-                                    unsafe { std::mem::transmute(node_match) };
-
-                                let sg_node = SgNodeRjs {
-                                    root: Arc::clone(&self.root),
-                                    inner_node: static_node_match,
-                                    _phantom: PhantomData,
-                                };
-                                nodes_array.set(node_idx, sg_node)?;
-                            }
-                        }
-                        file_obj.set("nodes", nodes_array)?;
-                    } else {
-                        // Create new root for different file
-                        let lang_str = detect_language_from_path(&file_refs.file_path);
-                        let lang = match Lang::from_str(&lang_str) {
-                            Ok(l) => l,
-                            Err(_) => continue, // Skip files with unsupported languages
-                        };
-                        let grep = AstGrep::new(file_refs.content.clone(), lang);
-
-                        if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
-                            grep,
-                            Some(file_refs.file_path.to_string_lossy().to_string()),
-                            self.root.semantic_provider.clone(),
-                            self.root.current_file_path.clone(),
-                        ) {
-                            file_obj.set("root", new_root.clone())?;
+                        if is_same_file {
+                            // Use existing root for same file
+                            let sg_root = SgRootRjs {
+                                inner: Arc::clone(&self.root),
+                                _phantom: PhantomData,
+                            };
+                            file_obj.set("root", sg_root)?;
 
                             // Find nodes for each location
                             let nodes_array = rquickjs::Array::new(ctx.clone())?;
-                            let root_node = new_root.inner.grep.root();
+                            let root_node = self.root.grep.root();
 
                             for (node_idx, loc) in file_refs.locations.iter().enumerate() {
                                 if let Some(node) = find_node_at_range(
@@ -1018,7 +1011,7 @@ impl<'js> SgNodeRjs<'js> {
                                         unsafe { std::mem::transmute(node_match) };
 
                                     let sg_node = SgNodeRjs {
-                                        root: Arc::clone(&new_root.inner),
+                                        root: Arc::clone(&self.root),
                                         inner_node: static_node_match,
                                         _phantom: PhantomData,
                                     };
@@ -1027,20 +1020,61 @@ impl<'js> SgNodeRjs<'js> {
                             }
                             file_obj.set("nodes", nodes_array)?;
                         } else {
-                            // Skip files we can't parse
-                            continue;
+                            // Create new root for different file
+                            let lang_str = detect_language_from_path(&file_refs.file_path);
+                            let lang = match Lang::from_str(&lang_str) {
+                                Ok(l) => l,
+                                Err(_) => continue, // Skip files with unsupported languages
+                            };
+                            let grep = AstGrep::new(file_refs.content.clone(), lang);
+
+                            if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
+                                grep,
+                                Some(file_refs.file_path.to_string_lossy().to_string()),
+                                self.root.semantic_provider.clone(),
+                                self.root.current_file_path.clone(),
+                            ) {
+                                file_obj.set("root", new_root.clone())?;
+
+                                // Find nodes for each location
+                                let nodes_array = rquickjs::Array::new(ctx.clone())?;
+                                let root_node = new_root.inner.grep.root();
+
+                                for (node_idx, loc) in file_refs.locations.iter().enumerate() {
+                                    if let Some(node) = find_node_at_range(
+                                        &root_node,
+                                        loc.range.start as usize,
+                                        loc.range.end as usize,
+                                    ) {
+                                        let node_match: NodeMatch<_> = node.into();
+                                        let static_node_match: NodeMatch<'static, TSDoc> =
+                                            unsafe { std::mem::transmute(node_match) };
+
+                                        let sg_node = SgNodeRjs {
+                                            root: Arc::clone(&new_root.inner),
+                                            inner_node: static_node_match,
+                                            _phantom: PhantomData,
+                                        };
+                                        nodes_array.set(node_idx, sg_node)?;
+                                    }
+                                }
+                                file_obj.set("nodes", nodes_array)?;
+                            } else {
+                                // Skip files we can't parse
+                                continue;
+                            }
                         }
+
+                        result_array.set(idx, file_obj)?;
                     }
 
-                    result_array.set(idx, file_obj)?;
+                    result_array.into_js(&ctx)
                 }
-
-                result_array.into_js(&ctx)
+                Err(e) => Err(Exception::throw_message(
+                    &ctx,
+                    &format!("Failed to find references: {}", e),
+                )),
             }
-            Err(e) => Err(Exception::throw_message(
-                &ctx,
-                &format!("Failed to find references: {}", e),
-            )),
         }
     }
 
@@ -1051,29 +1085,36 @@ impl<'js> SgNodeRjs<'js> {
     /// Returns null if:
     /// - No semantic provider is configured
     /// - Type information is not available
-    #[cfg(feature = "native")]
     #[qjs(rename = "typeInfo")]
     pub fn type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        let provider = match &self.root.semantic_provider {
-            Some(p) => p,
-            None => return Ok(Value::new_null(ctx)),
-        };
+        #[cfg(not(feature = "native"))]
+        {
+            return Ok(Value::new_null(ctx));
+        }
+        #[cfg(feature = "native")]
+        {
+            let provider = match &self.root.semantic_provider {
+                Some(p) => p,
+                None => return Ok(Value::new_null(ctx)),
+            };
 
-        let file_path = match &self.root.filename {
-            Some(f) => std::path::PathBuf::from(f),
-            None => return Ok(Value::new_null(ctx)),
-        };
+            let file_path = match &self.root.filename {
+                Some(f) => std::path::PathBuf::from(f),
+                None => return Ok(Value::new_null(ctx)),
+            };
 
-        let byte_range = self.inner_node.range();
-        let range = language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+            let byte_range = self.inner_node.range();
+            let range =
+                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
 
-        match provider.get_type(&file_path, range) {
-            Ok(Some(type_str)) => type_str.into_js(&ctx),
-            Ok(None) => Ok(Value::new_null(ctx)),
-            Err(e) => Err(Exception::throw_message(
-                &ctx,
-                &format!("Failed to get type: {}", e),
-            )),
+            match provider.get_type(&file_path, range) {
+                Ok(Some(type_str)) => type_str.into_js(&ctx),
+                Ok(None) => Ok(Value::new_null(ctx)),
+                Err(e) => Err(Exception::throw_message(
+                    &ctx,
+                    &format!("Failed to get type: {}", e),
+                )),
+            }
         }
     }
 }
