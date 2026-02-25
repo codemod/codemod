@@ -147,32 +147,36 @@ impl SharedStateContext {
     ///
     /// If another thread holds the lock, blocks until it is released.
     /// If the current thread holds the lock, proceeds immediately (re-entrant).
-    /// If no lock exists for this key, proceeds immediately.
     ///
-    /// The per-key `Mutex` is held during `f` so that no `acquireLock` can
-    /// start between our check and the data operation.
+    /// Uses `entry()` to atomically create-or-get the `KeyLock`, preventing a
+    /// race where `get()` returns `None` but `acquire_lock` creates the entry
+    /// before `f()` runs.  The per-key `Mutex` is held during `f` so that no
+    /// `acquireLock` can start between our check and the data operation.
     fn with_key_guard<T>(&self, name: &str, f: impl FnOnce() -> T) -> T {
-        if let Some(lock_ref) = self.key_locks.get(name) {
-            let lock = lock_ref.clone();
-            drop(lock_ref); // release DashMap ref before taking the Mutex
+        let lock = self
+            .key_locks
+            .entry(name.to_string())
+            .or_insert_with(|| {
+                Arc::new(KeyLock {
+                    holder: Mutex::new(None),
+                    condvar: Condvar::new(),
+                })
+            })
+            .clone();
 
-            let current = std::thread::current().id();
-            let mut holder = lock.holder.lock().unwrap();
-            while let Some(tid) = *holder {
-                if tid == current {
-                    break; // re-entrant: we hold the lock
-                }
-                holder = lock.condvar.wait(holder).unwrap();
+        let current = std::thread::current().id();
+        let mut holder = lock.holder.lock().unwrap();
+        while let Some(tid) = *holder {
+            if tid == current {
+                break; // re-entrant: we hold the lock
             }
-            // holder is either None or current thread — safe to proceed.
-            // Keep the MutexGuard alive so no acquireLock can start mid-operation.
-            let result = f();
-            drop(holder);
-            result
-        } else {
-            // No lock has ever been created for this key — proceed freely.
-            f()
+            holder = lock.condvar.wait(holder).unwrap();
         }
+        // holder is either None or current thread — safe to proceed.
+        // Keep the MutexGuard alive so no acquireLock can start mid-operation.
+        let result = f();
+        drop(holder);
+        result
     }
 
     pub fn set(&self, name: &str, value: serde_json::Value, persist: bool) {
@@ -230,7 +234,16 @@ impl SharedStateContext {
 
         let current = std::thread::current().id();
         let mut holder = key_lock.holder.lock().unwrap();
-        while holder.is_some() {
+        while let Some(tid) = *holder {
+            if tid == current {
+                // Re-entrant: same thread already holds this lock.
+                // This is a programming error — return a no-op guard rather than deadlocking.
+                drop(holder);
+                return Arc::new(SharedLockGuard {
+                    key_lock,
+                    released: std::sync::atomic::AtomicBool::new(true), // already "released" — won't double-release
+                });
+            }
             holder = key_lock.condvar.wait(holder).unwrap();
         }
         *holder = Some(current);

@@ -6,6 +6,7 @@ use codemod_sandbox::sandbox::{
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_sandbox::SharedStateContext;
+use log::warn;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -44,10 +45,22 @@ pub async fn handler(args: &Command) -> Result<()> {
             Ok(state_json) => {
                 match serde_json::from_str::<HashMap<String, serde_json::Value>>(&state_json) {
                     Ok(state) => SharedStateContext::with_initial_state(state),
-                    Err(_) => SharedStateContext::new(),
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse CODEMOD_STATE file '{}': {}",
+                            state_file_path, e
+                        );
+                        SharedStateContext::new()
+                    }
                 }
             }
-            Err(_) => SharedStateContext::new(),
+            Err(e) => {
+                warn!(
+                    "Failed to read CODEMOD_STATE file '{}': {}",
+                    state_file_path, e
+                );
+                SharedStateContext::new()
+            }
         }
     } else {
         SharedStateContext::new()

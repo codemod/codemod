@@ -276,46 +276,144 @@ If the selector finds no matches in a file, your transform is not invoked for th
 
 ## State Management
 
-State conveys execution context and progress signals across runs (e.g., total files, current progress) to coordinate large migrations.
+The `codemod:workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
 
-### Persistent State Across Runs
-
-JSSG codemods can leverage persistent state for large-scale migrations:
+### API Reference
 
 ```ts
+import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
+```
+
+<ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
+  Sets a named state value. Values are stored as native JavaScript objects (no manual JSON serialization needed). When `persist` is `true` (the default), the value is saved at the end of the execution batch and available to subsequent workflow steps.
+</ParamField>
+
+<ParamField path="getState" type="<T>(name: string) => T | undefined">
+  Gets a named state value, or `undefined` if it doesn't exist.
+</ParamField>
+
+<ParamField path="unsetState" type="(name: string) => void">
+  Removes a named state value. If the key was persisted, a removal is propagated to persistent storage.
+</ParamField>
+
+<ParamField path="acquireLock" type="(name: string) => () => void">
+  Acquires a named mutex lock. Returns a `release` function that **must** be called when done. While held, other threads' `getState`, `setState`, and `unsetState` calls on the same key block until released.
+</ParamField>
+
+### Basic Usage
+
+State is shared across all files processed in parallel within a single step:
+
+```ts codemod.ts
 import type { Transform } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
 
-const transform: Transform<TSX> = async (root, options) => {
-  const filePath = root.filename();
-  
-  // Access current state
-  // The following meta properties are example placeholders.
-  // In a real migration, _meta_progress and _meta_total_files should be set and updated
-  // by your orchestration logic or JSSG's state management system.
-  // They are used here to illustrate how you might track progress across files.
-  const currentProgress = options.matrixValues?._meta_progress || 0;
-  const totalFiles = options.matrixValues?._meta_total_files || 0;
-  
-  // Update progress
-  const newProgress = currentProgress + 1;
-  console.log(`Progress: ${newProgress}/${totalFiles} files processed`);
-  
-  // Use state for coordination
-  if (newProgress % 100 === 0) {
-    console.log(`Checkpoint: ${newProgress} files completed`);
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
+
+  // Safely accumulate results across parallel file executions
+  const release = acquireLock("results");
+  try {
+    const results = getState<string[]>("importedFiles") ?? [];
+    results.push(root.filename());
+    setState("importedFiles", results);
+  } finally {
+    release();
   }
+
+  return null;
 };
 
 export default transform;
 ```
 
-### Common State Use Cases
+### When to Use Locks
 
-- **Sharding**: Distribute files across multiple workers
-- **Progress tracking**: Monitor migration progress
-- **Coordination**: Coordinate between parallel tasks
-- **Resume capability**: Resume interrupted migrations
+Use `acquireLock` when you need to read-modify-write shared state from parallel threads. Without it, concurrent `getState` → `setState` sequences can overwrite each other:
+
+```ts
+// Without lock — RACE CONDITION:
+// Thread A reads count=0, Thread B reads count=0,
+// both write count=1 instead of count=2
+const count = getState<number>("count") ?? 0;
+setState("count", count + 1);
+
+// With lock — SAFE:
+const release = acquireLock("count");
+try {
+  const count = getState<number>("count") ?? 0;
+  setState("count", count + 1);
+} finally {
+  release();
+}
+```
+
+<Warning>
+Always call `release()` in a `finally` block. Failing to release a lock will block all other threads waiting on that key.
+</Warning>
+
+<Info>
+Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
+</Info>
+
+### Persisting State Across Workflow Steps
+
+State set with `persist: true` (the default) is automatically saved after a `js-ast-grep` step completes. Subsequent steps in the same workflow node can read this state:
+
+<CodeGroup>
+```yaml workflow.yaml
+nodes:
+  - id: analyze
+    steps:
+      - name: "Scan files"
+        js-ast-grep:
+          js_file: scripts/scan.ts
+          language: "tsx"
+      - name: "Process results"
+        run: |
+          codemod jssg exec $CODEMOD_PATH/scripts/process.ts
+```
+
+```ts scripts/scan.ts
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
+
+const transform: Transform<TSX> = async (root) => {
+  // Collect file paths that match criteria
+  const release = acquireLock("files");
+  try {
+    const files = getState<string[]>("filesToProcess") ?? [];
+    files.push(root.filename());
+    setState("filesToProcess", files); // persisted by default
+  } finally {
+    release();
+  }
+  return null;
+};
+
+export default transform;
+```
+
+```ts scripts/process.ts
+import { getState } from "codemod:workflow";
+
+// This runs in a subsequent "run" step via jssg exec.
+// State from the previous js-ast-grep step is available.
+const files = getState<string[]>("filesToProcess") ?? [];
+console.log(`Processing ${files.length} files`);
+```
+</CodeGroup>
+
+### Transient State
+
+Pass `persist: false` to keep state only for the current step execution (useful for in-memory coordination that doesn't need to survive across steps):
+
+```ts
+setState("processingQueue", queue, false); // not persisted
+```
 
 ## Multi-Repo Orchestration
 
