@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(in crate::commands::agent) const DEFAULT_UPDATE_SOURCE: &str = "registry";
+// Temporary placeholder key until registry-backed signing key management is finalized.
+const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY: &str =
+    "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=";
 
 #[derive(Clone, Debug)]
 pub(in crate::commands::agent) struct UpdatePolicyResolveOptions {
@@ -153,43 +156,37 @@ fn resolve_manifest_authenticity_config(
 }
 
 fn resolve_manifest_public_key() -> std::result::Result<Option<VerifyingKey>, String> {
-    let raw_value = match std::env::var(MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR) {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(format!(
-                "Invalid {} value (non-unicode).",
-                MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
-            ));
+    match std::env::var(MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR) {
+        Ok(value) => {
+            parse_manifest_public_key(&value, MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR).map(Some)
         }
-    };
+        Err(std::env::VarError::NotPresent) => parse_manifest_public_key(
+            DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY,
+            "bundled managed update manifest public key",
+        )
+        .map(Some),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "Invalid {} value (non-unicode).",
+            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
+        )),
+    }
+}
 
+fn parse_manifest_public_key(
+    raw_value: &str,
+    source_label: &str,
+) -> std::result::Result<VerifyingKey, String> {
     let trimmed = raw_value.trim().trim_start_matches("ed25519:");
     if trimmed.is_empty() {
-        return Err(format!(
-            "Empty {} value.",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
-        ));
+        return Err(format!("Empty {source_label} value."));
     }
-    let bytes = decode_base64_bytes(trimmed).map_err(|error| {
-        format!(
-            "Failed to decode {} as base64: {error}",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
-        )
-    })?;
-    let key_bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-        format!(
-            "{} must decode to exactly 32 bytes",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
-        )
-    })?;
-    let key = VerifyingKey::from_bytes(&key_bytes).map_err(|error| {
-        format!(
-            "Invalid {} value: {error}",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
-        )
-    })?;
-    Ok(Some(key))
+    let bytes = decode_base64_bytes(trimmed)
+        .map_err(|error| format!("Failed to decode {source_label} as base64: {error}"))?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| format!("{source_label} must decode to exactly 32 bytes"))?;
+    VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|error| format!("Invalid {source_label} value: {error}"))
 }
 
 fn decode_base64_bytes(value: &str) -> std::result::Result<Vec<u8>, String> {
