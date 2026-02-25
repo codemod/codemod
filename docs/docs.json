@@ -15,13 +15,7 @@
   },
   "favicon": "/images/favicon.svg",
   "styling": {
-    "eyebrows": "breadcrumbs",
-    "codeblocks": {
-      "theme": {
-        "light": "github-light",
-        "dark": "github-dark"
-      }
-    }
+    "eyebrows": "breadcrumbs"
   },
   "interaction": {
     "drilldown": true
