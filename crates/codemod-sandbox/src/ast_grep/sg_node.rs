@@ -889,22 +889,13 @@ impl<'js> SgNodeRjs<'js> {
                         // Definition is in a different file, create new root
                         let lang_str = detect_language_from_path(&def_result.location.file_path);
                         let lang = Lang::from_str(&lang_str).map_err(|e| {
-                            Exception::throw_message(
-                                &ctx,
-                                &format!("Unsupported language: {}", e),
-                            )
+                            Exception::throw_message(&ctx, &format!("Unsupported language: {}", e))
                         })?;
                         let grep = AstGrep::new(def_result.content.clone(), lang);
 
                         if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
                             grep,
-                            Some(
-                                def_result
-                                    .location
-                                    .file_path
-                                    .to_string_lossy()
-                                    .to_string(),
-                            ),
+                            Some(def_result.location.file_path.to_string_lossy().to_string()),
                             self.root.semantic_provider.clone(),
                             self.root.current_file_path.clone(),
                         ) {

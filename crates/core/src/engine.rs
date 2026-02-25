@@ -53,7 +53,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
-    MetricsContext,
+    MetricsContext, SharedStateContext,
 };
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
@@ -1551,6 +1551,8 @@ impl Engine {
                             .map(|callback| Arc::new(callback.clone())),
                     },
                     bundle_path,
+                    Some(task.workflow_run_id),
+                    Some(state),
                 )
                 .await
             }
@@ -1700,6 +1702,8 @@ impl Engine {
         matrix_input: Option<HashMap<String, serde_json::Value>>,
         capabilities_data: &CapabilitiesData,
         bundle_path: &Option<PathBuf>,
+        workflow_run_id: Option<Uuid>,
+        initial_state: Option<&HashMap<String, serde_json::Value>>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
 
@@ -1854,7 +1858,13 @@ impl Engine {
         let progress_callback = self.workflow_run_config.progress_callback.clone();
         let file_writer = Arc::clone(&self.file_writer);
         let selector_config = selector_config.map(Arc::new);
+        let shared_state_context = if let Some(state) = initial_state {
+            SharedStateContext::with_initial_state(state.clone())
+        } else {
+            SharedStateContext::new()
+        };
         let metrics_context_clone = metrics_context.clone();
+        let shared_state_context_clone = shared_state_context.clone();
 
         // Execute the codemod on each file using the config's multi-threading
         config
@@ -1888,6 +1898,7 @@ impl Engine {
                         capabilities: config.capabilities.clone(),
                         semantic_provider: semantic_provider.clone(),
                         metrics_context: Some(metrics_context_clone.clone()),
+                        shared_state_context: Some(shared_state_context_clone.clone()),
                         test_mode: false,
                         target_directory: Some(&target_path),
                     })
@@ -2040,6 +2051,43 @@ impl Engine {
                 }
             })
             .map_err(|e| Error::StepExecution(e.to_string()))?;
+
+        // Persist shared state to the workflow state adapter
+        if let Some(wf_run_id) = workflow_run_id {
+            let persistable = shared_state_context.get_persistable();
+            let removals = shared_state_context.get_removals();
+
+            if !persistable.is_empty() || !removals.is_empty() {
+                let mut fields = HashMap::new();
+                for (key, value) in persistable {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Update,
+                            value: Some(value),
+                        },
+                    );
+                }
+                for key in removals {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Remove,
+                            value: None,
+                        },
+                    );
+                }
+
+                self.state_adapter
+                    .lock()
+                    .await
+                    .apply_state_diff(&StateDiff {
+                        workflow_run_id: wf_run_id,
+                        fields,
+                    })
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -2381,11 +2429,6 @@ impl Engine {
             );
         }
 
-        env.insert(
-            String::from("CODEMOD_STATE"),
-            serde_json::to_string(state).unwrap_or("".to_string()),
-        );
-
         // Add step environment variables
         if let Some(step_env) = step_env {
             for (key, value) in step_env {
@@ -2407,6 +2450,21 @@ impl Engine {
         let temp_dir = std::env::temp_dir();
         let state_outputs_path = temp_dir.join(task.id.to_string());
         File::create(&state_outputs_path)?;
+
+        // Write state to a temp file and pass its path (env vars have OS size limits)
+        let state_input_path = temp_dir.join(format!("{}-state-input", task.id));
+        std::fs::write(
+            &state_input_path,
+            serde_json::to_string(state).unwrap_or_else(|_| "{}".to_string()),
+        )?;
+        env.insert(
+            String::from("CODEMOD_STATE"),
+            state_input_path
+                .canonicalize()?
+                .to_str()
+                .expect("File path should be valid UTF-8")
+                .to_string(),
+        );
 
         if let Some(bundle_path) = bundle_path {
             env.insert(
@@ -2458,8 +2516,9 @@ impl Engine {
 
         let outputs = read_to_string(&state_outputs_path).await?;
 
-        // Clean up the temporary file
+        // Clean up the temporary files
         std::fs::remove_file(&state_outputs_path).ok();
+        std::fs::remove_file(&state_input_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();
