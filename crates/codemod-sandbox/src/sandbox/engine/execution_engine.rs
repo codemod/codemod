@@ -549,7 +549,7 @@ where
                 })?;
 
             // Evaluate module
-            let _ = module
+            let (_, eval_value) = module
                 .eval()
                 .catch(&ctx)
                 .map_err(|e| ExecutionError::Runtime {
@@ -558,7 +558,15 @@ where
                     },
                 })?;
 
-            while ctx.execute_pending_job() {}
+            // Await the module evaluation promise to surface errors from top-level await
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
 
             Ok(())
         };
