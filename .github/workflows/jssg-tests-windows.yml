@@ -5,25 +5,21 @@ on:
     branches:
       - main
     paths:
-      - "crates/**"
-      - "packages/**"
+      - "crates/cli/src/commands/jssg/test.rs"
+      - "crates/cli/src/main.rs"
+      - "crates/cli/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".nvmrc"
       - ".github/workflows/jssg-tests-windows.yml"
   pull_request:
     branches:
       - main
     paths:
-      - "crates/**"
-      - "packages/**"
+      - "crates/cli/src/commands/jssg/test.rs"
+      - "crates/cli/src/main.rs"
+      - "crates/cli/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".nvmrc"
       - ".github/workflows/jssg-tests-windows.yml"
   workflow_dispatch:
 
@@ -41,23 +37,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          check-latest: true
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run workspace test suites
+      - name: Run Windows JSSG-related CLI tests
+        shell: pwsh
         run: |
-          pnpm -r --if-present test *>&1 | Tee-Object -FilePath jssg-test.log
+          cargo test -p codemod commands::jssg::test::tests -- --nocapture *>&1 | Tee-Object -FilePath jssg-test.log
+          exit $LASTEXITCODE
 
       - name: Upload test log
         if: always()

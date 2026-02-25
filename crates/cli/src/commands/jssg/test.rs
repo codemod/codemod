@@ -113,6 +113,7 @@ pub struct Command {
 async fn send_failure_event(
     telemetry: &TelemetrySenderMutex,
     codemod_file: &str,
+    error_category: &str,
     error_message: &str,
 ) {
     telemetry
@@ -125,6 +126,7 @@ async fn send_failure_event(
                     ("commandName".to_string(), "codemod.jssgTest".to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                    ("errorCategory".to_string(), error_category.to_string()),
                     ("errorMessage".to_string(), error_message.to_string()),
                 ]),
             },
@@ -134,14 +136,21 @@ async fn send_failure_event(
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
-    let result = handler_impl(args, &telemetry).await;
+    let result = handler_impl(args).await;
     if let Err(error) = &result {
-        send_failure_event(&telemetry, &args.codemod_file, &error.to_string()).await;
+        let (error_category, error_message) = classify_and_sanitize_error(&error.to_string());
+        send_failure_event(
+            &telemetry,
+            &args.codemod_file,
+            error_category,
+            &error_message,
+        )
+        .await;
     }
     result
 }
 
-async fn handler_impl(args: &Command, telemetry: &TelemetrySenderMutex) -> Result<()> {
+async fn handler_impl(args: &Command) -> Result<()> {
     let codemod_path = Path::new(&args.codemod_file);
 
     if !codemod_path.exists() {
@@ -347,12 +356,6 @@ async fn handler_impl(args: &Command, telemetry: &TelemetrySenderMutex) -> Resul
         .await?;
 
     if !summary.is_success() {
-        send_failure_event(
-            telemetry,
-            &args.codemod_file,
-            "JSSG test command completed with failing tests",
-        )
-        .await;
         std::process::exit(1);
     }
 
@@ -361,6 +364,45 @@ async fn handler_impl(args: &Command, telemetry: &TelemetrySenderMutex) -> Resul
 
 fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn classify_and_sanitize_error(error_message: &str) -> (&'static str, String) {
+    if error_message.contains("Metrics mismatch:") {
+        return ("metrics_mismatch", "Metrics snapshot mismatch".to_string());
+    }
+
+    if error_message.contains("Metrics snapshot exists at") {
+        return (
+            "stale_metrics_snapshot",
+            "Stale metrics snapshot".to_string(),
+        );
+    }
+
+    if error_message.contains("Codemod file '") && error_message.contains(" does not exist") {
+        return (
+            "codemod_not_found",
+            "Codemod file does not exist".to_string(),
+        );
+    }
+
+    let first_line = error_message
+        .split('\n')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\r', "");
+    let sanitized = truncate_with_ellipsis(&first_line, 200);
+    ("command_error", sanitized)
+}
+
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let char_count = input.chars().count();
+    if char_count <= max_chars {
+        return input.to_string();
+    }
+
+    let truncated: String = input.chars().take(max_chars).collect();
+    format!("{truncated}...")
 }
 
 /// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
@@ -399,7 +441,7 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_metrics_diff, normalize_line_endings};
+    use super::{classify_and_sanitize_error, generate_metrics_diff, normalize_line_endings};
 
     #[test]
     fn normalize_line_endings_converts_crlf_to_lf() {
@@ -438,5 +480,22 @@ mod tests {
             diff.contains("+  \"count\": 2"),
             "expected inserted line in diff, got: {diff}"
         );
+    }
+
+    #[test]
+    fn error_classification_redacts_metrics_diff_payload() {
+        let input = "Metrics mismatch:\n--- expected\n+++ actual\n-{\"code\":\"secret\"}";
+        let (category, message) = classify_and_sanitize_error(input);
+        assert_eq!(category, "metrics_mismatch");
+        assert_eq!(message, "Metrics snapshot mismatch");
+    }
+
+    #[test]
+    fn error_classification_truncates_generic_errors() {
+        let long_message = "x".repeat(260);
+        let (category, message) = classify_and_sanitize_error(&long_message);
+        assert_eq!(category, "command_error");
+        assert_eq!(message.len(), 203);
+        assert!(message.ends_with("..."));
     }
 }
