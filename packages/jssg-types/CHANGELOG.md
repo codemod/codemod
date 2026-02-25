@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.5.0
+
+### Minor Changes
+
+- 2e21a93: codemod:workflow types
+
 ## 1.4.1
 
 ### Patch Changes
