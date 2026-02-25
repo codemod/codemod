@@ -15,28 +15,27 @@ pub mod native;
 use ast_grep_language::{LanguageExt, SupportLang};
 
 #[cfg(feature = "native")]
-use crate::sandbox::engine::codemod_lang::CodemodLang;
-#[cfg(feature = "native")]
 use ast_grep_core::tree_sitter::LanguageExt;
 
 #[cfg(feature = "wasm")]
 use ast_grep_core::language::Language;
 
-use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
 #[cfg(feature = "native")]
-use rquickjs::{Function, Value};
-
-use crate::sandbox::engine::execution_engine::{
-    validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
+use crate::{
+    sandbox::engine::codemod_lang::CodemodLang,
+    sandbox::engine::{
+        execution_engine::{
+            validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
+        },
+        transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
+        ExecutionModeFlag,
+    },
+    utils::quickjs_utils::maybe_promise,
 };
-use crate::sandbox::engine::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
-};
-use crate::sandbox::engine::ExecutionModeFlag;
-use crate::utils::quickjs_utils::maybe_promise;
-use std::str::FromStr;
-use std::sync::Arc;
+use rquickjs::module::{Declarations, Exports, ModuleDef};
+use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
+#[cfg(feature = "native")]
+use std::{str::FromStr, sync::Arc};
 
 use sg_node::{SgNodeRjs, SgRootRjs};
 

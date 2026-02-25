@@ -2018,6 +2018,8 @@ function helper() {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2106,6 +2108,8 @@ interface ApiResponse {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2172,6 +2176,8 @@ var count = 0;
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2218,6 +2224,8 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2292,6 +2300,8 @@ build/
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2324,6 +2334,8 @@ build/
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 
@@ -2386,6 +2398,8 @@ export default function transform(ast) {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
         )
         .await;
 

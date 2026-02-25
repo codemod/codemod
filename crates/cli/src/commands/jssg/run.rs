@@ -5,7 +5,8 @@ use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::diff::{generate_unified_diff, DiffConfig};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
+use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
@@ -15,12 +16,12 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::MetricsContext;
+use codemod_sandbox::{MetricsContext, SharedStateContext};
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -80,6 +81,14 @@ pub struct Command {
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     pub no_color: bool,
+
+    /// Open a web-based execution report after the run completes
+    #[arg(long)]
+    pub report: bool,
+
+    /// Show verbose output (e.g. shared state after execution)
+    #[arg(long, short)]
+    pub verbose: bool,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -184,10 +193,19 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
+    let shared_state_context = SharedStateContext::new();
     let metrics_context_clone = metrics_context.clone();
+    let shared_state_context_clone = shared_state_context.clone();
 
     // Create diff config for dry-run mode
     let diff_config = DiffConfig::with_color_control(args.no_color);
+
+    // Always collect diffs so we can offer report interactively
+    let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
+    let diff_collector_clone = diff_collector.clone();
+
+    // Clone target_directory for use after the closure moves it
+    let target_directory_for_report = target_directory.clone();
 
     let _ = config.execute(move |file_path, _config| {
         // Only process files
@@ -219,6 +237,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
+                shared_state_context: Some(shared_state_context_clone.clone()),
                 test_mode: false,
                 target_directory: Some(&target_directory),
             };
@@ -303,6 +322,24 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     &diff_config,
                                 );
                                 diff.print();
+
+                                // Collect plain-text diff for report
+                                if let Some(ref collector) = diff_collector_clone {
+                                    let plain_config = DiffConfig {
+                                        color: false,
+                                        ..DiffConfig::default()
+                                    };
+                                    let plain_diff = generate_unified_diff(
+                                        change_path,
+                                        &original,
+                                        &modified.content,
+                                        &plain_config,
+                                    );
+                                    if let Ok(mut diffs) = collector.lock() {
+                                        diffs.push(plain_diff);
+                                    }
+                                }
+
                                 debug!("Would modify file (dry run): {}", change_path.display());
                             }
                         }
@@ -319,11 +356,50 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         });
     });
 
-    // Print metrics report if any metrics were collected
-    crate::utils::metrics::print_metrics(&metrics_context.get_all());
+    let metrics_data = metrics_context.get_all();
 
-    let seconds = started.elapsed().as_millis() as f64 / 1000.0;
+    let duration_ms = started.elapsed().as_millis() as f64;
+    let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    if args.verbose {
+        let state = shared_state_context.get_persistable();
+        if !state.is_empty() {
+            println!("\nState:");
+            for (key, value) in &state {
+                println!("  {key}: {value}");
+            }
+        }
+    }
+
+    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let files_modified = collected_diffs.len();
+
+        let report = ExecutionReport::build(
+            args.js_file.clone(),
+            None,
+            duration_ms,
+            args.dry_run,
+            target_directory_for_report.display().to_string(),
+            CLI_VERSION.to_string(),
+            files_modified,
+            0,
+            0,
+            convert_metrics(&metrics_data),
+            convert_diffs(
+                &collected_diffs,
+                &target_directory_for_report.display().to_string(),
+            ),
+        );
+
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
+    }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     let execution_id = generate_execution_id();

@@ -232,6 +232,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                     capabilities,
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
+                    shared_state_context: None,
                     test_mode: true,
                     target_directory: None,
                 };

@@ -9,7 +9,7 @@ use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::WorkflowGlobalModule;
+use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
@@ -153,6 +153,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Optional shared state context for cross-thread state communication
+    pub shared_state_context: Option<SharedStateContext>,
     /// Whether this is a test execution (jssgTransform becomes a no-op)
     pub test_mode: bool,
     /// The target directory the codemod is running against.
@@ -242,8 +244,9 @@ where
             },
         })?;
 
-    // Capture metrics context for use inside async block
+    // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
+    let shared_state_context = options.shared_state_context.clone();
     let test_mode = options.test_mode;
 
     // Execute JavaScript code
@@ -290,6 +293,13 @@ where
                 },
             })?;
         }
+
+        // Always store a SharedStateContext so codemod:workflow functions work
+        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -427,6 +437,8 @@ pub struct SimpleJsExecutionOptions<'a, R> {
     pub resolver: Arc<R>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Optional shared state context for cross-thread state communication
+    pub shared_state_context: Option<SharedStateContext>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -466,6 +478,10 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
     built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
 
+    // Add WorkflowGlobalModule (step outputs)
+    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
+    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
@@ -488,6 +504,7 @@ where
         })?;
 
     let metrics_context = options.metrics_context.clone();
+    let shared_state_context = options.shared_state_context.clone();
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
@@ -498,6 +515,13 @@ where
                 },
             })?;
         }
+
+        // Always store a SharedStateContext so codemod:workflow functions work
+        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -621,6 +645,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -669,6 +694,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -717,6 +743,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -765,6 +792,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -805,6 +833,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -850,6 +879,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
@@ -956,6 +986,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
+            shared_state_context: None,
             test_mode: false,
             target_directory: None,
         };
