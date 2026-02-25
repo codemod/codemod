@@ -257,6 +257,7 @@ impl JssgTestHandler {
                         capabilities: capabilities.clone(),
                         semantic_provider: None,
                         metrics_context: Some(metrics_context),
+                        shared_state_context: None,
                         test_mode: true,
                         target_directory: None,
                     };

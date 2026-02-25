@@ -16,7 +16,7 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::MetricsContext;
+use codemod_sandbox::{MetricsContext, SharedStateContext};
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
@@ -85,6 +85,10 @@ pub struct Command {
     /// Open a web-based execution report after the run completes
     #[arg(long)]
     pub report: bool,
+
+    /// Show verbose output (e.g. shared state after execution)
+    #[arg(long, short)]
+    pub verbose: bool,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -189,7 +193,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
+    let shared_state_context = SharedStateContext::new();
     let metrics_context_clone = metrics_context.clone();
+    let shared_state_context_clone = shared_state_context.clone();
 
     // Create diff config for dry-run mode
     let diff_config = DiffConfig::with_color_control(args.no_color);
@@ -231,6 +237,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
+                shared_state_context: Some(shared_state_context_clone.clone()),
                 test_mode: false,
                 target_directory: Some(&target_directory),
             };
@@ -354,6 +361,16 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let duration_ms = started.elapsed().as_millis() as f64;
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    if args.verbose {
+        let state = shared_state_context.get_persistable();
+        if !state.is_empty() {
+            println!("\nState:");
+            for (key, value) in &state {
+                println!("  {key}: {value}");
+            }
+        }
+    }
 
     if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
         let collected_diffs = diff_collector

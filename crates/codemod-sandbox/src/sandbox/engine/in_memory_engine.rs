@@ -10,6 +10,7 @@ use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::utils::quickjs_utils::maybe_promise;
+use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
@@ -60,6 +61,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Optional shared state context for cross-thread state communication
+    pub shared_state_context: Option<SharedStateContext>,
     /// Execution timeout in milliseconds (default: 200ms)
     pub timeout_ms: Option<u64>,
     /// Memory limit in bytes (default: 64 MB)
@@ -149,6 +152,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
+    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+
     let in_memory_resolver = QuickJSResolver::new(Arc::clone(&resolver_arc));
     let noop_loader = InMemoryLoader::new(Arc::clone(&resolver_arc));
 
@@ -167,8 +173,9 @@ where
             },
         })?;
 
-    // Capture metrics context for use inside async block
+    // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
+    let shared_state_context = options.shared_state_context.clone();
 
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
@@ -181,6 +188,13 @@ where
                 },
             })?;
         }
+
+        // Always store a SharedStateContext so codemod:workflow functions work
+        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -367,6 +381,7 @@ export default function transform(root) {
             file_path: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
         });
@@ -423,6 +438,7 @@ export default function transform(root) {
             file_path: None,
             semantic_provider: None,
             metrics_context: None,
+            shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
         });
