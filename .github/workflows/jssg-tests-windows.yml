@@ -1,0 +1,58 @@
+name: Codemod JSSG tests (windows-latest)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/cli/src/commands/jssg/test.rs"
+      - "crates/cli/src/main.rs"
+      - "crates/cli/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/jssg-tests-windows.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "crates/cli/src/commands/jssg/test.rs"
+      - "crates/cli/src/main.rs"
+      - "crates/cli/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/jssg-tests-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jssg-tests-windows:
+    name: Codemod JSSG tests (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Windows JSSG-related CLI tests
+        shell: pwsh
+        run: |
+          cargo test -p codemod commands::jssg::test::tests -- --nocapture *>&1 | Tee-Object -FilePath jssg-test.log
+          exit $LASTEXITCODE
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-jssg-test-log
+          path: jssg-test.log
+          if-no-files-found: warn
