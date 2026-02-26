@@ -21,6 +21,7 @@ pub(in crate::commands::agent) const DEFAULT_UPDATE_SOURCE: &str = "registry";
 const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ID: &str = "default";
 const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_BASE64: &str =
     "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=";
+const MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
 pub(in crate::commands::agent) struct UpdatePolicyResolveOptions {
@@ -271,6 +272,23 @@ fn retry_after_seconds_from_headers(headers: &reqwest::header::HeaderMap) -> Opt
     };
     let now_epoch_secs = now_epoch_secs();
     Some(reset_epoch_secs.saturating_sub(now_epoch_secs).max(1))
+}
+
+fn summarize_http_error_body(body: &str) -> String {
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return "<empty response body>".to_string();
+    }
+
+    if normalized.chars().count() <= MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS {
+        return normalized;
+    }
+
+    normalized
+        .chars()
+        .take(MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS)
+        .collect::<String>()
+        + "..."
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -684,21 +702,22 @@ async fn fetch_remote_update_manifest(
             None
         };
         let body = response.text().await.unwrap_or_default();
+        let body_summary = summarize_http_error_body(&body);
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             if let Some(seconds) = retry_after_seconds {
                 return Err(format!(
                     "HTTP {} while fetching remote manifest (rate limited; retry after {}s): {}",
-                    status, seconds, body
+                    status, seconds, body_summary
                 ));
             }
             return Err(format!(
                 "HTTP {} while fetching remote manifest (rate limited): {}",
-                status, body
+                status, body_summary
             ));
         }
         return Err(format!(
             "HTTP {} while fetching remote manifest: {}",
-            status, body
+            status, body_summary
         ));
     }
 
@@ -1178,5 +1197,22 @@ mod tests {
         let parsed_from_reset =
             retry_after_seconds_from_headers(&reset_headers).expect("expected reset parse");
         assert!(parsed_from_reset <= 30 && parsed_from_reset >= 1);
+    }
+
+    #[test]
+    fn summarize_http_error_body_normalizes_and_truncates() {
+        let input = "  too\nmany    requests  ".repeat(60);
+        let summary = summarize_http_error_body(&input);
+
+        assert!(!summary.contains('\n'));
+        assert!(summary.contains("too many requests"));
+        assert!(summary.ends_with("..."));
+        assert!(summary.chars().count() <= MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS + 3);
+    }
+
+    #[test]
+    fn summarize_http_error_body_handles_empty_body() {
+        let summary = summarize_http_error_body("   ");
+        assert_eq!(summary, "<empty response body>");
     }
 }

@@ -1362,3 +1362,44 @@ fn resolve_update_policy_context_handles_rate_limited_manifest_endpoint_graceful
         server.shutdown().await;
     });
 }
+
+#[test]
+fn resolve_update_policy_context_truncates_large_error_body_in_warnings() {
+    let _env_lock = ENV_GUARD.lock().expect("expected env lock");
+    let runtime = Runtime::new().expect("expected runtime");
+    runtime.block_on(async {
+        let manifest_path = "/manifest/rate-limited-large".to_string();
+        let oversized_body = "x".repeat(2_048);
+        let server = TestHttpServer::start_with_builder(|_| {
+            HashMap::from([(
+                manifest_path.clone(),
+                TestHttpFixture {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    body: oversized_body.clone().into_bytes(),
+                    headers: vec![("Retry-After".to_string(), "60".to_string())],
+                },
+            )])
+        })
+        .await;
+
+        let context = resolve_update_policy_context(&UpdatePolicyResolveOptions {
+            mode: UpdatePolicyMode::Notify,
+            remote_source: format!("{}{manifest_path}", server.base_url),
+            require_signed_manifest: Some(true),
+        })
+        .await
+        .expect("expected update policy context");
+
+        let warning = context
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("HTTP 429"))
+            .expect("expected HTTP warning");
+
+        assert!(warning.contains("retry after 60s"));
+        assert!(warning.contains("..."));
+        assert!(!warning.contains(&oversized_body));
+
+        server.shutdown().await;
+    });
+}
