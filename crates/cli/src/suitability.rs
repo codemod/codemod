@@ -168,8 +168,9 @@ pub async fn search_registry(request: RegistrySearchRequest) -> Result<RegistryS
     if let Some(scope) = request.scope {
         query_params.push(("scope", scope));
     }
-    query_params.push(("size", request.size.to_string()));
-    query_params.push(("from", request.from.to_string()));
+    let (page, limit) = pagination_from_size_from(request.size, request.from);
+    query_params.push(("page", page.to_string()));
+    query_params.push(("limit", limit.to_string()));
 
     let client = reqwest::Client::new();
     let mut reqwest_request = client.get(&endpoint).query(&query_params);
@@ -196,6 +197,12 @@ pub async fn search_registry(request: RegistrySearchRequest) -> Result<RegistryS
     Ok(RegistrySearchResult {
         response: response_body,
     })
+}
+
+fn pagination_from_size_from(size: u32, from: u32) -> (u32, u32) {
+    let limit = size.max(1);
+    let page = (from / limit) + 1;
+    (page, limit)
 }
 
 pub fn summarize_search_coverage(packages: &[RegistrySearchPackage]) -> SearchCoverageSummary {
@@ -512,5 +519,19 @@ mod tests {
         let build_decision = evaluate_threshold_route(&[build]);
         assert_eq!(build_decision.band, SuitabilityRouteBand::Build);
         assert!(build_decision.score.is_some_and(|score| score < 80));
+    }
+
+    #[test]
+    fn pagination_from_size_from_translates_offset_and_size() {
+        let (page, limit) = pagination_from_size_from(20, 40);
+        assert_eq!(page, 3);
+        assert_eq!(limit, 20);
+    }
+
+    #[test]
+    fn pagination_from_size_from_clamps_zero_size_to_one() {
+        let (page, limit) = pagination_from_size_from(0, 0);
+        assert_eq!(page, 1);
+        assert_eq!(limit, 1);
     }
 }
