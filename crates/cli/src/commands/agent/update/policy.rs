@@ -1,8 +1,8 @@
 use super::types::{
     ManagedUpdateManifest, RemoteManifestSnapshot, UpdatePolicyContext, UpdatePolicyMode,
     MANAGED_UPDATE_MANIFEST_CACHE_RELATIVE_DIR, MANAGED_UPDATE_MANIFEST_CACHE_TTL_SECS,
-    MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR, MANAGED_UPDATE_MANIFEST_REQUEST_TIMEOUT_SECS,
-    MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER, MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
+    MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR, MANAGED_UPDATE_MANIFEST_REQUEST_TIMEOUT_SECS,
+    MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
     MANAGED_UPDATE_REGISTRY_MANIFEST_PATH,
 };
 use crate::auth::TokenStorage;
@@ -11,14 +11,15 @@ use butterflow_core::utils::get_cache_dir;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(in crate::commands::agent) const DEFAULT_UPDATE_SOURCE: &str = "registry";
 // Temporary placeholder key until registry-backed signing key management is finalized.
-const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY: &str =
+const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ID: &str = "default";
+const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_BASE64: &str =
     "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=";
 
 #[derive(Clone, Debug)]
@@ -114,7 +115,7 @@ impl ManifestAuthenticityMode {
 #[derive(Clone, Debug)]
 struct ManifestAuthenticityConfig {
     mode: ManifestAuthenticityMode,
-    public_key: Option<VerifyingKey>,
+    public_keys: Option<HashMap<String, VerifyingKey>>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,37 +138,46 @@ fn resolve_manifest_authenticity_config(
         None => ManifestAuthenticityMode::Optional,
     };
 
-    match resolve_manifest_public_key() {
-        Ok(public_key) => (
+    match resolve_manifest_public_keys() {
+        Ok(public_keys) => (
             ManifestAuthenticityConfig {
                 mode: requirement,
-                public_key,
+                public_keys,
             },
             None,
         ),
         Err(error) => (
             ManifestAuthenticityConfig {
                 mode: requirement,
-                public_key: None,
+                public_keys: None,
             },
             Some(error),
         ),
     }
 }
 
-fn resolve_manifest_public_key() -> std::result::Result<Option<VerifyingKey>, String> {
-    match std::env::var(MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR) {
+fn resolve_manifest_public_keys(
+) -> std::result::Result<Option<HashMap<String, VerifyingKey>>, String> {
+    match std::env::var(MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR) {
         Ok(value) => {
-            parse_manifest_public_key(&value, MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR).map(Some)
+            parse_manifest_public_keys(&value, MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR)
+                .map(Some)
         }
-        Err(std::env::VarError::NotPresent) => parse_manifest_public_key(
-            DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY,
-            "bundled managed update manifest public key",
-        )
-        .map(Some),
+        Err(std::env::VarError::NotPresent) => {
+            let mut keyring = HashMap::new();
+            let bundled = parse_manifest_public_key(
+                DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_BASE64,
+                "bundled managed update manifest public key",
+            )?;
+            keyring.insert(
+                DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ID.to_string(),
+                bundled,
+            );
+            Ok(Some(keyring))
+        }
         Err(std::env::VarError::NotUnicode(_)) => Err(format!(
             "Invalid {} value (non-unicode).",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
+            MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR
         )),
     }
 }
@@ -189,6 +199,49 @@ fn parse_manifest_public_key(
         .map_err(|error| format!("Invalid {source_label} value: {error}"))
 }
 
+fn parse_manifest_public_keys(
+    raw_value: &str,
+    source_label: &str,
+) -> std::result::Result<HashMap<String, VerifyingKey>, String> {
+    let parsed: serde_json::Value = serde_json::from_str(raw_value)
+        .map_err(|error| format!("Failed to parse {source_label} as JSON object: {error}"))?;
+    let key_object = parsed.as_object().ok_or_else(|| {
+        format!("{source_label} must be a JSON object mapping kid -> base64 public key")
+    })?;
+    if key_object.is_empty() {
+        return Err(format!(
+            "{source_label} must contain at least one key entry"
+        ));
+    }
+
+    let mut keyring = HashMap::with_capacity(key_object.len());
+    for (kid, key_value) in key_object {
+        let normalized_kid = kid.trim();
+        if normalized_kid.is_empty() {
+            return Err(format!("{source_label} contains an empty key id"));
+        }
+        if !normalized_kid
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        {
+            return Err(format!(
+                "{source_label}[\"{normalized_kid}\"] has invalid key id format"
+            ));
+        }
+
+        let raw_public_key = key_value.as_str().ok_or_else(|| {
+            format!("{source_label}[\"{normalized_kid}\"] must be a base64 string")
+        })?;
+        let public_key = parse_manifest_public_key(
+            raw_public_key,
+            &format!("{source_label}[\"{normalized_kid}\"]"),
+        )?;
+        keyring.insert(normalized_kid.to_string(), public_key);
+    }
+
+    Ok(keyring)
+}
+
 fn decode_base64_bytes(value: &str) -> std::result::Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(value)
@@ -198,52 +251,185 @@ fn decode_base64_bytes(value: &str) -> std::result::Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
+fn retry_after_seconds_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let retry_after_seconds = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    if retry_after_seconds.is_some() {
+        return retry_after_seconds;
+    }
+
+    let reset_epoch = headers
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())?;
+    let reset_epoch_secs = if reset_epoch > 10_000_000_000 {
+        reset_epoch / 1_000
+    } else {
+        reset_epoch
+    };
+    let now_epoch_secs = now_epoch_secs();
+    Some(reset_epoch_secs.saturating_sub(now_epoch_secs).max(1))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManifestSignatureEntry {
+    kid: String,
+    sig: String,
+}
+
+fn parse_manifest_signatures_header(
+    raw_header: &str,
+) -> std::result::Result<Vec<ManifestSignatureEntry>, String> {
+    let entries: Vec<&str> = raw_header
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if entries.is_empty() {
+        return Err(format!(
+            "`{}` header must include at least one signature entry",
+            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
+        ));
+    }
+
+    let mut parsed = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let mut kid = None;
+        let mut sig = None;
+
+        for field in entry
+            .split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            let (name, value) = field.split_once('=').ok_or_else(|| {
+                format!(
+                    "invalid `{}` header entry `{entry}`: expected `name=value` pairs",
+                    MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
+                )
+            })?;
+            let normalized_name = name.trim();
+            let normalized_value = value.trim();
+            if normalized_value.is_empty() {
+                return Err(format!(
+                    "invalid `{}` header entry `{entry}`: `{}` cannot be empty",
+                    MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, normalized_name
+                ));
+            }
+
+            match normalized_name {
+                "kid" => kid = Some(normalized_value.to_string()),
+                "sig" => sig = Some(normalized_value.to_string()),
+                _ => {
+                    return Err(format!(
+                        "invalid `{}` header entry `{entry}`: unsupported field `{}`",
+                        MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, normalized_name
+                    ));
+                }
+            }
+        }
+
+        let parsed_kid = kid.ok_or_else(|| {
+            format!(
+                "invalid `{}` header entry `{entry}`: missing `kid`",
+                MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
+            )
+        })?;
+        let parsed_sig = sig.ok_or_else(|| {
+            format!(
+                "invalid `{}` header entry `{entry}`: missing `sig`",
+                MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
+            )
+        })?;
+
+        parsed.push(ManifestSignatureEntry {
+            kid: parsed_kid,
+            sig: parsed_sig,
+        });
+    }
+
+    Ok(parsed)
+}
+
 fn verify_remote_manifest_authenticity(
     payload: &[u8],
     signature_header: Option<&str>,
     config: &ManifestAuthenticityConfig,
 ) -> std::result::Result<bool, String> {
-    let signature = signature_header
+    let signatures = signature_header
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(parse_manifest_signatures_header)
+        .transpose()?;
 
-    match (config.mode, config.public_key.as_ref(), signature) {
+    match (
+        config.mode,
+        config.public_keys.as_ref(),
+        signatures.as_ref(),
+    ) {
         (ManifestAuthenticityMode::Required, None, _) => Err(format!(
             "manifest authenticity is required but {} is not configured",
-            MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
+            MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR
         )),
         (ManifestAuthenticityMode::Required, Some(_), None) => Err(format!(
             "manifest authenticity is required but response header `{}` is missing",
-            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER
+            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
         )),
         (_, None, Some(_)) => Err(format!(
             "response header `{}` was provided, but {} is not configured",
-            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER, MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR
+            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR
         )),
         (_, Some(_), None) if config.mode.is_required() => Err(format!(
             "manifest authenticity is required but response header `{}` is missing",
-            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER
+            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER
         )),
         (_, Some(_), None) => Ok(false),
         (_, None, None) => Ok(false),
-        (_, Some(public_key), Some(signature_value)) => {
-            let signature_bytes = decode_base64_bytes(signature_value).map_err(|error| {
-                format!(
-                    "failed to decode `{}` header as base64: {error}",
-                    MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER
-                )
-            })?;
-            let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
-                format!(
-                    "`{}` header must decode to exactly 64 bytes",
-                    MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER
-                )
-            })?;
-            let signature = Signature::from_bytes(&signature_array);
-            public_key.verify(payload, &signature).map_err(|error| {
-                format!("remote manifest signature verification failed: {error}")
-            })?;
-            Ok(true)
+        (_, Some(public_keys), Some(signature_entries)) => {
+            let mut failures = Vec::new();
+
+            for signature_entry in signature_entries {
+                let Some(public_key) = public_keys.get(&signature_entry.kid) else {
+                    failures.push(format!(
+                        "kid `{}`: no trusted public key configured",
+                        signature_entry.kid
+                    ));
+                    continue;
+                };
+
+                let signature_bytes =
+                    decode_base64_bytes(signature_entry.sig.as_str()).map_err(|error| {
+                        format!(
+                            "failed to decode `{}` header signature for kid `{}` as base64: {error}",
+                            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, signature_entry.kid
+                        )
+                    })?;
+                let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+                    format!(
+                        "`{}` header signature for kid `{}` must decode to exactly 64 bytes",
+                        MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, signature_entry.kid
+                    )
+                })?;
+                let signature = Signature::from_bytes(&signature_array);
+                match public_key.verify(payload, &signature) {
+                    Ok(()) => return Ok(true),
+                    Err(error) => failures.push(format!("kid `{}`: {error}", signature_entry.kid)),
+                }
+            }
+
+            let available_kids = {
+                let mut kids: Vec<&str> = public_keys.keys().map(String::as_str).collect();
+                kids.sort_unstable();
+                kids.join(", ")
+            };
+            Err(format!(
+                "remote manifest signature verification failed for `{}` header entries ({}). trusted kids: [{}]",
+                MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER,
+                failures.join(", "),
+                available_kids
+            ))
         }
     }
 }
@@ -492,7 +678,24 @@ async fn fetch_remote_update_manifest(
         .map_err(|error| format!("request failed: {error}"))?;
     if !response.status().is_success() {
         let status = response.status();
+        let retry_after_seconds = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            retry_after_seconds_from_headers(response.headers())
+        } else {
+            None
+        };
         let body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            if let Some(seconds) = retry_after_seconds {
+                return Err(format!(
+                    "HTTP {} while fetching remote manifest (rate limited; retry after {}s): {}",
+                    status, seconds, body
+                ));
+            }
+            return Err(format!(
+                "HTTP {} while fetching remote manifest (rate limited): {}",
+                status, body
+            ));
+        }
         return Err(format!(
             "HTTP {} while fetching remote manifest: {}",
             status, body
@@ -501,7 +704,7 @@ async fn fetch_remote_update_manifest(
 
     let signature_header = response
         .headers()
-        .get(MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER)
+        .get(MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     let payload = response
@@ -833,7 +1036,7 @@ mod tests {
     fn verify_remote_manifest_authenticity_optional_accepts_unsigned_payload() {
         let config = ManifestAuthenticityConfig {
             mode: ManifestAuthenticityMode::Optional,
-            public_key: None,
+            public_keys: None,
         };
         let verified = verify_remote_manifest_authenticity(b"{}", None, &config)
             .expect("expected unsigned optional verification path");
@@ -846,7 +1049,7 @@ mod tests {
         let public_key = signing_key.verifying_key();
         let required_without_key = ManifestAuthenticityConfig {
             mode: ManifestAuthenticityMode::Required,
-            public_key: None,
+            public_keys: None,
         };
         let missing_key_error =
             verify_remote_manifest_authenticity(b"{}", None, &required_without_key).unwrap_err();
@@ -854,7 +1057,7 @@ mod tests {
 
         let required_with_key = ManifestAuthenticityConfig {
             mode: ManifestAuthenticityMode::Required,
-            public_key: Some(public_key),
+            public_keys: Some(HashMap::from([("test".to_string(), public_key)])),
         };
         let missing_signature_error =
             verify_remote_manifest_authenticity(b"{}", None, &required_with_key).unwrap_err();
@@ -866,16 +1069,114 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[5_u8; 32]);
         let payload = br#"{"schemaVersion":"1","components":[]}"#;
         let signature = signing_key.sign(payload);
-        let signature_header =
-            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+        let signature_header = format!(
+            "kid=test;sig={}",
+            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+        );
         let config = ManifestAuthenticityConfig {
             mode: ManifestAuthenticityMode::Required,
-            public_key: Some(signing_key.verifying_key()),
+            public_keys: Some(HashMap::from([(
+                "test".to_string(),
+                signing_key.verifying_key(),
+            )])),
         };
 
         let verified =
             verify_remote_manifest_authenticity(payload, Some(&signature_header), &config)
                 .expect("expected signature verification");
         assert!(verified);
+    }
+
+    #[test]
+    fn verify_remote_manifest_authenticity_rejects_unknown_kid() {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let payload = br#"{"schemaVersion":"1","components":[]}"#;
+        let signature = signing_key.sign(payload);
+        let signature_header = format!(
+            "kid=untrusted;sig={}",
+            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+        );
+        let config = ManifestAuthenticityConfig {
+            mode: ManifestAuthenticityMode::Required,
+            public_keys: Some(HashMap::from([(
+                "trusted".to_string(),
+                signing_key.verifying_key(),
+            )])),
+        };
+
+        let error = verify_remote_manifest_authenticity(payload, Some(&signature_header), &config)
+            .expect_err("expected unknown kid verification failure");
+        assert!(error.contains("no trusted public key configured"));
+    }
+
+    #[test]
+    fn verify_remote_manifest_authenticity_accepts_when_one_signature_matches() {
+        let trusted_signing_key = SigningKey::from_bytes(&[9_u8; 32]);
+        let payload = br#"{"schemaVersion":"1","components":[]}"#;
+        let trusted_signature = trusted_signing_key.sign(payload);
+        let signature_header = format!(
+            "kid=unknown;sig={}, kid=trusted;sig={}",
+            base64::engine::general_purpose::STANDARD.encode(trusted_signature.to_bytes()),
+            base64::engine::general_purpose::STANDARD.encode(trusted_signature.to_bytes())
+        );
+        let config = ManifestAuthenticityConfig {
+            mode: ManifestAuthenticityMode::Required,
+            public_keys: Some(HashMap::from([(
+                "trusted".to_string(),
+                trusted_signing_key.verifying_key(),
+            )])),
+        };
+
+        let verified =
+            verify_remote_manifest_authenticity(payload, Some(&signature_header), &config)
+                .expect("expected signature verification to succeed when one signature matches");
+        assert!(verified);
+    }
+
+    #[test]
+    fn parse_manifest_public_keys_rejects_invalid_shapes() {
+        let invalid_json = parse_manifest_public_keys("{", "TEST_KEYS")
+            .expect_err("expected invalid JSON public keys parse error");
+        assert!(invalid_json.contains("Failed to parse"));
+
+        let non_object = parse_manifest_public_keys("[]", "TEST_KEYS")
+            .expect_err("expected non-object public keys parse error");
+        assert!(non_object.contains("must be a JSON object"));
+
+        let empty_object = parse_manifest_public_keys("{}", "TEST_KEYS")
+            .expect_err("expected empty public keys parse error");
+        assert!(empty_object.contains("at least one key entry"));
+
+        let non_string = parse_manifest_public_keys(r#"{"trusted":123}"#, "TEST_KEYS")
+            .expect_err("expected non-string public key parse error");
+        assert!(non_string.contains("must be a base64 string"));
+
+        let invalid_kid = parse_manifest_public_keys(r#"{"bad kid":"Zm9v"}"#, "TEST_KEYS")
+            .expect_err("expected invalid kid parse error");
+        assert!(invalid_kid.contains("invalid key id format"));
+    }
+
+    #[test]
+    fn parse_manifest_signatures_header_rejects_invalid_entry() {
+        let error = parse_manifest_signatures_header("sig=abc123")
+            .expect_err("expected missing kid parse error");
+        assert!(error.contains("missing `kid`"));
+    }
+
+    #[test]
+    fn retry_after_seconds_from_headers_parses_retry_after_and_reset() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "60".parse().unwrap());
+        assert_eq!(retry_after_seconds_from_headers(&headers), Some(60));
+
+        let mut reset_headers = reqwest::header::HeaderMap::new();
+        let reset_epoch_secs = now_epoch_secs() + 30;
+        reset_headers.insert(
+            "x-ratelimit-reset",
+            reset_epoch_secs.to_string().parse().unwrap(),
+        );
+        let parsed_from_reset =
+            retry_after_seconds_from_headers(&reset_headers).expect("expected reset parse");
+        assert!(parsed_from_reset <= 30 && parsed_from_reset >= 1);
     }
 }

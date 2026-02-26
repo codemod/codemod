@@ -14,7 +14,7 @@ use super::update::types::{
     AutoSafeApplyResult, AutoSafeComponentStatus, ManagedUpdateManifest,
     ManagedUpdateManifestComponent, ReconcileDecisionStatus, RemoteManifestSnapshot,
     StagedComponentUpdate, StagedFileWrite, UpdatePolicyContext, UpdatePolicyMode,
-    MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR, MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER,
+    MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR, MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER,
     MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
 };
 use super::{interactive_user_scope_label, managed_components_from_install};
@@ -158,6 +158,10 @@ impl Drop for EnvRestoreGuard {
 
 fn signing_key_fixture() -> SigningKey {
     SigningKey::from_bytes(&[7_u8; 32])
+}
+
+fn manifest_public_keys_env_value(public_key_base64: &str) -> String {
+    format!(r#"{{"test":"{public_key_base64}"}}"#)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -877,8 +881,10 @@ fn remote_auto_safe_update_end_to_end_across_supported_harnesses() {
                 let manifest_bytes =
                     serde_json::to_vec(&manifest).expect("expected manifest serialization");
                 let signature = signing_key.sign(&manifest_bytes);
-                let signature_header =
-                    base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+                let signature_header = format!(
+                    "kid=test;sig={}",
+                    base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+                );
 
                 HashMap::from([
                     (
@@ -887,7 +893,7 @@ fn remote_auto_safe_update_end_to_end_across_supported_harnesses() {
                             status: StatusCode::OK,
                             body: manifest_bytes,
                             headers: vec![(
-                                MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER.to_string(),
+                                MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER.to_string(),
                                 signature_header,
                             )],
                         },
@@ -907,8 +913,8 @@ fn remote_auto_safe_update_end_to_end_across_supported_harnesses() {
             let remote_source = format!("{}{manifest_path}", server.base_url);
             let _env_restore = EnvRestoreGuard::set(&[
                 (
-                    MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR,
-                    public_key.clone(),
+                    MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR,
+                    manifest_public_keys_env_value(&public_key),
                 ),
                 (
                     "CODEMOD_AGENT_UPDATE_LOCK_PATH",
@@ -997,8 +1003,10 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
             };
             let manifest_bytes = serde_json::to_vec(&manifest).expect("expected serialization");
             let signature = signing_key.sign(&manifest_bytes);
-            let signature_header =
-                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+            let signature_header = format!(
+                "kid=test;sig={}",
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            );
 
             HashMap::from([
                 (
@@ -1007,7 +1015,7 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
                         status: StatusCode::OK,
                         body: manifest_bytes,
                         headers: vec![(
-                            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER.to_string(),
+                            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER.to_string(),
                             signature_header,
                         )],
                     },
@@ -1026,8 +1034,8 @@ fn remote_auto_safe_update_checksum_mismatch_fails_without_writing_partial_conte
 
         let _env_restore = EnvRestoreGuard::set(&[
             (
-                MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR,
-                public_key.clone(),
+                MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR,
+                manifest_public_keys_env_value(&public_key),
             ),
             (
                 "CODEMOD_AGENT_UPDATE_LOCK_PATH",
@@ -1104,8 +1112,10 @@ fn remote_auto_safe_update_skips_incompatible_components() {
             };
             let manifest_bytes = serde_json::to_vec(&manifest).expect("expected serialization");
             let signature = signing_key.sign(&manifest_bytes);
-            let signature_header =
-                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+            let signature_header = format!(
+                "kid=test;sig={}",
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            );
 
             HashMap::from([
                 (
@@ -1114,7 +1124,7 @@ fn remote_auto_safe_update_skips_incompatible_components() {
                         status: StatusCode::OK,
                         body: manifest_bytes,
                         headers: vec![(
-                            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER.to_string(),
+                            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER.to_string(),
                             signature_header,
                         )],
                     },
@@ -1133,8 +1143,8 @@ fn remote_auto_safe_update_skips_incompatible_components() {
 
         let _env_restore = EnvRestoreGuard::set(&[
             (
-                MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR,
-                public_key.clone(),
+                MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR,
+                manifest_public_keys_env_value(&public_key),
             ),
             (
                 "CODEMOD_AGENT_UPDATE_LOCK_PATH",
@@ -1208,8 +1218,10 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
             };
             let manifest_bytes = serde_json::to_vec(&manifest).expect("expected serialization");
             let signature = signing_key.sign(&manifest_bytes);
-            let signature_header =
-                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+            let signature_header = format!(
+                "kid=test;sig={}",
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            );
 
             HashMap::from([
                 (
@@ -1218,7 +1230,7 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
                         status: StatusCode::OK,
                         body: manifest_bytes,
                         headers: vec![(
-                            MANAGED_UPDATE_MANIFEST_SIGNATURE_HEADER.to_string(),
+                            MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER.to_string(),
                             signature_header,
                         )],
                     },
@@ -1251,8 +1263,8 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
 
         let _env_restore = EnvRestoreGuard::set(&[
             (
-                MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ENV_VAR,
-                public_key.clone(),
+                MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR,
+                manifest_public_keys_env_value(&public_key),
             ),
             (
                 "CODEMOD_AGENT_UPDATE_LOCK_PATH",
@@ -1299,6 +1311,53 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
             fs::read_to_string(&skill_path).expect("expected unchanged skill content"),
             "old-skill-content"
         );
+
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn resolve_update_policy_context_handles_rate_limited_manifest_endpoint_gracefully() {
+    let _env_lock = ENV_GUARD.lock().expect("expected env lock");
+    let runtime = Runtime::new().expect("expected runtime");
+    runtime.block_on(async {
+        let manifest_path = "/manifest/rate-limited".to_string();
+        let server = TestHttpServer::start_with_builder(|_| {
+            HashMap::from([(
+                manifest_path.clone(),
+                TestHttpFixture {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    body: b"rate limited".to_vec(),
+                    headers: vec![
+                        ("Retry-After".to_string(), "60".to_string()),
+                        (
+                            "X-RateLimit-Reset".to_string(),
+                            (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                                + 60)
+                                .to_string(),
+                        ),
+                    ],
+                },
+            )])
+        })
+        .await;
+
+        let context = resolve_update_policy_context(&UpdatePolicyResolveOptions {
+            mode: UpdatePolicyMode::Notify,
+            remote_source: format!("{}{manifest_path}", server.base_url),
+            require_signed_manifest: Some(true),
+        })
+        .await
+        .expect("expected update policy context");
+
+        assert!(context.fallback_applied);
+        assert!(context.remote_manifest.is_none());
+        assert!(context.warnings.iter().any(|warning| {
+            warning.contains("HTTP 429") && warning.contains("retry after 60s")
+        }));
 
         server.shutdown().await;
     });
