@@ -172,8 +172,13 @@ pub fn create_engine(
 
     let capabilities_security_callback = capabilities_security_callback(no_interactive);
     let dry_run_callback = if dry_run {
-        // In dry-run mode: print diffs to terminal + optionally collect for report
-        Some(create_dry_run_callback(no_color, diff_collector))
+        if output_format == OutputFormat::Jsonl {
+            // In JSONL mode: silently collect diffs without printing to stdout
+            diff_collector.map(create_silent_diff_collector)
+        } else {
+            // In text mode: print diffs to terminal + optionally collect for report
+            Some(create_dry_run_callback(no_color, diff_collector))
+        }
     } else {
         diff_collector.map(create_silent_diff_collector)
     };

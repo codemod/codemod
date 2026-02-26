@@ -186,13 +186,14 @@ impl StructuredLogger {
 /// In Text mode, falls through to the `log` crate macros.
 #[macro_export]
 macro_rules! slog {
-    ($logger:expr, $level:ident, $($arg:tt)*) => {
-        if $logger.is_jsonl() {
-            $logger.log(stringify!($level), &format!($($arg)*));
+    ($logger:expr, $level:ident, $($arg:tt)*) => {{
+        let __logger = &$logger;
+        if __logger.is_jsonl() {
+            __logger.log(stringify!($level), &format!($($arg)*));
         } else {
             log::$level!($($arg)*);
         }
-    };
+    }};
 }
 
 #[cfg(test)]
