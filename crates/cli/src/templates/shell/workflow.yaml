@@ -8,7 +8,7 @@ nodes:
     steps:
       - id: init
         name: Initialize
-        run: ./scripts/setup.sh
+        run: $CODEMOD_PATH/scripts/setup.sh
 
   - id: transform
     name: Apply Transformations
@@ -17,7 +17,7 @@ nodes:
     steps:
       - id: apply
         name: Apply Changes
-        run: ./scripts/transform.sh
+        run: $CODEMOD_PATH/scripts/transform.sh
 
   - id: cleanup
     name: Cleanup
@@ -26,4 +26,4 @@ nodes:
     steps:
       - id: clean
         name: Clean temporary files
-        run: ./scripts/cleanup.sh
+        run: $CODEMOD_PATH/scripts/cleanup.sh

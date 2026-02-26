@@ -24,6 +24,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         false,
         false,
         None,
+        Default::default(),
     )?;
 
     println!("Canceling workflow run {}...", args.id);
