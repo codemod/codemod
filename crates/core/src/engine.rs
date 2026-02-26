@@ -1683,13 +1683,6 @@ impl Engine {
                         return;
                     }
 
-                    slog!(
-                        logger,
-                        debug,
-                        "Executing AST grep on file: {}",
-                        path.display()
-                    );
-
                     // Execute ast-grep on this file
                     match scan_file_with_combined_scan(
                         path,
@@ -1960,13 +1953,6 @@ impl Engine {
                         return;
                     }
                 };
-
-                slog!(
-                    logger,
-                    debug,
-                    "Executing JSSG on file: {}",
-                    file_path.display()
-                );
 
                 // Execute the async codemod using the captured runtime handle
                 std::env::set_var("CODEMOD_STEP_ID", &step_id);

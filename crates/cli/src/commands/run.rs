@@ -85,6 +85,10 @@ pub struct Command {
     /// Open a web-based execution report after the run completes
     #[arg(long)]
     report: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value = "text")]
+    format: String,
 }
 
 async fn send_failure_event(
@@ -207,6 +211,11 @@ pub async fn handler(
 
     let started = std::time::Instant::now();
 
+    let output_format: butterflow_core::structured_log::OutputFormat = args
+        .format
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
     // Run workflow using the extracted workflow runner
     let (engine, config) = create_engine(
         workflow_path,
@@ -219,7 +228,7 @@ pub async fn handler(
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
-        Default::default(),
+        output_format,
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {
