@@ -59,6 +59,10 @@ pub struct Command {
     /// No interactive mode
     #[arg(long)]
     no_interactive: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value = "text")]
+    format: String,
 }
 
 /// Resume a workflow
@@ -85,6 +89,11 @@ pub async fn handler(args: &Command) -> Result<()> {
         "Resuming workflow {} with capabilities: {:?}",
         args.id, capabilities
     );
+
+    let output_format: butterflow_core::structured_log::OutputFormat = args
+        .format
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
 
     let (engine, _) = create_engine(
         workflow_file_path,

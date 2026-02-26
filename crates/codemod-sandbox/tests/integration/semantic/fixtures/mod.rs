@@ -237,6 +237,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         capabilities: None,
         semantic_provider: provider,
         metrics_context: None,
+        shared_state_context: None,
         test_mode: false,
         target_directory: None,
     };

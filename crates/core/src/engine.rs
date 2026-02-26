@@ -14,6 +14,8 @@ use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfi
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
+use crate::slog;
+use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{
@@ -53,7 +55,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::{
     sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
     utils::project_discovery::find_tsconfig,
-    MetricsContext,
+    MetricsContext, SharedStateContext,
 };
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
@@ -139,6 +141,9 @@ pub struct Engine {
 
     /// Notification for when running tasks complete
     task_completion_notify: Arc<Notify>,
+
+    /// Structured logger for JSONL output
+    pub structured_logger: StructuredLogger,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -173,6 +178,7 @@ impl Engine {
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            structured_logger: StructuredLogger::default(),
         }
     }
 
@@ -180,6 +186,7 @@ impl Engine {
     pub fn with_workflow_run_config(workflow_run_config: WorkflowRunConfig) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
+        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
@@ -189,6 +196,7 @@ impl Engine {
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            structured_logger,
         }
     }
 
@@ -198,6 +206,7 @@ impl Engine {
         workflow_run_config: WorkflowRunConfig,
     ) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> = Arc::new(Mutex::new(state_adapter));
+        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
@@ -207,6 +216,7 @@ impl Engine {
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            structured_logger,
         }
     }
 
@@ -1291,38 +1301,14 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
-        // Create a runner for this task
-        let runner: Box<dyn Runner> = match node
+        let runtime_type = node
             .runtime
             .as_ref()
             .map(|r| r.r#type)
-            .unwrap_or(RuntimeType::Direct)
-        {
-            RuntimeType::Direct => Box::new(DirectRunner::new()),
-            RuntimeType::Docker => {
-                #[cfg(feature = "docker")]
-                {
-                    Box::new(DockerRunner::new())
-                }
-                #[cfg(not(feature = "docker"))]
-                {
-                    return Err(Error::UnsupportedRuntime(RuntimeType::Docker));
-                }
-            }
-            RuntimeType::Podman => {
-                #[cfg(feature = "podman")]
-                {
-                    Box::new(PodmanRunner::new())
-                }
-                #[cfg(not(feature = "podman"))]
-                {
-                    return Err(Error::UnsupportedRuntime(RuntimeType::Podman));
-                }
-            }
-        };
+            .unwrap_or(RuntimeType::Direct);
 
         // Execute each step in the node
-        for step in &node.steps {
+        for (step_index, step) in node.steps.iter().enumerate() {
             let state = self
                 .state_adapter
                 .lock()
@@ -1342,13 +1328,62 @@ impl Engine {
                 .unwrap_or_default();
 
                 if !should_execute {
-                    info!(
+                    slog!(
+                        self.structured_logger,
+                        info,
                         "Skipping step '{}' - condition not met: {}",
-                        step.name, condition
+                        step.name,
+                        condition
                     );
                     continue;
                 }
             }
+
+            let step_logger = self.structured_logger.with_context(StepContext {
+                step_name: step.name.clone(),
+                step_index,
+                node_id: node.id.clone(),
+                node_name: node.name.clone(),
+                task_id: task_id.to_string(),
+            });
+
+            let runner: Box<dyn Runner> = match runtime_type {
+                RuntimeType::Direct => Box::new(DirectRunner::new()),
+                RuntimeType::Docker => {
+                    #[cfg(feature = "docker")]
+                    {
+                        Box::new(DockerRunner::new())
+                    }
+                    #[cfg(not(feature = "docker"))]
+                    {
+                        return Err(Error::UnsupportedRuntime(RuntimeType::Docker));
+                    }
+                }
+                RuntimeType::Podman => {
+                    #[cfg(feature = "podman")]
+                    {
+                        Box::new(PodmanRunner::new())
+                    }
+                    #[cfg(not(feature = "podman"))]
+                    {
+                        return Err(Error::UnsupportedRuntime(RuntimeType::Podman));
+                    }
+                }
+            };
+
+            step_logger.step_start();
+            let step_start_time = std::time::Instant::now();
+
+            // In JSONL mode, capture ALL stdout (fd 1) during step execution.
+            // Any println!, console.log, etc. from child processes, AI agents,
+            // or JS codemods will be intercepted and wrapped in JSONL with the
+            // correct step context. The structured logger bypasses the capture
+            // by writing directly to the saved real stdout fd.
+            let _stdout_capture = if self.structured_logger.is_jsonl() {
+                StdoutCaptureGuard::start(&step_logger)
+            } else {
+                None
+            };
 
             let result = self
                 .execute_step_action(
@@ -1364,12 +1399,20 @@ impl Engine {
                     &workflow_run.bundle_path,
                     &[],
                     &self.workflow_run_config.capabilities,
+                    &step_logger,
                 )
                 .await;
 
+            // Drop the capture guard to restore stdout before emitting step_end.
+            // This ensures all captured output is flushed and attributed to this step.
+            drop(_stdout_capture);
+
             match result {
-                Ok(_) => {}
+                Ok(_) => {
+                    step_logger.step_end("success", step_start_time.elapsed().as_millis() as u64);
+                }
                 Err(e) => {
+                    step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
                     fields.insert(
@@ -1489,6 +1532,7 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         match action {
             StepAction::RunScript(run) => {
@@ -1509,6 +1553,7 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
+                    logger,
                 )
                 .await
             }
@@ -1559,13 +1604,15 @@ impl Engine {
                         bundle_path,
                         dependency_chain,
                         capabilities,
+                        logger,
                     ))
                     .await?;
                 }
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep).await
+                self.execute_ast_grep_step(node.id.clone(), ast_grep, logger)
+                    .await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
@@ -1585,6 +1632,9 @@ impl Engine {
                             .map(|callback| Arc::new(callback.clone())),
                     },
                     bundle_path,
+                    Some(task.workflow_run_id),
+                    Some(state),
+                    logger,
                 )
                 .await
             }
@@ -1599,11 +1649,12 @@ impl Engine {
                     bundle_path,
                     dependency_chain,
                     capabilities,
+                    logger,
                 ))
                 .await
             }
             StepAction::AI(ai_config) => {
-                self.execute_ai_step(ai_config, step_env, node, task, params, state)
+                self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
                     .await
             }
             StepAction::InstallSkill(install_skill) => {
@@ -1639,7 +1690,12 @@ impl Engine {
         }
     }
 
-    pub async fn execute_ast_grep_step(&self, id: String, ast_grep: &UseAstGrep) -> Result<()> {
+    pub async fn execute_ast_grep_step(
+        &self,
+        id: String,
+        ast_grep: &UseAstGrep,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
         let bundle_path = self.workflow_run_config.bundle_path.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
@@ -1683,14 +1739,20 @@ impl Engine {
                 let id_clone = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
+                let logger = logger.clone();
 
-                let _ = execution_config.execute(|path, config| {
+                let _ = execution_config.execute(move |path, config| {
                     // Only process files, not directories
                     if !path.is_file() {
                         return;
                     }
 
-                    info!("Executing AST grep on file: {}", path.display());
+                    slog!(
+                        logger,
+                        debug,
+                        "Executing AST grep on file: {}",
+                        path.display()
+                    );
 
                     // Execute ast-grep on this file
                     match scan_file_with_combined_scan(
@@ -1700,7 +1762,13 @@ impl Engine {
                     ) {
                         Ok((matches, file_modified, new_content)) => {
                             if !matches.is_empty() {
-                                info!("Found {} matches in {}", matches.len(), path.display());
+                                slog!(
+                                    logger,
+                                    info,
+                                    "Found {} matches in {}",
+                                    matches.len(),
+                                    path.display()
+                                );
                             }
                             if file_modified {
                                 if let Some(new_content) = new_content {
@@ -1712,7 +1780,9 @@ impl Engine {
                                     });
 
                                     if let Err(e) = write_result {
-                                        error!(
+                                        slog!(
+                                            logger,
+                                            error,
                                             "Failed to write modified file {}: {}",
                                             path.display(),
                                             e
@@ -1733,7 +1803,7 @@ impl Engine {
                             }
                         }
                         Err(e) => {
-                            error!("{e}");
+                            slog!(logger, error, "{e}");
                             self.execution_stats
                                 .files_with_errors
                                 .fetch_add(1, Ordering::Relaxed);
@@ -1764,6 +1834,9 @@ impl Engine {
         matrix_input: Option<HashMap<String, serde_json::Value>>,
         capabilities_data: &CapabilitiesData,
         bundle_path: &Option<PathBuf>,
+        workflow_run_id: Option<Uuid>,
+        initial_state: Option<&HashMap<String, serde_json::Value>>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
 
@@ -1898,7 +1971,9 @@ impl Engine {
                     if file_path.is_file() {
                         if let Ok(content) = std::fs::read_to_string(file_path) {
                             if let Err(e) = provider.notify_file_processed(file_path, &content) {
-                                debug!(
+                                slog!(
+                                    logger,
+                                    debug,
                                     "Failed to pre-index file {} for semantic analysis: {}",
                                     file_path.display(),
                                     e
@@ -1918,7 +1993,14 @@ impl Engine {
         let progress_callback = self.workflow_run_config.progress_callback.clone();
         let file_writer = Arc::clone(&self.file_writer);
         let selector_config = selector_config.map(Arc::new);
+        let shared_state_context = if let Some(state) = initial_state {
+            SharedStateContext::with_initial_state(state.clone())
+        } else {
+            SharedStateContext::new()
+        };
         let metrics_context_clone = metrics_context.clone();
+        let shared_state_context_clone = shared_state_context.clone();
+        let logger = logger.clone();
 
         // Execute the codemod on each file using the config's multi-threading
         config
@@ -1932,10 +2014,23 @@ impl Engine {
                 let content = match std::fs::read_to_string(file_path) {
                     Ok(content) => content,
                     Err(e) => {
-                        warn!("Failed to read file {}: {}", file_path.display(), e);
+                        slog!(
+                            logger,
+                            warn,
+                            "Failed to read file {}: {}",
+                            file_path.display(),
+                            e
+                        );
                         return;
                     }
                 };
+
+                slog!(
+                    logger,
+                    debug,
+                    "Executing JSSG on file: {}",
+                    file_path.display()
+                );
 
                 // Execute the async codemod using the captured runtime handle
                 std::env::set_var("CODEMOD_STEP_ID", &step_id);
@@ -1952,6 +2047,7 @@ impl Engine {
                         capabilities: config.capabilities.clone(),
                         semantic_provider: semantic_provider.clone(),
                         metrics_context: Some(metrics_context_clone.clone()),
+                        shared_state_context: Some(shared_state_context_clone.clone()),
                         test_mode: false,
                         target_directory: Some(&target_path),
                     })
@@ -1987,7 +2083,9 @@ impl Engine {
                                             });
                                         }
 
-                                        debug!(
+                                        slog!(
+                                            logger,
+                                            debug,
                                             "Would modify file (dry run): {}",
                                             change_path.display()
                                         );
@@ -2020,7 +2118,9 @@ impl Engine {
                                         });
 
                                         if let Err(e) = write_result {
-                                            error!(
+                                            slog!(
+                                                logger,
+                                                error,
                                                 "Failed to write modified file {}: {}",
                                                 write_path.display(),
                                                 e
@@ -2034,20 +2134,29 @@ impl Engine {
                                                 && write_path != change_path
                                             {
                                                 if let Err(e) = std::fs::remove_file(change_path) {
-                                                    error!(
+                                                    slog!(
+                                                        logger,
+                                                        error,
                                                         "Failed to remove original file {}: {}",
                                                         change_path.display(),
                                                         e
                                                     );
                                                 } else {
-                                                    debug!(
+                                                    slog!(
+                                                        logger,
+                                                        debug,
                                                         "Renamed file: {} -> {}",
                                                         change_path.display(),
                                                         write_path.display()
                                                     );
                                                 }
                                             } else {
-                                                debug!("Modified file: {}", change_path.display());
+                                                slog!(
+                                                    logger,
+                                                    debug,
+                                                    "Modified file: {}",
+                                                    change_path.display()
+                                                );
                                             }
                                             if let Some(ref provider) = semantic_provider {
                                                 let _ = provider.notify_file_processed(
@@ -2081,7 +2190,9 @@ impl Engine {
                         }
                     }
                     Err(e) => {
-                        error!(
+                        slog!(
+                            logger,
+                            error,
                             "Failed to execute codemod on {}: {:?}",
                             file_path.display(),
                             e
@@ -2105,6 +2216,43 @@ impl Engine {
             })
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
+        // Persist shared state to the workflow state adapter
+        if let Some(wf_run_id) = workflow_run_id {
+            let persistable = shared_state_context.get_persistable();
+            let removals = shared_state_context.get_removals();
+
+            if !persistable.is_empty() || !removals.is_empty() {
+                let mut fields = HashMap::new();
+                for (key, value) in persistable {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Update,
+                            value: Some(value),
+                        },
+                    );
+                }
+                for key in removals {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Remove,
+                            value: None,
+                        },
+                    );
+                }
+
+                self.state_adapter
+                    .lock()
+                    .await
+                    .apply_state_diff(&StateDiff {
+                        workflow_run_id: wf_run_id,
+                        fields,
+                    })
+                    .await?;
+            }
+        }
+
         Ok(())
     }
 
@@ -2118,6 +2266,7 @@ impl Engine {
         task: &Task,
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         // Resolve the prompt with parameters, state, and matrix values
         // TODO: Load step outputs from STEP_OUTPUTS file and pass here
@@ -2129,7 +2278,12 @@ impl Engine {
             None, // step outputs
         )?;
 
-        info!("Executing AI agent step with prompt: {}", resolved_prompt);
+        slog!(
+            logger,
+            info,
+            "Executing AI agent step with prompt: {}",
+            resolved_prompt
+        );
 
         // Configure LLM settings - check for API key from config or environment
         let api_key = match ai_config
@@ -2140,19 +2294,32 @@ impl Engine {
             Some(key) => key,
             None => {
                 // No API key - surface instructions for coding agents and skip the step
-                println!();
-                println!("[AI INSTRUCTIONS]");
-                println!();
-                if let Some(system_prompt) = &ai_config.system_prompt {
-                    println!("{system_prompt}");
+                if logger.is_jsonl() {
+                    logger.log("info", "[AI INSTRUCTIONS]");
+                    if let Some(system_prompt) = &ai_config.system_prompt {
+                        logger.log("info", system_prompt);
+                    }
+                    logger.log("info", &resolved_prompt);
+                    logger.log("info", "[/AI INSTRUCTIONS]");
+                } else {
+                    println!();
+                    println!("[AI INSTRUCTIONS]");
+                    println!();
+                    if let Some(system_prompt) = &ai_config.system_prompt {
+                        println!("{system_prompt}");
+                        println!();
+                    }
+                    println!("{resolved_prompt}");
+                    println!();
+                    println!("[/AI INSTRUCTIONS]");
                     println!();
                 }
-                println!("{resolved_prompt}");
-                println!();
-                println!("[/AI INSTRUCTIONS]");
-                println!();
 
-                info!("Skipping AI step - no API key provided. See [AI INSTRUCTIONS] above.");
+                slog!(
+                    logger,
+                    info,
+                    "Skipping AI step - no API key provided. See [AI INSTRUCTIONS] above."
+                );
                 return Ok(());
             }
         };
@@ -2197,8 +2364,9 @@ impl Engine {
             .await
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
-        println!("AI agent output:\n{}", output.data.unwrap_or_default());
-        info!("AI agent step completed successfully");
+        let ai_output = output.data.unwrap_or_default();
+        slog!(logger, info, "AI agent output:\n{ai_output}");
+        slog!(logger, info, "AI agent step completed successfully");
         Ok(())
     }
 
@@ -2214,8 +2382,9 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
-        info!("Executing codemod step: {}", codemod.source);
+        slog!(logger, info, "Executing codemod step: {}", codemod.source);
 
         // Check for runtime cycles before execution
         if let Some(cycle_start) = self.find_cycle_in_chain(&codemod.source, dependency_chain) {
@@ -2248,7 +2417,9 @@ impl Engine {
             .await
             .map_err(|e| Error::Other(format!("Failed to resolve package: {e}")))?;
 
-        info!(
+        slog!(
+            logger,
+            info,
             "Resolved codemod package: {} -> {}",
             codemod.source,
             resolved_package.package_dir.display()
@@ -2272,6 +2443,7 @@ impl Engine {
             bundle_path,
             &new_chain,
             capabilities,
+            logger,
         )
         .await
     }
@@ -2289,6 +2461,7 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
@@ -2356,7 +2529,9 @@ impl Engine {
             working_dir.to_string_lossy().to_string(),
         );
 
-        info!(
+        slog!(
+            logger,
+            info,
             "Running codemod workflow: {} with {} parameters",
             resolved_package.spec.name,
             codemod_params.len()
@@ -2364,7 +2539,7 @@ impl Engine {
 
         // Execute the codemod workflow synchronously by running its steps directly
         // This avoids the recursive engine execution cycle
-        info!("Executing codemod workflow steps directly");
+        slog!(logger, info, "Executing codemod workflow steps directly");
 
         // Create a direct runner for executing the codemod steps
         let runner: Box<dyn Runner> = Box::new(DirectRunner::new());
@@ -2381,9 +2556,12 @@ impl Engine {
                         None,
                     )?;
                     if !should_execute {
-                        info!(
+                        slog!(
+                            logger,
+                            info,
                             "Skipping codemod step '{}' - condition not met: {}",
-                            step.name, condition
+                            step.name,
+                            condition
                         );
                         continue;
                     }
@@ -2402,12 +2580,13 @@ impl Engine {
                     &Some(resolved_package.package_dir.clone()),
                     dependency_chain,
                     capabilities,
+                    logger,
                 ))
                 .await?;
             }
         }
 
-        info!("Codemod workflow completed successfully");
+        slog!(logger, info, "Codemod workflow completed successfully");
         Ok(())
     }
 
@@ -2423,6 +2602,7 @@ impl Engine {
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
@@ -2445,11 +2625,6 @@ impl Engine {
             );
         }
 
-        env.insert(
-            String::from("CODEMOD_STATE"),
-            serde_json::to_string(state).unwrap_or("".to_string()),
-        );
-
         // Add step environment variables
         if let Some(step_env) = step_env {
             for (key, value) in step_env {
@@ -2471,6 +2646,21 @@ impl Engine {
         let temp_dir = std::env::temp_dir();
         let state_outputs_path = temp_dir.join(task.id.to_string());
         File::create(&state_outputs_path)?;
+
+        // Write state to a temp file and pass its path (env vars have OS size limits)
+        let state_input_path = temp_dir.join(format!("{}-state-input", task.id));
+        std::fs::write(
+            &state_input_path,
+            serde_json::to_string(state).unwrap_or_else(|_| "{}".to_string()),
+        )?;
+        env.insert(
+            String::from("CODEMOD_STATE"),
+            state_input_path
+                .canonicalize()?
+                .to_str()
+                .expect("File path should be valid UTF-8")
+                .to_string(),
+        );
 
         if let Some(bundle_path) = bundle_path {
             env.insert(
@@ -2517,13 +2707,18 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        println!("Step output:");
-        println!("{output}");
+        if logger.is_jsonl() {
+            logger.log("info", &format!("Step output:\n{output}"));
+        } else {
+            println!("Step output:");
+            println!("{output}");
+        }
 
         let outputs = read_to_string(&state_outputs_path).await?;
 
-        // Clean up the temporary file
+        // Clean up the temporary files
         std::fs::remove_file(&state_outputs_path).ok();
+        std::fs::remove_file(&state_input_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();
@@ -2784,6 +2979,7 @@ impl Clone for Engine {
             metrics_context: self.metrics_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
+            structured_logger: self.structured_logger.clone(),
         }
     }
 }

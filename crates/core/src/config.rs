@@ -10,6 +10,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,
+    structured_log::OutputFormat,
 };
 
 pub type CapabilitiesSecurityCallback =

@@ -5,6 +5,7 @@ use std::fs;
 use tempfile::TempDir;
 
 use butterflow_core::engine::{CapabilitiesData, Engine};
+use butterflow_core::structured_log::StructuredLogger;
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
     WorkflowStatus,
@@ -1776,6 +1777,7 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1846,6 +1848,7 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1881,6 +1884,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1939,6 +1943,7 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2018,6 +2023,9 @@ function helper() {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2106,6 +2114,9 @@ interface ApiResponse {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2172,6 +2183,9 @@ var count = 0;
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2218,6 +2232,9 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2292,6 +2309,9 @@ build/
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2324,6 +2344,9 @@ build/
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2386,6 +2409,9 @@ export default function transform(ast) {
                 capabilities_security_callback: None,
             },
             &None,
+            None,
+            None,
+            &StructuredLogger::default(),
         )
         .await;
 

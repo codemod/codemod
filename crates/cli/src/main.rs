@@ -318,7 +318,7 @@ async fn main() -> Result<()> {
                 commands::jssg::run::handler(args, telemetry_sender.clone()).await?;
             }
             JssgCommands::Test(args) => {
-                commands::jssg::test::handler(args).await?;
+                commands::jssg::test::handler(args, telemetry_sender.clone()).await?;
             }
             JssgCommands::ListApplicable(args) => {
                 commands::jssg::list_applicable::handler(args).await?;
