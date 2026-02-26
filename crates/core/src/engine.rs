@@ -109,7 +109,7 @@ pub struct Engine {
     task_completion_notify: Arc<Notify>,
 
     /// Structured logger for JSONL output
-    pub(crate) structured_logger: StructuredLogger,
+    pub structured_logger: StructuredLogger,
 }
 
 /// Represents a codemod dependency chain for cycle detection

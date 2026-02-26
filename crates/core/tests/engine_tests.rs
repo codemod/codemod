@@ -1766,7 +1766,6 @@ message: "Found var declaration"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_ast_grep_step(
             "test".to_string(),
@@ -1778,7 +1777,7 @@ message: "Found var declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1838,7 +1837,6 @@ message: "Found interface declaration"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1850,7 +1848,7 @@ message: "Found interface declaration"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1875,7 +1873,6 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1887,7 +1884,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -1935,7 +1932,6 @@ message: "Found console.log statement"
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_ast_grep_step(
             "test-node".to_string(),
@@ -1947,7 +1943,7 @@ message: "Found console.log statement"
                 allow_dirty: Some(false),
                 max_threads: None,
             },
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2005,7 +2001,6 @@ function helper() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2030,7 +2025,7 @@ function helper() {
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2097,7 +2092,6 @@ interface ApiResponse {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2122,7 +2116,7 @@ interface ApiResponse {
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2167,7 +2161,6 @@ var count = 0;
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2192,7 +2185,7 @@ var count = 0;
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2217,7 +2210,6 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2242,7 +2234,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2295,7 +2287,6 @@ build/
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2320,7 +2311,7 @@ build/
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2355,7 +2346,7 @@ build/
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
@@ -2396,7 +2387,6 @@ export default function transform(ast) {
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_workflow_run_config(config);
-    let logger = StructuredLogger::default();
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
@@ -2421,7 +2411,7 @@ export default function transform(ast) {
             &None,
             None,
             None,
-            &logger,
+            &StructuredLogger::default(),
         )
         .await;
 
