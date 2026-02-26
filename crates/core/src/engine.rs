@@ -1684,6 +1684,7 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
+                    logger,
                 )
                 .await
             }

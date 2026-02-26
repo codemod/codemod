@@ -254,6 +254,7 @@ pub async fn handler(
         args.no_color,
         diff_collector.clone(),
         package_behavior_shape.includes_skill(),
+        Default::default(),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {

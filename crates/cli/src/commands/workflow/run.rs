@@ -113,6 +113,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.no_color,
         diff_collector.clone(),
         false,
+        output_format,
     )?;
 
     // Run workflow using the extracted workflow runner

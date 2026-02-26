@@ -51,6 +51,8 @@ pub struct WorkflowRunConfig {
     pub dry_run_callback: Option<DryRunCallback>,
     /// Skip executing install-skill steps at runtime (used by package run UX)
     pub skip_install_skill_steps: bool,
+    /// Output format for structured logging (Text or Jsonl)
+    pub output_format: OutputFormat,
 }
 
 impl Default for WorkflowRunConfig {
@@ -70,6 +72,7 @@ impl Default for WorkflowRunConfig {
             no_interactive: false,
             dry_run_callback: None,
             skip_install_skill_steps: false,
+            output_format: OutputFormat::Text,
         }
     }
 }
