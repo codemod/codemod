@@ -15,7 +15,7 @@ use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::slog;
-use crate::structured_log::{StepContext, StructuredLogger};
+use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::{
@@ -1267,35 +1267,11 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
-        // Create a runner for this task
-        let runner: Box<dyn Runner> = match node
+        let runtime_type = node
             .runtime
             .as_ref()
             .map(|r| r.r#type)
-            .unwrap_or(RuntimeType::Direct)
-        {
-            RuntimeType::Direct => Box::new(DirectRunner::new()),
-            RuntimeType::Docker => {
-                #[cfg(feature = "docker")]
-                {
-                    Box::new(DockerRunner::new())
-                }
-                #[cfg(not(feature = "docker"))]
-                {
-                    return Err(Error::UnsupportedRuntime(RuntimeType::Docker));
-                }
-            }
-            RuntimeType::Podman => {
-                #[cfg(feature = "podman")]
-                {
-                    Box::new(PodmanRunner::new())
-                }
-                #[cfg(not(feature = "podman"))]
-                {
-                    return Err(Error::UnsupportedRuntime(RuntimeType::Podman));
-                }
-            }
-        };
+            .unwrap_or(RuntimeType::Direct);
 
         // Execute each step in the node
         for (step_index, step) in node.steps.iter().enumerate() {
@@ -1336,8 +1312,44 @@ impl Engine {
                 node_name: node.name.clone(),
                 task_id: task_id.to_string(),
             });
+
+            let runner: Box<dyn Runner> = match runtime_type {
+                RuntimeType::Direct => Box::new(DirectRunner::new()),
+                RuntimeType::Docker => {
+                    #[cfg(feature = "docker")]
+                    {
+                        Box::new(DockerRunner::new())
+                    }
+                    #[cfg(not(feature = "docker"))]
+                    {
+                        return Err(Error::UnsupportedRuntime(RuntimeType::Docker));
+                    }
+                }
+                RuntimeType::Podman => {
+                    #[cfg(feature = "podman")]
+                    {
+                        Box::new(PodmanRunner::new())
+                    }
+                    #[cfg(not(feature = "podman"))]
+                    {
+                        return Err(Error::UnsupportedRuntime(RuntimeType::Podman));
+                    }
+                }
+            };
+
             step_logger.step_start();
             let step_start_time = std::time::Instant::now();
+
+            // In JSONL mode, capture ALL stdout (fd 1) during step execution.
+            // Any println!, console.log, etc. from child processes, AI agents,
+            // or JS codemods will be intercepted and wrapped in JSONL with the
+            // correct step context. The structured logger bypasses the capture
+            // by writing directly to the saved real stdout fd.
+            let _stdout_capture = if self.structured_logger.is_jsonl() {
+                StdoutCaptureGuard::start(&step_logger)
+            } else {
+                None
+            };
 
             let result = self
                 .execute_step_action(
@@ -1356,6 +1368,10 @@ impl Engine {
                     &step_logger,
                 )
                 .await;
+
+            // Drop the capture guard to restore stdout before emitting step_end.
+            // This ensures all captured output is flushed and attributed to this step.
+            drop(_stdout_capture);
 
             match result {
                 Ok(_) => {
@@ -2285,11 +2301,7 @@ impl Engine {
             .map_err(|e| Error::StepExecution(e.to_string()))?;
 
         let ai_output = output.data.unwrap_or_default();
-        if logger.is_jsonl() {
-            logger.log("info", &format!("AI agent output:\n{ai_output}"));
-        } else {
-            println!("AI agent output:\n{ai_output}");
-        }
+        slog!(logger, info, "AI agent output:\n{ai_output}");
         slog!(logger, info, "AI agent step completed successfully");
         Ok(())
     }

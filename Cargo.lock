@@ -751,6 +751,7 @@ dependencies = [
  "futures-util",
  "ignore",
  "language-core",
+ "libc",
  "log",
  "rand 0.9.2",
  "rayon",
