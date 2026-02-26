@@ -219,6 +219,7 @@ pub async fn handler(
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
+        Default::default(),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {

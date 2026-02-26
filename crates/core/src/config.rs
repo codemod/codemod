@@ -10,6 +10,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crate::{
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,
+    structured_log::OutputFormat,
 };
 
 pub type CapabilitiesSecurityCallback =
@@ -48,6 +49,8 @@ pub struct WorkflowRunConfig {
     pub no_interactive: bool,
     /// Callback for reporting changes in dry-run mode
     pub dry_run_callback: Option<DryRunCallback>,
+    /// Output format for structured logging (Text or Jsonl)
+    pub output_format: OutputFormat,
 }
 
 impl Default for WorkflowRunConfig {
@@ -66,6 +69,7 @@ impl Default for WorkflowRunConfig {
             capabilities_security_callback: None,
             no_interactive: false,
             dry_run_callback: None,
+            output_format: OutputFormat::Text,
         }
     }
 }

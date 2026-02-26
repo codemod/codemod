@@ -8,6 +8,7 @@ use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
+use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
@@ -145,6 +146,7 @@ pub fn create_engine(
     no_interactive: bool,
     no_color: bool,
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
+    output_format: OutputFormat,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -159,7 +161,12 @@ pub fn create_engine(
         }
     });
 
-    let progress_callback = create_progress_callback();
+    // Skip progress bars in JSONL mode (would corrupt structured output)
+    let progress_callback = if output_format == OutputFormat::Jsonl {
+        None
+    } else {
+        Some(create_progress_callback())
+    };
 
     let registry_client = create_registry_client(registry)?;
 
@@ -173,7 +180,7 @@ pub fn create_engine(
 
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
-        progress_callback: Arc::new(Some(progress_callback)),
+        progress_callback: Arc::new(progress_callback),
         dry_run,
         target_path,
         workflow_file_path,
@@ -184,6 +191,7 @@ pub fn create_engine(
         capabilities,
         no_interactive,
         dry_run_callback,
+        output_format,
         ..WorkflowRunConfig::default()
     };
 

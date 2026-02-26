@@ -61,6 +61,10 @@ pub struct Command {
     /// Open a web-based execution report after the run completes
     #[arg(long)]
     report: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value = "text")]
+    format: String,
 }
 
 /// Run a workflow
@@ -92,6 +96,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let started = std::time::Instant::now();
 
+    let output_format: butterflow_core::structured_log::OutputFormat = args
+        .format
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
     let (engine, config) = create_engine(
         workflow_file_path,
         target_path.clone(),
@@ -103,6 +112,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
+        output_format,
     )?;
 
     // Run workflow using the extracted workflow runner
