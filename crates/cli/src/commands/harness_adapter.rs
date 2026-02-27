@@ -245,6 +245,12 @@ pub struct ManagedStateWriteResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedStateReadResult {
+    pub path: PathBuf,
+    pub components: Vec<ManagedComponentSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PeriodicUpdateTriggerUpsertResult {
     pub tracked_paths: Vec<PathBuf>,
     pub updated_paths: Vec<PathBuf>,
@@ -1740,6 +1746,14 @@ pub fn persist_managed_install_state(
     persist_managed_install_state_with_runtime(harness, scope, components, &runtime_paths)
 }
 
+pub fn read_managed_install_state(
+    harness: Harness,
+    scope: InstallScope,
+) -> AdapterResult<Option<ManagedStateReadResult>> {
+    let runtime_paths = RuntimePaths::current()?;
+    read_managed_install_state_with_runtime(harness, scope, &runtime_paths)
+}
+
 fn persist_managed_install_state_with_runtime(
     harness: Harness,
     scope: InstallScope,
@@ -1752,6 +1766,22 @@ fn persist_managed_install_state_with_runtime(
     let result = persist_managed_install_state_locked(&state_path, &expected_state);
     lock_guard.release();
     result
+}
+
+fn read_managed_install_state_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<ManagedStateReadResult>> {
+    let state_path = managed_state_path_for_harness(harness, scope, runtime_paths)?;
+    let Some(state) = read_managed_install_state_if_present(&state_path)? else {
+        return Ok(None);
+    };
+    let components = managed_components_from_state(&state)?;
+    Ok(Some(ManagedStateReadResult {
+        path: state_path,
+        components,
+    }))
 }
 
 fn persist_managed_install_state_locked(
@@ -2124,6 +2154,39 @@ fn managed_state_component_from_snapshot(
         path: snapshot.path.to_string_lossy().to_string(),
         version: snapshot.version.clone(),
         fingerprint: content_fingerprint(&snapshot.path),
+    }
+}
+
+fn managed_components_from_state(
+    state: &ManagedInstallState,
+) -> AdapterResult<Vec<ManagedComponentSnapshot>> {
+    state
+        .components
+        .iter()
+        .map(managed_snapshot_from_state_component)
+        .collect()
+}
+
+fn managed_snapshot_from_state_component(
+    component: &ManagedInstallStateComponent,
+) -> AdapterResult<ManagedComponentSnapshot> {
+    let kind = managed_component_kind_from_state(&component.kind)?;
+    Ok(ManagedComponentSnapshot {
+        id: component.id.clone(),
+        kind,
+        path: PathBuf::from(&component.path),
+        version: component.version.clone(),
+    })
+}
+
+fn managed_component_kind_from_state(kind: &str) -> AdapterResult<ManagedComponentKind> {
+    match kind {
+        "skill" => Ok(ManagedComponentKind::Skill),
+        "mcp_config" => Ok(ManagedComponentKind::McpConfig),
+        "discovery_guide" => Ok(ManagedComponentKind::DiscoveryGuide),
+        unknown => Err(HarnessAdapterError::InstallFailed(format!(
+            "Managed install state contains unsupported component kind `{unknown}`"
+        ))),
     }
 }
 
@@ -4140,6 +4203,68 @@ codemod-skill-version: 0.1.0
                 assert!(state_content.contains(&format!("\"scope\": \"{}\"", scope.as_str())));
             }
         }
+    }
+
+    #[test]
+    fn read_managed_install_state_restores_snapshots_after_persist() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        let installed = install_mcs_skill_bundle_with_runtime(
+            Harness::Claude,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+        upsert_skill_discovery_guides_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let discovery_paths = discovery_guide_paths_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        persist_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &snapshots,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let loaded = read_managed_install_state_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap()
+        .expect("expected managed state");
+
+        assert_eq!(
+            loaded.path,
+            expected_managed_state_path(&runtime_paths, Harness::Claude, InstallScope::Project)
+        );
+        assert_eq!(loaded.components.len(), snapshots.len());
+        assert!(loaded
+            .components
+            .iter()
+            .any(|component| component.id == "codemod"));
+        assert!(loaded
+            .components
+            .iter()
+            .any(|component| component.id == "codemod-mcp"));
+        assert!(loaded
+            .components
+            .iter()
+            .any(|component| component.id == "discovery-guide:CLAUDE.md"));
     }
 
     #[test]

@@ -1400,3 +1400,42 @@ fn resolve_update_policy_context_truncates_large_error_body_in_warnings() {
         server.shutdown().await;
     });
 }
+
+#[test]
+fn resolve_update_policy_context_hides_server_configuration_details_for_5xx() {
+    let _env_lock = ENV_GUARD.lock().expect("expected env lock");
+    let runtime = Runtime::new().expect("expected runtime");
+    runtime.block_on(async {
+        let manifest_path = "/manifest/unavailable".to_string();
+        let server = TestHttpServer::start_with_builder(|_| {
+            HashMap::from([(
+                manifest_path.clone(),
+                TestHttpFixture {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    body: br#"{"error":"Service Unavailable","message":"Managed update manifest is not configured. Set MANAGED_UPDATE_MANIFEST_JSON."}"#.to_vec(),
+                    headers: Vec::new(),
+                },
+            )])
+        })
+        .await;
+
+        let context = resolve_update_policy_context(&UpdatePolicyResolveOptions {
+            mode: UpdatePolicyMode::Notify,
+            remote_source: format!("{}{manifest_path}", server.base_url),
+            require_signed_manifest: Some(true),
+        })
+        .await
+        .expect("expected update policy context");
+
+        let warning = context
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("HTTP 503"))
+            .expect("expected HTTP 503 warning");
+
+        assert!(warning.contains("remote manifest service unavailable"));
+        assert!(!warning.contains("MANAGED_UPDATE_MANIFEST_JSON"));
+
+        server.shutdown().await;
+    });
+}

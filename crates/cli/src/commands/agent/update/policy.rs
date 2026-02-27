@@ -701,9 +701,9 @@ async fn fetch_remote_update_manifest(
         } else {
             None
         };
-        let body = response.text().await.unwrap_or_default();
-        let body_summary = summarize_http_error_body(&body);
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let body = response.text().await.unwrap_or_default();
+            let body_summary = summarize_http_error_body(&body);
             if let Some(seconds) = retry_after_seconds {
                 return Err(format!(
                     "HTTP {} while fetching remote manifest (rate limited; retry after {}s): {}",
@@ -715,6 +715,14 @@ async fn fetch_remote_update_manifest(
                 status, body_summary
             ));
         }
+        if status.is_server_error() {
+            return Err(format!(
+                "HTTP {} while fetching remote manifest: remote manifest service unavailable",
+                status
+            ));
+        }
+        let body = response.text().await.unwrap_or_default();
+        let body_summary = summarize_http_error_body(&body);
         return Err(format!(
             "HTTP {} while fetching remote manifest: {}",
             status, body_summary
@@ -908,6 +916,15 @@ pub(in crate::commands::agent) fn parse_update_remote_source_value(
 
 pub(in crate::commands::agent) fn resolve_default_registry_source(
 ) -> std::result::Result<String, String> {
+    if let Ok(registry_url) = std::env::var("CODEMOD_REGISTRY_URL") {
+        let normalized = registry_url.trim();
+        if !normalized.is_empty() {
+            let parsed = url::Url::parse(normalized)
+                .map_err(|error| format!("invalid CODEMOD_REGISTRY_URL `{normalized}`: {error}"))?;
+            return Ok(format!("registry:{parsed}"));
+        }
+    }
+
     let storage = TokenStorage::new()
         .map_err(|error| format!("failed to initialize token storage: {error}"))?;
     let config = storage

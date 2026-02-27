@@ -1,9 +1,9 @@
 use crate::commands::harness_adapter::{
-    install_restart_hint, persist_managed_install_state, resolve_adapter, resolve_install_scope,
-    skill_discovery_guide_paths, upsert_periodic_update_trigger, upsert_skill_discovery_guides,
-    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill,
-    ManagedComponentKind, ManagedComponentSnapshot, OutputFormat, PeriodicUpdatePolicy,
-    VerificationStatus,
+    install_restart_hint, persist_managed_install_state, read_managed_install_state,
+    resolve_adapter, resolve_install_scope, skill_discovery_guide_paths,
+    upsert_periodic_update_trigger, upsert_skill_discovery_guides, Harness, HarnessAdapterError,
+    InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
+    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
 };
 use crate::commands::output::{exit_adapter_error, format_output_path};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
@@ -38,6 +38,8 @@ pub struct Command {
 enum AgentAction {
     /// Install MCS and baseline codemod skills into harness-specific paths
     Install(InstallCommand),
+    /// Reconcile/apply managed updates; falls back to install when not installed yet
+    Update(UpdateCommand),
     /// List installed codemod skills for a harness
     List(ListCommand),
 }
@@ -59,6 +61,9 @@ struct InstallCommand {
     /// Overwrite existing skill files
     #[arg(long)]
     force: bool,
+    /// Internal mode switch used by `agent update`
+    #[arg(skip)]
+    update: bool,
     /// Managed update policy for this install and periodic harness checks
     #[arg(long, value_enum, default_value_t = UpdatePolicyMode::AutoSafe)]
     update_policy: UpdatePolicyMode,
@@ -77,6 +82,58 @@ struct InstallCommand {
 }
 
 #[derive(Args, Debug)]
+struct UpdateCommand {
+    /// Target harness adapter
+    #[arg(long, value_enum, default_value_t = Harness::Auto)]
+    harness: Harness,
+    /// Disable interactive install wizard prompts
+    #[arg(long)]
+    no_interactive: bool,
+    /// Update within current repo workspace scope
+    #[arg(long, conflicts_with = "user")]
+    project: bool,
+    /// Update within user-level scope
+    #[arg(long, conflicts_with = "project")]
+    user: bool,
+    /// If fallback install is needed, overwrite existing skill files
+    #[arg(long)]
+    force: bool,
+    /// Managed update policy for this update execution
+    #[arg(long, value_enum, default_value_t = UpdatePolicyMode::AutoSafe)]
+    update_policy: UpdatePolicyMode,
+    /// Remote source for managed update metadata: local, registry, or absolute URL
+    #[arg(long, default_value = DEFAULT_UPDATE_SOURCE)]
+    update_source: String,
+    /// Require signed remote manifests for this update execution
+    #[arg(long, conflicts_with = "allow_unsigned_manifest")]
+    require_signed_manifest: bool,
+    /// Allow unsigned remote manifests for this update execution
+    #[arg(long, conflicts_with = "require_signed_manifest")]
+    allow_unsigned_manifest: bool,
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
+    format: OutputFormat,
+}
+
+impl From<&UpdateCommand> for InstallCommand {
+    fn from(value: &UpdateCommand) -> Self {
+        Self {
+            harness: value.harness,
+            no_interactive: value.no_interactive,
+            project: value.project,
+            user: value.user,
+            force: value.force,
+            update: true,
+            update_policy: value.update_policy,
+            update_source: value.update_source.clone(),
+            require_signed_manifest: value.require_signed_manifest,
+            allow_unsigned_manifest: value.allow_unsigned_manifest,
+            format: value.format,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
 struct ListCommand {
     /// Target harness adapter
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
@@ -89,174 +146,25 @@ struct ListCommand {
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     match &args.action {
         AgentAction::Install(command) => {
-            let install_inputs = resolve_install_inputs(command).unwrap_or_else(|error| {
-                exit_adapter_error(error, command.format);
-            });
-            let resolved_adapter =
-                resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
-                    exit_adapter_error(error, command.format);
-                });
-            let request = InstallRequest {
-                scope: install_inputs.scope,
-                force: install_inputs.force,
-            };
-            let installed = resolved_adapter
-                .adapter
-                .install_skills(&request)
-                .unwrap_or_else(|error| {
-                    exit_adapter_error(error, command.format);
-                });
-            let verification_checks =
-                resolved_adapter
-                    .adapter
-                    .verify_skills()
-                    .unwrap_or_else(|error| {
-                        exit_adapter_error(error, command.format);
-                    });
-
-            if let Some(failed_check) = verification_checks
-                .iter()
-                .find(|check| check.status == VerificationStatus::Fail)
-            {
-                let reason = failed_check
-                    .reason
-                    .as_ref()
-                    .map(|text| format!(": {text}"))
-                    .unwrap_or_default();
-                exit_adapter_error(
-                    HarnessAdapterError::InvalidSkillPackage(format!(
-                        "installed skill `{}` failed validation{reason}",
-                        failed_check.skill
-                    )),
-                    command.format,
-                );
-            }
-
-            let update_policy = resolve_update_policy_context(&UpdatePolicyResolveOptions {
-                mode: install_inputs.update_policy,
-                remote_source: install_inputs.update_source.clone(),
-                require_signed_manifest: install_inputs.require_signed_manifest,
-            })
-            .await
-            .unwrap_or_else(|error| {
-                exit_adapter_error(
-                    HarnessAdapterError::InstallFailed(format!(
-                        "failed to resolve update policy: {error}"
-                    )),
-                    command.format,
-                )
-            });
-            let mut warnings = resolved_adapter.warnings;
-            let mut messages = Vec::new();
-            warnings.extend(update_policy.warnings.iter().cloned());
-
-            match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
-                Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
-                    "Updated discovery hints in: {}",
-                    updated_files
-                        .iter()
-                        .map(|path| format_output_path(path))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )),
-                Ok(_) => {}
-                Err(error) => warnings.push(format!(
-                    "Installed skills, but failed to update harness discovery hints: {error}"
-                )),
-            }
-
-            let discovery_paths = match skill_discovery_guide_paths(
-                resolved_adapter.harness,
-                install_inputs.scope,
-            ) {
-                Ok(paths) => paths,
-                Err(error) => {
-                    warnings.push(format!(
-                            "Installed skills, but failed to resolve harness discovery hint paths for managed-state tracking: {error}"
-                        ));
-                    Vec::new()
-                }
-            };
-
-            let periodic_trigger = match upsert_periodic_update_trigger(
-                resolved_adapter.harness,
-                install_inputs.scope,
-                periodic_policy_from_update_mode(install_inputs.update_policy),
-            ) {
-                Ok(result) => Some(result),
-                Err(error) => {
-                    warnings.push(format!(
-                        "Installed skills, but failed to upsert periodic update triggers: {error}"
-                    ));
-                    None
-                }
-            };
-
-            let periodic_trigger_paths = periodic_trigger
-                .as_ref()
-                .map(|result| result.tracked_paths.clone())
-                .unwrap_or_default();
-            let managed_components = managed_components_from_install(
-                &installed,
-                &discovery_paths,
-                &periodic_trigger_paths,
-            );
-            let component_decisions = build_component_reconcile_decisions(
-                &update_policy,
-                resolved_adapter.harness,
-                &managed_components,
-            );
-            let auto_safe_apply = maybe_apply_auto_safe_updates(
-                &update_policy,
-                &component_decisions,
-                &managed_components,
-            )
-            .await;
-
-            warnings.extend(auto_safe_apply.warnings.iter().cloned());
-            let managed_state = match persist_managed_install_state(
-                resolved_adapter.harness,
-                install_inputs.scope,
-                &managed_components,
-            ) {
-                Ok(state_write) => Some(state_write),
-                Err(error) => {
-                    warnings.push(format!(
-                        "Installed skills, but failed to persist managed install state: {error}"
-                    ));
-                    None
-                }
-            };
-            if let Some(policy_runtime_message) = update_policy_runtime_message(
-                &update_policy,
-                managed_state.as_ref(),
-                auto_safe_apply.result.as_ref(),
-            ) {
-                messages.push(policy_runtime_message);
-            }
-
-            let output = build_install_output(BuildInstallOutputInput {
-                harness: resolved_adapter.harness,
-                scope: install_inputs.scope,
-                installed,
-                managed_state,
-                update_policy: &update_policy,
-                component_decisions,
-                auto_safe_apply: auto_safe_apply.result,
-                notes: messages,
-                warnings,
-                restart_hint: Some(install_restart_hint(resolved_adapter.harness)),
-            });
-            print_install_output(&output, command.format)?;
-            send_agent_install_event(
+            handle_install_like_action(
+                command,
                 &telemetry,
+                "agentMcsInstalled",
+                "codemod.agent.install",
                 command.harness,
-                resolved_adapter.harness,
-                &install_inputs,
-                &output,
             )
-            .await;
-            Ok(())
+            .await
+        }
+        AgentAction::Update(command) => {
+            let install_like_command = InstallCommand::from(command);
+            handle_install_like_action(
+                &install_like_command,
+                &telemetry,
+                "agentMcsUpdated",
+                "codemod.agent.update",
+                command.harness,
+            )
+            .await
         }
         AgentAction::List(command) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
@@ -288,8 +196,156 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 }
 
+async fn handle_install_like_action(
+    command: &InstallCommand,
+    telemetry: &TelemetrySenderMutex,
+    event_kind: &'static str,
+    command_name: &'static str,
+    requested_harness: Harness,
+) -> Result<()> {
+    let mut install_inputs = resolve_install_inputs(command).unwrap_or_else(|error| {
+        exit_adapter_error(error, command.format);
+    });
+    let resolved_adapter = resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
+        exit_adapter_error(error, command.format);
+    });
+    let update_policy = resolve_update_policy_context(&UpdatePolicyResolveOptions {
+        mode: install_inputs.update_policy,
+        remote_source: install_inputs.update_source.clone(),
+        require_signed_manifest: install_inputs.require_signed_manifest,
+    })
+    .await
+    .unwrap_or_else(|error| {
+        exit_adapter_error(
+            HarnessAdapterError::InstallFailed(format!("failed to resolve update policy: {error}")),
+            command.format,
+        )
+    });
+    let mut warnings = resolved_adapter.warnings.clone();
+    let mut messages = Vec::new();
+    warnings.extend(update_policy.warnings.iter().cloned());
+    let (installed, managed_components) = if command.update {
+        let mut managed_state =
+            read_managed_install_state(resolved_adapter.harness, install_inputs.scope)
+                .unwrap_or_else(|error| {
+                    exit_adapter_error(error, command.format);
+                });
+        if managed_state.is_none() && !install_inputs.scope_explicit {
+            let alternate = alternate_scope(install_inputs.scope);
+            let alternate_state = read_managed_install_state(resolved_adapter.harness, alternate)
+                .unwrap_or_else(|error| {
+                    exit_adapter_error(error, command.format);
+                });
+            if let Some(found_state) = alternate_state {
+                messages.push(format!(
+                    "No managed state found for `{}` scope; using existing `{}` scope state.",
+                    install_inputs.scope.as_str(),
+                    alternate.as_str()
+                ));
+                install_inputs.scope = alternate;
+                managed_state = Some(found_state);
+            }
+        }
+        if let Some(managed_state) = managed_state {
+            messages.push(format!(
+                "Loaded managed state from: {}",
+                format_output_path(&managed_state.path)
+            ));
+            (Vec::new(), managed_state.components)
+        } else {
+            messages.push(
+                "No managed install state found; running install fallback before update."
+                    .to_string(),
+            );
+            run_install_flow(
+                &resolved_adapter,
+                &install_inputs,
+                command.format,
+                &mut messages,
+                &mut warnings,
+            )
+        }
+    } else {
+        run_install_flow(
+            &resolved_adapter,
+            &install_inputs,
+            command.format,
+            &mut messages,
+            &mut warnings,
+        )
+    };
+    let component_decisions = build_component_reconcile_decisions(
+        &update_policy,
+        resolved_adapter.harness,
+        &managed_components,
+    );
+    let auto_safe_apply =
+        maybe_apply_auto_safe_updates(&update_policy, &component_decisions, &managed_components)
+            .await;
+
+    warnings.extend(auto_safe_apply.warnings.iter().cloned());
+    if command.update {
+        messages
+            .push("Executed managed update reconciliation for existing components.".to_string());
+    }
+    let managed_state = match persist_managed_install_state(
+        resolved_adapter.harness,
+        install_inputs.scope,
+        &managed_components,
+    ) {
+        Ok(state_write) => Some(state_write),
+        Err(error) => {
+            warnings.push(format!(
+                "Installed skills, but failed to persist managed install state: {error}"
+            ));
+            None
+        }
+    };
+    if let Some(policy_runtime_message) = update_policy_runtime_message(
+        &update_policy,
+        managed_state.as_ref(),
+        auto_safe_apply.result.as_ref(),
+    ) {
+        messages.push(policy_runtime_message);
+    }
+
+    let restart_hint = if command.update {
+        auto_safe_apply.result.as_ref().and_then(|result| {
+            (result.applied > 0).then(|| install_restart_hint(resolved_adapter.harness))
+        })
+    } else {
+        Some(install_restart_hint(resolved_adapter.harness))
+    };
+    let output = build_install_output(BuildInstallOutputInput {
+        harness: resolved_adapter.harness,
+        scope: install_inputs.scope,
+        installed,
+        managed_state,
+        update_policy: &update_policy,
+        component_decisions,
+        auto_safe_apply: auto_safe_apply.result,
+        notes: messages,
+        warnings,
+        restart_hint,
+    });
+    print_install_output(&output, command.format)?;
+    send_agent_install_event(
+        telemetry,
+        event_kind,
+        command_name,
+        requested_harness,
+        resolved_adapter.harness,
+        &install_inputs,
+        &output,
+    )
+    .await;
+    Ok(())
+}
+
 async fn send_agent_install_event(
     telemetry: &TelemetrySenderMutex,
+    event_kind: &'static str,
+    command_name: &'static str,
     requested_harness: Harness,
     resolved_harness: Harness,
     inputs: &InstallInputs,
@@ -315,12 +371,9 @@ async fn send_agent_install_event(
     telemetry
         .send_event(
             BaseEvent {
-                kind: "agentMcsInstalled".to_string(),
+                kind: event_kind.to_string(),
                 properties: HashMap::from([
-                    (
-                        "commandName".to_string(),
-                        "codemod.agent.install".to_string(),
-                    ),
+                    ("commandName".to_string(), command_name.to_string()),
                     (
                         "requestedHarness".to_string(),
                         requested_harness.as_str().to_string(),
@@ -487,6 +540,99 @@ fn managed_components_from_install(
     components
 }
 
+fn run_install_flow(
+    resolved_adapter: &ResolvedAdapter,
+    install_inputs: &InstallInputs,
+    format: OutputFormat,
+    messages: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> (Vec<InstalledSkill>, Vec<ManagedComponentSnapshot>) {
+    let request = InstallRequest {
+        scope: install_inputs.scope,
+        force: install_inputs.force,
+    };
+    let installed = resolved_adapter
+        .adapter
+        .install_skills(&request)
+        .unwrap_or_else(|error| {
+            exit_adapter_error(error, format);
+        });
+    let verification_checks = resolved_adapter
+        .adapter
+        .verify_skills()
+        .unwrap_or_else(|error| {
+            exit_adapter_error(error, format);
+        });
+
+    if let Some(failed_check) = verification_checks
+        .iter()
+        .find(|check| check.status == VerificationStatus::Fail)
+    {
+        let reason = failed_check
+            .reason
+            .as_ref()
+            .map(|text| format!(": {text}"))
+            .unwrap_or_default();
+        exit_adapter_error(
+            HarnessAdapterError::InvalidSkillPackage(format!(
+                "installed skill `{}` failed validation{reason}",
+                failed_check.skill
+            )),
+            format,
+        );
+    }
+
+    match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
+        Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
+            "Updated discovery hints in: {}",
+            updated_files
+                .iter()
+                .map(|path| format_output_path(path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Ok(_) => {}
+        Err(error) => warnings.push(format!(
+            "Installed skills, but failed to update harness discovery hints: {error}"
+        )),
+    }
+
+    let discovery_paths = match skill_discovery_guide_paths(
+        resolved_adapter.harness,
+        install_inputs.scope,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            warnings.push(format!(
+                "Installed skills, but failed to resolve harness discovery hint paths for managed-state tracking: {error}"
+            ));
+            Vec::new()
+        }
+    };
+
+    let periodic_trigger = match upsert_periodic_update_trigger(
+        resolved_adapter.harness,
+        install_inputs.scope,
+        periodic_policy_from_update_mode(install_inputs.update_policy),
+    ) {
+        Ok(result) => Some(result),
+        Err(error) => {
+            warnings.push(format!(
+                "Installed skills, but failed to upsert periodic update triggers: {error}"
+            ));
+            None
+        }
+    };
+
+    let periodic_trigger_paths = periodic_trigger
+        .as_ref()
+        .map(|result| result.tracked_paths.clone())
+        .unwrap_or_default();
+    let managed_components =
+        managed_components_from_install(&installed, &discovery_paths, &periodic_trigger_paths);
+    (installed, managed_components)
+}
+
 fn managed_component_kind_from_install_entry(entry: &InstalledSkill) -> ManagedComponentKind {
     if entry.name == "codemod-mcp" {
         ManagedComponentKind::McpConfig
@@ -499,6 +645,7 @@ fn managed_component_kind_from_install_entry(entry: &InstalledSkill) -> ManagedC
 struct InstallInputs {
     harness: Harness,
     scope: InstallScope,
+    scope_explicit: bool,
     force: bool,
     interactive: bool,
     update_policy: UpdatePolicyMode,
@@ -536,12 +683,14 @@ fn resolve_install_inputs(
     let interactive = !command.no_interactive
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal();
+    let scope_explicit = command.project || command.user;
 
     if !interactive {
         let scope = resolve_install_scope(command.project, command.user)?;
         return Ok(InstallInputs {
             harness: command.harness,
             scope,
+            scope_explicit,
             force: command.force,
             interactive,
             update_policy: command.update_policy,
@@ -627,7 +776,9 @@ fn resolve_install_inputs(
             .scope
     };
 
-    let force = if command.force {
+    let force = if command.update {
+        command.force
+    } else if command.force {
         true
     } else {
         Confirm::new("Overwrite existing skill files if they already exist?")
@@ -643,6 +794,7 @@ fn resolve_install_inputs(
     Ok(InstallInputs {
         harness,
         scope,
+        scope_explicit,
         force,
         interactive,
         update_policy: command.update_policy,
@@ -652,6 +804,13 @@ fn resolve_install_inputs(
             command.allow_unsigned_manifest,
         ),
     })
+}
+
+fn alternate_scope(scope: InstallScope) -> InstallScope {
+    match scope {
+        InstallScope::Project => InstallScope::User,
+        InstallScope::User => InstallScope::Project,
+    }
 }
 
 fn detected_harness_for_interactive_prompt() -> Option<Harness> {

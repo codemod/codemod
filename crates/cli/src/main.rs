@@ -503,6 +503,12 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_agent_update_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "update", "--format", "logs"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn parser_accepts_agent_list_with_logs_format() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "list", "--format", "logs"]);
         assert!(parse_result.is_ok());
@@ -572,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_help_lists_install_and_list_only() {
+    fn agent_help_lists_install_update_and_list_only() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
         let error = match parse_result {
             Err(error) => error,
@@ -582,6 +588,7 @@ mod tests {
 
         let help_text = error.to_string();
         assert!(help_text.contains("install"));
+        assert!(help_text.contains("update"));
         assert!(help_text.contains("list"));
         assert!(!help_text.contains("verify-skills"));
         assert!(!help_text.contains("run"));

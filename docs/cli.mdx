@@ -112,6 +112,16 @@ Managed update policy is install-flag driven and shared by install-time reconcil
 Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
 After install, restart or reload your harness session so newly installed skills are picked up.
 
+**`agent update`**
+
+Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
+
+```bash
+npx codemod agent update [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+```
+
+If managed install state is missing, `agent update` automatically falls back to an install flow and then applies update reconciliation.
+
 **`agent list`**
 
 List installed codemod-managed skills (MCS and package skills).
