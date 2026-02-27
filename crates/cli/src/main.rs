@@ -448,6 +448,20 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_agent_install_with_codex_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "codex"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_antigravity_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "antigravity"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn parser_accepts_agent_install_with_no_interactive() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--no-interactive"]);
         assert!(parse_result.is_ok());
@@ -585,6 +599,8 @@ mod tests {
         let help_text = error.to_string();
         assert!(help_text.contains("opencode"));
         assert!(help_text.contains("cursor"));
+        assert!(help_text.contains("codex"));
+        assert!(help_text.contains("antigravity"));
         assert!(help_text.contains("--no-interactive"));
         assert!(!help_text.contains("--periodic-policy"));
         assert!(help_text.contains("--update-policy"));

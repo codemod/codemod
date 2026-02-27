@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
@@ -87,6 +88,15 @@ const CODEMOD_PERIODIC_TRIGGER_OPENCODE_USER_CONFIG_RELATIVE_DIR: &str = ".confi
 const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_EVENT_NAME: &str = "session.idle";
 const CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
 const CODEMOD_PERIODIC_TRIGGER_CLAUDE_SESSION_START_EVENT: &str = "SessionStart";
+const CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME: &str = "config.toml";
+const CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_FILE_NAME: &str = "CODEMOD_PERIODIC_UPDATE.md";
+const CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_BEGIN: &str =
+    "<!-- codemod-periodic-update:begin -->";
+const CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
+const CODEX_CONFIG_DIR_NAME: &str = ".codex";
+const CODEX_WORKSPACE_SKILLS_RELATIVE_PATH: &str = ".agents/skills";
+const ANTIGRAVITY_WORKSPACE_ROOT: &str = ".agents";
+const ANTIGRAVITY_USER_ROOT: &str = ".gemini/antigravity";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillPackageInstallSpec {
@@ -104,6 +114,8 @@ pub enum Harness {
     Goose,
     Opencode,
     Cursor,
+    Codex,
+    Antigravity,
 }
 
 impl Harness {
@@ -114,6 +126,8 @@ impl Harness {
             Self::Goose => "goose",
             Self::Opencode => "opencode",
             Self::Cursor => "cursor",
+            Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -242,6 +256,7 @@ enum PeriodicUpdateIntegrationKind {
     Hook,
     Plugin,
     Guidance,
+    Notify,
 }
 
 impl PeriodicUpdateIntegrationKind {
@@ -250,6 +265,7 @@ impl PeriodicUpdateIntegrationKind {
             Self::Hook => "hook",
             Self::Plugin => "plugin",
             Self::Guidance => "guidance",
+            Self::Notify => "notify",
         }
     }
 }
@@ -384,7 +400,7 @@ impl HarnessAdapterError {
     pub fn hint(&self) -> &'static str {
         match self {
             Self::UnsupportedHarness(_) => {
-                "Use --harness claude, --harness goose, --harness opencode, or --harness cursor."
+                "Use --harness claude, --harness goose, --harness opencode, --harness cursor, --harness codex, or --harness antigravity."
             }
             Self::InvalidSkillPackage(_) => {
                 "Retry with `codemod agent install --force` and inspect installed entries via `codemod agent list --format json`."
@@ -575,6 +591,69 @@ impl HarnessAdapter for CursorHarnessAdapter {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct CodexHarnessAdapter;
+
+impl HarnessAdapter for CodexHarnessAdapter {
+    fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_mcs_skill_bundle_with_runtime(Harness::Codex, request, &runtime_paths)
+    }
+
+    fn install_package_skill(
+        &self,
+        package: &SkillPackageInstallSpec,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_package_skill_bundle_with_runtime(Harness::Codex, package, request, &runtime_paths)
+    }
+
+    fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        list_skills_with_runtime(Harness::Codex, &runtime_paths)
+    }
+
+    fn verify_skills(&self) -> AdapterResult<Vec<VerificationCheck>> {
+        let runtime_paths = RuntimePaths::current()?;
+        verify_skills_with_runtime(Harness::Codex, &runtime_paths)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct AntigravityHarnessAdapter;
+
+impl HarnessAdapter for AntigravityHarnessAdapter {
+    fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_mcs_skill_bundle_with_runtime(Harness::Antigravity, request, &runtime_paths)
+    }
+
+    fn install_package_skill(
+        &self,
+        package: &SkillPackageInstallSpec,
+        request: &InstallRequest,
+    ) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        install_package_skill_bundle_with_runtime(
+            Harness::Antigravity,
+            package,
+            request,
+            &runtime_paths,
+        )
+    }
+
+    fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
+        let runtime_paths = RuntimePaths::current()?;
+        list_skills_with_runtime(Harness::Antigravity, &runtime_paths)
+    }
+
+    fn verify_skills(&self) -> AdapterResult<Vec<VerificationCheck>> {
+        let runtime_paths = RuntimePaths::current()?;
+        verify_skills_with_runtime(Harness::Antigravity, &runtime_paths)
+    }
+}
+
 pub fn resolve_adapter(harness: Harness) -> AdapterResult<ResolvedAdapter> {
     let runtime_paths = RuntimePaths::current()?;
     resolve_adapter_with_runtime(harness, &runtime_paths)
@@ -590,6 +669,8 @@ fn resolve_adapter_with_runtime(
         Harness::Goose => (Harness::Goose, Vec::new()),
         Harness::Opencode => (Harness::Opencode, Vec::new()),
         Harness::Cursor => (Harness::Cursor, Vec::new()),
+        Harness::Codex => (Harness::Codex, Vec::new()),
+        Harness::Antigravity => (Harness::Antigravity, Vec::new()),
     };
 
     let adapter: Box<dyn HarnessAdapter> = match resolved_harness {
@@ -597,6 +678,8 @@ fn resolve_adapter_with_runtime(
         Harness::Goose => Box::new(GooseHarnessAdapter),
         Harness::Opencode => Box::new(OpencodeHarnessAdapter),
         Harness::Cursor => Box::new(CursorHarnessAdapter),
+        Harness::Codex => Box::new(CodexHarnessAdapter),
+        Harness::Antigravity => Box::new(AntigravityHarnessAdapter),
         Harness::Auto => return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
     };
 
@@ -613,6 +696,8 @@ fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
         (Harness::Goose, ".goose"),
         (Harness::Opencode, ".opencode"),
         (Harness::Cursor, ".cursor"),
+        (Harness::Codex, ".codex"),
+        (Harness::Antigravity, ".agents"),
     ] {
         if cwd.join(root_dir).exists() {
             return (harness, Vec::new());
@@ -622,7 +707,7 @@ fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
     (
         Harness::Claude,
         vec![
-            "No .claude, .goose, .opencode, or .cursor directory found; defaulting to Claude harness.".to_string(),
+            "No .claude, .goose, .opencode, .cursor, .codex, or .agents directory found; defaulting to Claude harness.".to_string(),
         ],
     )
 }
@@ -640,7 +725,7 @@ pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<Install
 
 pub fn install_restart_hint(harness: Harness) -> String {
     format!(
-        "Restart or reload your {} session so newly installed skills and MCP config are picked up.",
+        "Restart or reload your {} session so newly installed skills are picked up.",
         harness.as_str()
     )
 }
@@ -738,17 +823,41 @@ fn harness_root_for_scope(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<PathBuf> {
-    let harness_dir = harness_hidden_dir(harness)?;
     match scope {
-        InstallScope::Project => Ok(runtime_paths.cwd.join(harness_dir)),
+        InstallScope::Project => Ok(match harness {
+            Harness::Claude => runtime_paths.cwd.join(".claude"),
+            Harness::Goose => runtime_paths.cwd.join(".goose"),
+            Harness::Opencode => runtime_paths.cwd.join(".opencode"),
+            Harness::Cursor => runtime_paths.cwd.join(".cursor"),
+            Harness::Codex => runtime_paths.cwd.join(CODEX_CONFIG_DIR_NAME),
+            Harness::Antigravity => runtime_paths.cwd.join(ANTIGRAVITY_WORKSPACE_ROOT),
+            Harness::Auto => {
+                return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+            }
+        }),
         InstallScope::User => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home| home.join(harness_dir))
+            .map(|home| match harness {
+                Harness::Claude => home.join(".claude"),
+                Harness::Goose => home.join(".goose"),
+                Harness::Opencode => home.join(".opencode"),
+                Harness::Cursor => home.join(".cursor"),
+                Harness::Codex => home.join(CODEX_CONFIG_DIR_NAME),
+                Harness::Antigravity => home.join(ANTIGRAVITY_USER_ROOT),
+                Harness::Auto => PathBuf::new(),
+            })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
                 )
+            })
+            .and_then(|root| {
+                if root.as_os_str().is_empty() {
+                    Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()))
+                } else {
+                    Ok(root)
+                }
             }),
     }
 }
@@ -784,9 +893,47 @@ fn periodic_update_trigger_strategy(
             integration_kind: PeriodicUpdateIntegrationKind::Plugin,
             upsert: upsert_opencode_periodic_update_plugin,
         }),
+        Harness::Codex => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: codex_config_path_for_scope(scope, runtime_paths, harness_root)?,
+            integration_kind: PeriodicUpdateIntegrationKind::Notify,
+            upsert: upsert_codex_periodic_update_notify,
+        }),
+        Harness::Antigravity => Ok(PeriodicUpdateTriggerStrategy {
+            integration_path: antigravity_periodic_hints_path_for_scope(
+                scope,
+                runtime_paths,
+                harness_root,
+            )?,
+            integration_kind: PeriodicUpdateIntegrationKind::Guidance,
+            upsert: upsert_antigravity_periodic_update_hints,
+        }),
         Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness(
             "auto is not valid for periodic trigger upsert".to_string(),
         )),
+    }
+}
+
+fn codex_config_path_for_scope(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+    harness_root: &Path,
+) -> AdapterResult<PathBuf> {
+    match scope {
+        InstallScope::Project => {
+            Ok(harness_root.join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME))
+        }
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| {
+                home.join(CODEX_CONFIG_DIR_NAME)
+                    .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME)
+            })
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
     }
 }
 
@@ -826,6 +973,30 @@ fn opencode_periodic_plugin_path_for_scope(
                 home.join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_USER_CONFIG_RELATIVE_DIR)
                     .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME)
                     .join(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_FILE_NAME)
+            })
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+    }
+}
+
+fn antigravity_periodic_hints_path_for_scope(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+    harness_root: &Path,
+) -> AdapterResult<PathBuf> {
+    match scope {
+        InstallScope::Project => {
+            Ok(harness_root.join(CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_FILE_NAME))
+        }
+        InstallScope::User => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home| {
+                home.join(ANTIGRAVITY_USER_ROOT)
+                    .join(CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_FILE_NAME)
             })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
@@ -1160,6 +1331,115 @@ fn upsert_opencode_periodic_update_plugin(
     write_file_if_changed(plugin_path, content.as_bytes())
 }
 
+fn upsert_codex_periodic_update_notify(
+    config_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    if let Some(parent_dir) = config_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create Codex config directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let existing = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Codex config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut document = if existing.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        existing.parse::<DocumentMut>().map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Codex config {} is not valid TOML: {error}",
+                config_path.display()
+            ))
+        })?
+    };
+
+    let expected = vec!["sh".to_string(), runner_path.to_string_lossy().to_string()];
+    if let Some(existing_notify) = read_notify_command(&document)? {
+        if existing_notify != expected {
+            // Preserve existing user notify integration if configured.
+            return Ok(false);
+        }
+    }
+
+    let mut notify = Array::new();
+    for arg in expected {
+        notify.push(arg);
+    }
+    document["notify"] = value(notify);
+
+    write_file_if_changed(config_path, format!("{}\n", document).as_bytes())
+}
+
+fn read_notify_command(document: &DocumentMut) -> AdapterResult<Option<Vec<String>>> {
+    let Some(item) = document.get("notify") else {
+        return Ok(None);
+    };
+    let Some(array) = item.as_array() else {
+        return Err(HarnessAdapterError::InstallFailed(
+            "Codex config has non-array `notify` entry".to_string(),
+        ));
+    };
+
+    let mut values = Vec::with_capacity(array.len());
+    for value in array.iter() {
+        let Some(raw) = value.as_str() else {
+            return Err(HarnessAdapterError::InstallFailed(
+                "Codex config `notify` array must contain only strings".to_string(),
+            ));
+        };
+        values.push(raw.to_string());
+    }
+
+    Ok(Some(values))
+}
+
+fn upsert_antigravity_periodic_update_hints(
+    hints_path: &Path,
+    runner_path: &Path,
+) -> AdapterResult<bool> {
+    let existing = if hints_path.exists() {
+        fs::read_to_string(hints_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Antigravity periodic guidance {}: {error}",
+                hints_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let block = format!(
+        "{begin}\nRun this command when a session starts to keep codemod-managed assets fresh (cooldown + quiet no-update behavior):\n`{runner}`\n{end}\n",
+        begin = CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_BEGIN,
+        runner = runner_path.display(),
+        end = CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_END,
+    );
+    let updated = upsert_managed_block(
+        &existing,
+        CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_BEGIN,
+        CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_END,
+        &block,
+    );
+    if updated == existing {
+        return Ok(false);
+    }
+
+    write_file_if_changed(hints_path, updated.as_bytes())
+}
+
 fn codemod_cli_invocation_candidates(runtime_paths: &RuntimePaths) -> Vec<CodemodCliInvocation> {
     let mut invocations = Vec::new();
     if let Some(current_executable) = runtime_paths.current_executable.as_ref() {
@@ -1319,7 +1599,13 @@ fn discovery_guide_paths_with_runtime(
 
     let file_names = match harness {
         Harness::Claude => vec![CLAUDE_GUIDE_FILE_NAME],
-        _ => vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME],
+        Harness::Goose | Harness::Opencode | Harness::Cursor => {
+            vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME]
+        }
+        Harness::Codex | Harness::Antigravity => vec![AGENTS_GUIDE_FILE_NAME],
+        Harness::Auto => {
+            return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+        }
     };
 
     Ok(file_names
@@ -1329,10 +1615,29 @@ fn discovery_guide_paths_with_runtime(
 }
 
 fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
-    let harness_dir = harness_hidden_dir(harness)?;
     Ok(match scope {
-        InstallScope::Project => format!("{harness_dir}/skills"),
-        InstallScope::User => format!("~/{harness_dir}/skills"),
+        InstallScope::Project => match harness {
+            Harness::Claude => ".claude/skills".to_string(),
+            Harness::Goose => ".goose/skills".to_string(),
+            Harness::Opencode => ".opencode/skills".to_string(),
+            Harness::Cursor => ".cursor/skills".to_string(),
+            Harness::Codex => ".agents/skills".to_string(),
+            Harness::Antigravity => ".agents/skills".to_string(),
+            Harness::Auto => {
+                return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+            }
+        },
+        InstallScope::User => match harness {
+            Harness::Claude => "~/.claude/skills".to_string(),
+            Harness::Goose => "~/.goose/skills".to_string(),
+            Harness::Opencode => "~/.opencode/skills".to_string(),
+            Harness::Cursor => "~/.cursor/skills".to_string(),
+            Harness::Codex => "~/.agents/skills".to_string(),
+            Harness::Antigravity => "~/.gemini/antigravity/skills".to_string(),
+            Harness::Auto => {
+                return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+            }
+        },
     })
 }
 
@@ -1497,23 +1802,42 @@ fn managed_state_path_for_harness(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<PathBuf> {
-    let harness_dir = harness_hidden_dir(harness)?;
     match scope {
-        InstallScope::Project => Ok(runtime_paths
-            .cwd
-            .join(harness_dir)
-            .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)),
+        InstallScope::Project => Ok(match harness {
+            Harness::Claude => runtime_paths.cwd.join(".claude"),
+            Harness::Goose => runtime_paths.cwd.join(".goose"),
+            Harness::Opencode => runtime_paths.cwd.join(".opencode"),
+            Harness::Cursor => runtime_paths.cwd.join(".cursor"),
+            Harness::Codex => runtime_paths.cwd.join(CODEX_CONFIG_DIR_NAME),
+            Harness::Antigravity => runtime_paths.cwd.join(ANTIGRAVITY_WORKSPACE_ROOT),
+            Harness::Auto => {
+                return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+            }
+        }
+        .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)),
         InstallScope::User => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home| {
-                home.join(harness_dir)
-                    .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)
+            .map(|home| match harness {
+                Harness::Claude => home.join(".claude"),
+                Harness::Goose => home.join(".goose"),
+                Harness::Opencode => home.join(".opencode"),
+                Harness::Cursor => home.join(".cursor"),
+                Harness::Codex => home.join(CODEX_CONFIG_DIR_NAME),
+                Harness::Antigravity => home.join(ANTIGRAVITY_USER_ROOT),
+                Harness::Auto => PathBuf::new(),
             })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
                 )
+            })
+            .and_then(|root| {
+                if root.as_os_str().is_empty() {
+                    Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()))
+                } else {
+                    Ok(root.join(CODEMOD_MANAGED_STATE_RELATIVE_PATH))
+                }
             }),
     }
 }
@@ -1833,13 +2157,15 @@ fn install_mcs_skill_bundle_with_runtime(
         scope: Some(request.scope),
     }];
 
-    let mcp_config_path = install_mcp_server_config(harness, request, runtime_paths)?;
-    installed.push(InstalledSkill {
-        name: "codemod-mcp".to_string(),
-        path: mcp_config_path,
-        version: None,
-        scope: Some(request.scope),
-    });
+    if let Some(mcp_config_path) = maybe_install_mcp_server_config(harness, request, runtime_paths)?
+    {
+        installed.push(InstalledSkill {
+            name: "codemod-mcp".to_string(),
+            path: mcp_config_path,
+            version: None,
+            scope: Some(request.scope),
+        });
+    }
 
     Ok(installed)
 }
@@ -1965,8 +2291,23 @@ fn install_mcp_server_config(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<PathBuf> {
     let mcp_config_path = mcp_config_path_for_harness(harness, request.scope, runtime_paths)?;
-    upsert_codemod_mcp_server(&mcp_config_path, request.force, runtime_paths)?;
+    upsert_codemod_mcp_server(harness, &mcp_config_path, request.force, runtime_paths)?;
     Ok(mcp_config_path)
+}
+
+fn maybe_install_mcp_server_config(
+    harness: Harness,
+    request: &InstallRequest,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<PathBuf>> {
+    if !harness_supports_mcp(harness) {
+        return Ok(None);
+    }
+    install_mcp_server_config(harness, request, runtime_paths).map(Some)
+}
+
+fn harness_supports_mcp(harness: Harness) -> bool {
+    !matches!(harness, Harness::Antigravity)
 }
 
 fn mcp_config_path_for_harness(
@@ -2017,6 +2358,19 @@ fn mcp_config_path_for_harness(
                     "Could not determine home directory for --user install".to_string(),
                 )
             }),
+        (Harness::Codex, InstallScope::Project) => Ok(runtime_paths.cwd.join(".codex/config.toml")),
+        (Harness::Codex, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| home_dir.join(".codex/config.toml"))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        (Harness::Antigravity, _) => Err(HarnessAdapterError::UnsupportedHarness(
+            "antigravity does not support Codemod MCP configuration yet".to_string(),
+        )),
         (Harness::Auto, _) => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
     }
 }
@@ -2032,6 +2386,24 @@ fn expected_codemod_mcp_server_entry(runtime_paths: &RuntimePaths) -> Value {
 }
 
 fn upsert_codemod_mcp_server(
+    harness: Harness,
+    config_path: &Path,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    match harness {
+        Harness::Codex => upsert_codemod_mcp_server_toml(config_path, force, runtime_paths),
+        Harness::Claude | Harness::Goose | Harness::Opencode | Harness::Cursor => {
+            upsert_codemod_mcp_server_json(config_path, force, runtime_paths)
+        }
+        Harness::Antigravity => Err(HarnessAdapterError::UnsupportedHarness(
+            "antigravity does not support Codemod MCP configuration yet".to_string(),
+        )),
+        Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
+    }
+}
+
+fn upsert_codemod_mcp_server_json(
     config_path: &Path,
     force: bool,
     runtime_paths: &RuntimePaths,
@@ -2112,6 +2484,143 @@ fn upsert_codemod_mcp_server(
     })?;
 
     Ok(())
+}
+
+fn upsert_codemod_mcp_server_toml(
+    config_path: &Path,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    if let Some(parent_dir) = config_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let existing_content = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read MCP config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut document = if existing_content.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        existing_content.parse::<DocumentMut>().map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "MCP config {} is not valid TOML: {error}",
+                config_path.display()
+            ))
+        })?
+    };
+
+    let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
+    let mut expected_args = invocation.args_prefix;
+    expected_args.push(MCP_SERVER_ARG_COMMAND.to_string());
+
+    if let Some(existing_server) = read_codex_mcp_server(&document)? {
+        if !force
+            && (existing_server.command != invocation.command
+                || existing_server.args != expected_args)
+        {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "MCP config {} already contains a conflicting mcp_servers.{} entry. Re-run with --force to overwrite.",
+                config_path.display(),
+                MCP_SERVER_NAME,
+            )));
+        }
+    }
+
+    if !document.as_table().contains_key("mcp_servers") {
+        document["mcp_servers"] = Item::Table(Table::new());
+    }
+    if !document["mcp_servers"].is_table() {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} has non-table `mcp_servers`; update manually or re-run with --force after fixing TOML",
+            config_path.display()
+        )));
+    }
+
+    document["mcp_servers"][MCP_SERVER_NAME]["command"] = value(invocation.command);
+    let mut args = Array::new();
+    for arg in expected_args {
+        args.push(arg);
+    }
+    document["mcp_servers"][MCP_SERVER_NAME]["args"] = value(args);
+
+    write_file_if_changed(config_path, format!("{}\n", document).as_bytes())?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CodexMcpServer {
+    command: String,
+    args: Vec<String>,
+}
+
+fn read_codex_mcp_server(document: &DocumentMut) -> AdapterResult<Option<CodexMcpServer>> {
+    let Some(mcp_servers) = document.get("mcp_servers") else {
+        return Ok(None);
+    };
+    let Some(mcp_servers_table) = mcp_servers.as_table_like() else {
+        return Err(HarnessAdapterError::InstallFailed(
+            "Codex config has non-table `mcp_servers` entry".to_string(),
+        ));
+    };
+
+    let Some(server) = mcp_servers_table.get(MCP_SERVER_NAME) else {
+        return Ok(None);
+    };
+    let Some(server_table) = server.as_table_like() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Codex config mcp_servers.{} must be a table",
+            MCP_SERVER_NAME
+        )));
+    };
+
+    let command = server_table
+        .get("command")
+        .and_then(Item::as_str)
+        .ok_or_else(|| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Codex config mcp_servers.{} has missing or non-string `command`",
+                MCP_SERVER_NAME
+            ))
+        })?
+        .to_string();
+
+    let args_item = server_table.get("args").ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Codex config mcp_servers.{} has missing `args` array",
+            MCP_SERVER_NAME
+        ))
+    })?;
+    let args_array = args_item.as_array().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Codex config mcp_servers.{} has non-array `args`",
+            MCP_SERVER_NAME
+        ))
+    })?;
+    let mut args = Vec::with_capacity(args_array.len());
+    for value in args_array.iter() {
+        let Some(arg) = value.as_str() else {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "Codex config mcp_servers.{} args must contain only strings",
+                MCP_SERVER_NAME
+            )));
+        };
+        args.push(arg.to_string());
+    }
+
+    Ok(Some(CodexMcpServer { command, args }))
 }
 
 fn list_skills_with_runtime(
@@ -2472,28 +2981,42 @@ fn skills_root_for_harness(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<PathBuf> {
-    let harness_dir = harness_hidden_dir(harness)?;
     match scope {
-        InstallScope::Project => Ok(runtime_paths.cwd.join(harness_dir).join("skills")),
+        InstallScope::Project => Ok(match harness {
+            Harness::Claude => runtime_paths.cwd.join(".claude/skills"),
+            Harness::Goose => runtime_paths.cwd.join(".goose/skills"),
+            Harness::Opencode => runtime_paths.cwd.join(".opencode/skills"),
+            Harness::Cursor => runtime_paths.cwd.join(".cursor/skills"),
+            Harness::Codex => runtime_paths.cwd.join(CODEX_WORKSPACE_SKILLS_RELATIVE_PATH),
+            Harness::Antigravity => runtime_paths.cwd.join(".agents/skills"),
+            Harness::Auto => {
+                return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
+            }
+        }),
         InstallScope::User => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home| home.join(harness_dir).join("skills"))
+            .map(|home| match harness {
+                Harness::Claude => home.join(".claude/skills"),
+                Harness::Goose => home.join(".goose/skills"),
+                Harness::Opencode => home.join(".opencode/skills"),
+                Harness::Cursor => home.join(".cursor/skills"),
+                Harness::Codex => home.join(".agents/skills"),
+                Harness::Antigravity => home.join(".gemini/antigravity/skills"),
+                Harness::Auto => PathBuf::new(),
+            })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
                 )
+            })
+            .and_then(|root| {
+                if root.as_os_str().is_empty() {
+                    Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()))
+                } else {
+                    Ok(root)
+                }
             }),
-    }
-}
-
-fn harness_hidden_dir(harness: Harness) -> AdapterResult<&'static str> {
-    match harness {
-        Harness::Claude => Ok(".claude"),
-        Harness::Goose => Ok(".goose"),
-        Harness::Opencode => Ok(".opencode"),
-        Harness::Cursor => Ok(".cursor"),
-        Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
     }
 }
 
@@ -2688,19 +3211,61 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
-    const ALL_HARNESSES: [Harness; 4] = [
+    const ALL_HARNESSES: [Harness; 6] = [
         Harness::Claude,
         Harness::Goose,
         Harness::Opencode,
         Harness::Cursor,
+        Harness::Codex,
+        Harness::Antigravity,
     ];
 
-    fn harness_hidden_dir_name(harness: Harness) -> &'static str {
+    const MCP_CAPABLE_HARNESSES: [Harness; 5] = [
+        Harness::Claude,
+        Harness::Goose,
+        Harness::Opencode,
+        Harness::Cursor,
+        Harness::Codex,
+    ];
+
+    fn expected_harness_root(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> PathBuf {
         match harness {
-            Harness::Claude => ".claude",
-            Harness::Goose => ".goose",
-            Harness::Opencode => ".opencode",
-            Harness::Cursor => ".cursor",
+            Harness::Claude => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(".claude"),
+                InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(".claude"),
+            },
+            Harness::Goose => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(".goose"),
+                InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(".goose"),
+            },
+            Harness::Opencode => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(".opencode"),
+                InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(".opencode"),
+            },
+            Harness::Cursor => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(".cursor"),
+                InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(".cursor"),
+            },
+            Harness::Codex => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(CODEX_CONFIG_DIR_NAME),
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(CODEX_CONFIG_DIR_NAME),
+            },
+            Harness::Antigravity => match scope {
+                InstallScope::Project => runtime_paths.cwd.join(ANTIGRAVITY_WORKSPACE_ROOT),
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(ANTIGRAVITY_USER_ROOT),
+            },
             Harness::Auto => panic!("auto is not valid for harness-specific tests"),
         }
     }
@@ -2711,6 +3276,8 @@ mod tests {
             Harness::Goose => runtime_paths.cwd.join(".goose/mcp.json"),
             Harness::Opencode => runtime_paths.cwd.join(".opencode/mcp.json"),
             Harness::Cursor => runtime_paths.cwd.join(".cursor/mcp.json"),
+            Harness::Codex => runtime_paths.cwd.join(".codex/config.toml"),
+            Harness::Antigravity => panic!("antigravity does not have MCP config support"),
             Harness::Auto => panic!("auto is not valid for harness-specific tests"),
         }
     }
@@ -2720,31 +3287,8 @@ mod tests {
         harness: Harness,
         scope: InstallScope,
     ) -> PathBuf {
-        let harness_dir = harness_hidden_dir_name(harness);
-        match scope {
-            InstallScope::Project => runtime_paths
-                .cwd
-                .join(harness_dir)
-                .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH),
-            InstallScope::User => runtime_paths
-                .home_dir
-                .as_ref()
-                .unwrap()
-                .join(harness_dir)
-                .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH),
-        }
-    }
-
-    fn expected_harness_root(
-        runtime_paths: &RuntimePaths,
-        harness: Harness,
-        scope: InstallScope,
-    ) -> PathBuf {
-        let harness_dir = harness_hidden_dir_name(harness);
-        match scope {
-            InstallScope::Project => runtime_paths.cwd.join(harness_dir),
-            InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(harness_dir),
-        }
+        expected_harness_root(runtime_paths, harness, scope)
+            .join(CODEMOD_MANAGED_STATE_RELATIVE_PATH)
     }
 
     fn expected_periodic_runner_path(
@@ -2942,6 +3486,14 @@ codemod-skill-version: 0.1.0
             resolve_adapter(Harness::Cursor).unwrap().harness,
             Harness::Cursor
         );
+        assert_eq!(
+            resolve_adapter(Harness::Codex).unwrap().harness,
+            Harness::Codex
+        );
+        assert_eq!(
+            resolve_adapter(Harness::Antigravity).unwrap().harness,
+            Harness::Antigravity
+        );
     }
 
     #[test]
@@ -3092,6 +3644,30 @@ codemod-skill-version: 0.1.0
                     assert!(plugin.contains("export async function CodemodPeriodicUpdate"));
                     assert!(plugin.contains(CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_EVENT_NAME));
                     assert!(plugin.contains(&runner_path.to_string_lossy().to_string()));
+                }
+                Harness::Codex => {
+                    let config_path = expected_harness_root(
+                        &runtime_paths,
+                        Harness::Codex,
+                        InstallScope::Project,
+                    )
+                    .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+                    let config_content = fs::read_to_string(&config_path).unwrap();
+                    let config_doc = config_content.parse::<DocumentMut>().unwrap();
+                    let notify = read_notify_command(&config_doc).unwrap().unwrap();
+                    assert_eq!(notify[0], "sh");
+                    assert_eq!(notify[1], runner_path.to_string_lossy());
+                }
+                Harness::Antigravity => {
+                    let hints_path = expected_harness_root(
+                        &runtime_paths,
+                        Harness::Antigravity,
+                        InstallScope::Project,
+                    )
+                    .join(CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_FILE_NAME);
+                    let hints = fs::read_to_string(&hints_path).unwrap();
+                    assert!(hints.contains(CODEMOD_PERIODIC_TRIGGER_ANTIGRAVITY_HINTS_BEGIN));
+                    assert!(hints.contains(&runner_path.to_string_lossy().to_string()));
                 }
                 Harness::Auto => unreachable!("auto is not part of ALL_HARNESSES"),
             }
@@ -3392,21 +3968,26 @@ codemod-skill-version: 0.1.0
                 install_mcs_skill_bundle_with_runtime(harness, &install_request, &runtime_paths)
                     .unwrap();
             let installed_skill = installed.first().unwrap();
-            let harness_dir = harness_hidden_dir_name(harness);
-            let mcp_entry = installed
-                .iter()
-                .find(|entry| entry.name == "codemod-mcp")
-                .expect("expected MCP install entry");
-
-            assert!(installed_skill
-                .path
-                .to_string_lossy()
-                .contains(&format!("{harness_dir}/skills/codemod/SKILL.md")));
+            let expected_skills_root =
+                skills_root_for_harness(harness, InstallScope::Project, &runtime_paths).unwrap();
             assert_eq!(
-                mcp_entry.path,
-                expected_project_mcp_path(&runtime_paths, harness)
+                installed_skill.path,
+                expected_skills_root.join("codemod").join("SKILL.md")
             );
-            assert!(mcp_entry.path.exists());
+
+            if harness_supports_mcp(harness) {
+                let mcp_entry = installed
+                    .iter()
+                    .find(|entry| entry.name == "codemod-mcp")
+                    .expect("expected MCP install entry");
+                assert_eq!(
+                    mcp_entry.path,
+                    expected_project_mcp_path(&runtime_paths, harness)
+                );
+                assert!(mcp_entry.path.exists());
+            } else {
+                assert!(installed.iter().all(|entry| entry.name != "codemod-mcp"));
+            }
         }
     }
 
@@ -3786,12 +4367,12 @@ codemod-skill-version: 0.1.0
                 &runtime_paths,
             )
             .unwrap();
-            let harness_dir = harness_hidden_dir_name(harness);
-
-            assert!(installed[0]
-                .path
-                .to_string_lossy()
-                .contains(&format!("{harness_dir}/skills/jest-to-vitest/SKILL.md")));
+            let expected_root =
+                skills_root_for_harness(harness, InstallScope::Project, &runtime_paths).unwrap();
+            assert_eq!(
+                installed[0].path,
+                expected_root.join("jest-to-vitest").join("SKILL.md")
+            );
         }
     }
 
@@ -4179,7 +4760,7 @@ codemod-skill-version: 0.1.0
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let config_path = runtime_paths.cwd.join(".mcp.json");
 
-        upsert_codemod_mcp_server(&config_path, false, &runtime_paths).unwrap();
+        upsert_codemod_mcp_server(Harness::Claude, &config_path, false, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4225,7 +4806,7 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        upsert_codemod_mcp_server(&config_path, false, &runtime_paths).unwrap();
+        upsert_codemod_mcp_server(Harness::Claude, &config_path, false, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4257,7 +4838,8 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        let update_result = upsert_codemod_mcp_server(&config_path, false, &runtime_paths);
+        let update_result =
+            upsert_codemod_mcp_server(Harness::Claude, &config_path, false, &runtime_paths);
         assert!(matches!(
             update_result,
             Err(HarnessAdapterError::InstallFailed(message))
@@ -4283,7 +4865,7 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        upsert_codemod_mcp_server(&config_path, true, &runtime_paths).unwrap();
+        upsert_codemod_mcp_server(Harness::Claude, &config_path, true, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -4312,10 +4894,55 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn upsert_mcp_server_writes_codex_toml_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".codex/config.toml");
+
+        upsert_codemod_mcp_server(Harness::Codex, &config_path, false, &runtime_paths).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let document = content.parse::<DocumentMut>().unwrap();
+        let server = read_codex_mcp_server(&document)
+            .unwrap()
+            .expect("expected codex MCP server entry");
+        assert_eq!(
+            server.command,
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap()
+        );
+        assert_eq!(server.args.last().map(String::as_str), Some("mcp"));
+    }
+
+    #[test]
+    fn install_mcs_skill_bundle_skips_mcp_for_antigravity() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        let installed = install_mcs_skill_bundle_with_runtime(
+            Harness::Antigravity,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert!(installed.iter().all(|entry| entry.name != "codemod-mcp"));
+        assert_eq!(installed.len(), 1);
+        assert!(installed[0]
+            .path
+            .ends_with(".agents/skills/codemod/SKILL.md"));
+    }
+
+    #[test]
     fn mcp_config_path_supports_all_harnesses_for_project_and_user_scope() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
 
-        for harness in ALL_HARNESSES {
+        for harness in MCP_CAPABLE_HARNESSES {
             let project_path =
                 mcp_config_path_for_harness(harness, InstallScope::Project, &runtime_paths)
                     .unwrap();
@@ -4347,5 +4974,23 @@ codemod-skill-version: 0.1.0
         let user_cursor =
             skills_root_for_harness(Harness::Cursor, InstallScope::User, &runtime_paths).unwrap();
         assert!(user_cursor.ends_with(".cursor/skills"));
+
+        let project_codex =
+            skills_root_for_harness(Harness::Codex, InstallScope::Project, &runtime_paths).unwrap();
+        assert!(project_codex.ends_with(".agents/skills"));
+
+        let user_codex =
+            skills_root_for_harness(Harness::Codex, InstallScope::User, &runtime_paths).unwrap();
+        assert!(user_codex.ends_with(".agents/skills"));
+
+        let project_antigravity =
+            skills_root_for_harness(Harness::Antigravity, InstallScope::Project, &runtime_paths)
+                .unwrap();
+        assert!(project_antigravity.ends_with(".agents/skills"));
+
+        let user_antigravity =
+            skills_root_for_harness(Harness::Antigravity, InstallScope::User, &runtime_paths)
+                .unwrap();
+        assert!(user_antigravity.ends_with(".gemini/antigravity/skills"));
     }
 }

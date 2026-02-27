@@ -1196,7 +1196,7 @@ mod tests {
         );
         let parsed_from_reset =
             retry_after_seconds_from_headers(&reset_headers).expect("expected reset parse");
-        assert!(parsed_from_reset <= 30 && parsed_from_reset >= 1);
+        assert!((1..=30).contains(&parsed_from_reset));
     }
 
     #[test]

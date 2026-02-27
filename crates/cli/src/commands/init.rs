@@ -104,6 +104,10 @@ impl PackageBehavior {
     }
 }
 
+const PACKAGE_BEHAVIOR_WORKFLOW_ONLY: &str = "Workflow only";
+const PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL: &str = "Workflow + agent skill";
+const PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY: &str = "Agent skill only";
+
 struct ProjectConfig {
     name: String,
     description: String,
@@ -471,6 +475,26 @@ fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageB
     }
 }
 
+fn package_behavior_from_selection(selection: &str) -> PackageBehavior {
+    match selection {
+        PACKAGE_BEHAVIOR_WORKFLOW_ONLY => PackageBehavior::WorkflowOnly,
+        PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL => PackageBehavior::WorkflowAndSkill,
+        PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY => PackageBehavior::SkillOnly,
+        _ => PackageBehavior::WorkflowOnly,
+    }
+}
+
+fn select_package_behavior() -> Result<PackageBehavior> {
+    let options = vec![
+        PACKAGE_BEHAVIOR_WORKFLOW_ONLY,
+        PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL,
+        PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY,
+    ];
+    let selection =
+        Select::new("What package behavior would you like to scaffold?", options).prompt()?;
+    Ok(package_behavior_from_selection(selection))
+}
+
 fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
     println!(
         "{} {}",
@@ -479,7 +503,11 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     );
     println!();
 
-    let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
+    let package_behavior = if args.skill || args.with_skill {
+        package_behavior_from_flags(args.skill, args.with_skill)?
+    } else {
+        select_package_behavior()?
+    };
     if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
         return Err(anyhow!(
             "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
@@ -1770,5 +1798,34 @@ mod tests {
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
         assert!(readme.contains("## Skill Installation"));
         assert!(readme.contains("npx codemod@latest @codemod/hybrid-project --skill --project"));
+    }
+
+    #[test]
+    fn package_behavior_selection_uses_agent_skill_labels() {
+        assert_eq!(
+            package_behavior_from_selection(PACKAGE_BEHAVIOR_WORKFLOW_ONLY),
+            PackageBehavior::WorkflowOnly
+        );
+        assert_eq!(
+            package_behavior_from_selection(PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL),
+            PackageBehavior::WorkflowAndSkill
+        );
+        assert_eq!(
+            package_behavior_from_selection(PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY),
+            PackageBehavior::SkillOnly
+        );
+        assert_eq!(
+            package_behavior_from_selection("unknown"),
+            PackageBehavior::WorkflowOnly
+        );
+    }
+
+    #[test]
+    fn package_behavior_flags_still_enforce_mutual_exclusion() {
+        let error = package_behavior_from_flags(true, true).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "--skill and --with-skill cannot be used together"
+        );
     }
 }

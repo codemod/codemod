@@ -259,6 +259,14 @@ fn resolve_install_inputs(
                 harness: Harness::Cursor,
                 label: "cursor",
             },
+            HarnessPromptOption {
+                harness: Harness::Codex,
+                label: "codex",
+            },
+            HarnessPromptOption {
+                harness: Harness::Antigravity,
+                label: "antigravity",
+            },
         ];
         let starting_cursor = detected_harness_for_interactive_prompt()
             .and_then(|detected| options.iter().position(|option| option.harness == detected))
@@ -342,6 +350,8 @@ fn user_skills_root_hint_for_harness(harness: Harness) -> &'static str {
         Harness::Goose => "~/.goose/skills",
         Harness::Opencode => "~/.opencode/skills",
         Harness::Cursor => "~/.cursor/skills",
+        Harness::Codex => "~/.agents/skills",
+        Harness::Antigravity => "~/.gemini/antigravity/skills",
     }
 }
 

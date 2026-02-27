@@ -171,17 +171,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn harness_skill_path(root: &std::path::Path, harness: Harness) -> PathBuf {
-    let harness_dir = match harness {
-        Harness::Claude => ".claude",
-        Harness::Goose => ".goose",
-        Harness::Opencode => ".opencode",
-        Harness::Cursor => ".cursor",
-        Harness::Auto => ".claude",
-    };
-    root.join(harness_dir)
-        .join("skills")
-        .join("codemod")
-        .join("SKILL.md")
+    match harness {
+        Harness::Claude => root.join(".claude/skills/codemod/SKILL.md"),
+        Harness::Goose => root.join(".goose/skills/codemod/SKILL.md"),
+        Harness::Opencode => root.join(".opencode/skills/codemod/SKILL.md"),
+        Harness::Cursor => root.join(".cursor/skills/codemod/SKILL.md"),
+        Harness::Codex | Harness::Antigravity => root.join(".agents/skills/codemod/SKILL.md"),
+        Harness::Auto => root.join(".claude/skills/codemod/SKILL.md"),
+    }
 }
 
 #[test]
