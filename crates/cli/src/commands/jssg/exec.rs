@@ -71,6 +71,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         resolver,
         metrics_context: None,
         shared_state_context: Some(shared_state_context.clone()),
+        console_log_collector: None,
     };
 
     execute_js_with_quickjs(options).await?;

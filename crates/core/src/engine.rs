@@ -213,6 +213,20 @@ impl Engine {
                     }
                     Ok(Err(e)) => {
                         error!("Task {} execution failed: {}", task_id, e);
+                        // Add error to task logs
+                        if let Ok(mut current_task) =
+                            engine.state_adapter.lock().await.get_task(task_id).await
+                        {
+                            current_task
+                                .logs
+                                .push(format!("Task execution failed: {}", e));
+                            let _ = engine
+                                .state_adapter
+                                .lock()
+                                .await
+                                .save_task(&current_task)
+                                .await;
+                        }
                     }
                     Err(_) => {
                         error!(
@@ -224,6 +238,22 @@ impl Engine {
                         if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
                         {
                             error!("Failed to mark task {} as failed: {}", task_id, e);
+                        } else {
+                            // Add timeout error to task logs
+                            if let Ok(mut current_task) =
+                                engine.state_adapter.lock().await.get_task(task_id).await
+                            {
+                                current_task.logs.push(format!(
+                                    "Task timed out after {} seconds",
+                                    task_timeout.as_secs()
+                                ));
+                                let _ = engine
+                                    .state_adapter
+                                    .lock()
+                                    .await
+                                    .save_task(&current_task)
+                                    .await;
+                            }
                         }
                         // Let cleanup guard send notification for timeout case
                     }
@@ -266,10 +296,21 @@ impl Engine {
             .apply_task_diff(&task_diff)
             .await?;
 
+        // Add error to task logs
+        let mut current_task = self.state_adapter.lock().await.get_task(task_id).await?;
+        current_task.logs.push(format!("Error: {}", error_message));
+        self.state_adapter
+            .lock()
+            .await
+            .save_task(&current_task)
+            .await?;
+
         Ok(())
     }
 
-    /// Wait for all currently running tasks to complete using pure notification-based approach
+    /// Wait for all currently running tasks to complete.
+    /// Uses polling so we detect completion of tasks run by other processes (e.g. TUI trigger-all
+    /// spawns multiple resume processes). The notify is used as a fast path when our own task completes.
     async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
         let mut consecutive_empty_checks = 0;
         const MAX_EMPTY_CHECKS: u8 = 3;
@@ -307,7 +348,12 @@ impl Engine {
                 running_tasks.len()
             );
 
-            self.task_completion_notify.notified().await;
+            // Poll: wait for notify (fast path) OR 1 second, then re-check. This ensures we
+            // detect completion of tasks run by other processes (e.g. TUI with multiple PTYs).
+            tokio::select! {
+                _ = self.task_completion_notify.notified() => {}
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
+            }
         }
         Ok(())
     }
@@ -333,6 +379,7 @@ impl Engine {
         workflow: Workflow,
         params: HashMap<String, serde_json::Value>,
         bundle_path: Option<PathBuf>,
+        target_path: Option<PathBuf>,
         capabilities: Option<&HashSet<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
@@ -345,6 +392,7 @@ impl Engine {
             status: WorkflowStatus::Pending,
             params: params.clone(),
             bundle_path,
+            target_path,
             tasks: Vec::new(),
             started_at: Utc::now(),
             ended_at: None,
@@ -699,6 +747,82 @@ impl Engine {
             .await
             .get_tasks(workflow_run_id)
             .await
+    }
+
+    /// Update workflow status to Completed or Failed when all tasks are done.
+    /// Used when TUI spawns tasks with --exit-on-task-complete (each process exits early,
+    /// so no process remains to run the all_done check in execute_workflow).
+    pub async fn update_workflow_status_if_all_tasks_done(
+        &self,
+        workflow_run_id: Uuid,
+    ) -> Result<()> {
+        let workflow_run = self
+            .state_adapter
+            .lock()
+            .await
+            .get_workflow_run(workflow_run_id)
+            .await?;
+
+        if workflow_run.status != WorkflowStatus::Running {
+            return Ok(());
+        }
+
+        let tasks = self
+            .state_adapter
+            .lock()
+            .await
+            .get_tasks(workflow_run_id)
+            .await?;
+
+        let all_done = tasks.iter().all(|t| {
+            t.status == TaskStatus::Completed
+                || t.status == TaskStatus::Failed
+                || t.status == TaskStatus::WontDo
+        });
+
+        if !all_done {
+            return Ok(());
+        }
+
+        let any_failed = tasks.iter().any(|t| t.status == TaskStatus::Failed);
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(if any_failed {
+                    WorkflowStatus::Failed
+                } else {
+                    WorkflowStatus::Completed
+                })?),
+            },
+        );
+        fields.insert(
+            "ended_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(Utc::now())?),
+            },
+        );
+        let workflow_run_diff = WorkflowRunDiff {
+            workflow_run_id,
+            fields,
+        };
+
+        self.state_adapter
+            .lock()
+            .await
+            .apply_workflow_run_diff(&workflow_run_diff)
+            .await?;
+
+        info!(
+            "Workflow run {} {} (status updated by TUI/CLI)",
+            workflow_run_id,
+            if any_failed { "failed" } else { "completed" }
+        );
+
+        Ok(())
     }
 
     /// List workflow runs
@@ -1357,6 +1481,7 @@ impl Engine {
                     &step.action,
                     &step.env,
                     &step.id,
+                    &step.name,
                     node,
                     &task,
                     &resolved_params,
@@ -1379,6 +1504,18 @@ impl Engine {
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
+
+                    // Get current task to add error to logs
+                    let mut current_task =
+                        self.state_adapter.lock().await.get_task(task_id).await?;
+                    let error_msg = format!("Step {} failed: {}", step.name, e);
+                    current_task.logs.push(error_msg.clone());
+                    self.state_adapter
+                        .lock()
+                        .await
+                        .save_task(&current_task)
+                        .await?;
+
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
                     fields.insert(
@@ -1399,10 +1536,7 @@ impl Engine {
                         "error".to_string(),
                         FieldDiff {
                             operation: DiffOperation::Add,
-                            value: Some(serde_json::to_value(format!(
-                                "Step {} failed: {}",
-                                step.name, e
-                            ))?),
+                            value: Some(serde_json::to_value(error_msg.clone())?),
                         },
                     );
                     let task_diff = TaskDiff { task_id, fields };
@@ -1490,6 +1624,7 @@ impl Engine {
         action: &StepAction,
         step_env: &Option<HashMap<String, String>>,
         step_id: &Option<String>,
+        step_name: &str,
         node: &Node,
         task: &Task,
         params: &HashMap<String, serde_json::Value>,
@@ -1562,6 +1697,7 @@ impl Engine {
                         &template_step.action,
                         &template_step.env,
                         &template_step.id,
+                        &template_step.name,
                         node,
                         task,
                         &combined_params,
@@ -1577,13 +1713,14 @@ impl Engine {
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep, logger)
+                self.execute_ast_grep_step(node.id.clone(), step_name, ast_grep, task, logger)
                     .await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
                     node.id.clone(),
                     step_id.clone().unwrap_or_default(),
+                    step_name,
                     js_ast_grep,
                     Some(params.clone()),
                     task.matrix_values.clone(),
@@ -1600,6 +1737,7 @@ impl Engine {
                     bundle_path,
                     Some(task.workflow_run_id),
                     Some(state),
+                    task,
                     logger,
                 )
                 .await
@@ -1629,7 +1767,9 @@ impl Engine {
     pub async fn execute_ast_grep_step(
         &self,
         id: String,
+        step_name: &str,
         ast_grep: &UseAstGrep,
+        task: &Task,
         logger: &StructuredLogger,
     ) -> Result<()> {
         let bundle_path = self.workflow_run_config.bundle_path.clone();
@@ -1637,10 +1777,8 @@ impl Engine {
         let config_path = bundle_path.join(&ast_grep.config_file);
 
         if !config_path.exists() {
-            return Err(Error::StepExecution(format!(
-                "AST grep config file not found: {}",
-                config_path.display()
-            )));
+            let error_msg = format!("AST grep config file not found: {}", config_path.display());
+            return Err(Error::StepExecution(error_msg));
         }
 
         if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_ref() {
@@ -1649,6 +1787,19 @@ impl Engine {
                 self.workflow_run_config.dry_run,
             );
         }
+
+        // Format execution summary
+        let execution_summary = format!(
+            "\x1b[32mStep {} completed\x1b[0m:\n\r{}",
+            step_name, self.execution_stats
+        );
+        let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+        current_task.logs.push(execution_summary);
+        self.state_adapter
+            .lock()
+            .await
+            .save_task(&current_task)
+            .await?;
 
         let config_path_clone = config_path.clone();
 
@@ -1732,7 +1883,7 @@ impl Engine {
                             }
                         }
                         Err(e) => {
-                            slog!(logger, error, "{e}");
+                            slog!(logger, error, "AST grep execution error: {}", e);
                             self.execution_stats
                                 .files_with_errors
                                 .fetch_add(1, Ordering::Relaxed);
@@ -1758,6 +1909,7 @@ impl Engine {
         &self,
         id: String,
         step_id: String,
+        step_name: &str,
         js_ast_grep: &UseJSAstGrep,
         params: Option<HashMap<String, serde_json::Value>>,
         matrix_input: Option<HashMap<String, serde_json::Value>>,
@@ -1765,6 +1917,7 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         workflow_run_id: Option<Uuid>,
         initial_state: Option<&HashMap<String, serde_json::Value>>,
+        task: &Task,
         logger: &StructuredLogger,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
@@ -1787,10 +1940,19 @@ impl Engine {
         }
 
         if !js_file_path.exists() {
-            return Err(Error::StepExecution(format!(
+            let error_msg = format!(
                 "JavaScript file '{}' does not exist",
                 js_file_path.display()
-            )));
+            );
+            // Add error to task logs
+            let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+            current_task.logs.push(error_msg.clone());
+            self.state_adapter
+                .lock()
+                .await
+                .save_task(&current_task)
+                .await?;
+            return Err(Error::StepExecution(error_msg));
         }
 
         let script_base_dir = js_file_path
@@ -1802,7 +1964,7 @@ impl Engine {
 
         let resolver = Arc::new(
             OxcResolver::new(script_base_dir.clone(), tsconfig_path)
-                .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
+                .map_err(|e| Error::Other(format!("Failed to create resolver: {}", e)))?,
         );
 
         let capabilities_security_callback_clone =
@@ -1838,17 +2000,21 @@ impl Engine {
 
         // Set language first to get default extensions
         let language = if let Some(lang_str) = &js_ast_grep.language {
-            lang_str
-                .parse()
-                .map_err(|e| Error::StepExecution(format!("Invalid language '{lang_str}': {e}")))?
+            lang_str.parse().map_err(|e| {
+                Error::StepExecution(format!("Invalid language '{lang_str}': {}", e))
+            })?
         } else {
             // Parse TypeScript as default
             "typescript".parse().map_err(|e| {
-                Error::StepExecution(format!("Failed to parse default language: {e}"))
+                Error::StepExecution(format!("Failed to parse default language: {}", e))
             })?
         };
 
-        let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+        // Create console log collector for selector extraction
+        let selector_log_collector = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let selector_log_collector_clone = Arc::clone(&selector_log_collector);
+
+        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
@@ -1856,9 +2022,40 @@ impl Engine {
                 .capabilities
                 .as_ref()
                 .map(|v| v.clone().into_iter().collect()),
+            console_log_collector: Some(Box::new(move |message| {
+                selector_log_collector_clone.lock().unwrap().push(message);
+            })),
         })
         .await
-        .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+        {
+            Ok(config) => config,
+            Err(e) => {
+                let error_msg = format!("Failed to extract selector: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::StepExecution(error_msg));
+            }
+        };
+
+        // Append selector extraction logs to task
+        let selector_logs = selector_log_collector.lock().unwrap().clone();
+        if !selector_logs.is_empty() {
+            let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+            for log in selector_logs {
+                current_task.logs.push(log);
+            }
+            self.state_adapter
+                .lock()
+                .await
+                .save_task(&current_task)
+                .await?;
+        }
 
         let semantic_provider: Option<Arc<dyn SemanticProvider>> =
             match &js_ast_grep.semantic_analysis {
@@ -1914,6 +2111,9 @@ impl Engine {
             }
         }
 
+        // Create console log collector to capture console.log/warn/error output
+        let console_log_collector = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
         // Capture variables for use in parallel threads
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();
@@ -1929,6 +2129,7 @@ impl Engine {
         };
         let metrics_context_clone = metrics_context.clone();
         let shared_state_context_clone = shared_state_context.clone();
+        let console_log_collector_clone = Arc::clone(&console_log_collector);
         let logger = logger.clone();
 
         // Execute the codemod on each file using the config's multi-threading
@@ -1956,6 +2157,7 @@ impl Engine {
 
                 // Execute the async codemod using the captured runtime handle
                 std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                let console_log_collector_for_callback = Arc::clone(&console_log_collector_clone);
                 let execution_result = runtime_handle.block_on(async {
                     execute_codemod_with_quickjs(JssgExecutionOptions {
                         script_path: &js_file_path_clone,
@@ -1972,6 +2174,12 @@ impl Engine {
                         shared_state_context: Some(shared_state_context_clone.clone()),
                         test_mode: false,
                         target_directory: Some(&target_path),
+                        console_log_collector: Some(Box::new(move |message| {
+                            console_log_collector_for_callback
+                                .lock()
+                                .unwrap()
+                                .push(message);
+                        })),
                     })
                     .await
                 });
@@ -2119,6 +2327,8 @@ impl Engine {
                             file_path.display(),
                             e
                         );
+                        // Note: Cannot access task logs here as we're in a closure
+                        // The error is already logged via error! macro
                         self.execution_stats
                             .files_with_errors
                             .fetch_add(1, Ordering::Relaxed);
@@ -2175,6 +2385,29 @@ impl Engine {
             }
         }
 
+        // Get the current task and append execution summary logs
+        let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+
+        // Collect console logs from JavaScript execution
+        let console_logs = console_log_collector.lock().unwrap().clone();
+        for log in console_logs {
+            current_task.logs.push(log.clone());
+        }
+
+        // Format execution summary
+        let execution_summary = format!(
+            "\x1b[32mStep {} completed\x1b[0m:\n\r{}",
+            step_name, self.execution_stats
+        );
+        current_task.logs.push(execution_summary);
+
+        // Save the updated task
+        self.state_adapter
+            .lock()
+            .await
+            .save_task(&current_task)
+            .await?;
+
         Ok(())
     }
 
@@ -2216,6 +2449,8 @@ impl Engine {
             Some(key) => key,
             None => {
                 // No API key - surface instructions for coding agents and skip the step
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+
                 if logger.is_jsonl() {
                     logger.log("info", "[AI INSTRUCTIONS]");
                     if let Some(system_prompt) = &ai_config.system_prompt {
@@ -2237,11 +2472,28 @@ impl Engine {
                     println!();
                 }
 
+                current_task.logs.push("[AI INSTRUCTIONS]".to_string());
+                if let Some(system_prompt) = &ai_config.system_prompt {
+                    current_task.logs.push(system_prompt.to_string());
+                }
+                current_task.logs.push(resolved_prompt.to_string());
+                current_task.logs.push("[/AI INSTRUCTIONS]".to_string());
+
                 slog!(
                     logger,
                     info,
                     "Skipping AI step - no API key provided. See [AI INSTRUCTIONS] above."
                 );
+                current_task.logs.push(
+                    "Skipping AI step - no API key provided. See [AI INSTRUCTIONS] above."
+                        .to_string(),
+                );
+
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
                 return Ok(());
             }
         };
@@ -2282,9 +2534,21 @@ impl Engine {
             llm_protocol: llm_provider,
         };
 
-        let output = execute_ai_step(config)
-            .await
-            .map_err(|e| Error::StepExecution(e.to_string()))?;
+        let output = match execute_ai_step(config).await {
+            Ok(output) => output,
+            Err(e) => {
+                let error_msg = format!("AI step execution failed: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::StepExecution(error_msg));
+            }
+        };
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
@@ -2316,7 +2580,7 @@ impl Engine {
                 .collect::<Vec<_>>()
                 .join(" → ");
 
-            return Err(Error::Other(format!(
+            let error_msg = format!(
                 "Runtime codemod dependency cycle detected!\n\
                 Cycle: {} → {} → {}\n\
                 This cycle was not caught during validation, indicating a dynamic dependency.\n\
@@ -2328,16 +2592,39 @@ impl Engine {
                     &chain_str
                 },
                 codemod.source
-            )));
+            );
+            // Add error to task logs
+            let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+            current_task.logs.push(error_msg.clone());
+            self.state_adapter
+                .lock()
+                .await
+                .save_task(&current_task)
+                .await?;
+            return Err(Error::Other(error_msg));
         }
 
         // Resolve the package (local path or registry package)
-        let resolved_package = self
+        let resolved_package = match self
             .workflow_run_config
             .registry_client
             .resolve_package(&codemod.source, None, false, None)
             .await
-            .map_err(|e| Error::Other(format!("Failed to resolve package: {e}")))?;
+        {
+            Ok(pkg) => pkg,
+            Err(e) => {
+                let error_msg = format!("Failed to resolve package: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::Other(error_msg));
+            }
+        };
 
         slog!(
             logger,
@@ -2388,18 +2675,53 @@ impl Engine {
         let workflow_path = resolved_package.package_dir.join("workflow.yaml");
 
         if !workflow_path.exists() {
-            return Err(Error::Other(format!(
+            let error_msg = format!(
                 "Workflow file not found in codemod package: {}",
                 workflow_path.display()
-            )));
+            );
+            // Add error to task logs
+            let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+            current_task.logs.push(error_msg.clone());
+            self.state_adapter
+                .lock()
+                .await
+                .save_task(&current_task)
+                .await?;
+            return Err(Error::Other(error_msg));
         }
 
         // Load the codemod workflow
-        let workflow_content = std::fs::read_to_string(&workflow_path)
-            .map_err(|e| Error::Other(format!("Failed to read workflow file: {e}")))?;
+        let workflow_content = match std::fs::read_to_string(&workflow_path) {
+            Ok(content) => content,
+            Err(e) => {
+                let error_msg = format!("Failed to read workflow file: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::Other(error_msg));
+            }
+        };
 
-        let codemod_workflow: Workflow = serde_yaml::from_str(&workflow_content)
-            .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
+        let codemod_workflow: Workflow = match serde_yaml::from_str(&workflow_content) {
+            Ok(workflow) => workflow,
+            Err(e) => {
+                let error_msg = format!("Failed to parse workflow YAML: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::Other(error_msg));
+            }
+        };
 
         // Prepare parameters for the codemod workflow
         let mut codemod_params = HashMap::new();
@@ -2494,6 +2816,7 @@ impl Engine {
                     &step.action,
                     &step.env,
                     &step.id,
+                    &step.name,
                     node,
                     task, // Use the current task context
                     params,
@@ -2567,7 +2890,21 @@ impl Engine {
         // Add temp file var for step outputs
         let temp_dir = std::env::temp_dir();
         let state_outputs_path = temp_dir.join(task.id.to_string());
-        File::create(&state_outputs_path)?;
+        match File::create(&state_outputs_path) {
+            Ok(_) => {}
+            Err(e) => {
+                let error_msg = format!("Failed to create state outputs file: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::Other(error_msg));
+            }
+        }
 
         // Write state to a temp file and pass its path (env vars have OS size limits)
         let state_input_path = temp_dir.join(format!("{}-state-input", task.id));
@@ -2592,9 +2929,32 @@ impl Engine {
         }
 
         env.insert(
+            String::from("CODEMOD_TARGET_PATH"),
+            self.workflow_run_config
+                .target_path
+                .to_str()
+                .unwrap_or("")
+                .to_string(),
+        );
+
+        let canonical_path = match state_outputs_path.canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                let error_msg = format!("Failed to canonicalize state outputs path: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(Error::Other(error_msg));
+            }
+        };
+        env.insert(
             String::from("STATE_OUTPUTS"),
-            state_outputs_path
-                .canonicalize()?
+            canonical_path
                 .to_str()
                 .expect("File path should be valid UTF-8")
                 .to_string(),
@@ -2614,7 +2974,21 @@ impl Engine {
             resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
 
         // Execute the command
-        let output = runner.run_command(&resolved_command, &env).await?;
+        let output = match runner.run_command(&resolved_command, &env).await {
+            Ok(output) => output,
+            Err(e) => {
+                let error_msg = format!("Failed to execute command: {}", e);
+                // Add error to task logs
+                let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
+                current_task.logs.push(error_msg.clone());
+                self.state_adapter
+                    .lock()
+                    .await
+                    .save_task(&current_task)
+                    .await?;
+                return Err(e);
+            }
+        };
 
         // Get the current task
         let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;

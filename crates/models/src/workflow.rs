@@ -84,6 +84,11 @@ pub struct WorkflowRun {
     #[ts(optional=nullable)]
     pub bundle_path: Option<PathBuf>,
 
+    /// The target path where the workflow was run
+    #[serde(default)]
+    #[ts(optional=nullable)]
+    pub target_path: Option<PathBuf>,
+
     /// Capabilities used in the workflow run
     #[serde(default)]
     #[ts(optional, as = "Option<HashSet<LlrtSupportedModules>>")]
