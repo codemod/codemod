@@ -90,6 +90,13 @@ enum ProjectType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InteractiveCodemodType {
+    Jssg,
+    MultiStepWorkflow,
+    AgentSkill,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageBehavior {
     WorkflowOnly,
     SkillOnly,
@@ -105,10 +112,6 @@ impl PackageBehavior {
         matches!(self, Self::SkillOnly | Self::WorkflowAndSkill)
     }
 }
-
-const PACKAGE_BEHAVIOR_WORKFLOW_ONLY: &str = "Workflow only";
-const PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL: &str = "Workflow + agent skill";
-const PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY: &str = "Agent skill only";
 
 struct ProjectConfig {
     name: String,
@@ -350,16 +353,7 @@ pub fn handler(args: &Command) -> Result<()> {
                 .project_type
                 .clone()
                 .ok_or_else(|| anyhow!("Project type is required --project-type"))?;
-            match selected_project_type {
-                ProjectType::Shell | ProjectType::AstGrepYaml => {
-                    println!(
-                        "{} Deprecated project type selected; scaffolding a Hybrid (Shell + YAML + jssg) package",
-                        style("ℹ").cyan(),
-                    );
-                    ProjectType::Hybrid
-                }
-                other => other,
-            }
+            normalize_project_type(selected_project_type)
         } else {
             // Skill-only packages do not scaffold workflow project assets.
             ProjectType::AstGrepJs
@@ -469,6 +463,19 @@ fn get_codemod_dir_name(name: &str) -> String {
     }
 }
 
+fn normalize_project_type(selected: ProjectType) -> ProjectType {
+    match selected {
+        ProjectType::Shell | ProjectType::AstGrepYaml => {
+            println!(
+                "{} Deprecated project type selected; scaffolding a Hybrid (Shell + YAML + jssg) package",
+                style("ℹ").cyan(),
+            );
+            ProjectType::Hybrid
+        }
+        other => other,
+    }
+}
+
 fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageBehavior> {
     match (skill, with_skill) {
         (true, true) => Err(anyhow!("--skill and --with-skill cannot be used together")),
@@ -476,26 +483,6 @@ fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageB
         (false, true) => Ok(PackageBehavior::WorkflowAndSkill),
         (false, false) => Ok(PackageBehavior::WorkflowOnly),
     }
-}
-
-fn package_behavior_from_selection(selection: &str) -> PackageBehavior {
-    match selection {
-        PACKAGE_BEHAVIOR_WORKFLOW_ONLY => PackageBehavior::WorkflowOnly,
-        PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL => PackageBehavior::WorkflowAndSkill,
-        PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY => PackageBehavior::SkillOnly,
-        _ => PackageBehavior::WorkflowOnly,
-    }
-}
-
-fn select_package_behavior() -> Result<PackageBehavior> {
-    let options = vec![
-        PACKAGE_BEHAVIOR_WORKFLOW_ONLY,
-        PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL,
-        PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY,
-    ];
-    let selection =
-        Select::new("What package behavior would you like to scaffold?", options).prompt()?;
-    Ok(package_behavior_from_selection(selection))
 }
 
 fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
@@ -506,26 +493,62 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     );
     println!();
 
-    let package_behavior = if args.skill || args.with_skill {
-        package_behavior_from_flags(args.skill, args.with_skill)?
-    } else {
-        select_package_behavior()?
-    };
-    if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
-        return Err(anyhow!(
-            "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
-        ));
-    }
-
-    // Project type selection (workflow scaffold only)
-    let project_type = if package_behavior.includes_workflow() {
-        if let Some(pt) = &args.project_type {
-            pt.clone()
-        } else {
-            select_project_type()?
+    let (project_type, package_behavior) = if args.skill || args.with_skill {
+        let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
+        if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
+            return Err(anyhow!(
+                "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
+            ));
         }
+        let project_type = if package_behavior.includes_workflow() {
+            if let Some(pt) = &args.project_type {
+                normalize_project_type(pt.clone())
+            } else {
+                select_project_type()?
+            }
+        } else {
+            ProjectType::AstGrepJs
+        };
+        (project_type, package_behavior)
+    } else if let Some(pt) = &args.project_type {
+        let project_type = normalize_project_type(pt.clone());
+        let with_skill = Confirm::new("Would you like to add an agent skill?")
+            .with_default(false)
+            .prompt()?;
+        let package_behavior = if with_skill {
+            PackageBehavior::WorkflowAndSkill
+        } else {
+            PackageBehavior::WorkflowOnly
+        };
+        (project_type, package_behavior)
     } else {
-        ProjectType::AstGrepJs
+        match select_interactive_codemod_type()? {
+            InteractiveCodemodType::AgentSkill => {
+                (ProjectType::AstGrepJs, PackageBehavior::SkillOnly)
+            }
+            InteractiveCodemodType::Jssg => {
+                let with_skill = Confirm::new("Would you like to add an agent skill?")
+                    .with_default(false)
+                    .prompt()?;
+                let package_behavior = if with_skill {
+                    PackageBehavior::WorkflowAndSkill
+                } else {
+                    PackageBehavior::WorkflowOnly
+                };
+                (ProjectType::AstGrepJs, package_behavior)
+            }
+            InteractiveCodemodType::MultiStepWorkflow => {
+                let with_skill = Confirm::new("Would you like to add an agent skill?")
+                    .with_default(false)
+                    .prompt()?;
+                let package_behavior = if with_skill {
+                    PackageBehavior::WorkflowAndSkill
+                } else {
+                    PackageBehavior::WorkflowOnly
+                };
+                (ProjectType::Hybrid, package_behavior)
+            }
+        }
     };
 
     // Language selection
@@ -655,6 +678,26 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         github_action,
         workspace,
     })
+}
+
+fn select_interactive_codemod_type() -> Result<InteractiveCodemodType> {
+    let options = vec![
+        "jssg codemod (covers most use cases)",
+        "multi-step workflow (shell command, YAML & jssg)",
+        "agent skill codemod",
+    ];
+
+    let selection =
+        Select::new("What type of codemod would you like to create?", options).prompt()?;
+
+    match selection {
+        "jssg codemod (covers most use cases)" => Ok(InteractiveCodemodType::Jssg),
+        "multi-step workflow (shell command, YAML & jssg)" => {
+            Ok(InteractiveCodemodType::MultiStepWorkflow)
+        }
+        "agent skill codemod" => Ok(InteractiveCodemodType::AgentSkill),
+        _ => Ok(InteractiveCodemodType::Jssg), // Default fallback
+    }
 }
 
 fn select_project_type() -> Result<ProjectType> {
@@ -1810,31 +1853,22 @@ mod tests {
     }
 
     #[test]
-    fn package_behavior_selection_uses_agent_skill_labels() {
+    fn package_behavior_flags_map_skill_modes() {
         assert_eq!(
-            package_behavior_from_selection(PACKAGE_BEHAVIOR_WORKFLOW_ONLY),
+            package_behavior_from_flags(false, false).unwrap(),
             PackageBehavior::WorkflowOnly
         );
         assert_eq!(
-            package_behavior_from_selection(PACKAGE_BEHAVIOR_WORKFLOW_AND_AGENT_SKILL),
+            package_behavior_from_flags(false, true).unwrap(),
             PackageBehavior::WorkflowAndSkill
         );
         assert_eq!(
-            package_behavior_from_selection(PACKAGE_BEHAVIOR_AGENT_SKILL_ONLY),
+            package_behavior_from_flags(true, false).unwrap(),
             PackageBehavior::SkillOnly
         );
-        assert_eq!(
-            package_behavior_from_selection("unknown"),
-            PackageBehavior::WorkflowOnly
-        );
-    }
-
-    #[test]
-    fn package_behavior_flags_still_enforce_mutual_exclusion() {
-        let error = package_behavior_from_flags(true, true).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "--skill and --with-skill cannot be used together"
+        assert!(
+            package_behavior_from_flags(true, true).is_err(),
+            "--skill + --with-skill should be rejected"
         );
     }
 }

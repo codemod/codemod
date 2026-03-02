@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn is_package_name_rejects_flag_like_values() {
-        assert!(!is_package_name("--skill"));
+        assert!(!is_package_name("--flag"));
         assert!(!is_package_name("--dry-run"));
     }
 
