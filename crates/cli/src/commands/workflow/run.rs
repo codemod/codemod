@@ -54,6 +54,10 @@ pub struct Command {
     #[arg(long)]
     no_interactive: bool,
 
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
+
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
@@ -112,7 +116,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
-        false,
+        args.no_interactive && !args.install_skill,
         output_format,
     )?;
 

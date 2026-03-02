@@ -1089,6 +1089,14 @@
           "description": "Package identifier to install (for example `@codemod/jest-to-vitest`)",
           "type": "string"
         },
+        "path": {
+          "description": "Authored skill source path inside the package (optional, defaults to conventional layout)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "scope": {
           "description": "Install scope (optional, defaults to project)",
           "anyOf": [

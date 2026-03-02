@@ -132,35 +132,17 @@ npx codemod agent list [--harness <claude|goose|opencode|cursor|codex|antigravit
 
 `agent install` performs internal skill validation checks during install flow.
 
-### Direct package skill install (`--skill`)
+### Package skill install (prompted from package run)
 
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
 This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/OpenCode/Cursor, `AGENTS.md` for Codex/Antigravity) without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
-npx codemod <package-id> --skill [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--format <logs|table|json|yaml>]
+npx codemod <package-id>
 ```
 
-Direct skill install also runs interactively by default in TTY sessions; pass `--no-interactive` for non-interactive execution.
-
-<ResponseField name="--harness <VALUE>" type="string">
-  Target harness skill root. `auto` resolves by workspace marker order: `.claude`, `.goose`, `.opencode`, `.cursor`, `.codex`, `.agents`, then Claude fallback.
-</ResponseField>
-
-<ResponseField name="--project | --user" type="boolean">
-  Install scope. `--project` writes to workspace harness roots. `--user` writes to user-level harness roots.
-</ResponseField>
-
-<ResponseField name="--force" type="boolean">
-  Overwrite existing skill content. Without `--force`, install is idempotent when content already matches.
-</ResponseField>
-
-<ResponseField name="--format <logs|table|json|yaml>" type="string">
-  Output contract format. Default: `logs` (human-readable).
-</ResponseField>
-
-Without `--skill`, package invocation follows normal `codemod run` behavior.
+In interactive TTY sessions, `npx codemod <package-id>` prompts for harness/scope/overwrite when installable skill behavior is available.
 
 <Info>
   Behavior-aware package runtime:
@@ -250,6 +232,15 @@ npx codemod <package-name>
   ```
 </ResponseField>
 
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive runs, execute `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow run -w workflow.yaml --no-interactive --install-skill
+  npx codemod <package-name> --no-interactive --install-skill
+  ```
+</ResponseField>
+
 **`workflow resume`**
 
 Resume a paused workflow.
@@ -268,6 +259,14 @@ npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
 
 <ResponseField name="--trigger-all" type="boolean">
   Trigger all awaiting tasks.
+</ResponseField>
+
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive resume runs, execute pending `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow resume -w workflow.yaml -i <ID> --trigger-all --no-interactive --install-skill
+  ```
 </ResponseField>
 
 **`workflow validate`**

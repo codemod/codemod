@@ -5,7 +5,6 @@ use crate::utils::package_validation::{
     detect_package_behavior_shape_with_manifest_hint, expected_workflow_path, PackageBehaviorShape,
 };
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
 use crate::workflow_runner::run_workflow;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
@@ -30,7 +29,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
-const SKILL_INSTALL_PROJECT_FLAG: &str = "--project";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SkillInstallOfferContext {
@@ -92,6 +90,10 @@ pub struct Command {
     /// No interactive mode
     #[arg(long)]
     no_interactive: bool,
+
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
 
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
@@ -198,6 +200,15 @@ pub async fn handler(
     );
 
     if package_behavior_shape == PackageBehaviorShape::SkillOnly {
+        if args.install_skill {
+            crate::commands::package_skill::install_from_run_request(
+                &args.package,
+                args.no_interactive,
+                &telemetry,
+            )
+            .await?;
+            return Ok(());
+        }
         if maybe_offer_skill_install(args, SkillInstallOfferContext::SkillOnly, &telemetry).await? {
             return Ok(());
         }
@@ -253,7 +264,11 @@ pub async fn handler(
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
-        package_behavior_shape.includes_skill(),
+        should_skip_install_skill_steps(
+            args.no_interactive,
+            args.install_skill,
+            package_behavior_shape,
+        ),
         Default::default(),
     )?;
 
@@ -331,7 +346,7 @@ pub async fn handler(
         )
         .await;
 
-    if package_behavior_shape == PackageBehaviorShape::WorkflowAndSkill {
+    if package_behavior_shape == PackageBehaviorShape::WorkflowAndSkill && !args.install_skill {
         let _ = maybe_offer_skill_install(
             args,
             SkillInstallOfferContext::WorkflowAndSkillPostRun,
@@ -377,6 +392,23 @@ fn workflow_path_for_run(package_dir: &Path, manifest: Option<&CodemodManifest>)
     package_dir.join(WORKFLOW_FILE_NAME)
 }
 
+fn should_skip_install_skill_steps(
+    no_interactive: bool,
+    install_skill: bool,
+    package_behavior_shape: PackageBehaviorShape,
+) -> bool {
+    if install_skill {
+        return false;
+    }
+
+    if package_behavior_shape.includes_skill() {
+        // Preserve package-run UX: offer post-run prompt instead of executing install-skill inline.
+        return true;
+    }
+
+    no_interactive
+}
+
 fn should_prompt_for_skill_install(no_interactive: bool) -> bool {
     should_prompt_for_skill_install_with_tty(
         no_interactive,
@@ -394,7 +426,7 @@ fn should_prompt_for_skill_install_with_tty(
 }
 
 fn skill_install_command(package_id: &str) -> String {
-    format!("npx codemod {package_id} --skill {SKILL_INSTALL_PROJECT_FLAG}")
+    format!("npx codemod {package_id}")
 }
 
 fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static str {
@@ -423,14 +455,14 @@ async fn maybe_offer_skill_install(
         }
         SkillInstallOfferContext::WorkflowAndSkillPostRun => {
             println!(
-                "\nℹ️ Package `{}` also includes skill behavior under `{}`.",
-                args.package, AGENTS_SKILL_ROOT_RELATIVE_PATH
+                "\nℹ️ Package `{}` also includes installable skill behavior.",
+                args.package
             );
         }
     }
 
     if !should_prompt_for_skill_install(args.no_interactive) {
-        println!("Install skill with: `{install_command}`");
+        println!("Install skill by re-running interactively: `{install_command}`");
         return Ok(false);
     }
 
@@ -441,30 +473,18 @@ async fn maybe_offer_skill_install(
         Ok(answer) => answer,
         Err(error) => {
             println!(
-                "Skipped skill install prompt ({error}). Install later with: `{install_command}`"
+                "Skipped skill install prompt ({error}). Re-run `{install_command}` and accept the install prompt."
             );
             return Ok(false);
         }
     };
 
     if !should_install {
-        println!("Skipped skill install. You can install later with: `{install_command}`");
+        println!("Skipped skill install. You can install later by running: `{install_command}`");
         return Ok(false);
     }
 
-    let install_args = vec![
-        args.package.clone(),
-        "--skill".to_string(),
-        SKILL_INSTALL_PROJECT_FLAG.to_string(),
-    ];
-    let handled =
-        crate::commands::package_skill::handle_direct_install(&install_args, telemetry).await?;
-    if !handled {
-        return Err(anyhow!(
-            "Failed to invoke package skill install for `{}`.",
-            args.package
-        ));
-    }
+    crate::commands::package_skill::install_from_run_prompt(&args.package, telemetry).await?;
 
     Ok(true)
 }
@@ -480,10 +500,9 @@ fn skill_only_package_run_error(package_id: &str, package_dir: &Path) -> anyhow:
 
 fn missing_behavior_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
     anyhow!(
-        "Package `{}` at {} has no executable workflow steps and no installable skill behavior. Add executable workflow steps, or add `install-skill` plus authored files under `{}`.",
+        "Package `{}` at {} has no executable workflow steps and no installable skill behavior. Add executable workflow steps, or add `install-skill` steps and authored skill files.",
         package_id,
         package_dir.display(),
-        AGENTS_SKILL_ROOT_RELATIVE_PATH,
     )
 }
 
@@ -843,8 +862,7 @@ nodes:
 
         assert!(message.contains("skill-only package"));
         assert!(message.contains("install-skill"));
-        assert!(message.contains("--skill"));
-        assert!(message.contains("--project"));
+        assert!(message.contains("npx codemod @codemod/mcs"));
         assert!(message.contains("@codemod/mcs"));
     }
 
@@ -858,22 +876,19 @@ nodes:
     }
 
     #[test]
-    fn test_missing_behavior_error_mentions_install_skill_and_authored_dir() {
+    fn test_missing_behavior_error_mentions_install_skill_and_authored_files() {
         let error = missing_behavior_run_error("@codemod/any", Path::new("/tmp/any"));
         let message = error.to_string();
 
         assert!(message.contains("no executable workflow steps"));
         assert!(message.contains("install-skill"));
-        assert!(message.contains(AGENTS_SKILL_ROOT_RELATIVE_PATH));
+        assert!(message.contains("authored skill files"));
     }
 
     #[test]
-    fn test_skill_install_command_defaults_to_project_scope() {
+    fn test_skill_install_command_uses_package_run_entrypoint() {
         let command = skill_install_command("@codemod/jest-to-vitest");
-        assert_eq!(
-            command,
-            "npx codemod @codemod/jest-to-vitest --skill --project"
-        );
+        assert_eq!(command, "npx codemod @codemod/jest-to-vitest");
     }
 
     #[test]
@@ -893,6 +908,43 @@ nodes:
         ));
         assert!(!should_prompt_for_skill_install_with_tty(
             false, false, false
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_install_skill_steps_defaults_to_skip_for_skill_packages() {
+        assert!(should_skip_install_skill_steps(
+            false,
+            false,
+            PackageBehaviorShape::WorkflowAndSkill
+        ));
+        assert!(should_skip_install_skill_steps(
+            true,
+            false,
+            PackageBehaviorShape::SkillOnly
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_install_skill_steps_skips_in_non_interactive_by_default() {
+        assert!(should_skip_install_skill_steps(
+            true,
+            false,
+            PackageBehaviorShape::WorkflowOnly
+        ));
+        assert!(!should_skip_install_skill_steps(
+            false,
+            false,
+            PackageBehaviorShape::WorkflowOnly
+        ));
+    }
+
+    #[test]
+    fn test_should_skip_install_skill_steps_honors_install_skill_override() {
+        assert!(!should_skip_install_skill_steps(
+            true,
+            true,
+            PackageBehaviorShape::WorkflowAndSkill
         ));
     }
 

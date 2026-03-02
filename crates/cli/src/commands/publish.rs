@@ -4,7 +4,6 @@ use crate::utils::package_validation::{
     validate_skill_behavior, PackageBehaviorShape,
 };
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
-use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
@@ -223,9 +222,8 @@ fn validate_package_structure(
     let behavior_shape = detect_package_behavior_shape(package_path, manifest);
     if behavior_shape == PackageBehaviorShape::Missing {
         return Err(anyhow!(
-            "Invalid package structure in {}: package must include executable workflow steps and/or skill installation steps with authored files under `{}`.",
+            "Invalid package structure in {}: package must include executable workflow steps and/or skill installation steps with authored skill files.",
             package_path.display(),
-            AGENTS_SKILL_ROOT_RELATIVE_PATH,
         ));
     }
 

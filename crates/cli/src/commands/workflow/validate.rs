@@ -259,6 +259,61 @@ nodes:
     }
 
     #[test]
+    fn validates_skill_package_with_custom_install_skill_path() {
+        let temp_dir = tempdir().unwrap();
+        write_manifest(
+            temp_dir.path(),
+            DEFAULT_WORKFLOW_FILE_NAME,
+            "@codemod/sample-skill",
+        );
+        let custom_skill_dir = temp_dir.path().join("skills/agents/sample-skill");
+        fs::create_dir_all(custom_skill_dir.join("references")).unwrap();
+        fs::write(
+            custom_skill_dir.join("SKILL.md"),
+            r#"---
+name: "sample"
+description: "description"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+"#,
+        )
+        .unwrap();
+        fs::write(
+            custom_skill_dir.join("references/index.md"),
+            "- [Usage](./usage.md)\n",
+        )
+        .unwrap();
+        fs::write(custom_skill_dir.join("references/usage.md"), "# Usage\n").unwrap();
+
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/sample-skill"
+          path: "./skills/agents/sample-skill/SKILL.md"
+"#,
+        )
+        .unwrap();
+
+        let result = validate_target(temp_dir.path());
+        assert!(
+            result.is_ok(),
+            "expected custom skill path validation to pass: {result:?}"
+        );
+    }
+
+    #[test]
     fn fails_skill_validation_when_reference_link_is_missing() {
         let temp_dir = tempdir().unwrap();
         write_manifest(temp_dir.path(), DEFAULT_WORKFLOW_FILE_NAME, "sample-skill");

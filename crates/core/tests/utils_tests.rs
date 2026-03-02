@@ -145,6 +145,35 @@ nodes:
 }
 
 #[test]
+fn test_validate_workflow_rejects_invalid_install_skill_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workflow_path = temp_dir.path().join("workflow.yaml");
+
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    steps:
+      - id: install-skill
+        name: Install package skill
+        install-skill:
+          package: "@codemod/example"
+          path: "   "
+"#;
+
+    fs::write(&workflow_path, yaml_content).unwrap();
+    let workflow = utils::parse_workflow_file(&workflow_path).unwrap();
+
+    let result = utils::validate_workflow(&workflow, temp_dir.path());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid install-skill path value"));
+}
+
+#[test]
 fn test_validate_workflow_valid() {
     // Create a valid workflow
     let workflow = Workflow {

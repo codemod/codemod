@@ -283,6 +283,11 @@ pub struct UseInstallSkill {
     /// Package identifier to install (for example `@codemod/jest-to-vitest`)
     pub package: String,
 
+    /// Authored skill source path inside the package (optional, defaults to conventional layout)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub path: Option<String>,
+
     /// Target harness adapter (optional, defaults to auto)
     #[serde(default)]
     #[ts(optional, as = "Option<InstallSkillHarness>")]

@@ -88,12 +88,12 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
-fn build_install_skill_command(config: &UseInstallSkill) -> String {
+fn build_install_skill_command(config: &UseInstallSkill, no_interactive: bool) -> String {
     let mut command = vec![
         "npx".to_string(),
         "codemod".to_string(),
+        "internal-install-skill".to_string(),
         config.package.clone(),
-        "--skill".to_string(),
     ];
 
     match config.scope.clone().unwrap_or(InstallSkillScope::Project) {
@@ -103,6 +103,10 @@ fn build_install_skill_command(config: &UseInstallSkill) -> String {
 
     if config.force.unwrap_or(false) {
         command.push("--force".to_string());
+    }
+
+    if no_interactive {
+        command.push("--no-interactive".to_string());
     }
 
     if let Some(harness) = &config.harness {
@@ -1659,10 +1663,17 @@ impl Engine {
             }
             StepAction::InstallSkill(install_skill) => {
                 if self.workflow_run_config.skip_install_skill_steps {
-                    eprintln!(
-                        "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
-                        install_skill.package
-                    );
+                    if self.workflow_run_config.no_interactive {
+                        eprintln!(
+                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
+                            install_skill.package
+                        );
+                    } else {
+                        eprintln!(
+                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
+                            install_skill.package
+                        );
+                    }
                     return Ok(());
                 }
 
@@ -1674,7 +1685,10 @@ impl Engine {
                     return Ok(());
                 }
 
-                let command = build_install_skill_command(install_skill);
+                let command = build_install_skill_command(
+                    install_skill,
+                    self.workflow_run_config.no_interactive,
+                );
                 self.execute_run_script_step(
                     runner,
                     &command,

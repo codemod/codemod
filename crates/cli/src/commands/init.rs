@@ -1,4 +1,6 @@
-use crate::utils::skill_layout::AGENTS_SKILL_ROOT_RELATIVE_PATH;
+use crate::utils::skill_layout::{
+    expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+};
 use anyhow::{anyhow, Result};
 use clap::Args;
 use console::{style, Emoji};
@@ -153,6 +155,7 @@ const INSTALL_SKILL_NODE_TEMPLATE: &str = r#"
         name: Install package skill
         install-skill:
           package: "{name}"
+          path: "{skill_path}"
 "#;
 
 // Shell project templates
@@ -794,8 +797,11 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let default_skill_path = expected_authored_skill_relative_file(&config.name);
     let mut workflow_content = if config.package_behavior == PackageBehavior::SkillOnly {
-        SKILL_WORKFLOW_TEMPLATE.replace("{name}", &config.name)
+        SKILL_WORKFLOW_TEMPLATE
+            .replace("{name}", &config.name)
+            .replace("{skill_path}", &default_skill_path)
     } else {
         match config.project_type {
             ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
@@ -807,7 +813,11 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     };
 
     if config.package_behavior == PackageBehavior::WorkflowAndSkill {
-        workflow_content.push_str(&INSTALL_SKILL_NODE_TEMPLATE.replace("{name}", &config.name));
+        workflow_content.push_str(
+            &INSTALL_SKILL_NODE_TEMPLATE
+                .replace("{name}", &config.name)
+                .replace("{skill_path}", &default_skill_path),
+        );
     }
 
     fs::write(project_path.join("workflow.yaml"), workflow_content)?;
@@ -1207,7 +1217,7 @@ fn create_gitignore(project_path: &Path) -> Result<()> {
 
 fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let test_command = if config.package_behavior == PackageBehavior::SkillOnly {
-        format!("npx codemod@latest {} --skill --project", config.name)
+        format!("npx codemod@latest {}", config.name)
     } else {
         match config.project_type {
             ProjectType::Shell => "bash scripts/transform.sh".to_string(),
@@ -1236,7 +1246,7 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 ## Skill Installation
 
 ```bash
-npx codemod@latest {} --skill --project
+npx codemod@latest {}
 ```
 "#,
             config.name
@@ -1521,15 +1531,13 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         println!();
         println!(
             "  {}",
-            style("Install your skill package locally").bold().cyan()
+            style("Run the package to install skill behavior")
+                .bold()
+                .cyan()
         );
         println!(
             "  {}",
-            style(format!(
-                "npx codemod@latest {} --skill --project",
-                config.name
-            ))
-            .dim()
+            style(format!("npx codemod@latest {}", config.name)).dim()
         );
         println!();
         println!(
@@ -1583,15 +1591,13 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             println!();
             println!(
                 "  {}",
-                style("Install package skill behavior").bold().cyan()
+                style("Run package and accept skill-install prompt")
+                    .bold()
+                    .cyan()
             );
             println!(
                 "  {}",
-                style(format!(
-                    "npx codemod@latest {} --skill --project",
-                    config.name
-                ))
-                .dim()
+                style(format!("npx codemod@latest {}", config.name)).dim()
             );
         }
     }
@@ -1700,9 +1706,10 @@ mod tests {
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("install-skill:"));
         assert!(workflow.contains("package: \"@codemod/sample-skill\""));
+        assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));
+        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
     }
 
     #[test]
@@ -1729,9 +1736,10 @@ mod tests {
         assert_eq!(validation.linked_reference_count, 1);
         let workflow = fs::read_to_string(codemod_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill --skill --project"));
+        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
     }
 
     #[test]
@@ -1796,8 +1804,9 @@ mod tests {
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("install-skill:"));
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
+        assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
-        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project --skill --project"));
+        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
     }
 
     #[test]

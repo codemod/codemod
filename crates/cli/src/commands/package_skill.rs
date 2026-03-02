@@ -7,14 +7,14 @@ use crate::commands::output::{exit_adapter_error, format_output_path};
 use crate::engine::create_registry_client;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape_with_manifest_hint, PackageBehaviorShape,
+    authored_skill_file_candidate, detect_package_behavior_shape_with_manifest_hint,
+    PackageBehaviorShape,
 };
 use crate::utils::skill_layout::{expected_authored_skill_file, find_authored_skill_dir};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use butterflow_core::registry::RegistryError;
-use clap::error::ErrorKind;
-use clap::Parser;
+use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use inquire::{Confirm, Select};
 use serde::Serialize;
@@ -29,32 +29,29 @@ use tabled::{Table, Tabled};
 #[cfg(test)]
 use crate::utils::skill_layout::SKILL_FILE_NAME;
 
-#[derive(Parser, Debug)]
-struct DirectSkillInstallCommand {
+#[derive(Args, Debug)]
+pub struct InternalInstallSkillStepCommand {
     /// Package identifier
     #[arg(value_name = "PACKAGE")]
-    package_id: String,
-    /// Install package skill behavior
-    #[arg(long)]
-    skill: bool,
+    pub package_id: String,
     /// Target harness adapter
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
-    harness: Harness,
+    pub harness: Harness,
     /// Disable interactive install wizard prompts
     #[arg(long)]
-    no_interactive: bool,
+    pub no_interactive: bool,
     /// Install into current repo workspace
     #[arg(long, conflicts_with = "user")]
-    project: bool,
+    pub project: bool,
     /// Install into user-level skills path
     #[arg(long, conflicts_with = "project")]
-    user: bool,
+    pub user: bool,
     /// Overwrite existing skill files
     #[arg(long)]
-    force: bool,
+    pub force: bool,
     /// Output format
     #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
-    format: OutputFormat,
+    pub format: OutputFormat,
 }
 
 #[derive(Serialize)]
@@ -117,42 +114,50 @@ impl fmt::Display for ScopePromptOption {
     }
 }
 
-pub async fn handle_direct_install(
-    trailing_args: &[String],
+pub async fn handle_internal_install_step(
+    command: &InternalInstallSkillStepCommand,
     telemetry: &TelemetrySenderMutex,
-) -> Result<bool> {
-    if trailing_args.is_empty() || !trailing_args.iter().any(|arg| arg == "--skill") {
-        return Ok(false);
-    }
+) -> Result<()> {
+    install_skill_command(command, telemetry).await?;
+    Ok(())
+}
 
-    let parse_args = std::iter::once("codemod".to_string())
-        .chain(trailing_args.iter().cloned())
-        .collect::<Vec<_>>();
+pub async fn install_from_run_prompt(
+    package_id: &str,
+    telemetry: &TelemetrySenderMutex,
+) -> Result<()> {
+    install_from_run_request(package_id, false, telemetry).await
+}
 
-    let command = match DirectSkillInstallCommand::try_parse_from(parse_args) {
-        Ok(command) => command,
-        Err(parse_error) => {
-            if matches!(
-                parse_error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) {
-                let _ = parse_error.print();
-                return Ok(true);
-            }
-            return Err(parse_error.into());
-        }
+pub async fn install_from_run_request(
+    package_id: &str,
+    no_interactive: bool,
+    telemetry: &TelemetrySenderMutex,
+) -> Result<()> {
+    let command = InternalInstallSkillStepCommand {
+        package_id: package_id.to_string(),
+        harness: Harness::Auto,
+        no_interactive,
+        project: true,
+        user: false,
+        force: false,
+        format: OutputFormat::Logs,
     };
+    install_skill_command(&command, telemetry).await
+}
 
-    if !command.skill {
-        return Ok(false);
-    }
+async fn install_skill_command(
+    command: &InternalInstallSkillStepCommand,
+    telemetry: &TelemetrySenderMutex,
+) -> Result<()> {
+    let command_format = command.format;
 
-    let install_inputs = resolve_install_inputs(&command).unwrap_or_else(|error| {
-        exit_adapter_error(error, command.format);
+    let install_inputs = resolve_install_inputs(command).unwrap_or_else(|error| {
+        exit_adapter_error(error, command_format);
     });
 
     let resolved_adapter = resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
-        exit_adapter_error(error, command.format);
+        exit_adapter_error(error, command_format);
     });
 
     let request = InstallRequest {
@@ -163,14 +168,14 @@ pub async fn handle_direct_install(
     let (package, mut package_warnings) = resolve_skill_package_for_install(&command.package_id)
         .await
         .unwrap_or_else(|error| {
-            exit_adapter_error(error, command.format);
+            exit_adapter_error(error, command_format);
         });
 
     let installed = resolved_adapter
         .adapter
         .install_package_skill(&package, &request)
         .unwrap_or_else(|error| {
-            exit_adapter_error(error, command.format);
+            exit_adapter_error(error, command_format);
         });
 
     let mut warnings = resolved_adapter.warnings;
@@ -201,7 +206,7 @@ pub async fn handle_direct_install(
         warnings,
         restart_hint,
     );
-    print_install_output(&output, command.format)?;
+    print_install_output(&output, command_format)?;
     send_package_skill_install_event(
         telemetry,
         &PackageSkillInstallTelemetryInput {
@@ -209,18 +214,18 @@ pub async fn handle_direct_install(
             resolved_harness: resolved_adapter.harness,
             scope: install_inputs.scope,
             force: install_inputs.force,
-            format: command.format,
+            format: command_format,
             package: &package,
             output: &output,
         },
     )
     .await;
 
-    Ok(true)
+    Ok(())
 }
 
 fn resolve_install_inputs(
-    command: &DirectSkillInstallCommand,
+    command: &InternalInstallSkillStepCommand,
 ) -> std::result::Result<SkillInstallInputs, HarnessAdapterError> {
     let interactive = !command.no_interactive
         && std::io::stdin().is_terminal()
@@ -580,8 +585,7 @@ async fn resolve_skill_package_for_install(
         HarnessAdapterError::SkillPackageInstallFailed(format!(
             "Package `{}` declares skill behavior but authored skill files were not found under `{}`.",
             resolved_package.id,
-            expected_authored_skill_file(&resolved_package.package_dir, &resolved_package.id)
-                .display()
+            resolved_package.expected_skill_file.display()
         ))
     })?;
 
@@ -609,6 +613,7 @@ struct ResolvedSkillPackage {
     version: String,
     description: String,
     package_dir: std::path::PathBuf,
+    expected_skill_file: PathBuf,
     skill_source_dir: Option<PathBuf>,
     behavior_shape: PackageBehaviorShape,
 }
@@ -643,8 +648,21 @@ async fn resolve_skill_package(
         .as_ref()
         .map(|manifest| manifest.name.as_str())
         .unwrap_or(resolved_package.spec.name.as_str());
-    let skill_source_dir =
-        find_authored_skill_dir(&resolved_package.package_dir, Some(manifest_name));
+    let candidate = authored_skill_file_candidate(
+        &resolved_package.package_dir,
+        manifest.as_ref(),
+        manifest_name,
+    )
+    .map_err(|error| HarnessAdapterError::SkillPackageInstallFailed(error.to_string()))?;
+    let expected_skill_file = candidate.path;
+    let has_explicit_skill_path = candidate.explicit;
+    let skill_source_dir = if expected_skill_file.is_file() {
+        expected_skill_file.parent().map(Path::to_path_buf)
+    } else if !has_explicit_skill_path {
+        find_authored_skill_dir(&resolved_package.package_dir, Some(manifest_name))
+    } else {
+        None
+    };
     let behavior_shape = detect_package_behavior_shape_with_manifest_hint(
         &resolved_package.package_dir,
         manifest.as_ref(),
@@ -655,6 +673,7 @@ async fn resolve_skill_package(
         version: resolved_package.version,
         description,
         package_dir: resolved_package.package_dir,
+        expected_skill_file,
         skill_source_dir,
         behavior_shape,
     })
@@ -720,7 +739,7 @@ fn unsupported_skill_install_error(
 
     match behavior_shape {
         PackageBehaviorShape::WorkflowOnly => format!(
-            "Package `{package_id}` at {} does not provide skill behavior (detected `{}`). Install this package with `codemod run {package_id}` instead of `--skill`.",
+            "Package `{package_id}` at {} does not provide skill behavior (detected `{}`). Run it with `codemod run {package_id}`.",
             package_dir.display(),
             behavior_shape.as_str(),
         ),

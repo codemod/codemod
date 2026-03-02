@@ -60,6 +60,10 @@ pub struct Command {
     #[arg(long)]
     no_interactive: bool,
 
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
+
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value = "text")]
     format: String,
@@ -107,7 +111,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         args.no_interactive,
         false,
         None,
-        false,
+        args.no_interactive && !args.install_skill,
         output_format,
     )?;
 

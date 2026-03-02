@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use log::info;
 use std::sync::Arc;
 mod ascii_art;
 mod auth;
@@ -86,6 +85,10 @@ enum Commands {
 
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
+
+    /// Internal command used by workflow install-skill steps
+    #[command(name = "internal-install-skill", hide = true)]
+    InternalInstallSkill(commands::package_skill::InternalInstallSkillStepCommand),
 }
 
 #[derive(Args, Debug)]
@@ -137,6 +140,10 @@ enum JssgCommands {
 
 /// Check if a string looks like a package name that should be run
 fn is_package_name(arg: &str) -> bool {
+    if arg.starts_with('-') {
+        return false;
+    }
+
     // Check for scoped packages (@org/package)
     if arg.starts_with('@') && arg.contains('/') {
         return true;
@@ -170,7 +177,6 @@ fn is_package_name(arg: &str) -> bool {
 type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
 
 enum ImplicitRoute {
-    DirectSkillInstall(Vec<String>),
     Run(Vec<String>),
 }
 
@@ -184,10 +190,6 @@ fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
         return None;
     }
 
-    if trailing_args.iter().any(|arg| arg == "--skill") {
-        return Some(ImplicitRoute::DirectSkillInstall(trailing_args.to_vec()));
-    }
-
     let mut run_args = vec!["codemod".to_string(), "run".to_string()];
     run_args.extend(trailing_args.iter().cloned());
     Some(ImplicitRoute::Run(run_args))
@@ -197,7 +199,6 @@ fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
 async fn handle_implicit_run_command(
     trailing_args: Vec<String>,
     telemetry_sender: TelemetrySenderMutex,
-    disable_analytics: bool,
 ) -> Result<bool> {
     let Some(route) = classify_implicit_route(&trailing_args) else {
         return Ok(false);
@@ -205,9 +206,6 @@ async fn handle_implicit_run_command(
 
     // Re-parse the entire CLI with the run command included
     match route {
-        ImplicitRoute::DirectSkillInstall(skill_args) => {
-            commands::package_skill::handle_direct_install(&skill_args, &telemetry_sender).await
-        }
         ImplicitRoute::Run(full_args) => match Cli::try_parse_from(&full_args) {
             Ok(new_cli) => {
                 if let Some(Commands::Run(run_args)) = new_cli.command {
@@ -224,13 +222,7 @@ async fn handle_implicit_run_command(
             }
             Err(e) => {
                 if e.kind() == clap::error::ErrorKind::UnknownArgument {
-                    info!("Unknown argument, falling back to legacy codemod runner.");
-                    let mut trailing_args = trailing_args.clone();
-                    if disable_analytics {
-                        trailing_args.push("--no-telemetry".to_string());
-                    }
-                    commands::run::run_legacy_codemod_with_raw_args(&trailing_args).await?;
-                    return Ok(true);
+                    return Ok(false);
                 }
                 Ok(false)
             }
@@ -360,14 +352,13 @@ async fn main() -> Result<()> {
         Some(Commands::Mcp(args)) => {
             args.run().await?;
         }
+        Some(Commands::InternalInstallSkill(args)) => {
+            commands::package_skill::handle_internal_install_step(args, &telemetry_sender).await?;
+        }
         None => {
             // Try to parse as implicit run command
-            if !handle_implicit_run_command(
-                cli.trailing_args.clone(),
-                telemetry_sender.clone(),
-                cli.disable_analytics,
-            )
-            .await?
+            if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
+                .await?
             {
                 // No valid subcommand or package name provided, show help
                 print_ascii_art();
@@ -405,6 +396,49 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_run_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "run",
+            "@codemod/sample",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_workflow_run_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "workflow",
+            "run",
+            "--workflow",
+            "workflow.yaml",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_workflow_resume_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "workflow",
+            "resume",
+            "--workflow",
+            "workflow.yaml",
+            "--id",
+            "00000000-0000-0000-0000-000000000001",
+            "--trigger-all",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn classify_implicit_route_ignores_non_package_keyword() {
         let trailing_args = vec![
             "workflow".to_string(),
@@ -416,14 +450,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_implicit_route_prefers_direct_skill_mode_when_flag_present() {
-        let trailing_args = vec![
-            "jest-to-vitest".to_string(),
-            "--skill".to_string(),
-            "--project".to_string(),
-        ];
-        let route = classify_implicit_route(&trailing_args);
-        assert!(matches!(route, Some(ImplicitRoute::DirectSkillInstall(_))));
+    fn is_package_name_rejects_flag_like_values() {
+        assert!(!is_package_name("--skill"));
+        assert!(!is_package_name("--dry-run"));
     }
 
     #[test]
@@ -431,6 +460,18 @@ mod tests {
         let trailing_args = vec!["jest-to-vitest".to_string(), "--dry-run".to_string()];
         let route = classify_implicit_route(&trailing_args);
         assert!(matches!(route, Some(ImplicitRoute::Run(_))));
+    }
+
+    #[test]
+    fn parser_accepts_hidden_internal_install_skill_command() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "internal-install-skill",
+            "@codemod/example",
+            "--project",
+            "--no-interactive",
+        ]);
+        assert!(parse_result.is_ok());
     }
 
     #[test]
@@ -472,13 +513,6 @@ mod tests {
         let parse_result =
             Cli::try_parse_from(["codemod", "agent", "install", "--update-policy", "manual"]);
         assert!(parse_result.is_ok());
-    }
-
-    #[test]
-    fn parser_rejects_agent_install_with_periodic_policy_flag() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--periodic-policy", "manual"]);
-        assert!(parse_result.is_err());
     }
 
     #[test]
@@ -535,13 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_init_skill_project_type() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "init", "my-skill", "--project-type", "skill"]);
-        assert!(parse_result.is_err());
-    }
-
-    #[test]
     fn parser_accepts_init_with_skill_flag() {
         let parse_result = Cli::try_parse_from([
             "codemod",
@@ -566,18 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_agent_verify_skills() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "verify-skills"]);
-        assert!(parse_result.is_err());
-    }
-
-    #[test]
-    fn parser_rejects_agent_run() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "run", "migrate"]);
-        assert!(parse_result.is_err());
-    }
-
-    #[test]
     fn agent_help_lists_install_update_and_list_only() {
         let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
         let error = match parse_result {
@@ -590,8 +605,6 @@ mod tests {
         assert!(help_text.contains("install"));
         assert!(help_text.contains("update"));
         assert!(help_text.contains("list"));
-        assert!(!help_text.contains("verify-skills"));
-        assert!(!help_text.contains("run"));
     }
 
     #[test]
@@ -609,7 +622,6 @@ mod tests {
         assert!(help_text.contains("codex"));
         assert!(help_text.contains("antigravity"));
         assert!(help_text.contains("--no-interactive"));
-        assert!(!help_text.contains("--periodic-policy"));
         assert!(help_text.contains("--update-policy"));
         assert!(help_text.contains("--update-source"));
         assert!(help_text.contains("--require-signed-manifest"));

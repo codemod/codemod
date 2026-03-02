@@ -11,3 +11,4 @@ nodes:
         name: Install package skill
         install-skill:
           package: "{name}"
+          path: "{skill_path}"

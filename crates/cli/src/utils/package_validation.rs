@@ -1,7 +1,7 @@
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::skill_layout::{
-    expected_authored_skill_file, find_authored_skill_dir, AGENTS_SKILL_ROOT_RELATIVE_PATH,
-    SKILL_FILE_NAME,
+    expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
+    AGENTS_SKILL_ROOT_RELATIVE_PATH, SKILL_FILE_NAME,
 };
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::parse_workflow_file;
@@ -51,6 +51,12 @@ pub(crate) struct SkillValidationSummary {
     pub linked_reference_count: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredSkillFileCandidate {
+    pub path: PathBuf,
+    pub explicit: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct WorkflowBehaviorSummary {
     has_install_skill_steps: bool,
@@ -77,12 +83,18 @@ pub(crate) fn validate_package_behavior_structure(
     }
 
     let workflow_summary = workflow_behavior_summary_from_path(&workflow_path)?;
-    let has_skill_layout = find_authored_skill_dir(package_path, Some(&manifest.name)).is_some();
+    let authored_skill_candidate =
+        authored_skill_file_candidate(package_path, Some(manifest), &manifest.name)?;
+    let has_skill_layout = if authored_skill_candidate.explicit {
+        authored_skill_candidate.path.is_file()
+    } else {
+        find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
+    };
 
     if workflow_summary.has_install_skill_steps && !has_skill_layout {
         return Err(anyhow!(
             "Workflow contains `install-skill` step(s), but authored skill files are missing at {}.",
-            expected_authored_skill_file(package_path, &manifest.name).display()
+            authored_skill_candidate.path.display()
         ));
     }
 
@@ -141,14 +153,20 @@ pub(crate) fn validate_skill_behavior(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<SkillValidationSummary> {
-    let skill_dir =
-        find_authored_skill_dir(package_path, Some(&manifest.name)).ok_or_else(|| {
-            anyhow!(
-                "Skill behavior is missing. Expected authored skill at {}.",
-                expected_authored_skill_file(package_path, &manifest.name).display()
-            )
-        })?;
-    let skill_file_path = skill_dir.join(SKILL_FILE_NAME);
+    let authored_skill_candidate =
+        authored_skill_file_candidate(package_path, Some(manifest), &manifest.name)?;
+    let skill_file_path = if authored_skill_candidate.explicit {
+        authored_skill_candidate.path.clone()
+    } else {
+        let skill_dir =
+            find_authored_skill_dir(package_path, Some(&manifest.name)).ok_or_else(|| {
+                anyhow!(
+                    "Skill behavior is missing. Expected authored skill at {}.",
+                    authored_skill_candidate.path.display()
+                )
+            })?;
+        skill_dir.join(SKILL_FILE_NAME)
+    };
 
     if !skill_file_path.is_file() {
         return Err(anyhow!(
@@ -156,6 +174,13 @@ pub(crate) fn validate_skill_behavior(
             skill_file_path.display()
         ));
     }
+
+    let Some(skill_dir) = skill_file_path.parent().map(Path::to_path_buf) else {
+        return Err(anyhow!(
+            "Skill behavior path {} has no parent directory.",
+            skill_file_path.display()
+        ));
+    };
 
     let skill_content = fs::read_to_string(&skill_file_path).map_err(|error| {
         anyhow!(
@@ -215,6 +240,26 @@ pub(crate) fn validate_skill_behavior(
     })
 }
 
+pub(crate) fn authored_skill_file_candidate(
+    package_path: &Path,
+    manifest: Option<&CodemodManifest>,
+    package_name: &str,
+) -> Result<AuthoredSkillFileCandidate> {
+    if let Some(configured_file_path) =
+        configured_skill_file_from_workflow(package_path, manifest, package_name)?
+    {
+        return Ok(AuthoredSkillFileCandidate {
+            path: configured_file_path,
+            explicit: true,
+        });
+    }
+
+    Ok(AuthoredSkillFileCandidate {
+        path: expected_authored_skill_file(package_path, package_name),
+        explicit: false,
+    })
+}
+
 pub(crate) fn expected_workflow_path(package_path: &Path, manifest: &CodemodManifest) -> PathBuf {
     package_path.join(configured_workflow_path(manifest))
 }
@@ -233,6 +278,166 @@ fn workflow_behavior_summary(
     manifest: &CodemodManifest,
 ) -> Result<WorkflowBehaviorSummary> {
     workflow_behavior_summary_from_path_optional(&expected_workflow_path(package_path, manifest))
+}
+
+fn configured_skill_file_from_workflow(
+    package_path: &Path,
+    manifest: Option<&CodemodManifest>,
+    package_name: &str,
+) -> Result<Option<PathBuf>> {
+    let workflow_path = workflow_path_with_manifest_hint(package_path, manifest);
+    if !workflow_path.is_file() {
+        return Ok(None);
+    }
+
+    let workflow = parse_workflow_file(&workflow_path).map_err(|error| {
+        anyhow!(
+            "Failed to parse workflow file {}: {error}",
+            workflow_path.display()
+        )
+    })?;
+    let install_skill_steps = collect_install_skill_steps(&workflow);
+    let exact_matches = install_skill_steps
+        .iter()
+        .filter(|install_skill| {
+            exact_package_identifier_match(&install_skill.package, package_name)
+        })
+        .collect::<Vec<_>>();
+
+    if !exact_matches.is_empty() {
+        return configured_path_from_matching_steps(
+            package_path,
+            &workflow_path,
+            package_name,
+            &exact_matches,
+        );
+    }
+
+    Ok(None)
+}
+
+fn collect_install_skill_steps(
+    workflow: &Workflow,
+) -> Vec<butterflow_models::step::UseInstallSkill> {
+    let template_by_id = workflow
+        .templates
+        .iter()
+        .map(|template| (template.id.clone(), template))
+        .collect::<HashMap<_, _>>();
+
+    let mut install_skill_steps = Vec::new();
+    for node in &workflow.nodes {
+        for step in &node.steps {
+            collect_install_skill_steps_from_action(
+                &step.action,
+                &template_by_id,
+                &mut HashSet::new(),
+                &mut install_skill_steps,
+            );
+        }
+    }
+
+    install_skill_steps
+}
+
+fn collect_install_skill_steps_from_action(
+    action: &StepAction,
+    template_by_id: &HashMap<String, &butterflow_models::template::Template>,
+    visiting_templates: &mut HashSet<String>,
+    install_skill_steps: &mut Vec<butterflow_models::step::UseInstallSkill>,
+) {
+    match action {
+        StepAction::InstallSkill(install_skill) => {
+            install_skill_steps.push(install_skill.clone());
+        }
+        StepAction::UseTemplate(template_use) => {
+            let Some(template) = template_by_id.get(&template_use.template) else {
+                return;
+            };
+
+            if !visiting_templates.insert(template_use.template.clone()) {
+                return;
+            }
+
+            for step in &template.steps {
+                collect_install_skill_steps_from_action(
+                    &step.action,
+                    template_by_id,
+                    visiting_templates,
+                    install_skill_steps,
+                );
+            }
+            visiting_templates.remove(&template_use.template);
+        }
+        _ => {}
+    }
+}
+
+fn configured_path_from_matching_steps(
+    package_path: &Path,
+    workflow_path: &Path,
+    package_name: &str,
+    matching_steps: &[&butterflow_models::step::UseInstallSkill],
+) -> Result<Option<PathBuf>> {
+    let mut resolved_paths = HashSet::new();
+    for install_skill in matching_steps {
+        let Some(configured_path) = install_skill.path.as_deref() else {
+            continue;
+        };
+
+        let trimmed = configured_path.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!(
+                "Workflow file {} has an install-skill step with an empty `path` value for package `{}`.",
+                workflow_path.display(),
+                install_skill.package.trim()
+            ));
+        }
+        if Path::new(trimmed).is_absolute() {
+            return Err(anyhow!(
+                "Workflow file {} has an install-skill step with absolute `path` value `{}` for package `{}`. Use a package-relative path.",
+                workflow_path.display(),
+                trimmed,
+                install_skill.package.trim()
+            ));
+        }
+
+        let configured_skill_file_path = resolve_configured_skill_file_path(package_path, trimmed)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Workflow file {} has an install-skill step with invalid `path` value `{}` for package `{}`.",
+                    workflow_path.display(),
+                    trimmed,
+                    install_skill.package.trim()
+                )
+            })?;
+        resolved_paths.insert(configured_skill_file_path);
+    }
+
+    match resolved_paths.len() {
+        0 => Ok(None),
+        1 => Ok(resolved_paths.into_iter().next()),
+        _ => Err(anyhow!(
+            "Workflow file {} has conflicting install-skill `path` values for package `{}`. Ensure matching install-skill steps resolve to a single skill path.",
+            workflow_path.display(),
+            package_name
+        )),
+    }
+}
+
+fn exact_package_identifier_match(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
+fn workflow_path_with_manifest_hint(
+    package_path: &Path,
+    manifest: Option<&CodemodManifest>,
+) -> PathBuf {
+    if let Some(manifest) = manifest {
+        expected_workflow_path(package_path, manifest)
+    } else {
+        package_path.join(DEFAULT_WORKFLOW_FILE_NAME)
+    }
 }
 
 fn workflow_behavior_summary_from_path_optional(
@@ -436,10 +641,7 @@ mod tests {
         }
     }
 
-    fn write_valid_skill_bundle(package_path: &Path, skill_name: &str) {
-        let skill_dir = package_path
-            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
-            .join(skill_name);
+    fn write_valid_skill_bundle_to_dir(skill_dir: &Path) {
         fs::create_dir_all(skill_dir.join("references")).unwrap();
         fs::write(
             skill_dir.join(SKILL_FILE_NAME),
@@ -460,6 +662,13 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
         fs::write(skill_dir.join("references/usage.md"), "# Usage\n").unwrap();
+    }
+
+    fn write_valid_skill_bundle(package_path: &Path, skill_name: &str) {
+        let skill_dir = package_path
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join(skill_name);
+        write_valid_skill_bundle_to_dir(&skill_dir);
     }
 
     fn write_workflow(path: &Path, body: &str) {
@@ -493,6 +702,69 @@ codemod-skill-version: 0.1.0
 
         let error = validate_skill_behavior(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("links missing path"));
+    }
+
+    #[test]
+    fn validate_skill_behavior_supports_custom_install_skill_path() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("@codemod/example");
+        let custom_skill_dir = temp_dir.path().join("skills/agents/example");
+        write_valid_skill_bundle_to_dir(&custom_skill_dir);
+        write_workflow(
+            temp_dir.path(),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - name: install
+        install-skill:
+          package: "@codemod/example"
+          path: "./skills/agents/example/SKILL.md"
+"#,
+        );
+
+        validate_package_behavior_structure(temp_dir.path(), &manifest)
+            .expect("custom install-skill path should validate");
+        let validation = validate_skill_behavior(temp_dir.path(), &manifest)
+            .expect("skill validation should use custom path");
+        assert!(validation.skill_dir.ends_with("skills/agents/example"));
+    }
+
+    #[test]
+    fn authored_skill_file_candidate_prefers_exact_package_match() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("@codemod/example");
+        write_workflow(
+            temp_dir.path(),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - name: install-one
+        install-skill:
+          package: "@other/example"
+          path: "./skills/agents/other/SKILL.md"
+      - name: install-two
+        install-skill:
+          package: "@codemod/example"
+          path: "./skills/agents/exact/SKILL.md"
+"#,
+        );
+
+        let candidate =
+            authored_skill_file_candidate(temp_dir.path(), Some(&manifest), &manifest.name)
+                .expect("candidate should resolve");
+        assert!(candidate.explicit);
+        assert_eq!(
+            candidate.path,
+            temp_dir.path().join("skills/agents/exact/SKILL.md")
+        );
     }
 
     #[test]

@@ -24,6 +24,39 @@ pub(crate) fn expected_authored_skill_file(package_dir: &Path, package_name: &st
     expected_authored_skill_dir(package_dir, package_name).join(SKILL_FILE_NAME)
 }
 
+pub(crate) fn expected_authored_skill_relative_file(package_name: &str) -> String {
+    format!(
+        "./{}/{}/{}",
+        AGENTS_SKILL_ROOT_RELATIVE_PATH,
+        derive_skill_name_from_package_name(package_name),
+        SKILL_FILE_NAME
+    )
+}
+
+pub(crate) fn resolve_configured_skill_file_path(
+    package_dir: &Path,
+    configured_path: &str,
+) -> Option<PathBuf> {
+    let trimmed = configured_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let configured = PathBuf::from(trimmed);
+    let with_root = package_dir.join(&configured);
+    let is_directory_hint = trimmed.ends_with('/') || trimmed.ends_with('\\');
+    let explicit_skill_file = configured.file_name().is_some_and(|name| {
+        name.to_string_lossy().eq_ignore_ascii_case(SKILL_FILE_NAME)
+            || name.to_string_lossy().to_ascii_lowercase().ends_with(".md")
+    });
+
+    if is_directory_hint || !explicit_skill_file {
+        Some(with_root.join(SKILL_FILE_NAME))
+    } else {
+        Some(with_root)
+    }
+}
+
 pub(crate) fn find_authored_skill_dir(
     package_dir: &Path,
     package_name: Option<&str>,
@@ -123,5 +156,29 @@ mod tests {
 
         let found = find_authored_skill_dir(temp_dir.path(), None);
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn expected_authored_skill_relative_file_uses_conventional_layout() {
+        assert_eq!(
+            expected_authored_skill_relative_file("@codemod/example"),
+            "./agents/skill/example/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn resolve_configured_skill_file_path_accepts_explicit_file_path() {
+        let temp_dir = tempdir().unwrap();
+        let path = resolve_configured_skill_file_path(temp_dir.path(), "./custom/SKILL.md")
+            .expect("expected configured path");
+        assert_eq!(path, temp_dir.path().join("custom/SKILL.md"));
+    }
+
+    #[test]
+    fn resolve_configured_skill_file_path_supports_directory_path() {
+        let temp_dir = tempdir().unwrap();
+        let path = resolve_configured_skill_file_path(temp_dir.path(), "./custom")
+            .expect("expected configured path");
+        assert_eq!(path, temp_dir.path().join("custom").join(SKILL_FILE_NAME));
     }
 }

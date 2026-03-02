@@ -5,8 +5,8 @@
 ## Installation
 
 ```bash
-# Install this package skill into the current project harness context
-npx codemod@latest {name} --skill --project
+# Run this package and accept the skill-install prompt
+npx codemod@latest {name}
 ```
 
 ## Usage

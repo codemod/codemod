@@ -9,13 +9,13 @@ Use this file for AI-native orchestration patterns. For command syntax and full 
 - List installed MCS skills:
   - `codemod agent list --harness auto --format table`
 - Install a package-provided skill:
-  - `npx codemod <package-id> --skill --harness auto --project`
+  - `npx codemod <package-id>` and accept the install prompt
 
 ## Orchestration Flow
 
 1. Discover migration candidates with `references/core/search-and-discovery.md`.
 2. Execute dry-run and apply flow with `references/core/dry-run-and-verify.md`.
-3. Use `npx codemod <package-id> --skill` when the package exposes installable skill behavior (required for skill-only packages).
+3. Use `npx codemod <package-id>` and accept the install prompt when the package exposes installable skill behavior (required for skill-only packages).
 4. Use `references/core/troubleshooting.md` when harness or execution issues appear.
 
 ## Operational Defaults

@@ -102,6 +102,20 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                         step.name, node.id
                     )));
                 }
+                if let Some(path) = &install_skill.path {
+                    if path.trim().is_empty() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value",
+                            step.name, node.id
+                        )));
+                    }
+                    if Path::new(path.trim()).is_absolute() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value: absolute paths are not allowed",
+                            step.name, node.id
+                        )));
+                    }
+                }
             }
         }
     }
