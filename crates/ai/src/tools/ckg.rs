@@ -1,10 +1,8 @@
 //! Code Knowledge Graph tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::validate_absolute_path;
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::validate_absolute_path;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashMap;
@@ -364,8 +362,7 @@ impl CkgTool {
     }
 }
 
-#[async_trait]
-impl Tool for CkgTool {
+impl CkgTool {
     fn name(&self) -> &str {
         "ckg_tool"
     }
@@ -472,43 +469,6 @@ impl Tool for CkgTool {
                 ),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "Build knowledge graph from a directory".to_string(),
-                parameters: json!({
-                    "operation": "build",
-                    "path": "/project/src",
-                    "recursive": true
-                }),
-                expected_result: "Knowledge graph built successfully".to_string(),
-            },
-            ToolExample {
-                description: "Query symbols by name".to_string(),
-                parameters: json!({
-                    "operation": "query",
-                    "query": "main"
-                }),
-                expected_result: "List of symbols matching 'main'".to_string(),
-            },
-            ToolExample {
-                description: "Analyze a specific file".to_string(),
-                parameters: json!({
-                    "operation": "analyze",
-                    "path": "/project/src/main.rs"
-                }),
-                expected_result: "Detailed analysis of the file".to_string(),
-            },
-            ToolExample {
-                description: "Get codebase statistics".to_string(),
-                parameters: json!({
-                    "operation": "stats"
-                }),
-                expected_result: "Statistics about the codebase".to_string(),
-            },
-        ]
     }
 }
 
@@ -788,9 +748,4 @@ impl CkgTool {
     }
 }
 
-impl_tool_factory!(
-    CkgToolFactory,
-    CkgTool,
-    "ckg_tool",
-    "Code Knowledge Graph tool for analyzing and querying code structure"
-);
+crate::impl_rig_tooldyn!(CkgTool);

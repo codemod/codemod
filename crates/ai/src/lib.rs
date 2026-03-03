@@ -1,3 +1,3 @@
 pub mod execute;
-pub(crate) mod output;
+pub(crate) mod prompt;
 pub(crate) mod tools;

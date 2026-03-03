@@ -1,10 +1,8 @@
 //! JSON editing tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::validate_absolute_path;
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::validate_absolute_path;
 use jsonpath_rust::JsonPathQuery;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -19,8 +17,7 @@ impl JsonEditTool {
     }
 }
 
-#[async_trait]
-impl Tool for JsonEditTool {
+impl JsonEditTool {
     fn name(&self) -> &str {
         "json_edit_tool"
     }
@@ -121,57 +118,6 @@ impl Tool for JsonEditTool {
                 ),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "View entire JSON file".to_string(),
-                parameters: json!({
-                    "operation": "view",
-                    "file_path": "/project/config.json"
-                }),
-                expected_result: "JSON content displayed with formatting".to_string(),
-            },
-            ToolExample {
-                description: "View specific JSON path".to_string(),
-                parameters: json!({
-                    "operation": "view",
-                    "file_path": "/project/config.json",
-                    "json_path": "$.database.host"
-                }),
-                expected_result: "Value at specified path".to_string(),
-            },
-            ToolExample {
-                description: "Set a value in JSON".to_string(),
-                parameters: json!({
-                    "operation": "set",
-                    "file_path": "/project/config.json",
-                    "json_path": "$.database.port",
-                    "value": 5432
-                }),
-                expected_result: "Value updated successfully".to_string(),
-            },
-            ToolExample {
-                description: "Add new property to JSON object".to_string(),
-                parameters: json!({
-                    "operation": "add",
-                    "file_path": "/project/config.json",
-                    "json_path": "$.features.new_feature",
-                    "value": true
-                }),
-                expected_result: "New property added successfully".to_string(),
-            },
-            ToolExample {
-                description: "Remove property from JSON".to_string(),
-                parameters: json!({
-                    "operation": "remove",
-                    "file_path": "/project/config.json",
-                    "json_path": "$.deprecated_setting"
-                }),
-                expected_result: "Property removed successfully".to_string(),
-            },
-        ]
     }
 }
 
@@ -503,12 +449,7 @@ impl JsonEditTool {
     }
 }
 
-impl_tool_factory!(
-    JsonEditToolFactory,
-    JsonEditTool,
-    "json_edit_tool",
-    "Tool for editing JSON files with JSONPath expressions"
-);
+crate::impl_rig_tooldyn!(JsonEditTool);
 
 #[cfg(test)]
 mod tests {
@@ -540,7 +481,6 @@ mod tests {
             id: id.to_string(),
             name: "json_edit_tool".to_string(),
             parameters: params,
-            metadata: None,
         }
     }
 

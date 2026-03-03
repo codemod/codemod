@@ -1,13 +1,11 @@
 //! File editing tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::{
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::{
     check_file_exists, create_edit_snippet, expand_tabs, format_with_line_numbers, maybe_truncate,
     run_command, validate_absolute_path, validate_directory_operation,
 };
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
 use serde_json::json;
 use std::path::Path;
 
@@ -26,8 +24,7 @@ impl EditTool {
     }
 }
 
-#[async_trait]
-impl Tool for EditTool {
+impl EditTool {
     fn name(&self) -> &str {
         "str_replace_based_edit_tool"
     }
@@ -137,50 +134,6 @@ impl Tool for EditTool {
                 ),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "View a file".to_string(),
-                parameters: json!({"command": "view", "path": "/repo/src/main.rs"}),
-                expected_result: "File contents with line numbers".to_string(),
-            },
-            ToolExample {
-                description: "View a file with line range".to_string(),
-                parameters: json!({"command": "view", "path": "/repo/src/main.rs", "view_range": [10, 20]}),
-                expected_result: "File contents from line 10 to 20 with line numbers".to_string(),
-            },
-            ToolExample {
-                description: "Create a new file".to_string(),
-                parameters: json!({
-                    "command": "create",
-                    "path": "/repo/hello.txt",
-                    "file_text": "Hello, world!"
-                }),
-                expected_result: "File created successfully".to_string(),
-            },
-            ToolExample {
-                description: "Replace text in a file".to_string(),
-                parameters: json!({
-                    "command": "str_replace",
-                    "path": "/repo/src/main.rs",
-                    "old_str": "println!(\"Hello, world!\");",
-                    "new_str": "println!(\"Hello, Rust!\");"
-                }),
-                expected_result: "Text replaced with snippet showing changes".to_string(),
-            },
-            ToolExample {
-                description: "Insert text after a specific line".to_string(),
-                parameters: json!({
-                    "command": "insert",
-                    "path": "/repo/src/main.rs",
-                    "insert_line": 5,
-                    "new_str": "    // This is a new comment"
-                }),
-                expected_result: "Text inserted with snippet showing changes".to_string(),
-            },
-        ]
     }
 }
 
@@ -452,9 +405,4 @@ impl Default for EditTool {
     }
 }
 
-impl_tool_factory!(
-    EditToolFactory,
-    EditTool,
-    "str_replace_based_edit_tool",
-    "Edit files by viewing, creating, or replacing text content"
-);
+crate::impl_rig_tooldyn!(EditTool);

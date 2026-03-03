@@ -1,10 +1,8 @@
 //! Cross-platform shell execution tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::maybe_truncate;
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::maybe_truncate;
 use serde_json::json;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -178,7 +176,6 @@ impl ShellSession {
             .into());
         }
 
-        let _error_code = 0;
         let (sentinel_before, sentinel_after) = self
             .config
             .sentinel
@@ -263,7 +260,7 @@ impl ShellSession {
                 }
             }
 
-            Ok::<(i32, String, String), coro_core::error::Error>((
+            Ok::<(i32, String, String), crate::tools::core::Error>((
                 error_code,
                 output,
                 String::new(),
@@ -307,8 +304,7 @@ impl BashTool {
     }
 }
 
-#[async_trait]
-impl Tool for BashTool {
+impl BashTool {
     fn name(&self) -> &str {
         "bash"
     }
@@ -462,66 +458,6 @@ impl Tool for BashTool {
             )),
         }
     }
-
-    fn requires_confirmation(&self) -> bool {
-        true // Bash commands can be dangerous
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        if cfg!(target_os = "windows") {
-            vec![
-                ToolExample {
-                    description: "List files in current directory (safe, fast)".to_string(),
-                    parameters: json!({"command": "dir"}),
-                    expected_result: "Directory listing with file details".to_string(),
-                },
-                ToolExample {
-                    description: "List only directories to understand structure".to_string(),
-                    parameters: json!({"command": "dir /ad"}),
-                    expected_result: "Directory listing showing only subdirectories".to_string(),
-                },
-                ToolExample {
-                    description: "Search specific file types (safer than full recursive)"
-                        .to_string(),
-                    parameters: json!({"command": "dir *.rs /s"}),
-                    expected_result: "Recursive listing of .rs files only".to_string(),
-                },
-                ToolExample {
-                    description: "Check disk space and system info".to_string(),
-                    parameters: json!({"command": "dir | findstr bytes"}),
-                    expected_result: "Summary line showing total files and bytes".to_string(),
-                },
-                ToolExample {
-                    description: "Safe way to explore large projects".to_string(),
-                    parameters: json!({"command": "dir /ad | findstr /v /i \"target node_modules .git\""}),
-                    expected_result: "Directory listing excluding common large folders".to_string(),
-                },
-            ]
-        } else {
-            vec![
-                ToolExample {
-                    description: "List files in current directory (Unix)".to_string(),
-                    parameters: json!({"command": "ls -la"}),
-                    expected_result: "Directory listing with file details".to_string(),
-                },
-                ToolExample {
-                    description: "Check Bash version".to_string(),
-                    parameters: json!({"command": "bash --version"}),
-                    expected_result: "Bash version information".to_string(),
-                },
-                ToolExample {
-                    description: "Restart shell session".to_string(),
-                    parameters: json!({"command": "echo 'restarting'", "restart": true}),
-                    expected_result: "Session restarted message".to_string(),
-                },
-                ToolExample {
-                    description: "Run a command with persistent state".to_string(),
-                    parameters: json!({"command": "export MY_VAR=hello && echo $MY_VAR"}),
-                    expected_result: "Variable set and echoed in persistent session".to_string(),
-                },
-            ]
-        }
-    }
 }
 
 impl Default for BashTool {
@@ -530,13 +466,4 @@ impl Default for BashTool {
     }
 }
 
-impl_tool_factory!(
-    BashToolFactory,
-    BashTool,
-    "bash",
-    if cfg!(target_os = "windows") {
-        "Execute Windows commands using cmd.exe"
-    } else {
-        "Execute bash commands on Unix-like systems"
-    }
-);
+crate::impl_rig_tooldyn!(BashTool);
