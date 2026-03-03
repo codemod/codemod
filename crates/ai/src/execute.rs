@@ -1,8 +1,23 @@
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::{Arc, RwLock};
 
-use rig::completion::Prompt;
+use rig::client::embeddings::EmbeddingsClient;
+use rig::completion::{Message, Prompt, PromptError, Usage};
 use thiserror::Error;
 
+use crate::memory::controller::{
+    compact_history_for_retry, is_context_limit_error_text, is_proactive_cancel_reason,
+    maybe_proactive_budget, proactive_cancel_reason, CompactionResult, CompactionStats,
+    MemoryTrigger, TokenUsageSnapshot,
+};
+use crate::memory::history::estimate_context_chars;
+use crate::memory::policy::{
+    DYNAMIC_CONTEXT_SAMPLE_DOCS, MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET,
+    SOFT_CONTEXT_TOKEN_BUDGET,
+};
+use crate::memory::semantic::{build_dynamic_context_index, DynamicContextIndex, SemanticDocument};
 use crate::prompt::{build_system_context, build_system_prompt_with_context, build_user_message};
 use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tools};
 
@@ -85,12 +100,64 @@ impl LlmProtocol {
 }
 
 #[derive(Debug, Clone, Default)]
-struct TaskDoneTerminationHook;
+struct TokenBudgetTracker {
+    snapshot: Arc<RwLock<Option<TokenUsageSnapshot>>>,
+}
 
-impl<M> rig::agent::PromptHook<M> for TaskDoneTerminationHook
+impl TokenBudgetTracker {
+    fn snapshot(&self) -> Option<TokenUsageSnapshot> {
+        self.snapshot
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+    }
+
+    fn update(&self, usage: Usage, prompt: &Message, history: &[Message]) {
+        if usage.total_tokens == 0 {
+            return;
+        }
+
+        let context_chars = estimate_context_chars(prompt, history);
+        if context_chars == 0 {
+            return;
+        }
+
+        if let Ok(mut guard) = self.snapshot.write() {
+            *guard = Some(TokenUsageSnapshot {
+                total_tokens: usage.total_tokens,
+                context_chars,
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct TaskDoneAndMemoryHook {
+    budget_tracker: TokenBudgetTracker,
+}
+
+impl<M> rig::agent::PromptHook<M> for TaskDoneAndMemoryHook
 where
     M: rig::completion::CompletionModel,
 {
+    fn on_completion_call(
+        &self,
+        prompt: &Message,
+        history: &[Message],
+    ) -> impl std::future::Future<Output = rig::agent::HookAction> + rig::wasm_compat::WasmCompatSend
+    {
+        let budget = self.budget_tracker.snapshot();
+        let proactive = maybe_proactive_budget(prompt, history, budget.as_ref());
+
+        async move {
+            if let Some((chars, estimated_tokens)) = proactive {
+                rig::agent::HookAction::terminate(proactive_cancel_reason(chars, estimated_tokens))
+            } else {
+                rig::agent::HookAction::cont()
+            }
+        }
+    }
+
     fn on_tool_result(
         &self,
         tool_name: &str,
@@ -137,64 +204,368 @@ fn build_preamble(config: &NormalizedAiExecutionConfig, available_tools: &[Strin
     )
 }
 
-fn handle_prompt_response(
-    result: Result<String, rig::completion::PromptError>,
-) -> Result<String, ExecuteAiStepError> {
-    match result {
-        Ok(text) => Ok(text),
-        Err(rig::completion::PromptError::PromptCancelled { reason, .. }) => reason
-            .strip_prefix(TASK_DONE_REASON_PREFIX)
-            .map(std::string::ToString::to_string)
-            .ok_or(ExecuteAiStepError::Execution(reason)),
-        Err(error) => Err(ExecuteAiStepError::Execution(error.to_string())),
-    }
+fn task_done_output(reason: &str) -> Option<String> {
+    reason
+        .strip_prefix(TASK_DONE_REASON_PREFIX)
+        .map(std::string::ToString::to_string)
 }
 
-async fn prompt_with_client<C>(
+fn build_memory_exhaustion_error(
+    attempts: usize,
+    stats: Option<&CompactionStats>,
+) -> ExecuteAiStepError {
+    let details = if let Some(stats) = stats {
+        format!(
+            "attempts={}, trigger={:?}, before_chars={}, after_chars={}, archived_docs={}, retrieved_docs={}, soft_char_budget={}, soft_token_budget={}",
+            attempts,
+            stats.trigger,
+            stats.before_chars,
+            stats.after_chars,
+            stats.archived_docs,
+            stats.retrieved_docs,
+            SOFT_CONTEXT_CHAR_BUDGET,
+            SOFT_CONTEXT_TOKEN_BUDGET
+        )
+    } else {
+        format!(
+            "attempts={}, soft_char_budget={}, soft_token_budget={}",
+            attempts, SOFT_CONTEXT_CHAR_BUDGET, SOFT_CONTEXT_TOKEN_BUDGET
+        )
+    };
+
+    ExecuteAiStepError::Execution(format!(
+        "Memory exhaustion: unable to compact context within limit. {details}"
+    ))
+}
+
+async fn compact_and_retry<C>(
+    client: &C,
+    config: &NormalizedAiExecutionConfig,
+    prompt_message: &Message,
+    source_history: &[Message],
+    compaction_attempts: usize,
+    last_compaction_stats: Option<&CompactionStats>,
+    trigger: MemoryTrigger,
+) -> Result<CompactionResult, ExecuteAiStepError>
+where
+    C: rig::client::CompletionClient,
+{
+    if compaction_attempts >= MAX_COMPACTION_ATTEMPTS {
+        return Err(build_memory_exhaustion_error(
+            compaction_attempts,
+            last_compaction_stats,
+        ));
+    }
+
+    compact_history_for_retry(
+        client,
+        &config.model,
+        &config.prompt,
+        prompt_message,
+        source_history,
+        compaction_attempts,
+        trigger,
+    )
+    .await
+    .map_err(|e| {
+        ExecuteAiStepError::Execution(format!("Failed to compact memory for retry: {}", e))
+    })
+}
+
+fn apply_compaction_result(
+    compaction: CompactionResult,
+    chat_history: &mut Vec<Message>,
+    semantic_docs: &mut Vec<SemanticDocument>,
+    last_compaction_stats: &mut Option<CompactionStats>,
+    compaction_attempts: &mut usize,
+) {
+    let CompactionResult {
+        history,
+        stats,
+        retrieval_docs,
+    } = compaction;
+
+    tracing::info!(
+        "AI memory compaction applied: attempt={}, trigger={:?}, before_chars={}, after_chars={}, archived_docs={}, retrieved_docs={}",
+        stats.attempt,
+        stats.trigger,
+        stats.before_chars,
+        stats.after_chars,
+        stats.archived_docs,
+        stats.retrieved_docs
+    );
+
+    *chat_history = history;
+    *semantic_docs = retrieval_docs;
+    *last_compaction_stats = Some(stats);
+    *compaction_attempts += 1;
+}
+
+type DynamicIndexBuilderFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<DynamicContextIndex>, ExecuteAiStepError>> + 'a>>;
+
+async fn run_prompt_loop_with_client<C, B>(
     client: &C,
     config: &NormalizedAiExecutionConfig,
     preamble: &str,
     task_message: &str,
+    mut build_dynamic_index: B,
 ) -> Result<String, ExecuteAiStepError>
 where
     C: rig::client::CompletionClient,
+    C::CompletionModel: 'static,
+    B: for<'a> FnMut(&'a C, &'a [SemanticDocument]) -> DynamicIndexBuilderFuture<'a>,
 {
     let tool_server_handle = resolve_tool_server_handle(&config.tools).await?;
-    let agent = client
-        .agent(config.model.clone())
-        .max_tokens(200_000)
-        .temperature(0.7)
-        .preamble(preamble)
-        .hook(TaskDoneTerminationHook)
-        .tool_server_handle(tool_server_handle)
-        .build();
+    let prompt_message = Message::user(task_message.to_string());
+    let mut chat_history: Vec<Message> = Vec::new();
+    let mut compaction_attempts = 0usize;
+    let mut last_compaction_stats: Option<CompactionStats> = None;
+    let mut semantic_docs: Vec<SemanticDocument> = Vec::new();
+    let budget_tracker = TokenBudgetTracker::default();
 
-    let result = agent
-        .prompt(task_message.to_string())
-        .max_turns(config.max_steps)
-        .with_tool_concurrency(1)
-        .await;
+    loop {
+        let dynamic_context_index = match build_dynamic_index(client, &semantic_docs).await {
+            Ok(index) => index,
+            Err(error) => {
+                tracing::warn!(
+                    "Skipping dynamic context index for this attempt due to index build failure: {}",
+                    error
+                );
+                None
+            }
+        };
 
-    handle_prompt_response(result)
+        let mut agent_builder = client
+            .agent(config.model.clone())
+            .max_tokens(200_000)
+            .temperature(0.7)
+            .preamble(preamble)
+            .hook(TaskDoneAndMemoryHook {
+                budget_tracker: budget_tracker.clone(),
+            });
+
+        if let Some(index) = dynamic_context_index {
+            agent_builder = agent_builder.dynamic_context(DYNAMIC_CONTEXT_SAMPLE_DOCS, index);
+        }
+
+        let agent = agent_builder
+            .tool_server_handle(tool_server_handle.clone())
+            .build();
+
+        let response = agent
+            .prompt(prompt_message.clone())
+            .with_history(&mut chat_history)
+            .with_tool_concurrency(1)
+            .extended_details()
+            .max_turns(config.max_steps)
+            .await;
+
+        match response {
+            Ok(final_response) => {
+                budget_tracker.update(final_response.total_usage, &prompt_message, &chat_history);
+                return Ok(final_response.output.to_string());
+            }
+            Err(PromptError::PromptCancelled {
+                chat_history: cancelled_history,
+                reason,
+            }) => {
+                if let Some(output) = task_done_output(&reason) {
+                    return Ok(output);
+                }
+
+                let trigger = if is_proactive_cancel_reason(&reason) {
+                    Some(MemoryTrigger::Proactive)
+                } else if is_context_limit_error_text(&reason) {
+                    Some(MemoryTrigger::ReactiveProviderError)
+                } else {
+                    None
+                };
+
+                if let Some(trigger) = trigger {
+                    let compaction = compact_and_retry(
+                        client,
+                        config,
+                        &prompt_message,
+                        cancelled_history.as_ref(),
+                        compaction_attempts,
+                        last_compaction_stats.as_ref(),
+                        trigger,
+                    )
+                    .await?;
+                    apply_compaction_result(
+                        compaction,
+                        &mut chat_history,
+                        &mut semantic_docs,
+                        &mut last_compaction_stats,
+                        &mut compaction_attempts,
+                    );
+                    continue;
+                }
+
+                return Err(ExecuteAiStepError::Execution(reason));
+            }
+            Err(error) => {
+                let error_message = error.to_string();
+                if is_context_limit_error_text(&error_message) {
+                    let compaction = compact_and_retry(
+                        client,
+                        config,
+                        &prompt_message,
+                        &chat_history,
+                        compaction_attempts,
+                        last_compaction_stats.as_ref(),
+                        MemoryTrigger::ReactiveProviderError,
+                    )
+                    .await?;
+                    apply_compaction_result(
+                        compaction,
+                        &mut chat_history,
+                        &mut semantic_docs,
+                        &mut last_compaction_stats,
+                        &mut compaction_attempts,
+                    );
+                    continue;
+                }
+
+                return Err(ExecuteAiStepError::Execution(error_message));
+            }
+        }
+    }
 }
 
 fn as_execution_error(error: impl std::fmt::Display) -> ExecuteAiStepError {
     ExecuteAiStepError::Execution(error.to_string())
 }
 
-async fn build_client_and_prompt<C, E, F>(
+trait ApiKeyBaseUrlClient: rig::client::CompletionClient {
+    fn build_from_config(
+        config: &NormalizedAiExecutionConfig,
+    ) -> std::result::Result<Self, rig::http_client::Error>
+    where
+        Self: Sized;
+}
+
+impl ApiKeyBaseUrlClient for rig::providers::openai::Client {
+    fn build_from_config(
+        config: &NormalizedAiExecutionConfig,
+    ) -> std::result::Result<Self, rig::http_client::Error> {
+        Self::builder()
+            .api_key(config.api_key.clone())
+            .base_url(config.endpoint.clone())
+            .build()
+    }
+}
+
+impl ApiKeyBaseUrlClient for rig::providers::anthropic::Client {
+    fn build_from_config(
+        config: &NormalizedAiExecutionConfig,
+    ) -> std::result::Result<Self, rig::http_client::Error> {
+        Self::builder()
+            .api_key(config.api_key.clone())
+            .base_url(config.endpoint.clone())
+            .build()
+    }
+}
+
+impl ApiKeyBaseUrlClient for rig::providers::gemini::Client {
+    fn build_from_config(
+        config: &NormalizedAiExecutionConfig,
+    ) -> std::result::Result<Self, rig::http_client::Error> {
+        Self::builder()
+            .api_key(config.api_key.clone())
+            .base_url(config.endpoint.clone())
+            .build()
+    }
+}
+
+fn build_no_dynamic_index<'a, C>(
+    _client: &'a C,
+    _docs: &'a [SemanticDocument],
+) -> DynamicIndexBuilderFuture<'a>
+where
+    C: rig::client::CompletionClient,
+{
+    Box::pin(async { Ok(None) })
+}
+
+fn build_semantic_index<'a, C>(
+    client: &'a C,
+    embedding_model: &'static str,
+    docs: &'a [SemanticDocument],
+) -> DynamicIndexBuilderFuture<'a>
+where
+    C: EmbeddingsClient,
+    C::EmbeddingModel: Clone + 'static,
+{
+    Box::pin(async move {
+        build_dynamic_context_index(client, embedding_model, docs)
+            .await
+            .map_err(|e| {
+                ExecuteAiStepError::Execution(format!(
+                    "Failed to build semantic memory index: {}",
+                    e
+                ))
+            })
+    })
+}
+
+async fn build_client_and_run<C, E, F, B>(
     build_client: F,
+    config: &NormalizedAiExecutionConfig,
+    preamble: &str,
+    task_message: &str,
+    build_dynamic_index: B,
+) -> Result<String, ExecuteAiStepError>
+where
+    C: rig::client::CompletionClient,
+    C::CompletionModel: 'static,
+    E: std::fmt::Display,
+    F: FnOnce() -> Result<C, E>,
+    B: for<'a> FnMut(&'a C, &'a [SemanticDocument]) -> DynamicIndexBuilderFuture<'a>,
+{
+    let client = build_client().map_err(as_execution_error)?;
+    run_prompt_loop_with_client(&client, config, preamble, task_message, build_dynamic_index).await
+}
+
+async fn run_plain_base_url_client<C>(
     config: &NormalizedAiExecutionConfig,
     preamble: &str,
     task_message: &str,
 ) -> Result<String, ExecuteAiStepError>
 where
-    C: rig::client::CompletionClient,
-    E: std::fmt::Display,
-    F: FnOnce() -> Result<C, E>,
+    C: ApiKeyBaseUrlClient,
+    C::CompletionModel: 'static,
 {
-    let client = build_client().map_err(as_execution_error)?;
-    prompt_with_client(&client, config, preamble, task_message).await
+    build_client_and_run(
+        || C::build_from_config(config),
+        config,
+        preamble,
+        task_message,
+        build_no_dynamic_index,
+    )
+    .await
+}
+
+async fn run_semantic_base_url_client<C>(
+    config: &NormalizedAiExecutionConfig,
+    preamble: &str,
+    task_message: &str,
+    embedding_model: &'static str,
+) -> Result<String, ExecuteAiStepError>
+where
+    C: ApiKeyBaseUrlClient + EmbeddingsClient,
+    C::CompletionModel: 'static,
+    C::EmbeddingModel: Clone + 'static,
+{
+    build_client_and_run(
+        || C::build_from_config(config),
+        config,
+        preamble,
+        task_message,
+        move |client, docs| build_semantic_index(client, embedding_model, docs),
+    )
+    .await
 }
 
 async fn run_with_provider(
@@ -206,49 +577,28 @@ async fn run_with_provider(
 
     match &config.llm_protocol {
         LlmProtocol::OpenAICompat => {
-            build_client_and_prompt(
-                || -> Result<openai::Client, rig::http_client::Error> {
-                    openai::Client::builder()
-                        .api_key(config.api_key.clone())
-                        .base_url(config.endpoint.clone())
-                        .build()
-                },
+            run_semantic_base_url_client::<openai::Client>(
                 config,
                 preamble,
                 task_message,
+                openai::TEXT_EMBEDDING_3_SMALL,
             )
             .await
         }
         LlmProtocol::Anthropic => {
-            build_client_and_prompt(
-                || -> Result<anthropic::Client, rig::http_client::Error> {
-                    anthropic::Client::builder()
-                        .api_key(config.api_key.clone())
-                        .base_url(config.endpoint.clone())
-                        .build()
-                },
-                config,
-                preamble,
-                task_message,
-            )
-            .await
+            run_plain_base_url_client::<anthropic::Client>(config, preamble, task_message).await
         }
         LlmProtocol::GoogleAi => {
-            build_client_and_prompt(
-                || -> Result<gemini::Client, rig::http_client::Error> {
-                    gemini::Client::builder()
-                        .api_key(config.api_key.clone())
-                        .base_url(config.endpoint.clone())
-                        .build()
-                },
+            run_semantic_base_url_client::<gemini::Client>(
                 config,
                 preamble,
                 task_message,
+                gemini::EMBEDDING_004,
             )
             .await
         }
         LlmProtocol::AzureOpenAi => {
-            build_client_and_prompt(
+            build_client_and_run(
                 || -> Result<azure::Client, rig::http_client::Error> {
                     azure::Client::builder()
                         .api_key(azure::AzureOpenAIAuth::ApiKey(config.api_key.clone()))
@@ -258,6 +608,9 @@ async fn run_with_provider(
                 config,
                 preamble,
                 task_message,
+                move |client, docs| {
+                    build_semantic_index(client, azure::TEXT_EMBEDDING_3_SMALL, docs)
+                },
             )
             .await
         }
@@ -267,6 +620,7 @@ async fn run_with_provider(
         ))),
     }
 }
+
 pub async fn execute_ai_step(
     config: ExecuteAiStepConfig,
 ) -> Result<ExecuteAiStepResult, ExecuteAiStepError> {
@@ -347,29 +701,14 @@ mod tests {
     }
 
     #[test]
-    fn test_task_done_prompt_cancelled_maps_to_success_response() {
-        let result = handle_prompt_response(Err(rig::completion::PromptError::PromptCancelled {
-            chat_history: Box::new(Vec::new()),
-            reason: format!("{TASK_DONE_REASON_PREFIX}Summary: done"),
-        }))
-        .unwrap();
-
-        assert_eq!(result, "Summary: done");
+    fn test_task_done_reason_mapping() {
+        let reason = format!("{TASK_DONE_REASON_PREFIX}Summary: done");
+        assert_eq!(task_done_output(&reason), Some("Summary: done".to_string()));
     }
 
     #[test]
-    fn test_non_task_done_prompt_cancelled_maps_to_error() {
-        let error = handle_prompt_response(Err(rig::completion::PromptError::PromptCancelled {
-            chat_history: Box::new(Vec::new()),
-            reason: "cancelled for another reason".to_string(),
-        }))
-        .unwrap_err();
-
-        assert!(matches!(error, ExecuteAiStepError::Execution(_)));
-        assert_eq!(
-            error.to_string(),
-            "AI execution failed: cancelled for another reason"
-        );
+    fn test_non_task_done_reason_not_mapped() {
+        assert_eq!(task_done_output("cancelled for another reason"), None);
     }
 
     #[tokio::test]
