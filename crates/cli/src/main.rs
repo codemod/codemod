@@ -11,6 +11,7 @@ mod dirty_git_check;
 mod engine;
 mod progress_bar;
 mod report_server;
+#[cfg(unix)]
 mod tui;
 mod utils;
 mod workflow_runner;
@@ -118,6 +119,7 @@ enum WorkflowCommands {
     Cancel(commands::workflow::cancel::Command),
 
     /// Browse workflow runs in an interactive TUI
+    #[cfg(unix)]
     Tui(commands::workflow::tui::Command),
 }
 
@@ -287,6 +289,7 @@ async fn main() -> Result<()> {
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
             }
+            #[cfg(unix)]
             WorkflowCommands::Tui(args) => {
                 commands::workflow::tui::handler(args).await?;
             }

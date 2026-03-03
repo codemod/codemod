@@ -16,9 +16,9 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
-use crate::workflow_runner::{
-    resolve_workflow_source, run_workflow, run_workflow_with_tui, workflow_has_manual_nodes,
-};
+use crate::workflow_runner::{resolve_workflow_source, run_workflow};
+#[cfg(unix)]
+use crate::workflow_runner::{run_workflow_with_tui, workflow_has_manual_nodes};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -137,9 +137,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Set the workflow name so it's stored on the WorkflowRun for TUI display
     engine.set_name(Some(args.workflow.clone()));
 
-    // Check if workflow has manual nodes and should launch TUI
-    let workflow = butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
-    let use_tui = !args.no_interactive && workflow_has_manual_nodes(&workflow);
+    // Check if workflow has manual nodes and should launch TUI (Unix only)
+    #[cfg(unix)]
+    let use_tui = {
+        let workflow =
+            butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
+        !args.no_interactive && workflow_has_manual_nodes(&workflow)
+    };
+    #[cfg(not(unix))]
+    let use_tui = false;
 
     if use_tui {
         config.quiet = true;
@@ -148,11 +154,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     // Run workflow -- with TUI if manual nodes, otherwise text-based
+    #[cfg(unix)]
     let (_, seconds) = if use_tui {
         run_workflow_with_tui(&engine, config).await?
     } else {
         run_workflow(&engine, config).await?
     };
+    #[cfg(not(unix))]
+    let (_, seconds) = run_workflow(&engine, config).await?;
 
     let duration_ms = started.elapsed().as_millis() as f64;
 

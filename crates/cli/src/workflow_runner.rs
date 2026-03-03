@@ -181,6 +181,7 @@ pub fn workflow_has_manual_nodes(workflow: &Workflow) -> bool {
 }
 
 /// Run a workflow and then launch the TUI for interactive monitoring
+#[cfg(unix)]
 pub async fn run_workflow_with_tui(
     engine: &Engine,
     config: WorkflowRunConfig,
