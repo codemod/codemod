@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
+use crate::ai_handoff::{detect_parent_coding_agent, DetectionConfidence};
 use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
@@ -131,6 +132,34 @@ pub struct CapabilitiesData {
 }
 
 impl Engine {
+    fn emit_ai_instructions(
+        &self,
+        logger: &StructuredLogger,
+        system_prompt: Option<&str>,
+        resolved_prompt: &str,
+    ) {
+        if logger.is_jsonl() {
+            logger.log("info", "[AI INSTRUCTIONS]");
+            if let Some(system_prompt) = system_prompt {
+                logger.log("info", system_prompt);
+            }
+            logger.log("info", resolved_prompt);
+            logger.log("info", "[/AI INSTRUCTIONS]");
+        } else {
+            println!();
+            println!("[AI INSTRUCTIONS]");
+            println!();
+            if let Some(system_prompt) = system_prompt {
+                println!("{system_prompt}");
+                println!();
+            }
+            println!("{resolved_prompt}");
+            println!();
+            println!("[/AI INSTRUCTIONS]");
+            println!();
+        }
+    }
+
     /// Create a new engine with a local state adapter
     pub fn new() -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
@@ -2207,6 +2236,37 @@ impl Engine {
             resolved_prompt
         );
 
+        let handoff_detection = detect_parent_coding_agent();
+        let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
+        slog!(
+            logger,
+            info,
+            "AI handoff detection confidence={} agent={} reasons={}",
+            handoff_detection.confidence.as_str(),
+            detected_agent,
+            handoff_detection.reasons.join(" | ")
+        );
+
+        if handoff_detection.confidence == DetectionConfidence::Detected {
+            self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
+            slog!(
+                logger,
+                info,
+                "AI handoff mode=handoff confidence={} agent={}",
+                handoff_detection.confidence.as_str(),
+                detected_agent
+            );
+            return Ok(());
+        }
+
+        slog!(
+            logger,
+            info,
+            "AI handoff mode=rig confidence={} agent={}",
+            handoff_detection.confidence.as_str(),
+            detected_agent
+        );
+
         // Configure LLM settings - check for API key from config or environment
         let api_key = match ai_config
             .api_key
@@ -2216,26 +2276,11 @@ impl Engine {
             Some(key) => key,
             None => {
                 // No API key - surface instructions for coding agents and skip the step
-                if logger.is_jsonl() {
-                    logger.log("info", "[AI INSTRUCTIONS]");
-                    if let Some(system_prompt) = &ai_config.system_prompt {
-                        logger.log("info", system_prompt);
-                    }
-                    logger.log("info", &resolved_prompt);
-                    logger.log("info", "[/AI INSTRUCTIONS]");
-                } else {
-                    println!();
-                    println!("[AI INSTRUCTIONS]");
-                    println!();
-                    if let Some(system_prompt) = &ai_config.system_prompt {
-                        println!("{system_prompt}");
-                        println!();
-                    }
-                    println!("{resolved_prompt}");
-                    println!();
-                    println!("[/AI INSTRUCTIONS]");
-                    println!();
-                }
+                self.emit_ai_instructions(
+                    logger,
+                    ai_config.system_prompt.as_deref(),
+                    &resolved_prompt,
+                );
 
                 slog!(
                     logger,

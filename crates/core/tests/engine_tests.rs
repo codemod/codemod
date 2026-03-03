@@ -37,6 +37,15 @@ impl EnvVarGuard {
             original,
         }
     }
+
+    fn set(key: &str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
 }
 
 impl Drop for EnvVarGuard {
@@ -1519,6 +1528,64 @@ async fn test_ai_step_no_api_key_fallback_allows_following_steps() {
         "Step after AI should execute even when AI step is skipped due to missing key"
     );
 
+    drop(api_key_guard);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_ai_step_detected_agent_handoff_skips_rig_with_api_key() {
+    let api_key_guard = EnvVarGuard::set("LLM_API_KEY", "test-key");
+    let provider_guard = EnvVarGuard::set("LLM_PROVIDER", "openai");
+    let base_url_guard = EnvVarGuard::set("LLM_BASE_URL", "http://127.0.0.1:1");
+    let marker_one_guard = EnvVarGuard::set("CODEX_SESSION_ID", "test-session");
+    let marker_two_guard = EnvVarGuard::set("CODEX_SANDBOX", "1");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_ai_no_key_fallback_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let mut completion_logs: Option<String> = None;
+    for _ in 0..50 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let Some(ai_task) = tasks.iter().find(|t| t.node_id == "ai-fallback-node") else {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            continue;
+        };
+
+        if ai_task.status == TaskStatus::Completed {
+            completion_logs = Some(ai_task.logs.join("\n"));
+            break;
+        }
+
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::Failed,
+            "AI step should hand off instructions and avoid Rig call when coding-agent context is detected"
+        );
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::WontDo,
+            "AI handoff path should keep the node running to completion"
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    let log_output = completion_logs.expect("AI handoff node did not complete within 5 seconds");
+    assert!(
+        log_output.contains("AFTER_AI_STEP_EXECUTED"),
+        "Step after AI should execute when handoff mode skips Rig"
+    );
+
+    drop(marker_two_guard);
+    drop(marker_one_guard);
+    drop(base_url_guard);
+    drop(provider_guard);
     drop(api_key_guard);
 }
 
