@@ -166,6 +166,8 @@ fn create_test_run(workflow: Workflow) -> WorkflowRun {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     }
 }
 
@@ -615,9 +617,8 @@ async fn test_calculate_matrix_task_changes_resets_failed_tasks_on_state_change(
     // Should NOT mark any tasks as WontDo (all hashes still exist)
     assert_eq!(changes.tasks_to_mark_wont_do.len(), 0);
 
-    // Should reset task_b (Failed) to Pending so it can be re-run
-    assert_eq!(changes.tasks_to_reset_to_pending.len(), 1);
-    assert_eq!(changes.tasks_to_reset_to_pending[0], task_b.id);
+    // Failed tasks should NOT be auto-reset — user must explicitly retry
+    assert_eq!(changes.tasks_to_reset_to_pending.len(), 0);
 
     // Should update the master task
     assert_eq!(changes.master_tasks_to_update.len(), 1);

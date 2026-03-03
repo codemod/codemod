@@ -325,7 +325,7 @@ impl Scheduler {
     ) -> Result<MatrixTaskChanges> {
         let mut new_tasks = Vec::new();
         let mut tasks_to_mark_wont_do = Vec::new();
-        let mut tasks_to_reset_to_pending = Vec::new();
+        let tasks_to_reset_to_pending = Vec::new();
         let mut master_tasks_to_update = Vec::new();
 
         for node in &workflow_run.workflow.nodes {
@@ -445,22 +445,9 @@ impl Scheduler {
                     }
                 }
 
-                // --- Identify Tasks to Reset to Pending ---
-                // When state changes (this function is called), existing tasks that are
-                // still valid (hash matches) but are in Failed state should be reset to
-                // Pending.
-                for (task_hash, task) in &existing_child_tasks_by_hash {
-                    if current_item_hashes.contains(task_hash) {
-                        // Task hash still matches current state - task is still valid
-                        if task.status == TaskStatus::Failed {
-                            debug!(
-                                "Need to reset task {} (hash: {}, matrix_values: {:?}) for node '{}' from Failed to Pending",
-                                task.id, task_hash, task.matrix_values, node.id
-                            );
-                            tasks_to_reset_to_pending.push(task.id);
-                        }
-                    }
-                }
+                // Note: we intentionally do NOT reset Failed tasks to Pending here.
+                // If a task failed, the user should explicitly retry it via the TUI or CLI.
+                // Recompilation only creates new tasks and marks removed ones as WontDo.
 
                 // --- Identify Tasks to Mark as WontDo ---
                 for (task_hash, task) in &existing_child_tasks_by_hash {

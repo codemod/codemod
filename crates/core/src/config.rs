@@ -51,6 +51,10 @@ pub struct WorkflowRunConfig {
     pub dry_run_callback: Option<DryRunCallback>,
     /// Output format for structured logging (Text or Jsonl)
     pub output_format: OutputFormat,
+    /// Human-readable name for this workflow run
+    pub name: Option<String>,
+    /// Suppress stdout/stderr output (used when TUI is active)
+    pub quiet: bool,
 }
 
 impl Default for WorkflowRunConfig {
@@ -70,6 +74,8 @@ impl Default for WorkflowRunConfig {
             no_interactive: false,
             dry_run_callback: None,
             output_format: OutputFormat::Text,
+            name: None,
+            quiet: false,
         }
     }
 }

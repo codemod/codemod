@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use butterflow_core::config::WorkflowRunConfig;
 use butterflow_core::engine::Engine;
 use butterflow_core::utils;
+use butterflow_models::node::NodeType;
+use butterflow_models::trigger::TriggerType;
+use butterflow_models::workflow::Workflow;
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
 use log::{error, info};
 use std::path::PathBuf;
@@ -162,4 +165,50 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             source
         ))
     }
+}
+
+/// Check if a workflow has any nodes that require manual triggering.
+/// A node is manual if its type is `Manual`, or if it has a `trigger` with
+/// type `Manual`.
+pub fn workflow_has_manual_nodes(workflow: &Workflow) -> bool {
+    workflow.nodes.iter().any(|n| {
+        n.r#type == NodeType::Manual
+            || n.trigger
+                .as_ref()
+                .map(|t| t.r#type == TriggerType::Manual)
+                .unwrap_or(false)
+    })
+}
+
+/// Run a workflow and then launch the TUI for interactive monitoring
+pub async fn run_workflow_with_tui(
+    engine: &Engine,
+    config: WorkflowRunConfig,
+) -> Result<(String, f64)> {
+    // Parse workflow file
+    let workflow = utils::parse_workflow_file(engine.get_workflow_file_path()).context(format!(
+        "Failed to parse workflow file: {}",
+        engine.get_workflow_file_path().display()
+    ))?;
+
+    let started = std::time::Instant::now();
+
+    // Run workflow
+    let workflow_run_id = engine
+        .run_workflow(
+            workflow,
+            config.params,
+            Some(config.bundle_path),
+            config.capabilities.as_ref(),
+        )
+        .await
+        .context("Failed to run workflow")?;
+
+    // Launch TUI in task list mode for this run
+    crate::tui::run_tui_for_run(engine.clone(), workflow_run_id).await?;
+
+    let seconds = started.elapsed().as_millis() as f64 / 1000.0;
+    println!("✨ Done in {seconds:.3}s");
+
+    Ok((workflow_run_id.to_string(), seconds))
 }

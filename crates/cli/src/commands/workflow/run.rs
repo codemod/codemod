@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::resolve_capabilities::{
+    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{Context, Result};
 use butterflow_core::diff::FileDiff;
@@ -14,7 +16,9 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
-use crate::workflow_runner::{resolve_workflow_source, run_workflow};
+use crate::workflow_runner::{
+    resolve_workflow_source, run_workflow, run_workflow_with_tui, workflow_has_manual_nodes,
+};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -86,6 +90,20 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(workflow_dir.to_path_buf()),
     );
 
+    // Build set of capabilities explicitly granted via CLI flags (skip prompting for these)
+    let mut cli_granted = std::collections::HashSet::new();
+    if args.allow_fs {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
+    }
+
+    let capabilities = prompt_capabilities(capabilities, &cli_granted, args.no_interactive);
+
     let target_path = args
         .target_path
         .clone()
@@ -101,54 +119,78 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    let (engine, config) = create_engine(
+    let (mut engine, mut config) = create_engine(
         workflow_file_path,
         target_path.clone(),
         args.dry_run,
         args.allow_dirty,
         params,
         None,
-        Some(capabilities),
+        Some(capabilities.clone()),
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
         output_format,
+        Some(capabilities),
     )?;
 
-    // Run workflow using the extracted workflow runner
-    let (_, seconds) = run_workflow(&engine, config).await?;
+    // Set the workflow name so it's stored on the WorkflowRun for TUI display
+    engine.set_name(Some(args.workflow.clone()));
+
+    // Check if workflow has manual nodes and should launch TUI
+    let workflow = butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
+    let use_tui = !args.no_interactive && workflow_has_manual_nodes(&workflow);
+
+    if use_tui {
+        config.quiet = true;
+        config.progress_callback = Arc::new(None);
+        engine.set_quiet(true);
+    }
+
+    // Run workflow -- with TUI if manual nodes, otherwise text-based
+    let (_, seconds) = if use_tui {
+        run_workflow_with_tui(&engine, config).await?
+    } else {
+        run_workflow(&engine, config).await?
+    };
 
     let duration_ms = started.elapsed().as_millis() as f64;
 
     let metrics_data = engine.metrics_context.get_all();
 
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
-        let collected_diffs = diff_collector
-            .map(|c| c.lock().unwrap().clone())
-            .unwrap_or_default();
+    if !use_tui {
+        if crate::utils::metrics::should_show_report(
+            args.report,
+            args.no_interactive,
+            &metrics_data,
+        ) {
+            let collected_diffs = diff_collector
+                .map(|c| c.lock().unwrap().clone())
+                .unwrap_or_default();
 
-        let stats = engine.execution_stats.clone();
-        let files_modified = stats.files_modified.load(Ordering::Relaxed);
-        let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
-        let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+            let stats = engine.execution_stats.clone();
+            let files_modified = stats.files_modified.load(Ordering::Relaxed);
+            let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
+            let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
-        let report = ExecutionReport::build(
-            args.workflow.clone(),
-            None,
-            duration_ms,
-            args.dry_run,
-            target_path.display().to_string(),
-            CLI_VERSION.to_string(),
-            files_modified,
-            files_unmodified,
-            files_with_errors,
-            convert_metrics(&metrics_data),
-            convert_diffs(&collected_diffs, &target_path.display().to_string()),
-        );
+            let report = ExecutionReport::build(
+                args.workflow.clone(),
+                None,
+                duration_ms,
+                args.dry_run,
+                target_path.display().to_string(),
+                CLI_VERSION.to_string(),
+                files_modified,
+                files_unmodified,
+                files_with_errors,
+                convert_metrics(&metrics_data),
+                convert_diffs(&collected_diffs, &target_path.display().to_string()),
+            );
 
-        crate::report_server::serve_report(report).await?;
-    } else {
-        crate::utils::metrics::print_metrics(&metrics_data);
+            crate::report_server::serve_report(report).await?;
+        } else {
+            crate::utils::metrics::print_metrics(&metrics_data);
+        }
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
