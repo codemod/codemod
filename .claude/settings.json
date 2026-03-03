@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}

@@ -3,242 +3,343 @@ title: "Quickstart"
 sidebarTitle: "Quickstart"
 ---
 
-This guide takes you from zero to a published codemod. Each step includes just enough to get started, with links to deeper documentation.
+This guide walks you through creating, testing, and publishing a codemod from scratch. You'll scaffold a project, build a multi-step workflow using Codemod MCP in your IDE, and publish it to the registry.
 
-## Building codemods
+## 1. Scaffold your project
 
-Codemods can be built using:
-- **MCP** — AI-assisted creation in your IDE (recommended for getting started)
-- **CLI** — Scaffold and build locally with `npx codemod init`
-- **Studio** — Web-based prototyping with live runner and AST viewer
+Run the interactive scaffolder to create a new codemod package:
 
-Once you have a codemod package, validation, running, and publishing work the same way regardless of how you built it.
+```bash
+npx codemod@latest init
+```
 
-<Tabs>
-  <Tab title="MCP (AI-assisted)">
-    <Steps>
-      <Step title="Generate a codemod">
-        Make sure you have [MCP installed](/model-context-protocol#quick-setup), then ask your AI assistant to create a codemod. Be specific about what you want to transform:
+You'll be prompted for a codemod type (JSSG or multi-step workflow), target language, project name, and other details.
 
-        ````
-        Create a jssg codemod that converts all console.log statements to console.info in TypeScript files. 
+<Tip>
+  `codemod init` can also set up a **monorepo** to host multiple codemods with shared GitHub Actions for automated publishing. See [CLI reference](/cli#codemod-init) for all available options.
+</Tip>
 
-        The codemod should:
-        - Target .ts and .tsx files
-        - Only transform console.log calls (not console.error, console.warn, etc.)
-        - Preserve all arguments and formatting
-        - Include test cases for the transformation
-        ````
+## 2. Install Codemod MCP
 
-        <Card title="MCP best practices" icon="lightbulb" href="/model-context-protocol#best-practices">
-          Tips for writing effective prompts and getting the most out of your AI assistant.
-        </Card>
+Codemod MCP gives your AI assistant tools for AST analysis, codemod creation, and testing, directly in your IDE.
 
-        You'll get a complete package structure:
+Add the following to your IDE's MCP configuration:
 
-        <Tree>
-          <Tree.Folder name="my-codemod" defaultOpen>
-            <Tree.File name="README.md" />
-            <Tree.File name="codemod.yaml" />
-            <Tree.File name="workflow.yaml" />
-            <Tree.Folder name="scripts" defaultOpen>
-              <Tree.File name="codemod.ts" />
-            </Tree.Folder>
-            <Tree.Folder name="tests" defaultOpen>
-              <Tree.Folder name="fixtures" defaultOpen>
-                <Tree.File name="input.tsx" />
-                <Tree.File name="expected.tsx" />
-              </Tree.Folder>
-            </Tree.Folder>
-          </Tree.Folder>
-        </Tree>
+```json
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}
+```
 
-        For more on package structure, see [Package Structure](/package-structure).
+## 3. Build your codemod
 
-        **Need the live runner or AST viewer?** If you need tools like the live runner, AST viewer, or shareable links, you can bring your codemod into [Codemod Studio](/platform/codemod-studio) and continue development there.
-      </Step>
+With MCP installed, ask your AI assistant to create a codemod. Be specific about the transformation you need:
 
-      <Step title="Validate your codemod">
-        Run tests to ensure your codemod works correctly:
+<Prompt
+  description="Extract React components from inside other components to module scope to prevent re-creation on render."
+  icon="react"
+  iconType="solid"
+  actions={["copy", "cursor"]}
+>
+Build a codemod to move React components defined inside other components
+to module scope to fix re-creation on every render.
+</Prompt>
 
-        ```bash
-        npx codemod jssg test ./scripts/codemod.ts --language tsx
-        ```
+<Card title="Prompting tips" icon="lightbulb" href="/model-context-protocol#best-practices">
+  Tips for writing effective prompts and getting the most out of MCP.
+</Card>
 
-        For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
-      </Step>
+The AI will use MCP tools to analyze your code, generate the transform script, and set up the package. You'll get a complete [Codemod package](/package-structure):
 
-      <Step title="Run your codemod">
-        Run your codemod on a target codebase:
+<Tree>
+  <Tree.Folder name="my-codemod" defaultOpen>
+    <Tree.File name="codemod.yaml" />
+    <Tree.File name="workflow.yaml" />
+    <Tree.Folder name="scripts" defaultOpen>
+      <Tree.File name="codemod.ts" />
+    </Tree.Folder>
+    <Tree.Folder name="tests" defaultOpen>
+      <Tree.Folder name="fixtures" defaultOpen>
+        <Tree.File name="input.tsx" />
+        <Tree.File name="expected.tsx" />
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
 
-        ```bash
-        npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
-        ```
+<CodeGroup>
 
-        For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
-      </Step>
+```yaml codemod.yaml expandable
+schema_version: "1.0"
 
-      <Step title="Publish your codemod">
-        Share your codemod with your team or the community:
+name: "extract-inner-components"
+version: "0.1.0"
+description: "Move React components defined inside other components to module scope"
+author: "Your Name <you@example.com>"
+license: "MIT"
+workflow: "workflow.yaml"
 
-        ```bash
-        npx codemod login
-        npx codemod publish
-        ```
+targets:
+  languages: ["tsx"]
 
-        Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
+keywords: ["react", "performance", "components"]
 
-        For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
-      </Step>
-    </Steps>
-  </Tab>
+registry:
+  access: "public"
+  visibility: "public"
 
-  <Tab title="CLI (Manual)">
-    <Steps>
-      <Step title="Scaffold a new codemod">
-        ```bash
-        npx codemod init
-        ```
+capabilities: []
+```
 
-        You'll be prompted for:
-        - **Codemod type**: JSSG (most use cases) or multi-step workflow
-        - **Target language**: JavaScript/TypeScript, Python, etc.
-        - **Project details**: name, description, author, license
-        - **Package options**: manager (npm/pnpm/yarn), private/public, monorepo structure
-        - **CI setup**: optionally generate GitHub Actions workflow for publishing
+```yaml workflow.yaml expandable
+# yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
 
-        This creates a complete package structure:
+version: "1"
 
-        <Tree>
-          <Tree.Folder name="my-codemod" defaultOpen>
-            <Tree.File name="README.md" />
-            <Tree.File name="codemod.yaml" />
-            <Tree.File name="workflow.yaml" />
-            <Tree.Folder name="scripts" defaultOpen>
-              <Tree.File name="codemod.ts" />
-            </Tree.Folder>
-            <Tree.Folder name="tests" defaultOpen>
-              <Tree.Folder name="fixtures" defaultOpen>
-                <Tree.File name="input.tsx" />
-                <Tree.File name="expected.tsx" />
-              </Tree.Folder>
-            </Tree.Folder>
-          </Tree.Folder>
-        </Tree>
+params:
+  schema:
+    run_ai_step:
+      name: "Run AI step"
+      description: "Enable AI-powered fixups for edge cases"
+      type: string
+      default: "false"
 
-        For more on package structure, see [package structure](/package-structure).
-      </Step>
+nodes:
+  - id: extract-inner-components
+    name: Extract inner React components to module scope
+    type: automatic
+    steps:
+      - name: "Move inner components to module scope"
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+          language: "tsx"
 
-      <Step title="Write your transform">
-        Edit `scripts/codemod.ts` to define your transformation logic. Here's a simple example that converts `console.log` to `logger.log`:
+      - name: "AI fixups for complex cases"
+        if: params.run_ai_step == "true"
+        ai:
+          prompt: |
+            The previous AST step extracted inner React components to module scope.
+            Some cases could not be handled deterministically. Scan for remaining
+            components defined inside other components and fix them:
 
-        ```ts scripts/codemod.ts
-        import type { Transform } from "codemod:ast-grep";
-        import type TSX from "codemod:ast-grep/langs/tsx";
+            1. If the inner component closes over parent state or props, convert those
+               to explicit props on the extracted component and update the call site.
+            2. If the inner component uses generics from the parent, lift the type
+               parameters to the extracted component's signature.
+            3. Add a TODO comment for any case you cannot safely transform.
 
-        const transform: Transform<TSX> = (root) => {
-          const rootNode = root.root();
-          const consoleCalls = rootNode.findAll({
-            rule: { pattern: "console.log($$$ARGS)" },
-          });
+            Only modify files that still contain inner component definitions.
+```
 
-          if (consoleCalls.length === 0) return null;
+```ts scripts/codemod.ts expandable
+import type { Transform, Edit } from "codemod:ast-grep";
+import type { SgNode } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
 
-          const edits = consoleCalls.map((node) => {
-            const args = node.getMultipleMatches("ARGS")
-              .map(arg => arg.text())
-              .join(", ");
-            return node.replace(`logger.log(${args})`);
-          });
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
 
-          return rootNode.commitEdits(edits);
-        };
+  // Find function components defined inside other function components.
+  // A component is a function_declaration whose name starts with uppercase,
+  // nested inside another function_declaration's statement_block.
+  const innerFuncComponents = rootNode.findAll({
+    rule: {
+      kind: "function_declaration",
+      has: {
+        field: "name",
+        kind: "identifier",
+        regex: "^[A-Z]",
+      },
+      inside: {
+        kind: "statement_block",
+        inside: {
+          kind: "function_declaration",
+          has: {
+            field: "name",
+            kind: "identifier",
+            regex: "^[A-Z]",
+          },
+        },
+      },
+    },
+  });
 
-        export default transform;
-        ```
+  // Find arrow function components: `const Foo = (...) => { ... }`
+  const innerArrowComponents = rootNode.findAll({
+    rule: {
+      kind: "lexical_declaration",
+      has: {
+        kind: "variable_declarator",
+        has: {
+          field: "name",
+          kind: "identifier",
+          regex: "^[A-Z]",
+        },
+      },
+      inside: {
+        kind: "statement_block",
+        inside: {
+          kind: "function_declaration",
+          has: {
+            field: "name",
+            kind: "identifier",
+            regex: "^[A-Z]",
+          },
+        },
+      },
+    },
+  });
 
-        For the full JSSG API, see [JSSG Quickstart](/jssg/quickstart).
-      </Step>
+  if (innerFuncComponents.length === 0 && innerArrowComponents.length === 0) {
+    return null;
+  }
 
-      <Step title="Test your codemod">
-        Run tests to ensure your codemod works correctly:
+  const allInner = [...innerFuncComponents, ...innerArrowComponents];
 
-        ```bash
-        npx codemod jssg test ./scripts/codemod.ts --language tsx
-        ```
+  // Group by parent component
+  const parentMap = new Map<
+    number,
+    { parent: SgNode<TSX>; children: SgNode<TSX>[] }
+  >();
 
-        For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
-      </Step>
+  for (const inner of allInner) {
+    const ancestors = inner.ancestors();
+    const parentComponent = ancestors.find(
+      (a) =>
+        a.kind() === "function_declaration" &&
+        a.field("name")?.matches({ rule: { regex: "^[A-Z]" } }),
+    );
+    if (!parentComponent) continue;
 
-      <Step title="Run on a target codebase">
-        ```bash
-        npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
-        ```
+    const parentId = parentComponent.id();
+    if (!parentMap.has(parentId)) {
+      parentMap.set(parentId, { parent: parentComponent, children: [] });
+    }
+    parentMap.get(parentId)!.children.push(inner);
+  }
 
-        For all CLI options and running from the registry, see [CLI reference](/cli#codemod-workflow).
-      </Step>
+  for (const { parent, children } of parentMap.values()) {
+    const extractedParts: string[] = [];
 
-      <Step title="Publish your codemod">
-        Share your codemod with your team or the community:
+    for (const child of children) {
+      extractedParts.push(child.text());
 
-        ```bash
-        npx codemod login
-        npx codemod publish
-        ```
+      // Remove the inner component from its original location
+      edits.push({
+        startPos: child.range().start.index,
+        endPos: child.range().end.index,
+        insertedText: "",
+      });
+    }
 
-        Your codemod is now in the [Codemod Registry](https://app.codemod.com/registry) and runnable via `npx codemod @codemod-name`.
+    // Insert extracted components before the parent function.
+    // If the parent is wrapped in an export_statement, insert before that instead.
+    const parentParent = parent.parent();
+    const insertTarget =
+      parentParent && parentParent.kind() === "export_statement"
+        ? parentParent
+        : parent;
 
-        For CI/CD automation and more publishing features, see [Publishing guide](/publishing).
-      </Step>
-    </Steps>
-  </Tab>
-  <Tab title="Studio (Web)">
-    <Steps>
-      <Step title="Open Codemod Studio">
-        Go to [Codemod Studio](https://app.codemod.com/studio) and sign in with your GitHub account.
-      </Step>
+    const insertText = extractedParts.join("\n\n") + "\n\n";
+    edits.push({
+      startPos: insertTarget.range().start.index,
+      endPos: insertTarget.range().start.index,
+      insertedText: insertText,
+    });
+  }
 
-      <Step title="Build your transform">
-        Use the visual interface to:
-        - Write and test patterns in the **live runner**
-        - Explore the **AST viewer** to understand code structure
-        - Iterate with instant feedback on sample inputs
+  return rootNode.commitEdits(edits);
+};
 
-        For a detailed walkthrough, see [Codemod Studio docs](/platform/codemod-studio).
-      </Step>
+export default transform;
+```
 
-      <Step title="Export your codemod">
-        Once your transform works, click **Export** to download a complete package structure ready for local use or publishing.
-      </Step>
+</CodeGroup>
 
-      <Step title="Publish your codemod">
-        Share your codemod with your team or the community using Codemod Studio's built-in [share](/platform/codemod-studio#sharing-codemods) feature.
-      </Step>
-    </Steps>
-  </Tab>
-</Tabs>
+## 4. Validate and test
 
----
+Validate the workflow schema:
 
-## Getting help
+```bash
+npx codemod@latest workflow validate -w workflow.yaml
+```
+
+Run tests against your input/expected fixtures:
+
+```bash
+npx codemod jssg test ./scripts/codemod.ts --language tsx
+```
+
+Tests use input/expected file pairs in the `tests/` directory. If MCP generated test fixtures, they will run automatically.
+
+For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
+
+## 5. Run your codemod
+
+Run your codemod on a target codebase:
+
+```bash
+npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+```
+
+<Tip>
+  **AI-powered steps**: If your workflow includes an AI step gated by a parameter, enable it at runtime:
+
+  ```bash
+  LLM_API_KEY=your-key npx codemod workflow run -w ./my-codemod/ -t /path/to/project --param run_ai_step=true
+  ```
+
+  Set `LLM_API_KEY` as an environment variable for your chosen provider. See [Workflow Reference — AI steps](/workflows/reference#ai-step) for provider configuration.
+</Tip>
+
+For all CLI options, see [CLI reference](/cli#codemod-workflow).
+
+## 6. Publish
+
+Share your codemod with your team or the community:
+
+```bash
+npx codemod login
+npx codemod publish
+```
+
+Your codemod is now in the [Codemod Registry](https://go.codemod.com/registry) and runnable by anyone via `npx codemod @your-scope/codemod-name`.
+
+For CI/CD automation, trusted publishers, and API keys, see the [Publishing guide](/publishing).
+
+## Next steps
+
+### Scale your migrations
+
+Your migration experience does not stop here. When you're managing migrations across large codebases or multiple teams, the same codemod package can power [Campaigns](/platform/campaigns) for automated multi-repo rollouts and [Insights](/platform/insights) for tracking adoption progress.
+
+See the [Platform quickstart](/platform/quickstart) for the full enterprise workflow.
+
+### Getting help
 
 <CardGroup cols={2}>
   <Card title="Join the community" icon="slack" href="https://go.codemod.com/community">
-    Ask questions, get help, and connect with other framework maintainers on Slack.
+    Ask questions, get help, and connect with other codemod users on Slack.
   </Card>
   <Card title="Book a call" icon="calendar" href="https://cal.com/alexbit">
     Schedule a demo or get hands-on help from the Codemod team.
   </Card>
 </CardGroup>
 
-## Next steps
+### Learn more
 
 <CardGroup cols={2}>
-  <Card title="CLI" icon="terminal" href="/cli">
-    Learn more about Codemod CLI.
+  <Card title="CLI reference" icon="terminal" href="/cli">
+    Full CLI command reference.
   </Card>
-  <Card title="Workflows" icon="diagram-project" href="/workflows/reference">
-    Orchestrate complex multi-step migrations.
+  <Card title="Workflow reference" icon="diagram-project" href="/workflows/reference">
+    Complete workflow.yaml specification.
   </Card>
   <Card title="JSSG" icon="js" href="/jssg/quickstart">
     Learn the transformation engine in depth.
