@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.5.4] - 2026-02-26
+
+### 🚀 Features
+
+- *(cli)* Add output format option for structured logging support
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.5.4 (#2000)
+- 
 ## [codemod-cli@1.5.3] - 2026-02-26
 
 ### 🚀 Features
