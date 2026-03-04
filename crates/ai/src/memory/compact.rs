@@ -6,7 +6,8 @@ use rig::completion::message::UserContent;
 use rig::completion::{AssistantContent, Message};
 
 use crate::memory::history::{
-    clip_chars, estimate_context_chars, extract_history_documents, HistoryDocument,
+    clip_chars, estimate_context_chars, extract_history_documents, extract_message_text,
+    HistoryDocument,
 };
 use crate::memory::policy::{
     MAX_SNIPPET_CHARS_PER_DOC, RECENT_MESSAGE_WINDOW, SOFT_CONTEXT_CHAR_BUDGET,
@@ -124,6 +125,23 @@ fn sanitize_tool_order(messages: Vec<Message>) -> Vec<Message> {
     rebuilt
 }
 
+fn normalize_compacted_history_to_text(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .filter_map(|message| {
+            let text = extract_message_text(&message);
+            if text.trim().is_empty() {
+                return None;
+            }
+
+            Some(match message {
+                Message::User { .. } => Message::user(text),
+                Message::Assistant { .. } => Message::assistant(text),
+            })
+        })
+        .collect()
+}
+
 pub fn deterministic_prune(history: &[Message], prompt: &Message, attempt: usize) -> PruneResult {
     if history.is_empty() {
         return PruneResult {
@@ -188,7 +206,9 @@ pub fn rebuild_history_with_memory(
     prompt: &Message,
 ) -> (Vec<Message>, RebuildStats) {
     if prune.archived_documents.is_empty() || memory_packet.is_none() {
-        let rebuilt = sanitize_tool_order(prune.retained_history.clone());
+        let rebuilt = normalize_compacted_history_to_text(sanitize_tool_order(
+            prune.retained_history.clone(),
+        ));
         return (
             rebuilt.clone(),
             RebuildStats {
@@ -202,7 +222,7 @@ pub fn rebuild_history_with_memory(
     let mut rebuilt = Vec::with_capacity(prune.retained_history.len() + 1);
     rebuilt.push(packet);
     rebuilt.extend_from_slice(&prune.retained_history);
-    rebuilt = sanitize_tool_order(rebuilt);
+    rebuilt = normalize_compacted_history_to_text(sanitize_tool_order(rebuilt));
 
     let rebuilt_chars = estimate_context_chars(prompt, &rebuilt);
     (
@@ -325,5 +345,32 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!rebuilt_text.contains("[tool_result:call-2]"));
+    }
+
+    #[test]
+    fn test_rebuild_normalizes_paired_tool_call_result_to_text_messages() {
+        let prune = PruneResult {
+            retained_history: vec![
+                assistant_tool_call_message("call-1", "read_file"),
+                Message::tool_result("call-1", "file content"),
+            ],
+            archived_documents: Vec::new(),
+            context_chars_before: 100,
+        };
+        let prompt = Message::user("task");
+        let packet = build_memory_packet("summary", &[]);
+        let (rebuilt, _) = rebuild_history_with_memory(&prune, Some(packet), &prompt);
+
+        assert_eq!(rebuilt.len(), 2);
+        assert!(matches!(rebuilt[0], Message::Assistant { .. }));
+        assert!(matches!(rebuilt[1], Message::User { .. }));
+
+        let rebuilt_text = rebuilt
+            .iter()
+            .map(extract_message_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rebuilt_text.contains("[tool_call:call-1]"));
+        assert!(rebuilt_text.contains("[tool_result:call-1]"));
     }
 }

@@ -2342,10 +2342,10 @@ impl Engine {
         progress_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         let mut elapsed_seconds = 0u64;
 
-        let output = loop {
+        let ai_result = loop {
             tokio::select! {
                 result = &mut ai_future => {
-                    break result.map_err(|e| Error::StepExecution(e.to_string()))?;
+                    break result;
                 }
                 _ = progress_interval.tick() => {
                     elapsed_seconds += 20;
@@ -2358,6 +2358,47 @@ impl Engine {
                 }
             }
         };
+
+        let output = match ai_result {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(diagnostics) = error.memory_exhaustion_diagnostics() {
+                    let trigger = diagnostics.trigger.as_deref().unwrap_or("unknown");
+                    let before_chars = diagnostics.before_chars.unwrap_or(0);
+                    let after_chars = diagnostics.after_chars.unwrap_or(0);
+                    let archived_docs = diagnostics.archived_docs.unwrap_or(0);
+                    let retrieved_docs = diagnostics.retrieved_docs.unwrap_or(0);
+                    slog!(
+                        logger,
+                        info,
+                        "AI memory exhaustion: attempts={} trigger={} before_chars={} after_chars={} archived_docs={} retrieved_docs={} soft_char_budget={} soft_token_budget={}",
+                        diagnostics.attempts,
+                        trigger,
+                        before_chars,
+                        after_chars,
+                        archived_docs,
+                        retrieved_docs,
+                        diagnostics.soft_char_budget,
+                        diagnostics.soft_token_budget
+                    );
+                }
+                return Err(Error::StepExecution(error.to_string()));
+            }
+        };
+
+        for event in &output.compaction_events {
+            slog!(
+                logger,
+                info,
+                "AI memory compaction applied: attempt={} trigger={} before_chars={} after_chars={} archived_docs={} retrieved_docs={}",
+                event.attempt,
+                event.trigger,
+                event.before_chars,
+                event.after_chars,
+                event.archived_docs,
+                event.retrieved_docs
+            );
+        }
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");

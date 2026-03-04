@@ -39,12 +39,98 @@ pub struct ExecuteAiStepConfig {
 #[derive(Debug, Clone, Default)]
 pub struct ExecuteAiStepResult {
     pub data: Option<serde_json::Value>,
+    pub compaction_events: Vec<CompactionEventDiagnostics>,
 }
 
 #[derive(Debug, Error)]
 pub enum ExecuteAiStepError {
     #[error("AI execution failed: {0}")]
     Execution(String),
+    #[error("AI execution failed: Memory exhaustion: unable to compact context within limit. {diagnostics}")]
+    MemoryExhaustion {
+        diagnostics: MemoryExhaustionDiagnostics,
+    },
+}
+
+impl ExecuteAiStepError {
+    pub fn memory_exhaustion_diagnostics(&self) -> Option<&MemoryExhaustionDiagnostics> {
+        match self {
+            Self::MemoryExhaustion { diagnostics } => Some(diagnostics),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionEventDiagnostics {
+    pub attempt: usize,
+    pub trigger: String,
+    pub before_chars: usize,
+    pub after_chars: usize,
+    pub archived_docs: usize,
+    pub retrieved_docs: usize,
+}
+
+impl CompactionEventDiagnostics {
+    fn from_stats(stats: &CompactionStats) -> Self {
+        Self {
+            attempt: stats.attempt,
+            trigger: format!("{:?}", stats.trigger),
+            before_chars: stats.before_chars,
+            after_chars: stats.after_chars,
+            archived_docs: stats.archived_docs,
+            retrieved_docs: stats.retrieved_docs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryExhaustionDiagnostics {
+    pub attempts: usize,
+    pub trigger: Option<String>,
+    pub before_chars: Option<usize>,
+    pub after_chars: Option<usize>,
+    pub archived_docs: Option<usize>,
+    pub retrieved_docs: Option<usize>,
+    pub soft_char_budget: usize,
+    pub soft_token_budget: u64,
+}
+
+impl std::fmt::Display for MemoryExhaustionDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let (
+            Some(trigger),
+            Some(before_chars),
+            Some(after_chars),
+            Some(archived_docs),
+            Some(retrieved_docs),
+        ) = (
+            &self.trigger,
+            self.before_chars,
+            self.after_chars,
+            self.archived_docs,
+            self.retrieved_docs,
+        ) {
+            return write!(
+                f,
+                "attempts={}, trigger={}, before_chars={}, after_chars={}, archived_docs={}, retrieved_docs={}, soft_char_budget={}, soft_token_budget={}",
+                self.attempts,
+                trigger,
+                before_chars,
+                after_chars,
+                archived_docs,
+                retrieved_docs,
+                self.soft_char_budget,
+                self.soft_token_budget
+            );
+        }
+
+        write!(
+            f,
+            "attempts={}, soft_char_budget={}, soft_token_budget={}",
+            self.attempts, self.soft_char_budget, self.soft_token_budget
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -366,28 +452,31 @@ fn build_memory_exhaustion_error(
     attempts: usize,
     stats: Option<&CompactionStats>,
 ) -> ExecuteAiStepError {
-    let details = if let Some(stats) = stats {
-        format!(
-            "attempts={}, trigger={:?}, before_chars={}, after_chars={}, archived_docs={}, retrieved_docs={}, soft_char_budget={}, soft_token_budget={}",
+    let diagnostics = if let Some(stats) = stats {
+        MemoryExhaustionDiagnostics {
             attempts,
-            stats.trigger,
-            stats.before_chars,
-            stats.after_chars,
-            stats.archived_docs,
-            stats.retrieved_docs,
-            SOFT_CONTEXT_CHAR_BUDGET,
-            SOFT_CONTEXT_TOKEN_BUDGET
-        )
+            trigger: Some(format!("{:?}", stats.trigger)),
+            before_chars: Some(stats.before_chars),
+            after_chars: Some(stats.after_chars),
+            archived_docs: Some(stats.archived_docs),
+            retrieved_docs: Some(stats.retrieved_docs),
+            soft_char_budget: SOFT_CONTEXT_CHAR_BUDGET,
+            soft_token_budget: SOFT_CONTEXT_TOKEN_BUDGET,
+        }
     } else {
-        format!(
-            "attempts={}, soft_char_budget={}, soft_token_budget={}",
-            attempts, SOFT_CONTEXT_CHAR_BUDGET, SOFT_CONTEXT_TOKEN_BUDGET
-        )
+        MemoryExhaustionDiagnostics {
+            attempts,
+            trigger: None,
+            before_chars: None,
+            after_chars: None,
+            archived_docs: None,
+            retrieved_docs: None,
+            soft_char_budget: SOFT_CONTEXT_CHAR_BUDGET,
+            soft_token_budget: SOFT_CONTEXT_TOKEN_BUDGET,
+        }
     };
 
-    ExecuteAiStepError::Execution(format!(
-        "Memory exhaustion: unable to compact context within limit. {details}"
-    ))
+    ExecuteAiStepError::MemoryExhaustion { diagnostics }
 }
 
 async fn compact_and_retry<C>(
@@ -430,6 +519,7 @@ fn apply_compaction_result(
     semantic_docs: &mut Vec<SemanticDocument>,
     last_compaction_stats: &mut Option<CompactionStats>,
     compaction_attempts: &mut usize,
+    compaction_events: &mut Vec<CompactionEventDiagnostics>,
 ) {
     let CompactionResult {
         history,
@@ -449,6 +539,7 @@ fn apply_compaction_result(
 
     *chat_history = history;
     *semantic_docs = retrieval_docs;
+    compaction_events.push(CompactionEventDiagnostics::from_stats(&stats));
     *last_compaction_stats = Some(stats);
     *compaction_attempts += 1;
 }
@@ -462,7 +553,7 @@ async fn run_prompt_loop_with_client<C, B>(
     preamble: &str,
     task_message: &str,
     mut build_dynamic_index: B,
-) -> Result<String, ExecuteAiStepError>
+) -> Result<ExecuteAiStepResult, ExecuteAiStepError>
 where
     C: rig::client::CompletionClient,
     C::CompletionModel: 'static,
@@ -474,6 +565,7 @@ where
     let mut compaction_attempts = 0usize;
     let mut last_compaction_stats: Option<CompactionStats> = None;
     let mut semantic_docs: Vec<SemanticDocument> = Vec::new();
+    let mut compaction_events: Vec<CompactionEventDiagnostics> = Vec::new();
     let budget_tracker = TokenBudgetTracker::default();
 
     loop {
@@ -523,14 +615,20 @@ where
         match response {
             Ok(final_response) => {
                 budget_tracker.update(final_response.total_usage, &prompt_message, &chat_history);
-                return Ok(final_response.output.to_string());
+                return Ok(ExecuteAiStepResult {
+                    data: Some(serde_json::Value::String(final_response.output.to_string())),
+                    compaction_events,
+                });
             }
             Err(PromptError::PromptCancelled {
                 chat_history: cancelled_history,
                 reason,
             }) => {
                 if let Some(output) = task_done_output(&reason) {
-                    return Ok(output);
+                    return Ok(ExecuteAiStepResult {
+                        data: Some(serde_json::Value::String(output)),
+                        compaction_events,
+                    });
                 }
 
                 let trigger = if is_proactive_cancel_reason(&reason) {
@@ -558,6 +656,7 @@ where
                         &mut semantic_docs,
                         &mut last_compaction_stats,
                         &mut compaction_attempts,
+                        &mut compaction_events,
                     );
                     continue;
                 }
@@ -591,6 +690,7 @@ where
                         &mut semantic_docs,
                         &mut last_compaction_stats,
                         &mut compaction_attempts,
+                        &mut compaction_events,
                     );
                     continue;
                 }
@@ -684,7 +784,7 @@ async fn build_client_and_run<C, E, F, B>(
     preamble: &str,
     task_message: &str,
     build_dynamic_index: B,
-) -> Result<String, ExecuteAiStepError>
+) -> Result<ExecuteAiStepResult, ExecuteAiStepError>
 where
     C: rig::client::CompletionClient,
     C::CompletionModel: 'static,
@@ -700,7 +800,7 @@ async fn run_plain_base_url_client<C>(
     config: &NormalizedAiExecutionConfig,
     preamble: &str,
     task_message: &str,
-) -> Result<String, ExecuteAiStepError>
+) -> Result<ExecuteAiStepResult, ExecuteAiStepError>
 where
     C: ApiKeyBaseUrlClient,
     C::CompletionModel: 'static,
@@ -720,7 +820,7 @@ async fn run_semantic_base_url_client<C>(
     preamble: &str,
     task_message: &str,
     embedding_model: &'static str,
-) -> Result<String, ExecuteAiStepError>
+) -> Result<ExecuteAiStepResult, ExecuteAiStepError>
 where
     C: ApiKeyBaseUrlClient + EmbeddingsClient,
     C::CompletionModel: 'static,
@@ -740,7 +840,7 @@ async fn run_with_provider(
     config: &NormalizedAiExecutionConfig,
     preamble: &str,
     task_message: &str,
-) -> Result<String, ExecuteAiStepError> {
+) -> Result<ExecuteAiStepResult, ExecuteAiStepError> {
     use rig::providers::{anthropic, azure, gemini, openai};
 
     match &config.llm_protocol {
@@ -796,11 +896,7 @@ pub async fn execute_ai_step(
     let preamble = build_preamble(&normalized, &normalized.tools);
     let task_message = build_user_message(&normalized.prompt);
 
-    let response = run_with_provider(&normalized, &preamble, &task_message).await?;
-
-    Ok(ExecuteAiStepResult {
-        data: Some(serde_json::Value::String(response)),
-    })
+    run_with_provider(&normalized, &preamble, &task_message).await
 }
 
 #[cfg(test)]
@@ -927,6 +1023,94 @@ mod tests {
         let message = output_limit_error_message(8_192);
         assert!(message.contains("ai.max_output_tokens"));
         assert!(message.contains("LLM_MAX_OUTPUT_TOKENS"));
+    }
+
+    #[test]
+    fn test_compaction_event_diagnostics_from_stats() {
+        let stats = CompactionStats {
+            attempt: 3,
+            trigger: MemoryTrigger::ReactiveProviderError,
+            before_chars: 45_000,
+            after_chars: 22_000,
+            archived_docs: 7,
+            retrieved_docs: 4,
+        };
+
+        let event = CompactionEventDiagnostics::from_stats(&stats);
+        assert_eq!(event.attempt, 3);
+        assert_eq!(event.trigger, "ReactiveProviderError");
+        assert_eq!(event.before_chars, 45_000);
+        assert_eq!(event.after_chars, 22_000);
+        assert_eq!(event.archived_docs, 7);
+        assert_eq!(event.retrieved_docs, 4);
+    }
+
+    #[test]
+    fn test_build_memory_exhaustion_error_contains_structured_diagnostics() {
+        let stats = CompactionStats {
+            attempt: 5,
+            trigger: MemoryTrigger::Proactive,
+            before_chars: 88_000,
+            after_chars: 54_000,
+            archived_docs: 6,
+            retrieved_docs: 7,
+        };
+
+        let error = build_memory_exhaustion_error(5, Some(&stats));
+        let diagnostics = error
+            .memory_exhaustion_diagnostics()
+            .expect("expected structured memory exhaustion diagnostics");
+
+        assert_eq!(diagnostics.attempts, 5);
+        assert_eq!(diagnostics.trigger.as_deref(), Some("Proactive"));
+        assert_eq!(diagnostics.before_chars, Some(88_000));
+        assert_eq!(diagnostics.after_chars, Some(54_000));
+        assert_eq!(diagnostics.archived_docs, Some(6));
+        assert_eq!(diagnostics.retrieved_docs, Some(7));
+        assert_eq!(diagnostics.soft_char_budget, SOFT_CONTEXT_CHAR_BUDGET);
+        assert_eq!(diagnostics.soft_token_budget, SOFT_CONTEXT_TOKEN_BUDGET);
+    }
+
+    #[test]
+    fn test_apply_compaction_result_records_event() {
+        let compaction = CompactionResult {
+            history: vec![Message::user("retained".to_string())],
+            stats: CompactionStats {
+                attempt: 2,
+                trigger: MemoryTrigger::ReactiveProviderError,
+                before_chars: 50_000,
+                after_chars: 24_000,
+                archived_docs: 5,
+                retrieved_docs: 3,
+            },
+            retrieval_docs: vec![SemanticDocument {
+                id: "doc-1".to_string(),
+                text: "retrieved".to_string(),
+            }],
+        };
+
+        let mut chat_history = Vec::new();
+        let mut semantic_docs = Vec::new();
+        let mut last_compaction_stats: Option<CompactionStats> = None;
+        let mut compaction_attempts = 0usize;
+        let mut compaction_events = Vec::new();
+
+        apply_compaction_result(
+            compaction,
+            &mut chat_history,
+            &mut semantic_docs,
+            &mut last_compaction_stats,
+            &mut compaction_attempts,
+            &mut compaction_events,
+        );
+
+        assert_eq!(chat_history.len(), 1);
+        assert_eq!(semantic_docs.len(), 1);
+        assert_eq!(compaction_attempts, 1);
+        assert_eq!(compaction_events.len(), 1);
+        assert_eq!(compaction_events[0].attempt, 2);
+        assert_eq!(compaction_events[0].trigger, "ReactiveProviderError");
+        assert!(last_compaction_stats.is_some());
     }
 
     #[tokio::test]
