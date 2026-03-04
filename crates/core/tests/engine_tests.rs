@@ -1633,8 +1633,10 @@ async fn test_ai_step_honors_llm_max_output_tokens_env_fallback_end_to_end() {
     let api_key_guard = EnvVarGuard::set("LLM_API_KEY", "test-key");
     let provider_guard = EnvVarGuard::set("LLM_PROVIDER", "openai");
     let base_url_guard = EnvVarGuard::set("LLM_BASE_URL", &base_url);
-    let max_output_tokens_guard =
-        EnvVarGuard::set("LLM_MAX_OUTPUT_TOKENS", &requested_output_tokens.to_string());
+    let max_output_tokens_guard = EnvVarGuard::set(
+        "LLM_MAX_OUTPUT_TOKENS",
+        &requested_output_tokens.to_string(),
+    );
     let path_guard = EnvVarGuard::set("PATH", "");
 
     let codex_home_guard = EnvVarGuard::unset("CODEX_HOME");

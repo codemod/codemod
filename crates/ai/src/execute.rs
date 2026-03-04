@@ -12,11 +12,9 @@ use crate::memory::controller::{
     proactive_cancel_reason, CompactionResult, CompactionStats, MemoryTrigger, TokenUsageSnapshot,
 };
 use crate::memory::history::estimate_context_chars;
-use crate::memory::policy::{
-    DYNAMIC_CONTEXT_SAMPLE_DOCS, MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET,
-    SOFT_CONTEXT_TOKEN_BUDGET,
-};
+use crate::memory::policy::{resolve_memory_policy, MemoryPolicy, DYNAMIC_CONTEXT_SAMPLE_DOCS};
 use crate::memory::semantic::{build_dynamic_context_index, DynamicContextIndex, SemanticDocument};
+use crate::model_catalog::{resolve_model_limits, MatchKind};
 use crate::prompt::{build_system_context, build_system_prompt_with_context, build_user_message};
 use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tools};
 
@@ -189,6 +187,16 @@ impl LlmProtocol {
             _ => Self::Custom(raw.trim().to_string()),
         }
     }
+
+    fn as_protocol_str(&self) -> &str {
+        match self {
+            Self::OpenAICompat => "openai",
+            Self::Anthropic => "anthropic",
+            Self::GoogleAi => "google_ai",
+            Self::AzureOpenAi => "azure_openai",
+            Self::Custom(value) => value.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -226,6 +234,7 @@ impl TokenBudgetTracker {
 #[derive(Debug, Clone, Default)]
 struct TaskDoneAndMemoryHook {
     budget_tracker: TokenBudgetTracker,
+    memory_policy: MemoryPolicy,
 }
 
 impl<M> rig::agent::PromptHook<M> for TaskDoneAndMemoryHook
@@ -239,7 +248,8 @@ where
     ) -> impl std::future::Future<Output = rig::agent::HookAction> + rig::wasm_compat::WasmCompatSend
     {
         let budget = self.budget_tracker.snapshot();
-        let proactive = maybe_proactive_budget(prompt, history, budget.as_ref());
+        let proactive =
+            maybe_proactive_budget(prompt, history, budget.as_ref(), &self.memory_policy);
 
         async move {
             if let Some((chars, estimated_tokens)) = proactive {
@@ -451,6 +461,7 @@ fn log_other_violation(error: &PromptError) {
 fn build_memory_exhaustion_error(
     attempts: usize,
     stats: Option<&CompactionStats>,
+    memory_policy: &MemoryPolicy,
 ) -> ExecuteAiStepError {
     let diagnostics = if let Some(stats) = stats {
         MemoryExhaustionDiagnostics {
@@ -460,8 +471,8 @@ fn build_memory_exhaustion_error(
             after_chars: Some(stats.after_chars),
             archived_docs: Some(stats.archived_docs),
             retrieved_docs: Some(stats.retrieved_docs),
-            soft_char_budget: SOFT_CONTEXT_CHAR_BUDGET,
-            soft_token_budget: SOFT_CONTEXT_TOKEN_BUDGET,
+            soft_char_budget: memory_policy.soft_context_char_budget,
+            soft_token_budget: memory_policy.soft_context_token_budget,
         }
     } else {
         MemoryExhaustionDiagnostics {
@@ -471,8 +482,8 @@ fn build_memory_exhaustion_error(
             after_chars: None,
             archived_docs: None,
             retrieved_docs: None,
-            soft_char_budget: SOFT_CONTEXT_CHAR_BUDGET,
-            soft_token_budget: SOFT_CONTEXT_TOKEN_BUDGET,
+            soft_char_budget: memory_policy.soft_context_char_budget,
+            soft_token_budget: memory_policy.soft_context_token_budget,
         }
     };
 
@@ -487,14 +498,17 @@ async fn compact_and_retry<C>(
     compaction_attempts: usize,
     last_compaction_stats: Option<&CompactionStats>,
     trigger: MemoryTrigger,
+    memory_policy: &MemoryPolicy,
+    summarizer_output_cap: Option<u64>,
 ) -> Result<CompactionResult, ExecuteAiStepError>
 where
     C: rig::client::CompletionClient,
 {
-    if compaction_attempts >= MAX_COMPACTION_ATTEMPTS {
+    if compaction_attempts >= memory_policy.max_compaction_attempts {
         return Err(build_memory_exhaustion_error(
             compaction_attempts,
             last_compaction_stats,
+            memory_policy,
         ));
     }
 
@@ -506,6 +520,8 @@ where
         source_history,
         compaction_attempts,
         trigger,
+        memory_policy,
+        summarizer_output_cap,
     )
     .await
     .map_err(|e| {
@@ -544,6 +560,25 @@ fn apply_compaction_result(
     *compaction_attempts += 1;
 }
 
+fn match_kind_label(kind: MatchKind) -> &'static str {
+    match kind {
+        MatchKind::Exact => "exact",
+        MatchKind::Alias => "alias",
+        MatchKind::None => "none",
+    }
+}
+
+fn resolve_effective_output_tokens(
+    requested_output_tokens: u64,
+    catalog_output_cap: Option<u64>,
+) -> u64 {
+    let requested = requested_output_tokens.max(1);
+    match catalog_output_cap.filter(|cap| *cap > 0) {
+        Some(cap) => requested.min(cap),
+        None => requested,
+    }
+}
+
 type DynamicIndexBuilderFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<DynamicContextIndex>, ExecuteAiStepError>> + 'a>>;
 
@@ -567,6 +602,55 @@ where
     let mut semantic_docs: Vec<SemanticDocument> = Vec::new();
     let mut compaction_events: Vec<CompactionEventDiagnostics> = Vec::new();
     let budget_tracker = TokenBudgetTracker::default();
+    let protocol = config.llm_protocol.as_protocol_str();
+    let limits = resolve_model_limits(protocol, &config.model);
+    let memory_policy = resolve_memory_policy(limits.context_tokens);
+    let requested_output_tokens = config.max_output_tokens;
+    let catalog_output_cap = limits.max_output_tokens.filter(|cap| *cap > 0);
+    let effective_output_tokens =
+        resolve_effective_output_tokens(requested_output_tokens, catalog_output_cap);
+
+    tracing::info!(
+        "ai_model_catalog_resolution protocol={} model={} match_kind={} matched_id={} context_tokens={} max_output_tokens={}",
+        protocol,
+        config.model,
+        match_kind_label(limits.match_kind),
+        limits.matched_id.as_deref().unwrap_or("none"),
+        limits
+            .context_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        limits
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    tracing::info!(
+        "ai_memory_policy_resolved source={} soft_token_budget={} target_token_budget={} soft_char_budget={} target_char_budget={}",
+        if limits.context_tokens.is_some() {
+            "model_catalog"
+        } else {
+            "defaults"
+        },
+        memory_policy.soft_context_token_budget,
+        memory_policy.target_context_token_budget,
+        memory_policy.soft_context_char_budget,
+        memory_policy.target_context_char_budget
+    );
+    tracing::info!(
+        "ai_token_budget resolved model={} requested={} effective={} source={} catalog_cap={}",
+        config.model,
+        requested_output_tokens,
+        effective_output_tokens,
+        if catalog_output_cap.is_some() {
+            "catalog_clamp"
+        } else {
+            "explicit_or_default"
+        },
+        catalog_output_cap
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
 
     loop {
         let dynamic_context_index = match build_dynamic_index(client, &semantic_docs).await {
@@ -579,21 +663,15 @@ where
                 None
             }
         };
-        let requested_output_tokens = config.max_output_tokens;
-        tracing::info!(
-            "ai_token_budget resolved model={} requested={} effective={} source=explicit_or_default",
-            config.model,
-            requested_output_tokens,
-            requested_output_tokens
-        );
 
         let mut agent_builder = client
             .agent(config.model.clone())
-            .max_tokens(requested_output_tokens)
+            .max_tokens(effective_output_tokens)
             .temperature(0.7)
             .preamble(preamble)
             .hook(TaskDoneAndMemoryHook {
                 budget_tracker: budget_tracker.clone(),
+                memory_policy,
             });
 
         if let Some(index) = dynamic_context_index {
@@ -648,6 +726,8 @@ where
                         compaction_attempts,
                         last_compaction_stats.as_ref(),
                         trigger,
+                        &memory_policy,
+                        catalog_output_cap,
                     )
                     .await?;
                     apply_compaction_result(
@@ -682,6 +762,8 @@ where
                         compaction_attempts,
                         last_compaction_stats.as_ref(),
                         MemoryTrigger::ReactiveProviderError,
+                        &memory_policy,
+                        catalog_output_cap,
                     )
                     .await?;
                     apply_compaction_result(
@@ -1026,6 +1108,21 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_effective_output_tokens_clamps_to_catalog_cap() {
+        assert_eq!(resolve_effective_output_tokens(8_192, Some(4_096)), 4_096);
+    }
+
+    #[test]
+    fn test_resolve_effective_output_tokens_keeps_requested_when_no_cap() {
+        assert_eq!(resolve_effective_output_tokens(8_192, None), 8_192);
+    }
+
+    #[test]
+    fn test_resolve_effective_output_tokens_ignores_non_positive_caps() {
+        assert_eq!(resolve_effective_output_tokens(8_192, Some(0)), 8_192);
+    }
+
+    #[test]
     fn test_compaction_event_diagnostics_from_stats() {
         let stats = CompactionStats {
             attempt: 3,
@@ -1056,7 +1153,8 @@ mod tests {
             retrieved_docs: 7,
         };
 
-        let error = build_memory_exhaustion_error(5, Some(&stats));
+        let policy = MemoryPolicy::default();
+        let error = build_memory_exhaustion_error(5, Some(&stats), &policy);
         let diagnostics = error
             .memory_exhaustion_diagnostics()
             .expect("expected structured memory exhaustion diagnostics");
@@ -1067,8 +1165,14 @@ mod tests {
         assert_eq!(diagnostics.after_chars, Some(54_000));
         assert_eq!(diagnostics.archived_docs, Some(6));
         assert_eq!(diagnostics.retrieved_docs, Some(7));
-        assert_eq!(diagnostics.soft_char_budget, SOFT_CONTEXT_CHAR_BUDGET);
-        assert_eq!(diagnostics.soft_token_budget, SOFT_CONTEXT_TOKEN_BUDGET);
+        assert_eq!(
+            diagnostics.soft_char_budget,
+            policy.soft_context_char_budget
+        );
+        assert_eq!(
+            diagnostics.soft_token_budget,
+            policy.soft_context_token_budget
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use serde_json::to_writer_pretty;
 use ts_export::export_recursive;
 
+mod model_catalog;
 mod tree_sitter_compress;
 mod ts_export;
 
@@ -28,6 +29,8 @@ enum Commands {
     Ts,
     /// Compress tree-sitter grammar node types to AI-friendly format.
     CompressTreeSitter,
+    /// Fetch and update the OpenRouter model catalog snapshot used by codemod-ai.
+    UpdateModelCatalog,
 }
 
 #[tokio::main]
@@ -77,6 +80,12 @@ async fn main() {
         Commands::CompressTreeSitter => {
             if let Err(e) = tree_sitter_compress::compress_tree_sitter_grammar().await {
                 eprintln!("Error compressing tree-sitter grammar: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::UpdateModelCatalog => {
+            if let Err(e) = model_catalog::update_model_catalog().await {
+                eprintln!("Error updating model catalog: {e}");
                 std::process::exit(1);
             }
         }
