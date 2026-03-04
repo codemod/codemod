@@ -73,7 +73,7 @@ struct StdioGuard {
 impl StdioGuard {
     /// Save real stdout/stderr, then redirect fd 1 & 2 to /dev/null.
     /// Returns the guard and a `File` handle to the real tty for ratatui.
-    fn redirect() -> (std::fs::File, Self) {
+    fn redirect() -> Result<(std::fs::File, Self)> {
         use std::os::unix::io::{AsRawFd, FromRawFd};
 
         unsafe {
@@ -82,27 +82,33 @@ impl StdioGuard {
 
             let saved_stdout_fd = libc_dup(real_stdout);
             let saved_stderr_fd = libc_dup(real_stderr);
-            assert!(saved_stdout_fd >= 0 && saved_stderr_fd >= 0);
+            if saved_stdout_fd < 0 || saved_stderr_fd < 0 {
+                anyhow::bail!("Failed to dup stdout/stderr file descriptors");
+            }
 
             // Dup for ratatui to write to the real terminal
             let tty_fd = libc_dup(real_stdout);
-            assert!(tty_fd >= 0);
+            if tty_fd < 0 {
+                anyhow::bail!("Failed to dup tty file descriptor");
+            }
             let tty_file = std::fs::File::from_raw_fd(tty_fd);
 
             let devnull_fd = libc_open(b"/dev/null\0".as_ptr(), O_WRONLY);
-            assert!(devnull_fd >= 0);
+            if devnull_fd < 0 {
+                anyhow::bail!("Failed to open /dev/null");
+            }
 
             libc_dup2(devnull_fd, 1);
             libc_dup2(devnull_fd, 2);
 
-            (
+            Ok((
                 tty_file,
                 Self {
                     saved_stdout_fd,
                     saved_stderr_fd,
                     devnull_fd,
                 },
-            )
+            ))
         }
     }
 
@@ -139,7 +145,15 @@ async fn run_tui_loop(mut app: App) -> Result<()> {
     // leave the user stuck in raw mode / alternate screen.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore_terminal();
+        // Write terminal-restore escape sequences directly to /dev/tty so they
+        // reach the real terminal even if stdout/stderr are redirected to /dev/null.
+        let _ = disable_raw_mode();
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            use std::io::Write;
+            // LeaveAlternateScreen + show cursor
+            let _ = tty.write_all(b"\x1b[?1049l\x1b[?25h");
+            let _ = tty.flush();
+        }
         original_hook(info);
     }));
 
@@ -156,7 +170,7 @@ async fn run_tui_loop(mut app: App) -> Result<()> {
     // *nothing* — println!, eprintln!, log macros, child-process output,
     // JS runtime errors — can corrupt the ratatui alternate screen.
     // We get back a File handle to the real tty for ratatui to write to.
-    let (tty_file, stdio_guard) = StdioGuard::redirect();
+    let (tty_file, stdio_guard) = StdioGuard::redirect()?;
 
     let backend = CrosstermBackend::new(tty_file);
     let mut terminal = Terminal::new(backend)?;
@@ -170,9 +184,10 @@ async fn run_tui_loop(mut app: App) -> Result<()> {
 
     let result = run_event_loop(&mut app, &mut terminal, &mut events, &stdio_guard).await;
 
-    // Always cleanup terminal, even if the loop errored
-    restore_terminal();
+    // Always cleanup: restore stdio FIRST so LeaveAlternateScreen reaches the
+    // real terminal instead of /dev/null.
     stdio_guard.restore();
+    restore_terminal();
     log::set_max_level(prev_log_level);
 
     result
@@ -232,6 +247,7 @@ async fn run_event_loop(
                 // This avoids waiting for background `spawn_blocking` tasks
                 // (workflow execution) to finish during tokio runtime shutdown.
                 if is_ctrl_c(&key) {
+                    stdio_guard.pause_redirect();
                     restore_terminal();
                     std::process::exit(0);
                 }

@@ -100,18 +100,17 @@ impl App {
                 self.workflow_runs = self
                     .engine
                     .list_workflow_runs(self.run_list_limit)
-                    .await
-                    .unwrap_or_default();
+                    .await?;
             }
             Screen::TaskList { workflow_run_id } => {
                 let wf_id = *workflow_run_id;
-                self.current_workflow_run = self.engine.get_workflow_run(wf_id).await.ok();
-                self.tasks = self.engine.get_tasks(wf_id).await.unwrap_or_default();
+                self.current_workflow_run = Some(self.engine.get_workflow_run(wf_id).await?);
+                self.tasks = self.engine.get_tasks(wf_id).await?;
             }
             Screen::Settings { workflow_run_id } => {
                 let wf_id = *workflow_run_id;
-                self.current_workflow_run = self.engine.get_workflow_run(wf_id).await.ok();
-                self.tasks = self.engine.get_tasks(wf_id).await.unwrap_or_default();
+                self.current_workflow_run = Some(self.engine.get_workflow_run(wf_id).await?);
+                self.tasks = self.engine.get_tasks(wf_id).await?;
             }
         }
 

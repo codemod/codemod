@@ -71,7 +71,14 @@ pub(crate) fn prompt_capabilities(
     no_interactive: bool,
 ) -> HashSet<LlrtSupportedModules> {
     if no_interactive {
-        return capabilities;
+        // In non-interactive mode, strip unsafe capabilities that were not
+        // explicitly granted via CLI flags to avoid implicitly granting
+        // dangerous permissions in CI/headless environments.
+        let unsafe_set: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
+        return capabilities
+            .into_iter()
+            .filter(|c| !unsafe_set.contains(c) || cli_granted.contains(c))
+            .collect();
     }
 
     let unsafe_set: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
