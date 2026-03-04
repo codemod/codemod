@@ -2317,11 +2317,12 @@ impl Engine {
         cmd.arg("-y")
             .arg("@openai/codex@0.101.0")
             .arg("exec")
-            .arg(prompt)
+            .arg("-") // read prompt from stdin
             .current_dir(&self.workflow_run_config.target_path)
             .env("OPENAI_API_KEY", api_key)
             .env_remove("RUST_LOG")
             .env_remove("RUST_BACKTRACE")
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -2332,6 +2333,15 @@ impl Engine {
         let mut child = cmd
             .spawn()
             .map_err(|e| Error::StepExecution(format!("Failed to spawn Codex CLI: {e}")))?;
+
+        // Write prompt to stdin and close it
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                Error::StepExecution(format!("Failed to write prompt to stdin: {e}"))
+            })?;
+            // stdin is dropped here, closing the pipe
+        }
 
         // Stream stdout line-by-line
         let stdout = child.stdout.take();
