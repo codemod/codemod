@@ -237,6 +237,11 @@ pub struct UseAI {
     #[ts(optional, as = "Option<String>")]
     pub model: Option<String>,
 
+    /// Maximum output tokens for a single model response (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<u64>")]
+    pub max_output_tokens: Option<u64>,
+
     /// System prompt for the AI agent (optional)
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]

@@ -4,13 +4,12 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use rig::client::embeddings::EmbeddingsClient;
-use rig::completion::{Message, Prompt, PromptError, Usage};
+use rig::completion::{CompletionError, Message, Prompt, PromptError, Usage};
 use thiserror::Error;
 
 use crate::memory::controller::{
-    compact_history_for_retry, is_context_limit_error_text, is_proactive_cancel_reason,
-    maybe_proactive_budget, proactive_cancel_reason, CompactionResult, CompactionStats,
-    MemoryTrigger, TokenUsageSnapshot,
+    compact_history_for_retry, is_proactive_cancel_reason, maybe_proactive_budget,
+    proactive_cancel_reason, CompactionResult, CompactionStats, MemoryTrigger, TokenUsageSnapshot,
 };
 use crate::memory::history::estimate_context_chars;
 use crate::memory::policy::{
@@ -22,11 +21,13 @@ use crate::prompt::{build_system_context, build_system_prompt_with_context, buil
 use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tools};
 
 const TASK_DONE_REASON_PREFIX: &str = "__task_done__:";
+const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 8_192;
 
 pub struct ExecuteAiStepConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
+    pub max_output_tokens: Option<u64>,
     pub system_prompt: Option<String>,
     pub max_steps: Option<usize>,
     pub enable_lakeview: Option<bool>,
@@ -51,6 +52,7 @@ struct NormalizedAiExecutionConfig {
     endpoint: String,
     api_key: String,
     model: String,
+    max_output_tokens: u64,
     system_prompt: Option<String>,
     max_steps: usize,
     prompt: String,
@@ -67,6 +69,10 @@ impl From<ExecuteAiStepConfig> for NormalizedAiExecutionConfig {
             endpoint: value.endpoint,
             api_key: value.api_key,
             model: value.model,
+            max_output_tokens: value
+                .max_output_tokens
+                .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+                .max(1),
             system_prompt: value.system_prompt,
             max_steps: value.max_steps.unwrap_or(30),
             prompt: value.prompt,
@@ -210,6 +216,152 @@ fn task_done_output(reason: &str) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
+fn parse_json_candidates(message: &str) -> Vec<serde_json::Value> {
+    let mut parsed = Vec::new();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(message) {
+        parsed.push(value);
+    }
+
+    if let Some(start) = message.find('{') {
+        if let Some(end) = message.rfind('}') {
+            if end > start {
+                let raw = &message[start..=end];
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+                    parsed.push(value);
+                }
+            }
+        }
+    }
+
+    parsed
+}
+
+fn is_context_limit_reason_text(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("context_length_exceeded") {
+        return true;
+    }
+
+    if normalized.contains("tokens > max")
+        && (normalized.contains("prompt") || normalized.contains("context"))
+    {
+        return true;
+    }
+
+    normalized.contains("input is too long for model context window")
+}
+
+fn is_reactive_context_error(error: &PromptError) -> bool {
+    let message = match error {
+        PromptError::CompletionError(CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(_, body),
+        )) => Some(body.as_str()),
+        PromptError::CompletionError(CompletionError::ProviderError(body))
+        | PromptError::CompletionError(CompletionError::ResponseError(body)) => Some(body.as_str()),
+        PromptError::PromptCancelled { reason, .. } => Some(reason.as_str()),
+        _ => None,
+    };
+
+    let Some(message) = message else {
+        return false;
+    };
+
+    for candidate in parse_json_candidates(message) {
+        let error = candidate.get("error").unwrap_or(&candidate);
+
+        let code = error
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| candidate.get("code").and_then(serde_json::Value::as_str))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if code == "context_length_exceeded" {
+            return true;
+        }
+
+        let status = error
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| candidate.get("status").and_then(serde_json::Value::as_str))
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        if status == "INVALID_ARGUMENT" {
+            let detail = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if is_context_limit_reason_text(detail) {
+                return true;
+            }
+        }
+    }
+
+    is_context_limit_reason_text(message)
+}
+
+fn is_output_limit_error(error: &PromptError) -> bool {
+    let message = match error {
+        PromptError::CompletionError(CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(_, body),
+        )) => Some(body.as_str()),
+        PromptError::CompletionError(CompletionError::ProviderError(body))
+        | PromptError::CompletionError(CompletionError::ResponseError(body)) => Some(body.as_str()),
+        _ => None,
+    };
+
+    let Some(message) = message else {
+        return false;
+    };
+
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("max_tokens")
+        && normalized.contains("maximum allowed number of output tokens")
+}
+
+fn output_limit_error_message(max_output_tokens: u64) -> String {
+    format!(
+        "Output token limit exceeded. Configure ai.max_output_tokens or LLM_MAX_OUTPUT_TOKENS (current requested value: {}).",
+        max_output_tokens
+    )
+}
+
+fn parse_status_code(error: &PromptError) -> Option<u16> {
+    match error {
+        PromptError::CompletionError(CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(status, _),
+        )) => Some(status.as_u16()),
+        _ => None,
+    }
+}
+
+fn format_status_code(status_code: Option<u16>) -> String {
+    status_code
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn log_context_violation(error: &PromptError) {
+    tracing::info!(
+        "ai_limit_violation kind=context_exceeded status={} parsed_limit=none action=compact_and_retry",
+        format_status_code(parse_status_code(error))
+    );
+}
+
+fn log_output_violation(error: &PromptError) {
+    tracing::info!(
+        "ai_limit_violation kind=output_max_exceeded status={} parsed_limit=none action=fail",
+        format_status_code(parse_status_code(error))
+    );
+}
+
+fn log_other_violation(error: &PromptError) {
+    tracing::info!(
+        "ai_limit_violation kind=other status={} parsed_limit=none action=none",
+        format_status_code(parse_status_code(error))
+    );
+}
+
 fn build_memory_exhaustion_error(
     attempts: usize,
     stats: Option<&CompactionStats>,
@@ -335,10 +487,17 @@ where
                 None
             }
         };
+        let requested_output_tokens = config.max_output_tokens;
+        tracing::info!(
+            "ai_token_budget resolved model={} requested={} effective={} source=explicit_or_default",
+            config.model,
+            requested_output_tokens,
+            requested_output_tokens
+        );
 
         let mut agent_builder = client
             .agent(config.model.clone())
-            .max_tokens(200_000)
+            .max_tokens(requested_output_tokens)
             .temperature(0.7)
             .preamble(preamble)
             .hook(TaskDoneAndMemoryHook {
@@ -376,7 +535,7 @@ where
 
                 let trigger = if is_proactive_cancel_reason(&reason) {
                     Some(MemoryTrigger::Proactive)
-                } else if is_context_limit_error_text(&reason) {
+                } else if is_context_limit_reason_text(&reason) {
                     Some(MemoryTrigger::ReactiveProviderError)
                 } else {
                     None
@@ -407,7 +566,15 @@ where
             }
             Err(error) => {
                 let error_message = error.to_string();
-                if is_context_limit_error_text(&error_message) {
+                if is_output_limit_error(&error) {
+                    log_output_violation(&error);
+                    return Err(ExecuteAiStepError::Execution(output_limit_error_message(
+                        requested_output_tokens,
+                    )));
+                }
+
+                if is_reactive_context_error(&error) {
+                    log_context_violation(&error);
                     let compaction = compact_and_retry(
                         client,
                         config,
@@ -428,6 +595,7 @@ where
                     continue;
                 }
 
+                log_other_violation(&error);
                 return Err(ExecuteAiStepError::Execution(error_message));
             }
         }
@@ -669,6 +837,7 @@ mod tests {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: "test-key".to_string(),
             model: "gpt-4o".to_string(),
+            max_output_tokens: 12_345,
             system_prompt: Some("Custom prompt".to_string()),
             max_steps: 30,
             prompt: "Test".to_string(),
@@ -689,6 +858,7 @@ mod tests {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: "test-key".to_string(),
             model: "gpt-4o".to_string(),
+            max_output_tokens: None,
             system_prompt: None,
             max_steps: None,
             enable_lakeview: None,
@@ -711,12 +881,61 @@ mod tests {
         assert_eq!(task_done_output("cancelled for another reason"), None);
     }
 
+    #[test]
+    fn test_default_requested_output_tokens_is_conservative() {
+        assert_eq!(DEFAULT_MAX_OUTPUT_TOKENS, 8_192);
+    }
+
+    #[test]
+    fn test_max_output_tokens_defaults_when_unspecified() {
+        let normalized = NormalizedAiExecutionConfig::from(ExecuteAiStepConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-4o".to_string(),
+            max_output_tokens: None,
+            system_prompt: None,
+            max_steps: None,
+            enable_lakeview: None,
+            prompt: "Test".to_string(),
+            working_dir: PathBuf::from("/tmp/project"),
+            llm_protocol: "openai".to_string(),
+        });
+
+        assert_eq!(normalized.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
+    }
+
+    #[test]
+    fn test_max_output_tokens_uses_explicit_value() {
+        let normalized = NormalizedAiExecutionConfig::from(ExecuteAiStepConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-4o".to_string(),
+            max_output_tokens: Some(4_096),
+            system_prompt: None,
+            max_steps: None,
+            enable_lakeview: None,
+            prompt: "Test".to_string(),
+            working_dir: PathBuf::from("/tmp/project"),
+            llm_protocol: "openai".to_string(),
+        });
+
+        assert_eq!(normalized.max_output_tokens, 4_096);
+    }
+
+    #[test]
+    fn test_output_limit_error_message_contains_guidance() {
+        let message = output_limit_error_message(8_192);
+        assert!(message.contains("ai.max_output_tokens"));
+        assert!(message.contains("LLM_MAX_OUTPUT_TOKENS"));
+    }
+
     #[tokio::test]
     async fn test_unknown_protocol_fails_fast() {
         let config = NormalizedAiExecutionConfig {
             endpoint: "https://example.com/v1".to_string(),
             api_key: "test-key".to_string(),
             model: "test-model".to_string(),
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: None,
             max_steps: 1,
             prompt: "Test".to_string(),

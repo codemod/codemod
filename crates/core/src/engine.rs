@@ -2297,6 +2297,12 @@ impl Engine {
             .or_else(|| std::env::var("LLM_MODEL").ok())
             .unwrap_or_else(|| "gpt-4o".to_string());
 
+        let max_output_tokens = ai_config.max_output_tokens.or_else(|| {
+            std::env::var("LLM_MAX_OUTPUT_TOKENS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        });
+
         let llm_provider = ai_config
             .llm_protocol
             .clone()
@@ -2319,6 +2325,7 @@ impl Engine {
             api_key,
             endpoint,
             model,
+            max_output_tokens,
             system_prompt: ai_config.system_prompt.clone(),
             max_steps: ai_config.max_steps,
             enable_lakeview: ai_config.enable_lakeview,

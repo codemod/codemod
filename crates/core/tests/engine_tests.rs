@@ -21,6 +21,8 @@ use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use uuid::Uuid;
 
 struct EnvVarGuard {
@@ -56,6 +58,39 @@ impl Drop for EnvVarGuard {
             std::env::remove_var(&self.key);
         }
     }
+}
+
+async fn spawn_output_limit_error_server(
+    requested_output_tokens: u64,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind test TCP listener");
+    let addr = listener
+        .local_addr()
+        .expect("failed to read listener local address");
+
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut request_buf = [0u8; 4096];
+            let _ = socket.read(&mut request_buf).await;
+
+            let body = format!(
+                "{{\"type\":\"error\",\"error\":{{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: {requested_output_tokens} > 1024, which is the maximum allowed number of output tokens for test-model\"}}}}"
+            );
+
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+
+    (format!("http://{}", addr), handle)
 }
 
 // Helper function to create a simple test workflow
@@ -1023,6 +1058,7 @@ fn create_ai_no_key_fallback_workflow() -> Workflow {
                         env: None,
                         dry_run: None,
                         model: None,
+                        max_output_tokens: None,
                         system_prompt: Some("You are a test system prompt.".to_string()),
                         max_steps: None,
                         tools: None,
@@ -1584,6 +1620,85 @@ async fn test_ai_step_detected_agent_handoff_skips_rig_with_api_key() {
 
     drop(marker_two_guard);
     drop(marker_one_guard);
+    drop(base_url_guard);
+    drop(provider_guard);
+    drop(api_key_guard);
+}
+
+#[tokio::test]
+async fn test_ai_step_honors_llm_max_output_tokens_env_fallback_end_to_end() {
+    let requested_output_tokens = 4_321u64;
+    let (base_url, server_handle) = spawn_output_limit_error_server(requested_output_tokens).await;
+
+    let api_key_guard = EnvVarGuard::set("LLM_API_KEY", "test-key");
+    let provider_guard = EnvVarGuard::set("LLM_PROVIDER", "openai");
+    let base_url_guard = EnvVarGuard::set("LLM_BASE_URL", &base_url);
+    let max_output_tokens_guard =
+        EnvVarGuard::set("LLM_MAX_OUTPUT_TOKENS", &requested_output_tokens.to_string());
+    let path_guard = EnvVarGuard::set("PATH", "");
+
+    let codex_home_guard = EnvVarGuard::unset("CODEX_HOME");
+    let codex_session_guard = EnvVarGuard::unset("CODEX_SESSION_ID");
+    let codex_sandbox_guard = EnvVarGuard::unset("CODEX_SANDBOX");
+    let claude_code_guard = EnvVarGuard::unset("CLAUDE_CODE");
+    let claude_session_guard = EnvVarGuard::unset("CLAUDE_CODE_SESSION_ID");
+    let aider_model_guard = EnvVarGuard::unset("AIDER_MODEL");
+    let aider_history_guard = EnvVarGuard::unset("AIDER_CHAT_HISTORY_FILE");
+    let cursor_guard = EnvVarGuard::unset("CURSOR_AGENT");
+    let windsurf_guard = EnvVarGuard::unset("WINDSURF_SESSION_ID");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_ai_no_key_fallback_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let mut failed_error: Option<String> = None;
+    for _ in 0..50 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let Some(ai_task) = tasks.iter().find(|t| t.node_id == "ai-fallback-node") else {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            continue;
+        };
+
+        if ai_task.status == TaskStatus::Failed {
+            failed_error = ai_task.error.clone();
+            break;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    server_handle.abort();
+    let _ = server_handle.await;
+
+    let error_output = failed_error.expect("AI step did not fail within 5 seconds");
+    assert!(
+        error_output.contains("Output token limit exceeded."),
+        "Expected output limit failure, got: {error_output}"
+    );
+    assert!(
+        error_output.contains(&format!(
+            "current requested value: {}",
+            requested_output_tokens
+        )),
+        "Expected env-derived requested output token value in error, got: {error_output}"
+    );
+
+    drop(windsurf_guard);
+    drop(cursor_guard);
+    drop(aider_history_guard);
+    drop(aider_model_guard);
+    drop(claude_session_guard);
+    drop(claude_code_guard);
+    drop(codex_sandbox_guard);
+    drop(codex_session_guard);
+    drop(codex_home_guard);
+    drop(max_output_tokens_guard);
+    drop(path_guard);
     drop(base_url_guard);
     drop(provider_guard);
     drop(api_key_guard);
