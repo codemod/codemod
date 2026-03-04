@@ -1,8 +1,12 @@
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::resolve_capabilities::{
+    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+};
 use crate::workflow_runner::run_workflow;
+#[cfg(unix)]
+use crate::workflow_runner::{run_workflow_with_tui, workflow_has_manual_nodes};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
@@ -206,6 +210,20 @@ pub async fn handler(
         None,
     );
 
+    // Build set of capabilities explicitly granted via CLI flags (skip prompting for these)
+    let mut cli_granted = std::collections::HashSet::new();
+    if args.allow_fs {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
+    }
+
+    let capabilities = prompt_capabilities(capabilities, &cli_granted, args.no_interactive);
+
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
 
@@ -217,21 +235,50 @@ pub async fn handler(
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     // Run workflow using the extracted workflow runner
-    let (engine, config) = create_engine(
+    let (mut engine, mut config) = create_engine(
         workflow_path,
         target_path.clone(),
         args.dry_run,
         args.allow_dirty,
         params,
         args.registry.clone(),
-        Some(capabilities),
+        Some(capabilities.clone()),
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
         output_format,
+        Some(capabilities),
     )?;
 
-    if let Err(e) = run_workflow(&engine, config).await {
+    // Set the package name so it's stored on the WorkflowRun for TUI display
+    engine.set_name(Some(args.package.clone()));
+
+    // Check if workflow has manual nodes and should launch TUI (Unix only)
+    #[cfg(unix)]
+    let use_tui = {
+        let workflow =
+            butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
+        !args.no_interactive && workflow_has_manual_nodes(&workflow)
+    };
+    #[cfg(not(unix))]
+    let use_tui = false;
+
+    if use_tui {
+        config.quiet = true;
+        config.progress_callback = Arc::new(None);
+        engine.set_quiet(true);
+    }
+
+    #[cfg(unix)]
+    let run_result = if use_tui {
+        run_workflow_with_tui(&engine, config).await
+    } else {
+        run_workflow(&engine, config).await
+    };
+    #[cfg(not(unix))]
+    let run_result = run_workflow(&engine, config).await;
+
+    if let Err(e) = run_result {
         let error_msg = format!("Workflow execution failed: {}", e);
         send_failure_event(&telemetry, &args.package, &error_msg).await;
         return Err(e);
@@ -246,44 +293,50 @@ pub async fn handler(
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
-    if args.dry_run {
-        println!("\n=== DRY RUN SUMMARY ===");
-        println!("Files that would be modified: {files_modified}");
-        println!("Files that would be unmodified: {files_unmodified}");
-        if files_with_errors > 0 {
-            println!("Files with errors: {files_with_errors}");
+    if !use_tui {
+        if args.dry_run {
+            println!("\n=== DRY RUN SUMMARY ===");
+            println!("Files that would be modified: {files_modified}");
+            println!("Files that would be unmodified: {files_unmodified}");
+            if files_with_errors > 0 {
+                println!("Files with errors: {files_with_errors}");
+            }
+            println!("No changes were made to the filesystem.");
+        } else {
+            println!("\n📝 Modified files: {files_modified}");
+            println!("✅ Unmodified files: {files_unmodified}");
+            if files_with_errors > 0 {
+                println!("❌ Files with errors: {files_with_errors}");
+            }
         }
-        println!("No changes were made to the filesystem.");
-    } else {
-        println!("\n📝 Modified files: {files_modified}");
-        println!("✅ Unmodified files: {files_unmodified}");
-        if files_with_errors > 0 {
-            println!("❌ Files with errors: {files_with_errors}");
+
+        if crate::utils::metrics::should_show_report(
+            args.report,
+            args.no_interactive,
+            &metrics_data,
+        ) {
+            let collected_diffs = diff_collector
+                .map(|c| c.lock().unwrap().clone())
+                .unwrap_or_default();
+
+            let report = ExecutionReport::build(
+                args.package.clone(),
+                None,
+                duration_ms,
+                args.dry_run,
+                target_path.display().to_string(),
+                CLI_VERSION.to_string(),
+                files_modified,
+                files_unmodified,
+                files_with_errors,
+                convert_metrics(&metrics_data),
+                convert_diffs(&collected_diffs, &target_path.display().to_string()),
+            );
+
+            crate::report_server::serve_report(report).await?;
+        } else {
+            crate::utils::metrics::print_metrics(&metrics_data);
         }
-    }
-
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
-        let collected_diffs = diff_collector
-            .map(|c| c.lock().unwrap().clone())
-            .unwrap_or_default();
-
-        let report = ExecutionReport::build(
-            args.package.clone(),
-            None,
-            duration_ms,
-            args.dry_run,
-            target_path.display().to_string(),
-            CLI_VERSION.to_string(),
-            files_modified,
-            files_unmodified,
-            files_with_errors,
-            convert_metrics(&metrics_data),
-            convert_diffs(&collected_diffs, &target_path.display().to_string()),
-        );
-
-        crate::report_server::serve_report(report).await?;
-    } else {
-        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     let execution_id = generate_execution_id();

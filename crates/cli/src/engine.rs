@@ -147,6 +147,7 @@ pub fn create_engine(
     no_color: bool,
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
     output_format: OutputFormat,
+    pre_approved_capabilities: Option<HashSet<LlrtSupportedModules>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check();
     let bundle_path = if workflow_file_path.is_file() {
@@ -170,7 +171,8 @@ pub fn create_engine(
 
     let registry_client = create_registry_client(registry)?;
 
-    let capabilities_security_callback = capabilities_security_callback(no_interactive);
+    let capabilities_security_callback =
+        capabilities_security_callback(no_interactive, pre_approved_capabilities);
     let dry_run_callback = if dry_run {
         // In dry-run mode: print diffs to terminal + optionally collect for report
         Some(create_dry_run_callback(no_color, diff_collector))
