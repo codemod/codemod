@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use rig::completion::Message;
+use rig::completion::message::UserContent;
+use rig::completion::{AssistantContent, Message};
 
 use crate::memory::history::{
     clip_chars, estimate_context_chars, extract_history_documents, HistoryDocument,
@@ -42,6 +43,87 @@ fn retention_indices(len: usize, attempt: usize) -> HashSet<usize> {
     indices
 }
 
+fn assistant_tool_call_ids(message: &Message) -> HashSet<String> {
+    match message {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| {
+                if let AssistantContent::ToolCall(tool_call) = item {
+                    Some(tool_call.id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => HashSet::new(),
+    }
+}
+
+fn user_tool_result_ids(message: &Message) -> HashSet<String> {
+    match message {
+        Message::User { content } => content
+            .iter()
+            .filter_map(|item| {
+                if let UserContent::ToolResult(tool_result) = item {
+                    Some(tool_result.id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => HashSet::new(),
+    }
+}
+
+fn retain_required_tool_call_parents(history: &[Message], retain: &mut HashSet<usize>) {
+    let initially_retained = retain.iter().copied().collect::<Vec<_>>();
+    for idx in initially_retained {
+        let result_ids = user_tool_result_ids(&history[idx]);
+        if result_ids.is_empty() {
+            continue;
+        }
+
+        for parent_idx in (0..idx).rev() {
+            let call_ids = assistant_tool_call_ids(&history[parent_idx]);
+            if !call_ids.is_empty() && result_ids.iter().all(|id| call_ids.contains(id)) {
+                retain.insert(parent_idx);
+                break;
+            }
+        }
+    }
+}
+
+fn has_immediate_matching_tool_call(previous: &Message, result_ids: &HashSet<String>) -> bool {
+    if result_ids.is_empty() {
+        return true;
+    }
+
+    let call_ids = assistant_tool_call_ids(previous);
+    !call_ids.is_empty() && result_ids.iter().all(|id| call_ids.contains(id))
+}
+
+fn sanitize_tool_order(messages: Vec<Message>) -> Vec<Message> {
+    let mut rebuilt = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        let result_ids = user_tool_result_ids(&message);
+        if result_ids.is_empty() {
+            rebuilt.push(message);
+            continue;
+        }
+
+        let Some(previous) = rebuilt.last() else {
+            continue;
+        };
+
+        if has_immediate_matching_tool_call(previous, &result_ids) {
+            rebuilt.push(message);
+        }
+    }
+
+    rebuilt
+}
+
 pub fn deterministic_prune(history: &[Message], prompt: &Message, attempt: usize) -> PruneResult {
     if history.is_empty() {
         return PruneResult {
@@ -54,6 +136,8 @@ pub fn deterministic_prune(history: &[Message], prompt: &Message, attempt: usize
     let context_before = estimate_context_chars(prompt, history);
 
     let retain = retention_indices(history.len(), attempt);
+    let mut retain = retain;
+    retain_required_tool_call_parents(history, &mut retain);
     let mut retained_history = Vec::new();
     let mut archived_messages = Vec::new();
 
@@ -104,7 +188,7 @@ pub fn rebuild_history_with_memory(
     prompt: &Message,
 ) -> (Vec<Message>, RebuildStats) {
     if prune.archived_documents.is_empty() || memory_packet.is_none() {
-        let rebuilt = prune.retained_history.clone();
+        let rebuilt = sanitize_tool_order(prune.retained_history.clone());
         return (
             rebuilt.clone(),
             RebuildStats {
@@ -115,15 +199,10 @@ pub fn rebuild_history_with_memory(
     }
 
     let packet = memory_packet.expect("checked above");
-    let mut rebuilt = Vec::new();
-
-    if let Some((first, rest)) = prune.retained_history.split_first() {
-        rebuilt.push(first.clone());
-        rebuilt.push(packet);
-        rebuilt.extend_from_slice(rest);
-    } else {
-        rebuilt.push(packet);
-    }
+    let mut rebuilt = Vec::with_capacity(prune.retained_history.len() + 1);
+    rebuilt.push(packet);
+    rebuilt.extend_from_slice(&prune.retained_history);
+    rebuilt = sanitize_tool_order(rebuilt);
 
     let rebuilt_chars = estimate_context_chars(prompt, &rebuilt);
     (
@@ -139,6 +218,18 @@ pub fn rebuild_history_with_memory(
 mod tests {
     use super::*;
     use crate::memory::history::extract_message_text;
+    use rig::OneOrMany;
+
+    fn assistant_tool_call_message(call_id: &str, name: &str) -> Message {
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(AssistantContent::tool_call(
+                call_id.to_string(),
+                name.to_string(),
+                serde_json::json!({}),
+            )),
+        }
+    }
 
     #[test]
     fn test_deterministic_prune_keeps_anchor_and_recent() {
@@ -185,7 +276,54 @@ mod tests {
 
         let (rebuilt, _) = rebuild_history_with_memory(&prune, Some(packet), &prompt);
         assert!(rebuilt.len() >= 2);
-        assert!(extract_message_text(&rebuilt[0]).contains("initial"));
-        assert!(extract_message_text(&rebuilt[1]).contains("[Memory Packet]"));
+        assert!(extract_message_text(&rebuilt[0]).contains("[Memory Packet]"));
+        assert!(extract_message_text(&rebuilt[1]).contains("initial"));
+    }
+
+    #[test]
+    fn test_retain_required_tool_call_parents_for_tool_results() {
+        let history = vec![
+            assistant_tool_call_message("call-1", "read"),
+            Message::tool_result("call-1", "ok"),
+            Message::assistant("later"),
+            Message::assistant("later-2"),
+            Message::assistant("later-3"),
+            Message::assistant("later-4"),
+            Message::assistant("later-5"),
+            Message::assistant("later-6"),
+            Message::assistant("later-7"),
+            Message::assistant("later-8"),
+            Message::assistant("later-9"),
+            Message::assistant("later-10"),
+        ];
+        let prompt = Message::user("task");
+
+        let result = deterministic_prune(&history, &prompt, 0);
+        let retained_text = result
+            .retained_history
+            .iter()
+            .map(extract_message_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(retained_text.contains("[tool_call:call-1]"));
+    }
+
+    #[test]
+    fn test_rebuild_sanitizes_orphaned_tool_result() {
+        let prune = PruneResult {
+            retained_history: vec![Message::tool_result("call-2", "orphaned")],
+            archived_documents: Vec::new(),
+            context_chars_before: 42,
+        };
+        let prompt = Message::user("task");
+        let packet = build_memory_packet("summary", &[]);
+        let (rebuilt, _) = rebuild_history_with_memory(&prune, Some(packet), &prompt);
+
+        let rebuilt_text = rebuilt
+            .iter()
+            .map(extract_message_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rebuilt_text.contains("[tool_result:call-2]"));
     }
 }

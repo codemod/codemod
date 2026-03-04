@@ -2334,9 +2334,30 @@ impl Engine {
             llm_protocol: llm_provider,
         };
 
-        let output = execute_ai_step(config)
-            .await
-            .map_err(|e| Error::StepExecution(e.to_string()))?;
+        let mut ai_future = std::pin::pin!(execute_ai_step(config));
+        let mut progress_interval = time::interval_at(
+            time::Instant::now() + Duration::from_secs(20),
+            Duration::from_secs(20),
+        );
+        progress_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut elapsed_seconds = 0u64;
+
+        let output = loop {
+            tokio::select! {
+                result = &mut ai_future => {
+                    break result.map_err(|e| Error::StepExecution(e.to_string()))?;
+                }
+                _ = progress_interval.tick() => {
+                    elapsed_seconds += 20;
+                    slog!(
+                        logger,
+                        info,
+                        "AI step still running ({}s elapsed); waiting for model/tool completion...",
+                        elapsed_seconds
+                    );
+                }
+            }
+        };
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");

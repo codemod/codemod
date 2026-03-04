@@ -262,12 +262,14 @@ steps:
 - `prompt` — The instructions for the AI agent
 - `system_prompt` — Optional system context
 - `model` — LLM model to use (default: gpt-5.2)
+- `max_output_tokens` — Maximum output tokens per model response (default: 8192)
 - `max_steps` — Maximum agent steps (default: 100)
 
 **Environment Variables:**
 
 - `LLM_API_KEY` — API key for the LLM provider
 - `LLM_MODEL` — Override the model
+- `LLM_MAX_OUTPUT_TOKENS` — Override maximum output tokens per response
 - `LLM_PROVIDER` — Provider (openai, anthropic, google_ai)
 - `LLM_BASE_URL` — Optional custom endpoint URL (inferred from provider if not set)
 
