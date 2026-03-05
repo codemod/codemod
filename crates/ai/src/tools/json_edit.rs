@@ -112,7 +112,7 @@ impl JsonEditTool {
             }
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unknown operation: {}. Supported operations: view, set, add, remove",
                     operation
                 ),
@@ -176,12 +176,12 @@ impl JsonEditTool {
 
                     Ok(ToolResult::success(
                         call_id,
-                        &format!("JSONPath '{}' matches:\n{}", path, output),
+                        format!("JSONPath '{}' matches:\n{}", path, output),
                     ))
                 }
                 Err(e) => Ok(ToolResult::error(
                     call_id,
-                    &format!("Invalid JSONPath expression '{}': {}", path, e),
+                    format!("Invalid JSONPath expression '{}': {}", path, e),
                 )),
             }
         } else {
@@ -193,7 +193,7 @@ impl JsonEditTool {
 
             Ok(ToolResult::success(
                 call_id,
-                &format!("JSON content of {}:\n{}", file_path.display(), output),
+                format!("JSON content of {}:\n{}", file_path.display(), output),
             ))
         }
     }
@@ -214,7 +214,7 @@ impl JsonEditTool {
         if let Err(e) = self.set_value_at_path(&mut data, json_path, value.clone()) {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Failed to set value: {}", e),
+                format!("Failed to set value: {}", e),
             ));
         }
 
@@ -222,7 +222,7 @@ impl JsonEditTool {
 
         Ok(ToolResult::success(
             call_id,
-            &format!(
+            format!(
                 "Successfully updated JSONPath '{}' with value: {}",
                 json_path,
                 serde_json::to_string(&value)?
@@ -244,7 +244,7 @@ impl JsonEditTool {
         if let Err(e) = self.add_value_at_path(&mut data, json_path, value) {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Failed to add value: {}", e),
+                format!("Failed to add value: {}", e),
             ));
         }
 
@@ -252,7 +252,7 @@ impl JsonEditTool {
 
         Ok(ToolResult::success(
             call_id,
-            &format!("Successfully added value at JSONPath '{}'", json_path),
+            format!("Successfully added value at JSONPath '{}'", json_path),
         ))
     }
 
@@ -269,7 +269,7 @@ impl JsonEditTool {
         if let Err(e) = self.remove_value_at_path(&mut data, json_path) {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Failed to remove value: {}", e),
+                format!("Failed to remove value: {}", e),
             ));
         }
 
@@ -277,7 +277,7 @@ impl JsonEditTool {
 
         Ok(ToolResult::success(
             call_id,
-            &format!(
+            format!(
                 "Successfully removed element(s) at JSONPath '{}'",
                 json_path
             ),

@@ -378,7 +378,7 @@ impl BashTool {
 
             return Ok(ToolResult::success(
                 &call.id,
-                &"tool has been restarted.".to_string(),
+                "tool has been restarted.".to_string(),
             ));
         }
 
@@ -389,7 +389,7 @@ impl BashTool {
             if let Some(warning) = check_windows_command_safety(&command) {
                 return Ok(ToolResult::error(
                     &call.id,
-                    &format!(
+                    format!(
                         "⚠️  Potentially dangerous command detected: {}\n\nSafer alternatives:\n{}",
                         warning.risk, warning.alternatives
                     ),
@@ -454,7 +454,7 @@ impl BashTool {
             }
             Err(e) => Ok(ToolResult::error(
                 &call.id,
-                &format!("Error running shell command: {}", e),
+                format!("Error running shell command: {}", e),
             )),
         }
     }

@@ -118,7 +118,7 @@ impl GlobTool {
         if files_only && dirs_only {
             return Ok(ToolResult::error(
                 &call.id,
-                &"Cannot specify both files_only and dirs_only as true".to_string(),
+                "Cannot specify both files_only and dirs_only as true".to_string(),
             ));
         }
 
@@ -126,7 +126,7 @@ impl GlobTool {
         if !base_path.exists() {
             return Ok(ToolResult::error(
                 &call.id,
-                &format!("Base path does not exist: {}", base_path.display()),
+                format!("Base path does not exist: {}", base_path.display()),
             ));
         }
 
@@ -155,7 +155,7 @@ impl GlobTool {
                 if matches.is_empty() {
                     Ok(ToolResult::success(
                         &call.id,
-                        &format!(
+                        format!(
                             "No files found matching pattern '{}' in {}",
                             pattern,
                             base_path.display()
@@ -195,7 +195,7 @@ impl GlobTool {
             }
             Err(e) => Ok(ToolResult::error(
                 &call.id,
-                &format!("Error finding files: {}", e),
+                format!("Error finding files: {}", e),
             )),
         }
     }

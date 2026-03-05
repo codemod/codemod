@@ -147,7 +147,7 @@ impl ThinkingTool {
                 });
                 Ok(ToolResult::error(
                     &call.id,
-                    &format!(
+                    format!(
                         "Sequential thinking failed: {}\n\nDetails:\n{}",
                         e,
                         serde_json::to_string_pretty(&error_data).unwrap_or_default()

@@ -272,7 +272,7 @@ impl McpTool {
             }
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unknown operation: {}. Supported operations: start_server, stop_server, list_servers, list_tools, call_tool",
                     operation
                 ),
@@ -312,12 +312,12 @@ impl McpTool {
 
                 Ok(ToolResult::success(
                     call_id,
-                    &format!("MCP server '{}' started successfully", server_name),
+                    format!("MCP server '{}' started successfully", server_name),
                 ))
             }
             Err(e) => Ok(ToolResult::error(
                 call_id,
-                &format!("Failed to start MCP server '{}': {}", server_name, e),
+                format!("Failed to start MCP server '{}': {}", server_name, e),
             )),
         }
     }
@@ -333,12 +333,12 @@ impl McpTool {
             server.stop().await;
             Ok(ToolResult::success(
                 call_id,
-                &format!("MCP server '{}' stopped successfully", server_name),
+                format!("MCP server '{}' stopped successfully", server_name),
             ))
         } else {
             Ok(ToolResult::error(
                 call_id,
-                &format!("MCP server '{}' not found", server_name),
+                format!("MCP server '{}' not found", server_name),
             ))
         }
     }
@@ -375,7 +375,7 @@ impl McpTool {
                     if tools.is_empty() {
                         Ok(ToolResult::success(
                             call_id,
-                            &format!("No tools available from MCP server '{}'", server_name),
+                            format!("No tools available from MCP server '{}'", server_name),
                         ))
                     } else {
                         let mut result =
@@ -408,7 +408,7 @@ impl McpTool {
                 }
                 Err(e) => Ok(ToolResult::error(
                     call_id,
-                    &format!(
+                    format!(
                         "Failed to list tools from MCP server '{}': {}",
                         server_name, e
                     ),
@@ -417,7 +417,7 @@ impl McpTool {
         } else {
             Ok(ToolResult::error(
                 call_id,
-                &format!("MCP server '{}' not found", server_name),
+                format!("MCP server '{}' not found", server_name),
             ))
         }
     }
@@ -443,7 +443,7 @@ impl McpTool {
 
                     Ok(ToolResult::success(
                         call_id,
-                        &format!(
+                        format!(
                             "Tool '{}' executed successfully on MCP server '{}':\n\n{}",
                             tool_name, server_name, result_str
                         ),
@@ -451,7 +451,7 @@ impl McpTool {
                 }
                 Err(e) => Ok(ToolResult::error(
                     call_id,
-                    &format!(
+                    format!(
                         "Failed to call tool '{}' on MCP server '{}': {}",
                         tool_name, server_name, e
                     ),
@@ -460,7 +460,7 @@ impl McpTool {
         } else {
             Ok(ToolResult::error(
                 call_id,
-                &format!("MCP server '{}' not found", server_name),
+                format!("MCP server '{}' not found", server_name),
             ))
         }
     }

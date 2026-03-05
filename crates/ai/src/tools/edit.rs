@@ -93,7 +93,7 @@ impl EditTool {
 
         // Validate path and command
         if let Err(e) = self.validate_path(&command, path) {
-            return Ok(ToolResult::error(&call.id, &e.to_string()));
+            return Ok(ToolResult::error(&call.id, e.to_string()));
         }
 
         match command.as_str() {
@@ -126,7 +126,7 @@ impl EditTool {
             }
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unrecognized command {}. The allowed commands for the {} tool are: {}",
                     command,
                     self.name(),
@@ -206,21 +206,21 @@ impl EditTool {
             let (init_line, final_line) = (range[0], range[1]);
 
             if init_line < 1 || init_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its first element `{}` should be within the range of lines of the file: [1, {}]",
                     range, init_line, n_lines_file
                 )));
             }
 
             if final_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its second element `{}` should be smaller than the number of lines in the file: `{}`",
                     range, final_line, n_lines_file
                 )));
             }
 
             if final_line != -1 && final_line < init_line {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its second element `{}` should be larger or equal than its first `{}`",
                     range, final_line, init_line
                 )));
@@ -256,7 +256,7 @@ impl EditTool {
         self.write_file(path, file_text)?;
         Ok(ToolResult::success(
             call_id,
-            &format!("File created successfully at: {}", path.display()),
+            format!("File created successfully at: {}", path.display()),
         ))
     }
 
@@ -277,7 +277,7 @@ impl EditTool {
         if occurrences == 0 {
             return Ok(ToolResult::error(
                 call_id,
-                &format!(
+                format!(
                     "No replacement was performed, old_str `{}` did not appear verbatim in {}.",
                     old_str,
                     path.display()
@@ -296,7 +296,7 @@ impl EditTool {
                     }
                 })
                 .collect();
-            return Ok(ToolResult::error(call_id, &format!(
+            return Ok(ToolResult::error(call_id, format!(
                 "No replacement was performed. Multiple occurrences of old_str `{}` in lines {:?}. Please ensure it is unique",
                 old_str, lines
             )));
@@ -338,7 +338,7 @@ impl EditTool {
         let n_lines_file = file_text_lines.len() as i32;
 
         if insert_line < 0 || insert_line > n_lines_file {
-            return Ok(ToolResult::error(call_id, &format!(
+            return Ok(ToolResult::error(call_id, format!(
                 "Invalid `insert_line` parameter: {}. It should be within the range of lines of the file: [0, {}]",
                 insert_line, n_lines_file
             )));

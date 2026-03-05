@@ -463,7 +463,7 @@ impl CkgTool {
             "stats" => self.get_statistics(&call.id).await,
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unknown operation: {}. Supported operations: build, query, analyze, stats",
                     operation
                 ),
@@ -487,14 +487,14 @@ impl CkgTool {
         if !path.exists() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path does not exist: {}", path.display()),
+                format!("Path does not exist: {}", path.display()),
             ));
         }
 
         if !path.is_dir() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path is not a directory: {}", path.display()),
+                format!("Path is not a directory: {}", path.display()),
             ));
         }
 
@@ -598,7 +598,7 @@ impl CkgTool {
         if symbols.is_empty() {
             return Ok(ToolResult::success(
                 call_id,
-                &format!("No symbols found matching query: '{}'", query),
+                format!("No symbols found matching query: '{}'", query),
             ));
         }
 
@@ -641,14 +641,14 @@ impl CkgTool {
         if !path.exists() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("File does not exist: {}", path.display()),
+                format!("File does not exist: {}", path.display()),
             ));
         }
 
         if !path.is_file() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path is not a file: {}", path.display()),
+                format!("Path is not a file: {}", path.display()),
             ));
         }
 
