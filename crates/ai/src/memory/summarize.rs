@@ -3,10 +3,11 @@
 use rig::completion::Prompt;
 
 use crate::memory::history::{clip_chars, HistoryDocument};
-use crate::memory::policy::{FINAL_SUMMARY_CHAR_LIMIT, SUMMARY_CHUNK_CHARS};
 use crate::memory::{MemoryError, Result};
 
 const SUMMARIZER_PREAMBLE: &str = "You summarize prior AI tool-execution context. Preserve facts, file paths, commands, failures, and decisions. Keep output concise and structured.";
+const SUMMARY_CHUNK_CHARS: usize = 6_000;
+const FINAL_SUMMARY_CHAR_LIMIT: usize = 14_000;
 
 fn chunk_documents(docs: &[String], max_chunk_chars: usize) -> Vec<String> {
     if docs.is_empty() {
@@ -53,7 +54,6 @@ where
 
     let response = client
         .agent(model.to_string())
-        .temperature(0.1)
         .preamble(SUMMARIZER_PREAMBLE)
         .build()
         .prompt(prompt)

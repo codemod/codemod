@@ -10,18 +10,16 @@ use thiserror::Error;
 use crate::memory::controller::{
     compact_history_for_retry, is_context_limit_error_text, is_proactive_cancel_reason,
     maybe_proactive_budget, proactive_cancel_reason, CompactionResult, CompactionStats,
-    MemoryTrigger, TokenUsageSnapshot,
-};
-use crate::memory::history::estimate_context_chars;
-use crate::memory::policy::{
-    DYNAMIC_CONTEXT_SAMPLE_DOCS, MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET,
+    MemoryTrigger, TokenUsageSnapshot, MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET,
     SOFT_CONTEXT_TOKEN_BUDGET,
 };
+use crate::memory::history::estimate_context_chars;
 use crate::memory::semantic::{build_dynamic_context_index, DynamicContextIndex, SemanticDocument};
 use crate::prompt::{build_system_context, build_system_prompt_with_context, build_user_message};
 use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tools};
 
 const TASK_DONE_REASON_PREFIX: &str = "__task_done__:";
+const DYNAMIC_CONTEXT_SAMPLE_DOCS: usize = 6;
 
 pub struct ExecuteAiStepConfig {
     pub endpoint: String,
@@ -428,13 +426,13 @@ where
             }
         };
 
-        let mut agent_builder = client
-            .agent(config.model.clone())
-            .temperature(0.7)
-            .preamble(preamble)
-            .hook(TaskDoneAndMemoryHook {
-                budget_tracker: budget_tracker.clone(),
-            });
+        let mut agent_builder =
+            client
+                .agent(config.model.clone())
+                .preamble(preamble)
+                .hook(TaskDoneAndMemoryHook {
+                    budget_tracker: budget_tracker.clone(),
+                });
 
         if let Some(index) = dynamic_context_index {
             agent_builder = agent_builder.dynamic_context(DYNAMIC_CONTEXT_SAMPLE_DOCS, index);

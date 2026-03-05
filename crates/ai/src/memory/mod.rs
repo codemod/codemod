@@ -3,7 +3,6 @@
 pub mod compact;
 pub mod controller;
 pub mod history;
-pub mod policy;
 pub mod semantic;
 pub mod summarize;
 

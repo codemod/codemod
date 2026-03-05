@@ -9,9 +9,10 @@ use crate::memory::history::{
     clip_chars, estimate_context_chars, extract_history_documents, extract_message_text,
     HistoryDocument,
 };
-use crate::memory::policy::{
-    MAX_SNIPPET_CHARS_PER_DOC, RECENT_MESSAGE_WINDOW, SOFT_CONTEXT_CHAR_BUDGET,
-};
+
+const RECENT_MESSAGE_WINDOW: usize = 16;
+const MAX_SNIPPET_CHARS_PER_DOC: usize = 1_200;
+const MAX_MEMORY_PACKET_CHARS: usize = 40_000;
 
 #[derive(Debug, Clone)]
 pub struct PruneResult {
@@ -197,7 +198,7 @@ pub fn build_memory_packet(summary: &str, retrieved_snippets: &[String]) -> Mess
     }
 
     // Final clip guard to avoid packet itself exploding context.
-    Message::user(clip_chars(&packet, SOFT_CONTEXT_CHAR_BUDGET / 3))
+    Message::user(clip_chars(&packet, MAX_MEMORY_PACKET_CHARS))
 }
 
 pub fn rebuild_history_with_memory(

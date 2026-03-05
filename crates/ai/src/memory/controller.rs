@@ -7,15 +7,16 @@ use crate::memory::compact::{
     RebuildStats,
 };
 use crate::memory::history::{estimate_context_chars, HistoryDocument};
-use crate::memory::policy::{
-    MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET, SOFT_CONTEXT_TOKEN_BUDGET,
-    TARGET_CONTEXT_CHAR_BUDGET, TARGET_CONTEXT_TOKEN_BUDGET,
-};
 use crate::memory::semantic::SemanticDocument;
 use crate::memory::summarize::hierarchical_summarize;
 use crate::memory::{MemoryError, Result};
 
 pub const MEMORY_PROACTIVE_REASON_PREFIX: &str = "__memory_compaction_proactive__:";
+pub(crate) const MAX_COMPACTION_ATTEMPTS: usize = 5;
+pub(crate) const SOFT_CONTEXT_TOKEN_BUDGET: u64 = 96_000;
+pub(crate) const TARGET_CONTEXT_TOKEN_BUDGET: u64 = 72_000;
+pub(crate) const SOFT_CONTEXT_CHAR_BUDGET: usize = 120_000;
+const TARGET_CONTEXT_CHAR_BUDGET: usize = 80_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryTrigger {

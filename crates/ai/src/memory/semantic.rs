@@ -6,8 +6,9 @@ use rig::vector_store::{in_memory_store::InMemoryVectorStore, TopNResults, Vecto
 use rig::wasm_compat::WasmBoxedFuture;
 use rig::Embed;
 
-use crate::memory::policy::MAX_VECTOR_INDEX_DOCS;
 use crate::memory::MemoryError;
+
+const MAX_VECTOR_INDEX_DOCS: usize = 256;
 
 #[derive(rig::Embed, serde::Serialize, Clone, Debug, Eq, PartialEq)]
 pub struct SemanticDocument {
