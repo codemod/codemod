@@ -20,4 +20,3 @@ tokio = { workspace = true, features = ["full"] }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
-chrono.workspace = true

@@ -9,13 +9,6 @@ use crate::memory::{MemoryError, Result};
 const SUMMARIZER_PREAMBLE: &str = "You summarize prior AI tool-execution context. Preserve facts, file paths, commands, failures, and decisions. Keep output concise and structured.";
 const SUMMARIZER_TARGET_OUTPUT_TOKENS: u64 = 2_000;
 
-fn resolve_summarizer_max_output_tokens(summarizer_output_cap: Option<u64>) -> u64 {
-    summarizer_output_cap
-        .unwrap_or(SUMMARIZER_TARGET_OUTPUT_TOKENS)
-        .max(1)
-        .min(SUMMARIZER_TARGET_OUTPUT_TOKENS)
-}
-
 fn chunk_documents(docs: &[String], max_chunk_chars: usize) -> Vec<String> {
     if docs.is_empty() {
         return Vec::new();
@@ -44,13 +37,10 @@ async fn summarize_chunk<C>(
     model: &str,
     query_focus: &str,
     chunk: &str,
-    summarizer_output_cap: Option<u64>,
 ) -> Result<String>
 where
     C: rig::client::CompletionClient,
 {
-    let max_output_tokens = resolve_summarizer_max_output_tokens(summarizer_output_cap);
-
     let prompt = format!(
         "Summarize this archived execution context.\n\
          Focus: {}\n\
@@ -65,7 +55,7 @@ where
     let response = client
         .agent(model.to_string())
         .temperature(0.1)
-        .max_tokens(max_output_tokens)
+        .max_tokens(SUMMARIZER_TARGET_OUTPUT_TOKENS)
         .preamble(SUMMARIZER_PREAMBLE)
         .build()
         .prompt(prompt)
@@ -88,7 +78,6 @@ pub async fn hierarchical_summarize<C>(
     model: &str,
     archived_docs: &[HistoryDocument],
     query_focus: &str,
-    summarizer_output_cap: Option<u64>,
 ) -> Result<String>
 where
     C: rig::client::CompletionClient,
@@ -119,9 +108,7 @@ where
         let chunks = chunk_documents(&level, SUMMARY_CHUNK_CHARS);
         let mut next = Vec::new();
         for chunk in chunks {
-            next.push(
-                summarize_chunk(client, model, query_focus, &chunk, summarizer_output_cap).await?,
-            );
+            next.push(summarize_chunk(client, model, query_focus, &chunk).await?);
         }
         level = next;
     }
@@ -145,26 +132,5 @@ mod tests {
         let chunks = chunk_documents(&docs, 45);
         assert!(chunks.len() >= 2);
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 50));
-    }
-
-    #[test]
-    fn test_resolve_summarizer_max_output_tokens_uses_default() {
-        assert_eq!(
-            resolve_summarizer_max_output_tokens(None),
-            SUMMARIZER_TARGET_OUTPUT_TOKENS
-        );
-    }
-
-    #[test]
-    fn test_resolve_summarizer_max_output_tokens_clamps_to_catalog_cap() {
-        assert_eq!(resolve_summarizer_max_output_tokens(Some(500)), 500);
-    }
-
-    #[test]
-    fn test_resolve_summarizer_max_output_tokens_never_exceeds_target() {
-        assert_eq!(
-            resolve_summarizer_max_output_tokens(Some(10_000)),
-            SUMMARIZER_TARGET_OUTPUT_TOKENS
-        );
     }
 }

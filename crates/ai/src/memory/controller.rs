@@ -7,7 +7,10 @@ use crate::memory::compact::{
     RebuildStats,
 };
 use crate::memory::history::{estimate_context_chars, HistoryDocument};
-use crate::memory::policy::MemoryPolicy;
+use crate::memory::policy::{
+    MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET, SOFT_CONTEXT_TOKEN_BUDGET,
+    TARGET_CONTEXT_CHAR_BUDGET, TARGET_CONTEXT_TOKEN_BUDGET,
+};
 use crate::memory::semantic::SemanticDocument;
 use crate::memory::summarize::hierarchical_summarize;
 use crate::memory::{MemoryError, Result};
@@ -58,7 +61,6 @@ pub fn maybe_proactive_budget(
     prompt: &Message,
     history: &[Message],
     usage_snapshot: Option<&TokenUsageSnapshot>,
-    policy: &MemoryPolicy,
 ) -> Option<(usize, Option<u64>)> {
     let chars = estimate_context_chars(prompt, history);
 
@@ -67,13 +69,13 @@ pub fn maybe_proactive_budget(
             let estimated_tokens = ((chars as u128 * snapshot.total_tokens as u128)
                 / snapshot.context_chars as u128) as u64;
 
-            if estimated_tokens > policy.soft_context_token_budget {
+            if estimated_tokens > SOFT_CONTEXT_TOKEN_BUDGET {
                 return Some((chars, Some(estimated_tokens)));
             }
         }
     }
 
-    if chars > policy.soft_context_char_budget {
+    if chars > SOFT_CONTEXT_CHAR_BUDGET {
         return Some((chars, None));
     }
 
@@ -103,9 +105,8 @@ fn aggressive_trim_to_target(
     mut history: Vec<Message>,
     prompt: &Message,
     attempt: usize,
-    target_context_char_budget: usize,
 ) -> Vec<Message> {
-    if estimate_context_chars(prompt, &history) <= target_context_char_budget {
+    if estimate_context_chars(prompt, &history) <= TARGET_CONTEXT_CHAR_BUDGET {
         return history;
     }
 
@@ -117,7 +118,7 @@ fn aggressive_trim_to_target(
         history = trimmed;
     }
 
-    while estimate_context_chars(prompt, &history) > target_context_char_budget && history.len() > 2
+    while estimate_context_chars(prompt, &history) > TARGET_CONTEXT_CHAR_BUDGET && history.len() > 2
     {
         let remove_index = if history.len() > 3 { 2 } else { 1 };
         history.remove(remove_index);
@@ -150,27 +151,20 @@ pub async fn compact_history_for_retry<C>(
     history: &[Message],
     attempt: usize,
     trigger: MemoryTrigger,
-    policy: &MemoryPolicy,
-    summarizer_output_cap: Option<u64>,
 ) -> Result<CompactionResult>
 where
     C: rig::client::CompletionClient,
 {
-    if attempt >= policy.max_compaction_attempts {
+    if attempt >= MAX_COMPACTION_ATTEMPTS {
         return Err(MemoryError::Compaction(format!(
-            "Reached max compaction attempts ({})",
-            policy.max_compaction_attempts
+            "Reached max compaction attempts ({MAX_COMPACTION_ATTEMPTS})"
         )));
     }
 
     let prune = deterministic_prune(history, current_prompt, attempt);
     if prune.archived_documents.is_empty() {
-        let trimmed = aggressive_trim_to_target(
-            prune.retained_history.clone(),
-            current_prompt,
-            attempt,
-            policy.target_context_char_budget,
-        );
+        let trimmed =
+            aggressive_trim_to_target(prune.retained_history.clone(), current_prompt, attempt);
         let stats = CompactionStats {
             attempt,
             trigger,
@@ -186,41 +180,25 @@ where
         });
     }
 
-    let summary = hierarchical_summarize(
-        client,
-        model,
-        &prune.archived_documents,
-        task_prompt,
-        summarizer_output_cap,
-    )
-    .await?;
+    let summary =
+        hierarchical_summarize(client, model, &prune.archived_documents, task_prompt).await?;
     let retrieval_docs = build_retrieval_docs(&prune.archived_documents, &summary);
     let packet = Some(build_memory_packet(&summary, &[]));
 
     let (mut rebuilt, mut rebuild_stats) =
         rebuild_history_with_memory(&prune, packet, current_prompt);
-    rebuilt = aggressive_trim_to_target(
-        rebuilt,
-        current_prompt,
-        attempt,
-        policy.target_context_char_budget,
-    );
+    rebuilt = aggressive_trim_to_target(rebuilt, current_prompt, attempt);
     rebuild_stats.retrieved_docs_count = retrieval_docs.len();
     rebuild_stats.rebuilt_context_chars = estimate_context_chars(current_prompt, &rebuilt);
 
     let estimated_tokens_after = if prune.context_chars_before > 0 {
-        (rebuild_stats.rebuilt_context_chars as u128 * policy.target_context_token_budget as u128
+        (rebuild_stats.rebuilt_context_chars as u128 * TARGET_CONTEXT_TOKEN_BUDGET as u128
             / prune.context_chars_before as u128) as u64
     } else {
         0
     };
-    if estimated_tokens_after > policy.target_context_token_budget {
-        rebuilt = aggressive_trim_to_target(
-            rebuilt,
-            current_prompt,
-            attempt.saturating_add(1),
-            policy.target_context_char_budget,
-        );
+    if estimated_tokens_after > TARGET_CONTEXT_TOKEN_BUDGET {
+        rebuilt = aggressive_trim_to_target(rebuilt, current_prompt, attempt.saturating_add(1));
         rebuild_stats.rebuilt_context_chars = estimate_context_chars(current_prompt, &rebuilt);
     }
 
@@ -234,7 +212,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::policy::resolve_memory_policy;
 
     #[test]
     fn test_proactive_reason_roundtrip() {
@@ -245,20 +222,18 @@ mod tests {
 
     #[test]
     fn test_maybe_proactive_budget_threshold() {
-        let policy = MemoryPolicy::default();
-        let prompt = Message::user("x".repeat(policy.soft_context_char_budget + 10));
-        assert!(maybe_proactive_budget(&prompt, &[], None, &policy).is_some());
+        let prompt = Message::user("x".repeat(SOFT_CONTEXT_CHAR_BUDGET + 10));
+        assert!(maybe_proactive_budget(&prompt, &[], None).is_some());
     }
 
     #[test]
     fn test_maybe_proactive_budget_uses_usage_snapshot() {
-        let policy = resolve_memory_policy(Some(120_000));
         let prompt = Message::user("x".repeat(20_000));
         let snapshot = TokenUsageSnapshot {
             total_tokens: 100_000,
             context_chars: 20_000,
         };
-        let signal = maybe_proactive_budget(&prompt, &[], Some(&snapshot), &policy);
+        let signal = maybe_proactive_budget(&prompt, &[], Some(&snapshot));
         assert!(signal.is_some());
     }
 }
