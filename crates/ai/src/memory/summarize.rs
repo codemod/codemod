@@ -7,7 +7,6 @@ use crate::memory::policy::{FINAL_SUMMARY_CHAR_LIMIT, SUMMARY_CHUNK_CHARS};
 use crate::memory::{MemoryError, Result};
 
 const SUMMARIZER_PREAMBLE: &str = "You summarize prior AI tool-execution context. Preserve facts, file paths, commands, failures, and decisions. Keep output concise and structured.";
-const SUMMARIZER_TARGET_OUTPUT_TOKENS: u64 = 2_000;
 
 fn chunk_documents(docs: &[String], max_chunk_chars: usize) -> Vec<String> {
     if docs.is_empty() {
@@ -48,14 +47,13 @@ where
          - Keep concrete facts only.\n\
          - Include file paths, commands, and errors if present.\n\
          - Keep under 350 words.\n\n\
-        Context:\n{}",
+         Context:\n{}",
         query_focus, chunk
     );
 
     let response = client
         .agent(model.to_string())
         .temperature(0.1)
-        .max_tokens(SUMMARIZER_TARGET_OUTPUT_TOKENS)
         .preamble(SUMMARIZER_PREAMBLE)
         .build()
         .prompt(prompt)

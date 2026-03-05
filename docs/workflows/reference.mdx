@@ -256,10 +256,6 @@ steps:
   Model identifier. Overrides `LLM_MODEL` if set.
 </ParamField>
 
-<ParamField path="ai.max_output_tokens" type="number" default="8192">
-  Maximum output tokens per model response. Resolution order: `ai.max_output_tokens` -> `LLM_MAX_OUTPUT_TOKENS` -> `8192`.
-</ParamField>
-
 <ParamField path="ai.system_prompt" type="string">
   System prompt to scope the AI agent's behavior.
 </ParamField>
@@ -283,7 +279,6 @@ steps:
   LLM_API_KEY=YOUR_KEY
   LLM_PROVIDER=openai  # or anthropic, google_ai, azure_openai
   LLM_MODEL=gpt-4o
-  LLM_MAX_OUTPUT_TOKENS=8192  # used when ai.max_output_tokens is omitted
   LLM_BASE_URL=https://api.openai.com/v1  # optional
   ```
 </ParamField>
