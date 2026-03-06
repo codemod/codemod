@@ -98,7 +98,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let dirty_check = dirty_git_check::dirty_check();
+    let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty);
 
     std::env::set_var("CODEMOD_STEP_ID", "jssg");
