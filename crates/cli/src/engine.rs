@@ -149,7 +149,7 @@ pub fn create_engine(
     skip_install_skill_steps: bool,
     output_format: OutputFormat,
 ) -> Result<(Engine, WorkflowRunConfig)> {
-    let dirty_check = dirty_git_check::dirty_check();
+    let dirty_check = dirty_git_check::dirty_check(no_interactive);
     let bundle_path = if workflow_file_path.is_file() {
         workflow_file_path.parent().unwrap().to_path_buf()
     } else {

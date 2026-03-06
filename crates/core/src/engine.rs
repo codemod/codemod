@@ -26,6 +26,7 @@ use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use tokio::fs::read_to_string;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::time;
 use uuid::Uuid;
@@ -1376,6 +1377,9 @@ impl Engine {
             };
 
             step_logger.step_start();
+            if !step_logger.is_jsonl() {
+                println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
+            }
             let step_start_time = std::time::Instant::now();
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
@@ -1557,7 +1561,6 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
-                    logger,
                 )
                 .await
             }
@@ -1698,7 +1701,6 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
-                    logger,
                 )
                 .await
             }
@@ -1761,13 +1763,6 @@ impl Engine {
                     if !path.is_file() {
                         return;
                     }
-
-                    slog!(
-                        logger,
-                        debug,
-                        "Executing AST grep on file: {}",
-                        path.display()
-                    );
 
                     // Execute ast-grep on this file
                     match scan_file_with_combined_scan(
@@ -2039,13 +2034,6 @@ impl Engine {
                         return;
                     }
                 };
-
-                slog!(
-                    logger,
-                    debug,
-                    "Executing JSSG on file: {}",
-                    file_path.display()
-                );
 
                 // Execute the async codemod using the captured runtime handle
                 std::env::set_var("CODEMOD_STEP_ID", &step_id);
@@ -2339,6 +2327,16 @@ impl Engine {
             }
         };
 
+        // Check if Codex CLI agent is requested via LLM_AGENT env var
+        if std::env::var("LLM_AGENT")
+            .map(|v| v.eq_ignore_ascii_case("codex"))
+            .unwrap_or(false)
+        {
+            return self
+                .execute_codex_cli_step(&api_key, &resolved_prompt, logger)
+                .await;
+        }
+
         let model = ai_config
             .model
             .clone()
@@ -2382,6 +2380,84 @@ impl Engine {
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
         slog!(logger, info, "AI agent step completed successfully");
+        Ok(())
+    }
+
+    /// Execute an AI step using OpenAI Codex CLI as the agent backend.
+    /// Invoked when the LLM_AGENT=codex environment variable is set.
+    async fn execute_codex_cli_step(
+        &self,
+        api_key: &str,
+        prompt: &str,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        slog!(logger, info, "Using Codex CLI agent");
+
+        let mut cmd = tokio::process::Command::new("npx");
+        cmd.arg("-y")
+            .arg("@openai/codex@0.101.0")
+            .arg("exec")
+            .arg("-") // read prompt from stdin
+            .current_dir(&self.workflow_run_config.target_path)
+            .env("OPENAI_API_KEY", api_key)
+            .env_remove("RUST_LOG")
+            .env_remove("RUST_BACKTRACE")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        if let Ok(base_url) = std::env::var("LLM_BASE_URL") {
+            cmd.env("OPENAI_BASE_URL", &base_url);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::StepExecution(format!("Failed to spawn Codex CLI: {e}")))?;
+
+        // Write prompt to stdin and close it
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                Error::StepExecution(format!("Failed to write prompt to stdin: {e}"))
+            })?;
+            // stdin is dropped here, closing the pipe
+        }
+
+        // Stream stdout line-by-line
+        let stdout = child.stdout.take();
+
+        let stdout_logger = logger.clone();
+        let stdout_handle = tokio::spawn(async move {
+            if let Some(stdout) = stdout {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    slog!(stdout_logger, info, "{line}");
+                }
+            }
+        });
+
+        let (_, status) = tokio::try_join!(
+            async {
+                stdout_handle
+                    .await
+                    .map_err(|e| Error::StepExecution(e.to_string()))
+            },
+            async {
+                child
+                    .wait()
+                    .await
+                    .map_err(|e| Error::StepExecution(format!("Codex CLI process error: {e}")))
+            },
+        )?;
+
+        if !status.success() {
+            return Err(Error::StepExecution(format!(
+                "Codex CLI exited with status {}",
+                status,
+            )));
+        }
+
+        slog!(logger, info, "Codex CLI step completed successfully");
         Ok(())
     }
 
@@ -2617,7 +2693,6 @@ impl Engine {
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
-        logger: &StructuredLogger,
     ) -> Result<()> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
@@ -2721,13 +2796,6 @@ impl Engine {
             .await
             .save_task(&current_task)
             .await?;
-
-        if logger.is_jsonl() {
-            logger.log("info", &format!("Step output:\n{output}"));
-        } else {
-            println!("Step output:");
-            println!("{output}");
-        }
 
         let outputs = read_to_string(&state_outputs_path).await?;
 

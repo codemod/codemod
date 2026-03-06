@@ -467,11 +467,11 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--test-directory" type="string">
-  The directory containing your tests (default: `"tests"`).
+  The parent directory containing your test case subdirectories (default: `"tests"`). Do not pass a specific test case subdirectory — use `--filter` instead.
 </ResponseField>
 
 <ResponseField name="--filter" type="string">
-  A pattern to run only tests whose names match the filter.
+  A pattern to run only tests whose names match the filter. Test names correspond to the subdirectory names within the test directory.
 </ResponseField>
 
 <ResponseField name="--reporter" type="string">
