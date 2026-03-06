@@ -78,6 +78,10 @@ pub struct Command {
     #[arg(long)]
     no_interactive: bool,
 
+    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
+    #[arg(long)]
+    agent: Option<String>,
+
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
@@ -229,7 +233,7 @@ pub async fn handler(
         args.no_color,
         diff_collector.clone(),
         output_format,
-        None,
+        args.agent.clone(),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {
