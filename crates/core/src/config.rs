@@ -8,6 +8,7 @@ use anyhow::Result;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::{
+    ai_handoff::AgentOption,
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,
     structured_log::OutputFormat,
@@ -16,6 +17,10 @@ use crate::{
 pub type CapabilitiesSecurityCallback =
     Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
+
+/// Callback for selecting an agent from available options.
+/// Returns the canonical name of the selected agent, or None to skip.
+pub type AgentSelectionCallback = Arc<Box<dyn Fn(&[AgentOption]) -> Option<String> + Send + Sync>>;
 
 /// Info about a file that would be modified in dry-run mode
 #[derive(Clone, Debug)]
@@ -47,6 +52,10 @@ pub struct WorkflowRunConfig {
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
     /// Non-interactive mode for CI/headless environments
     pub no_interactive: bool,
+    /// Explicitly selected coding agent for AI steps (e.g. "claude-code", "codex")
+    pub agent: Option<String>,
+    /// Callback for presenting agent selection UI when no agent is specified
+    pub agent_selection_callback: Option<AgentSelectionCallback>,
     /// Callback for reporting changes in dry-run mode
     pub dry_run_callback: Option<DryRunCallback>,
     /// Output format for structured logging (Text or Jsonl)
@@ -68,6 +77,8 @@ impl Default for WorkflowRunConfig {
             capabilities: None,
             capabilities_security_callback: None,
             no_interactive: false,
+            agent: None,
+            agent_selection_callback: None,
             dry_run_callback: None,
             output_format: OutputFormat::Text,
         }

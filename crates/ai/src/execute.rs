@@ -503,6 +503,7 @@ where
             }
             Err(error) => {
                 let error_message = error.to_string();
+
                 if is_context_limit_error_text(&error_message) {
                     let compaction = compact_and_retry(
                         client,

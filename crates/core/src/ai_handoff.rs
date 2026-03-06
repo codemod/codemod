@@ -1,6 +1,157 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 const MAX_PARENT_DEPTH: usize = 8;
+
+/// Agents that can be launched from the CLI with a command to execute the AI instructions.
+/// Each entry maps a canonical agent name to the executable names to search for on `$PATH`,
+/// plus the command template for invoking the agent with a prompt.
+const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
+    LaunchableAgent {
+        canonical: "claude-code",
+        executables: &["claude"],
+        label: "Claude Code",
+    },
+    LaunchableAgent {
+        canonical: "codex",
+        executables: &["codex"],
+        label: "Codex CLI",
+    },
+    LaunchableAgent {
+        canonical: "aider",
+        executables: &["aider"],
+        label: "Aider",
+    },
+    LaunchableAgent {
+        canonical: "goose",
+        executables: &["goose", "goose-cli", "block-goose"],
+        label: "Goose",
+    },
+    LaunchableAgent {
+        canonical: "opencode",
+        executables: &["opencode", "opencode-cli", "open-code"],
+        label: "OpenCode",
+    },
+    LaunchableAgent {
+        canonical: "openclaw",
+        executables: &["openclaw", "openclaw-cli", "open-claw"],
+        label: "OpenClaw",
+    },
+];
+
+#[derive(Clone, Debug)]
+struct LaunchableAgent {
+    canonical: &'static str,
+    executables: &'static [&'static str],
+    label: &'static str,
+}
+
+/// An agent that was found (or not) on the system.
+#[derive(Clone, Debug)]
+pub struct AgentOption {
+    /// Canonical name (e.g. "claude-code")
+    pub canonical: &'static str,
+    /// Human-readable label (e.g. "Claude Code")
+    pub label: &'static str,
+    /// Path to the executable, if found
+    pub executable_path: Option<PathBuf>,
+}
+
+impl AgentOption {
+    pub fn is_available(&self) -> bool {
+        self.executable_path.is_some()
+    }
+}
+
+/// Discover which coding agents are installed on the system by checking `$PATH`.
+pub fn discover_installed_agents() -> Vec<AgentOption> {
+    LAUNCHABLE_AGENTS
+        .iter()
+        .map(|agent| {
+            let executable_path = agent
+                .executables
+                .iter()
+                .find_map(|exe| find_executable_on_path(exe));
+
+            log::debug!(
+                "agent discovery: {} ({}) -> {}",
+                agent.canonical,
+                agent.label,
+                executable_path
+                    .as_ref()
+                    .map_or("not found".to_string(), |p| p.display().to_string()),
+            );
+
+            AgentOption {
+                canonical: agent.canonical,
+                label: agent.label,
+                executable_path,
+            }
+        })
+        .collect()
+}
+
+/// Resolve an agent name (from `--agent` flag) to a canonical name.
+/// Accepts canonical names or aliases.
+pub fn resolve_agent_name(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    KNOWN_AGENTS
+        .iter()
+        .find(|a| a.canonical == lower || a.aliases.iter().any(|alias| *alias == lower))
+        .map(|a| a.canonical)
+}
+
+/// Find an agent by canonical name and return its executable path if installed.
+pub fn find_agent_executable(canonical: &str) -> Option<PathBuf> {
+    LAUNCHABLE_AGENTS
+        .iter()
+        .find(|a| a.canonical == canonical)
+        .and_then(|a| {
+            a.executables
+                .iter()
+                .find_map(|exe| find_executable_on_path(exe))
+        })
+}
+
+/// Build the command to launch a coding agent with the given prompt.
+/// Returns `None` if the agent is not recognized.
+pub fn build_agent_command(
+    canonical: &str,
+    executable: &Path,
+    prompt: &str,
+    system_prompt: Option<&str>,
+    working_dir: &Path,
+) -> Option<std::process::Command> {
+    let mut cmd = std::process::Command::new(executable);
+    cmd.current_dir(working_dir);
+
+    let full_prompt = if let Some(sys) = system_prompt {
+        format!("{}\n\n{}", sys, prompt)
+    } else {
+        prompt.to_string()
+    };
+
+    match canonical {
+        "claude-code" => {
+            cmd.arg("-p").arg(&full_prompt);
+        }
+        "codex" => {
+            cmd.arg("--quiet").arg(&full_prompt);
+        }
+        "aider" => {
+            cmd.arg("--message").arg(&full_prompt).arg("--yes");
+        }
+        "goose" => {
+            cmd.arg("run").arg("--text").arg(&full_prompt);
+        }
+        "opencode" | "openclaw" => {
+            cmd.arg("--message").arg(&full_prompt);
+        }
+        _ => return None,
+    }
+
+    Some(cmd)
+}
 
 const KNOWN_AGENTS: &[KnownAgent] = &[
     KnownAgent {
@@ -141,9 +292,25 @@ struct ProcessSnapshot {
 }
 
 pub fn detect_parent_coding_agent() -> DetectionResult {
+    log::debug!("starting parent coding agent detection");
+
     let env_signals = collect_env_signals(std::env::vars());
+    log::debug!("collected {} environment signals", env_signals.len());
+
     let process_signals = collect_process_signals(MAX_PARENT_DEPTH);
-    classify_detection(process_signals, env_signals)
+    let result = classify_detection(process_signals, env_signals);
+
+    log::info!(
+        "AI handoff detection complete: confidence={}, agent={}, reasons={}",
+        result.confidence.as_str(),
+        result.agent_name.as_deref().unwrap_or("none"),
+        result.reasons.len(),
+    );
+    for reason in &result.reasons {
+        log::debug!("detection signal: {}", reason);
+    }
+
+    result
 }
 
 fn classify_detection(
@@ -238,6 +405,12 @@ where
     for marker in ENV_MARKERS {
         if let Some(value) = env_map.get(marker.key) {
             if !value.trim().is_empty() {
+                log::debug!(
+                    "found environment marker: {}={} (agent={})",
+                    marker.key,
+                    value,
+                    marker.agent
+                );
                 signals.push(Signal {
                     agent: marker.agent,
                     strength: SignalStrength::Weak,
@@ -251,14 +424,32 @@ where
 }
 
 fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
+    log::debug!(
+        "inspecting parent process chain (max_depth={})",
+        max_parent_depth
+    );
     match inspect_parent_process_chain(max_parent_depth) {
         Ok(chain) => {
+            log::debug!("parent process chain collected: {} processes", chain.len());
             let mut signals = Vec::new();
 
             for process in chain {
+                log::debug!(
+                    "inspecting parent process: pid={} ppid={} executable={} command={}",
+                    process.pid,
+                    process.parent_pid,
+                    process.executable,
+                    process.command
+                );
+
                 let executable_path = process.executable.trim();
                 if !executable_path.is_empty() {
                     if let Some(agent) = detect_agent_in_executable(executable_path) {
+                        log::debug!(
+                            "executable matched agent (strong signal): pid={} agent={}",
+                            process.pid,
+                            agent
+                        );
                         signals.push(Signal {
                             agent,
                             strength: SignalStrength::Strong,
@@ -271,6 +462,11 @@ fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
                 }
 
                 if let Some(agent) = detect_agent_in_text(&process.command) {
+                    log::debug!(
+                        "command matched agent (medium signal): pid={} agent={}",
+                        process.pid,
+                        agent
+                    );
                     signals.push(Signal {
                         agent,
                         strength: SignalStrength::Medium,
@@ -284,7 +480,10 @@ fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
 
             ProcessInspection::Signals(signals)
         }
-        Err(error) => ProcessInspection::Failed(error),
+        Err(error) => {
+            log::warn!("failed to inspect parent process chain: {}", error);
+            ProcessInspection::Failed(error)
+        }
     }
 }
 
@@ -349,6 +548,18 @@ fn normalize_text_for_matching(input: &str) -> String {
     }
 
     normalized.trim().to_string()
+}
+
+fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var).find_map(|dir| {
+        let full_path = dir.join(name);
+        if full_path.is_file() {
+            Some(full_path)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(unix)]

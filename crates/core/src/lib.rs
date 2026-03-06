@@ -1,4 +1,4 @@
-pub(crate) mod ai_handoff;
+pub mod ai_handoff;
 pub mod config;
 pub mod diff;
 pub mod engine;
