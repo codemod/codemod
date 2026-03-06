@@ -262,7 +262,12 @@ pub async fn handler(
         }
     }
 
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
         let collected_diffs = diff_collector
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();

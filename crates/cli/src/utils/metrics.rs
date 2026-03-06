@@ -11,7 +11,12 @@ fn count_metric_entries(metrics: &MetricsData) -> usize {
 /// - `--report` → always true
 /// - `--no-interactive` → always false
 /// - otherwise → prompt the user, mentioning collected metrics if any
-pub fn should_show_report(report_flag: bool, no_interactive: bool, metrics: &MetricsData) -> bool {
+pub fn should_show_report(
+    report_flag: bool,
+    no_interactive: bool,
+    metrics: &MetricsData,
+    files_modified: usize,
+) -> bool {
     if report_flag {
         return true;
     }
@@ -20,6 +25,11 @@ pub fn should_show_report(report_flag: bool, no_interactive: bool, metrics: &Met
     }
 
     let metric_count = count_metric_entries(metrics);
+
+    // Nothing to show — skip the prompt entirely
+    if metric_count == 0 && files_modified == 0 {
+        return false;
+    }
     let help_message = if metric_count > 0 {
         format!(
             "We collected {} metric data points. Everything is processed offline and stays on your machine.",
