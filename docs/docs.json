@@ -61,7 +61,8 @@
                 "group": "Workflows",
                 "pages": [
                   "workflows/introduction",
-                  "workflows/reference"
+                  "workflows/reference",
+                  "workflows/ai-harness-rig"
                 ]
               },
               {
