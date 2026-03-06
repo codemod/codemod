@@ -14,10 +14,11 @@ pub const TRUNCATED_MESSAGE: &str = "<response clipped><NOTE>To save on context 
 /// Truncate content if it exceeds the provided length.
 pub fn maybe_truncate(content: &str, truncate_after: Option<usize>) -> String {
     let limit = truncate_after.unwrap_or(MAX_RESPONSE_LEN);
-    if content.len() <= limit {
+    if content.chars().count() <= limit {
         content.to_string()
     } else {
-        format!("{}{}", &content[..limit], TRUNCATED_MESSAGE)
+        let clipped: String = content.chars().take(limit).collect();
+        format!("{clipped}{TRUNCATED_MESSAGE}")
     }
 }
 

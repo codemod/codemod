@@ -199,19 +199,6 @@ impl ThinkingTool {
         let branch_id: Option<String> = call.get_parameter("branch_id").ok();
         let needs_more_thoughts: Option<bool> = call.get_parameter("needs_more_thoughts").ok();
 
-        // Validate optional revision fields
-        if let Some(revises) = revises_thought {
-            if revises < 1 {
-                return Err("revises_thought must be a positive integer".into());
-            }
-        }
-
-        if let Some(branch_from) = branch_from_thought {
-            if branch_from < 1 {
-                return Err("branch_from_thought must be a positive integer".into());
-            }
-        }
-
         let mut thought_data = ThoughtData {
             thought,
             thought_number,

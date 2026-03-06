@@ -891,6 +891,7 @@ mod tests {
         assert_eq!(compaction_events[0].trigger, "ReactiveProviderError");
         assert!(last_compaction_stats.is_some());
     }
+
     #[tokio::test]
     async fn test_unknown_protocol_fails_fast() {
         let config = NormalizedAiExecutionConfig {

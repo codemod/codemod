@@ -359,7 +359,18 @@ fn inspect_parent_process_chain(
 
     let mut chain = Vec::new();
     let mut seen_pids = HashSet::new();
-    let mut pid = unsafe { libc::getppid() as i32 };
+    let current_pid = std::process::id().to_string();
+    let parent_output = Command::new("ps")
+        .args(["-ww", "-p", &current_pid, "-o", "ppid="])
+        .output()
+        .map_err(|error| format!("failed to inspect current process parent pid: {error}"))?;
+    if !parent_output.status.success() {
+        return Err("ps command failed while inspecting current process parent pid".to_string());
+    }
+    let mut pid = String::from_utf8_lossy(&parent_output.stdout)
+        .trim()
+        .parse::<i32>()
+        .map_err(|error| format!("failed to parse parent pid from ps output: {error}"))?;
 
     for _ in 0..max_parent_depth {
         if pid <= 1 || !seen_pids.insert(pid) {

@@ -21,6 +21,7 @@ use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use serde_json::json;
+use serial_test::serial;
 use uuid::Uuid;
 
 struct EnvVarGuard {
@@ -1482,7 +1483,8 @@ async fn test_codemod_environment_variables() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn test_ai_step_no_api_key_fallback_allows_following_steps() {
     let api_key_guard = EnvVarGuard::unset("LLM_API_KEY");
 
@@ -1532,7 +1534,8 @@ async fn test_ai_step_no_api_key_fallback_allows_following_steps() {
 }
 
 #[cfg(unix)]
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn test_ai_step_detected_agent_handoff_skips_rig_with_api_key() {
     let api_key_guard = EnvVarGuard::set("LLM_API_KEY", "test-key");
     let provider_guard = EnvVarGuard::set("LLM_PROVIDER", "openai");
