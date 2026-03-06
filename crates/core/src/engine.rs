@@ -2351,6 +2351,16 @@ impl Engine {
             if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
                 let agents = discover_installed_agents();
                 if let Some(selected) = callback(&agents) {
+                    if selected == "__print_prompt__" {
+                        slog!(logger, info, "User chose to print prompt");
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        return Ok(());
+                    }
+
                     slog!(logger, info, "User selected agent: {}", selected);
                     if let Some(executable) = find_agent_executable(&selected) {
                         return self.launch_agent(
