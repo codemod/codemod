@@ -56,6 +56,10 @@ pub enum StepAction {
     /// Execute AI agent with prompt
     #[serde(rename = "ai")]
     AI(UseAI),
+
+    /// Install package skill behavior via codemod CLI
+    #[serde(rename = "install-skill")]
+    InstallSkill(UseInstallSkill),
 }
 
 /// Represents a template use in a step
@@ -271,4 +275,50 @@ pub struct UseAI {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub llm_protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseInstallSkill {
+    /// Package identifier to install (for example `@codemod/jest-to-vitest`)
+    pub package: String,
+
+    /// Authored skill source path inside the package (optional, defaults to conventional layout)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub path: Option<String>,
+
+    /// Target harness adapter (optional, defaults to auto)
+    #[serde(default)]
+    #[ts(optional, as = "Option<InstallSkillHarness>")]
+    pub harness: Option<InstallSkillHarness>,
+
+    /// Install scope (optional, defaults to project)
+    #[serde(default)]
+    #[ts(optional, as = "Option<InstallSkillScope>")]
+    pub scope: Option<InstallSkillScope>,
+
+    /// Overwrite existing skill files (optional, defaults to false)
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallSkillHarness {
+    Auto,
+    Claude,
+    Goose,
+    Opencode,
+    Cursor,
+    Codex,
+    Antigravity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallSkillScope {
+    Project,
+    User,
 }
