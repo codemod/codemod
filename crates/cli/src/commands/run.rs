@@ -229,6 +229,7 @@ pub async fn handler(
         args.no_color,
         diff_collector.clone(),
         output_format,
+        None,
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {

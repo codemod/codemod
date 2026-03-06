@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use log::info;
 use std::sync::Arc;
+mod agent_select;
 mod ascii_art;
 mod auth;
 mod auth_provider;

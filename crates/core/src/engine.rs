@@ -10,7 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-use crate::ai_handoff::{detect_parent_coding_agent, DetectionConfidence};
+use crate::ai_handoff::{
+    build_agent_command, detect_parent_coding_agent, discover_installed_agents,
+    find_agent_executable, resolve_agent_name, DetectionConfidence,
+};
 use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
@@ -132,6 +135,59 @@ pub struct CapabilitiesData {
 }
 
 impl Engine {
+    fn launch_agent(
+        &self,
+        canonical: &str,
+        executable: &Path,
+        system_prompt: Option<&str>,
+        prompt: &str,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        let working_dir = &self.workflow_run_config.target_path;
+
+        let mut cmd =
+            build_agent_command(canonical, executable, prompt, system_prompt, working_dir)
+                .ok_or_else(|| {
+                    Error::StepExecution(format!(
+                        "Failed to build command for agent '{}'",
+                        canonical
+                    ))
+                })?;
+
+        slog!(
+            logger,
+            info,
+            "Launching agent '{}' at {}",
+            canonical,
+            executable.display()
+        );
+
+        // Inherit stdio so user can interact with the agent
+        cmd.stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+
+        let status = cmd.status()?;
+
+        if status.success() {
+            slog!(logger, info, "Agent '{}' completed successfully", canonical);
+            Ok(())
+        } else {
+            let code = status.code().unwrap_or(-1);
+            slog!(
+                logger,
+                warn,
+                "Agent '{}' exited with code {}",
+                canonical,
+                code
+            );
+            Err(Error::StepExecution(format!(
+                "Agent '{}' exited with code {}",
+                canonical, code
+            )))
+        }
+    }
+
     fn emit_ai_instructions(
         &self,
         logger: &StructuredLogger,
@@ -2236,6 +2292,7 @@ impl Engine {
             resolved_prompt
         );
 
+        // 1. Check if running inside a parent coding agent
         let handoff_detection = detect_parent_coding_agent();
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
         slog!(
@@ -2257,6 +2314,63 @@ impl Engine {
                 detected_agent
             );
             return Ok(());
+        }
+
+        // 2. Check if agent was explicitly specified via --agent
+        if let Some(ref agent_name) = self.workflow_run_config.agent {
+            if let Some(canonical) = resolve_agent_name(agent_name) {
+                slog!(logger, info, "Agent specified via --agent: {}", canonical);
+                if let Some(executable) = find_agent_executable(canonical) {
+                    return self.launch_agent(
+                        canonical,
+                        &executable,
+                        ai_config.system_prompt.as_deref(),
+                        &resolved_prompt,
+                        logger,
+                    );
+                } else {
+                    slog!(
+                        logger,
+                        warn,
+                        "Agent '{}' is not installed, falling back to built-in AI",
+                        canonical
+                    );
+                }
+            } else {
+                slog!(
+                    logger,
+                    warn,
+                    "Unknown agent '{}' specified via --agent, ignoring",
+                    agent_name
+                );
+            }
+        }
+
+        // 3. If interactive, discover installed agents and prompt user to select
+        if !self.workflow_run_config.no_interactive {
+            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
+                let agents = discover_installed_agents();
+                if let Some(selected) = callback(&agents) {
+                    slog!(logger, info, "User selected agent: {}", selected);
+                    if let Some(executable) = find_agent_executable(&selected) {
+                        return self.launch_agent(
+                            &selected,
+                            &executable,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                            logger,
+                        );
+                    } else {
+                        slog!(
+                            logger,
+                            warn,
+                            "Agent '{}' executable not found, falling back to built-in AI",
+                            selected
+                        );
+                    }
+                }
+                // User dismissed the selection — fall through to built-in AI
+            }
         }
 
         slog!(
