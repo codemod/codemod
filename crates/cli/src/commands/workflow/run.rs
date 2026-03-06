@@ -122,15 +122,20 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let metrics_data = engine.metrics_context.get_all();
 
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+    let stats = engine.execution_stats.clone();
+    let files_modified = stats.files_modified.load(Ordering::Relaxed);
+    let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
+    let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
         let collected_diffs = diff_collector
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();
-
-        let stats = engine.execution_stats.clone();
-        let files_modified = stats.files_modified.load(Ordering::Relaxed);
-        let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
-        let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
         let report = ExecutionReport::build(
             args.workflow.clone(),

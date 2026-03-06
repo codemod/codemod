@@ -1339,6 +1339,9 @@ impl Engine {
             };
 
             step_logger.step_start();
+            if !step_logger.is_jsonl() {
+                println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
+            }
             let step_start_time = std::time::Instant::now();
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
@@ -1520,7 +1523,6 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
-                    logger,
                 )
                 .await
             }
@@ -2613,7 +2615,6 @@ impl Engine {
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
-        logger: &StructuredLogger,
     ) -> Result<()> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
@@ -2717,13 +2718,6 @@ impl Engine {
             .await
             .save_task(&current_task)
             .await?;
-
-        if logger.is_jsonl() {
-            logger.log("info", &format!("Step output:\n{output}"));
-        } else {
-            println!("Step output:");
-            println!("{output}");
-        }
 
         let outputs = read_to_string(&state_outputs_path).await?;
 
