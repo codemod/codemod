@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use butterflow_core::registry::RegistryConfig;
-use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
+use crate::utils::env_paths::config_dir_from_env;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -16,9 +16,13 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        Self::with_default_registry(RegistryConfig::default().default_registry.to_string())
+    }
+}
+
+impl Config {
+    fn with_default_registry(registry_url: String) -> Self {
         let mut registries = HashMap::new();
-        let default_registry_config = RegistryConfig::default();
-        let registry_url = default_registry_config.default_registry;
 
         registries.insert(
             registry_url.to_string(),
@@ -64,8 +68,17 @@ pub struct TokenStorage {
 
 impl TokenStorage {
     pub fn new() -> Result<Self> {
-        let config_dir = config_dir().unwrap().join("codemod");
+        Self::new_with_env(None)
+    }
 
+    pub fn new_with_env(env: Option<&HashMap<String, String>>) -> Result<Self> {
+        let config_dir = config_dir_from_env(env)
+            .context("Could not determine config directory")?
+            .join("codemod");
+        Self::with_config_dir(config_dir)
+    }
+
+    pub fn with_config_dir(config_dir: PathBuf) -> Result<Self> {
         // Create config directory if it doesn't exist
         if !config_dir.exists() {
             fs::create_dir_all(&config_dir)
@@ -76,10 +89,20 @@ impl TokenStorage {
     }
 
     pub fn load_config(&self) -> Result<Config> {
+        self.load_config_with_env(None)
+    }
+
+    pub fn load_config_with_env(&self, env: Option<&HashMap<String, String>>) -> Result<Config> {
         let config_path = self.config_dir.join("config.json");
 
         if !config_path.exists() {
-            return Ok(Config::default());
+            let default_registry = env
+                .and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| RegistryConfig::default().default_registry);
+            return Ok(Config::with_default_registry(default_registry));
         }
 
         let content = fs::read_to_string(&config_path)

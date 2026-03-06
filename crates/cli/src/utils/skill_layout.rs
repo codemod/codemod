@@ -1,3 +1,4 @@
+use crate::utils::path_safety::normalize_relative_path;
 use log::warn;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,11 +39,7 @@ pub(crate) fn resolve_configured_skill_file_path(
     configured_path: &str,
 ) -> Option<PathBuf> {
     let trimmed = configured_path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let configured = PathBuf::from(trimmed);
+    let configured = normalize_relative_path(trimmed)?;
     let with_root = package_dir.join(&configured);
     let is_directory_hint = trimmed.ends_with('/') || trimmed.ends_with('\\');
     let explicit_skill_file = configured.file_name().is_some_and(|name| {
@@ -180,5 +177,13 @@ mod tests {
         let path = resolve_configured_skill_file_path(temp_dir.path(), "./custom")
             .expect("expected configured path");
         assert_eq!(path, temp_dir.path().join("custom").join(SKILL_FILE_NAME));
+    }
+
+    #[test]
+    fn resolve_configured_skill_file_path_rejects_parent_traversal() {
+        let temp_dir = tempdir().unwrap();
+        assert!(
+            resolve_configured_skill_file_path(temp_dir.path(), "../custom/SKILL.md").is_none()
+        );
     }
 }

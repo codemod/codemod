@@ -1,12 +1,21 @@
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use butterflow_models::step::StepAction;
 use serde_yaml;
 
 use butterflow_models::{Error, Node, Result, Workflow};
+
+fn has_parent_path_components(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    })
+}
 
 /// Parse a workflow definition from a file
 pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
@@ -103,15 +112,23 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     )));
                 }
                 if let Some(path) = &install_skill.path {
-                    if path.trim().is_empty() {
+                    let trimmed = path.trim();
+                    if trimmed.is_empty() {
                         return Err(Error::WorkflowValidation(format!(
                             "Step {} in node {} has invalid install-skill path value",
                             step.name, node.id
                         )));
                     }
-                    if Path::new(path.trim()).is_absolute() {
+                    let parsed_path = Path::new(trimmed);
+                    if parsed_path.is_absolute() {
                         return Err(Error::WorkflowValidation(format!(
                             "Step {} in node {} has invalid install-skill path value: absolute paths are not allowed",
+                            step.name, node.id
+                        )));
+                    }
+                    if has_parent_path_components(parsed_path) {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value: parent-directory traversal is not allowed",
                             step.name, node.id
                         )));
                     }

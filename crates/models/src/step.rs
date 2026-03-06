@@ -312,6 +312,8 @@ pub enum InstallSkillHarness {
     Goose,
     Opencode,
     Cursor,
+    Codex,
+    Antigravity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]

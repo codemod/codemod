@@ -5,6 +5,8 @@ use std::{
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
+use butterflow_models::step::UseInstallSkill;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::{
@@ -31,6 +33,20 @@ pub struct DryRunChange {
 /// Callback type for reporting dry-run changes
 pub type DryRunCallback = Arc<Box<dyn Fn(DryRunChange) + Send + Sync>>;
 
+#[derive(Clone, Debug)]
+pub struct InstallSkillExecutionRequest {
+    pub install_skill: UseInstallSkill,
+    pub no_interactive: bool,
+    pub target_path: PathBuf,
+    pub env: HashMap<String, String>,
+    pub output_format: OutputFormat,
+}
+
+#[async_trait]
+pub trait InstallSkillExecutor: Send + Sync {
+    async fn execute(&self, request: InstallSkillExecutionRequest) -> Result<String>;
+}
+
 /// Configuration for running a workflow
 #[derive(Clone)]
 pub struct WorkflowRunConfig {
@@ -53,6 +69,8 @@ pub struct WorkflowRunConfig {
     pub skip_install_skill_steps: bool,
     /// Output format for structured logging (Text or Jsonl)
     pub output_format: OutputFormat,
+    /// Optional in-process executor for install-skill workflow steps
+    pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 }
 
 impl Default for WorkflowRunConfig {
@@ -73,6 +91,7 @@ impl Default for WorkflowRunConfig {
             dry_run_callback: None,
             skip_install_skill_steps: false,
             output_format: OutputFormat::Text,
+            install_skill_executor: None,
         }
     }
 }

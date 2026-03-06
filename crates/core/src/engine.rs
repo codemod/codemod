@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
+use crate::config::{
+    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, WorkflowRunConfig,
+};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -35,8 +37,8 @@ use crate::registry::ResolvedPackage;
 use butterflow_models::runtime::RuntimeType;
 
 use butterflow_models::step::{
-    InstallSkillHarness, InstallSkillScope, SemanticAnalysisConfig, SemanticAnalysisMode,
-    StepAction, UseAI, UseAstGrep, UseCodemod, UseInstallSkill, UseJSAstGrep,
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseCodemod,
+    UseJSAstGrep,
 };
 use butterflow_models::{
     evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
@@ -89,42 +91,20 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
-fn build_install_skill_command(config: &UseInstallSkill, no_interactive: bool) -> String {
-    let mut command = vec![
-        "npx".to_string(),
-        "codemod".to_string(),
-        "internal-install-skill".to_string(),
-        config.package.clone(),
-    ];
+struct PreparedStepExecution {
+    env: HashMap<String, String>,
+    state_outputs_path: PathBuf,
+    state_input_path: PathBuf,
+}
 
-    match config.scope.clone().unwrap_or(InstallSkillScope::Project) {
-        InstallSkillScope::Project => command.push("--project".to_string()),
-        InstallSkillScope::User => command.push("--user".to_string()),
+fn log_step_output(logger: &StructuredLogger, output: &str) {
+    if !logger.is_jsonl() {
+        return;
     }
 
-    if config.force.unwrap_or(false) {
-        command.push("--force".to_string());
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        logger.log("info", line);
     }
-
-    if no_interactive {
-        command.push("--no-interactive".to_string());
-    }
-
-    if let Some(harness) = &config.harness {
-        command.push("--harness".to_string());
-        command.push(
-            match harness {
-                InstallSkillHarness::Auto => "auto",
-                InstallSkillHarness::Claude => "claude",
-                InstallSkillHarness::Goose => "goose",
-                InstallSkillHarness::Opencode => "opencode",
-                InstallSkillHarness::Cursor => "cursor",
-            }
-            .to_string(),
-        );
-    }
-
-    command.join(" ")
 }
 
 /// Workflow engine
@@ -1688,21 +1668,32 @@ impl Engine {
                     return Ok(());
                 }
 
-                let command = build_install_skill_command(
-                    install_skill,
-                    self.workflow_run_config.no_interactive,
-                );
-                self.execute_run_script_step(
-                    runner,
-                    &command,
-                    step_env,
-                    node,
-                    task,
-                    params,
-                    state,
-                    bundle_path,
-                )
-                .await
+                let Some(install_skill_executor) =
+                    self.workflow_run_config.install_skill_executor.as_ref()
+                else {
+                    return Err(Error::Runtime(
+                        "install-skill step requested but no install-skill executor is configured"
+                            .to_string(),
+                    ));
+                };
+
+                let prepared =
+                    self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+                let output = install_skill_executor
+                    .execute(InstallSkillExecutionRequest {
+                        install_skill: install_skill.clone(),
+                        no_interactive: self.workflow_run_config.no_interactive,
+                        target_path: self.workflow_run_config.target_path.clone(),
+                        env: prepared.env.clone(),
+                        output_format: self.workflow_run_config.output_format,
+                    })
+                    .await
+                    .map_err(|error| {
+                        Error::Runtime(format!("Failed to execute install-skill step: {error}"))
+                    })?;
+
+                log_step_output(logger, &output);
+                self.finalize_step_execution(task, output, prepared).await
             }
         }
     }
@@ -2694,6 +2685,24 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<()> {
+        // Resolve variables
+        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
+        let resolved_command =
+            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+
+        let output = runner.run_command(&resolved_command, &prepared.env).await?;
+        self.finalize_step_execution(task, output, prepared).await
+    }
+
+    fn prepare_step_execution(
+        &self,
+        step_env: &Option<HashMap<String, String>>,
+        node: &Node,
+        task: &Task,
+        state: &HashMap<String, serde_json::Value>,
+        bundle_path: &Option<PathBuf>,
+    ) -> Result<PreparedStepExecution> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
 
@@ -2776,14 +2785,19 @@ impl Engine {
             task.workflow_run_id.to_string(),
         );
 
-        // Resolve variables
-        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-        let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        Ok(PreparedStepExecution {
+            env,
+            state_outputs_path,
+            state_input_path,
+        })
+    }
 
-        // Execute the command
-        let output = runner.run_command(&resolved_command, &env).await?;
-
+    async fn finalize_step_execution(
+        &self,
+        task: &Task,
+        output: String,
+        prepared: PreparedStepExecution,
+    ) -> Result<()> {
         // Get the current task
         let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
 
@@ -2797,11 +2811,11 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        let outputs = read_to_string(&state_outputs_path).await?;
+        let outputs = read_to_string(&prepared.state_outputs_path).await?;
 
         // Clean up the temporary files
-        std::fs::remove_file(&state_outputs_path).ok();
-        std::fs::remove_file(&state_input_path).ok();
+        std::fs::remove_file(&prepared.state_outputs_path).ok();
+        std::fs::remove_file(&prepared.state_input_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();

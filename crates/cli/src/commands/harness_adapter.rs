@@ -1,7 +1,10 @@
+use crate::utils::env_paths::home_dir_from_env;
+use crate::utils::skill_layout::SKILL_FILE_NAME;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -424,11 +427,6 @@ pub type AdapterResult<T> = std::result::Result<T, HarnessAdapterError>;
 
 pub trait HarnessAdapter: Send + Sync {
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>>;
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>>;
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>>;
     fn verify_skills(&self) -> AdapterResult<Vec<VerificationCheck>>;
 }
@@ -440,7 +438,7 @@ pub struct ResolvedAdapter {
 }
 
 #[derive(Clone, Debug)]
-struct RuntimePaths {
+pub(crate) struct RuntimePaths {
     cwd: PathBuf,
     home_dir: Option<PathBuf>,
     current_executable: Option<PathBuf>,
@@ -448,18 +446,35 @@ struct RuntimePaths {
 
 impl RuntimePaths {
     fn current() -> AdapterResult<Self> {
-        let cwd = std::env::current_dir().map_err(|error| {
-            HarnessAdapterError::InstallFailed(format!(
-                "Unable to read current working directory: {error}"
-            ))
-        })?;
+        Self::for_context(None, None)
+    }
+
+    fn for_context(
+        working_directory: Option<&Path>,
+        environment: Option<&HashMap<String, String>>,
+    ) -> AdapterResult<Self> {
+        let cwd = match working_directory {
+            Some(path) => path.to_path_buf(),
+            None => std::env::current_dir().map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Unable to read current working directory: {error}"
+                ))
+            })?,
+        };
 
         Ok(Self {
             cwd,
-            home_dir: dirs::home_dir(),
+            home_dir: home_dir_from_env(environment),
             current_executable: std::env::current_exe().ok(),
         })
     }
+}
+
+pub(crate) fn runtime_paths_for_execution(
+    working_directory: Option<&Path>,
+    environment: Option<&HashMap<String, String>>,
+) -> AdapterResult<RuntimePaths> {
+    RuntimePaths::for_context(working_directory, environment)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -485,15 +500,6 @@ impl HarnessAdapter for ClaudeHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Claude, request, &runtime_paths)
     }
 
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(Harness::Claude, package, request, &runtime_paths)
-    }
-
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Claude, &runtime_paths)
@@ -512,15 +518,6 @@ impl HarnessAdapter for GooseHarnessAdapter {
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Goose, request, &runtime_paths)
-    }
-
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(Harness::Goose, package, request, &runtime_paths)
     }
 
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
@@ -543,20 +540,6 @@ impl HarnessAdapter for OpencodeHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Opencode, request, &runtime_paths)
     }
 
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(
-            Harness::Opencode,
-            package,
-            request,
-            &runtime_paths,
-        )
-    }
-
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Opencode, &runtime_paths)
@@ -575,15 +558,6 @@ impl HarnessAdapter for CursorHarnessAdapter {
     fn install_skills(&self, request: &InstallRequest) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         install_mcs_skill_bundle_with_runtime(Harness::Cursor, request, &runtime_paths)
-    }
-
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(Harness::Cursor, package, request, &runtime_paths)
     }
 
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
@@ -606,15 +580,6 @@ impl HarnessAdapter for CodexHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Codex, request, &runtime_paths)
     }
 
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(Harness::Codex, package, request, &runtime_paths)
-    }
-
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Codex, &runtime_paths)
@@ -635,20 +600,6 @@ impl HarnessAdapter for AntigravityHarnessAdapter {
         install_mcs_skill_bundle_with_runtime(Harness::Antigravity, request, &runtime_paths)
     }
 
-    fn install_package_skill(
-        &self,
-        package: &SkillPackageInstallSpec,
-        request: &InstallRequest,
-    ) -> AdapterResult<Vec<InstalledSkill>> {
-        let runtime_paths = RuntimePaths::current()?;
-        install_package_skill_bundle_with_runtime(
-            Harness::Antigravity,
-            package,
-            request,
-            &runtime_paths,
-        )
-    }
-
     fn list_skills(&self) -> AdapterResult<Vec<InstalledSkill>> {
         let runtime_paths = RuntimePaths::current()?;
         list_skills_with_runtime(Harness::Antigravity, &runtime_paths)
@@ -665,7 +616,7 @@ pub fn resolve_adapter(harness: Harness) -> AdapterResult<ResolvedAdapter> {
     resolve_adapter_with_runtime(harness, &runtime_paths)
 }
 
-fn resolve_adapter_with_runtime(
+pub(crate) fn resolve_adapter_with_runtime(
     harness: Harness,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<ResolvedAdapter> {
@@ -759,6 +710,11 @@ pub fn upsert_periodic_update_trigger(
 ) -> AdapterResult<PeriodicUpdateTriggerUpsertResult> {
     let runtime_paths = RuntimePaths::current()?;
     upsert_periodic_update_trigger_with_runtime(harness, scope, periodic_policy, &runtime_paths)
+}
+
+pub fn mcs_install_requires_force(harness: Harness, scope: InstallScope) -> AdapterResult<bool> {
+    let runtime_paths = RuntimePaths::current()?;
+    mcs_install_requires_force_with_runtime(harness, scope, &runtime_paths)
 }
 
 fn upsert_periodic_update_trigger_with_runtime(
@@ -1570,7 +1526,7 @@ fn ensure_executable_permissions(path: &Path) -> AdapterResult<()> {
     Ok(())
 }
 
-fn upsert_skill_discovery_guides_with_runtime(
+pub(crate) fn upsert_skill_discovery_guides_with_runtime(
     harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
@@ -2233,7 +2189,29 @@ fn install_mcs_skill_bundle_with_runtime(
     Ok(installed)
 }
 
-fn install_package_skill_bundle_with_runtime(
+fn mcs_install_requires_force_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<bool> {
+    validate_embedded_mcs_bundle()?;
+
+    let skill_root =
+        skills_root_for_harness(harness, scope, runtime_paths)?.join(MCS_SKILL_DIR_NAME);
+    if managed_text_file_requires_force(&skill_root.join(SKILL_FILE_NAME), MCS_SKILL_MD)? {
+        return Ok(true);
+    }
+
+    for (relative_path, content) in MCS_REFERENCE_FILES {
+        if managed_text_file_requires_force(&skill_root.join(relative_path), content)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+pub(crate) fn install_package_skill_bundle_with_runtime(
     harness: Harness,
     package: &SkillPackageInstallSpec,
     request: &InstallRequest,
@@ -2254,6 +2232,26 @@ fn install_package_skill_bundle_with_runtime(
         version: Some(package.version.clone()),
         scope: Some(request.scope),
     }])
+}
+
+pub(crate) fn package_skill_install_requires_force_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    package: &SkillPackageInstallSpec,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<bool> {
+    validate_skill_package_install_spec(package)?;
+
+    let skill_dir_name = skill_directory_name_for_package_id(&package.id);
+    let skill_root = skills_root_for_harness(harness, scope, runtime_paths)?.join(skill_dir_name);
+    if !skill_root.exists() {
+        return Ok(false);
+    }
+
+    Ok(!package_skill_directories_match(
+        &package.source_dir,
+        &skill_root,
+    )?)
 }
 
 fn skill_directory_name_for_package_id(package_id: &str) -> String {
@@ -3085,10 +3083,14 @@ fn skills_root_for_harness(
 
 fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()> {
     if path.exists() && !force {
-        return Err(HarnessAdapterError::InstallFailed(format!(
-            "Skill file already exists at {}. Re-run with --force to overwrite.",
-            path.display()
-        )));
+        if managed_text_file_requires_force(path, content)? {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "Skill file already exists at {}. Re-run with --force to overwrite.",
+                path.display()
+            )));
+        }
+
+        return Ok(());
     }
 
     if let Some(parent_dir) = path.parent() {
@@ -3105,6 +3107,17 @@ fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()
     })?;
 
     Ok(())
+}
+
+fn managed_text_file_requires_force(path: &Path, content: &str) -> AdapterResult<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let existing = fs::read_to_string(path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!("Failed to read {}: {error}", path.display()))
+    })?;
+    Ok(existing != content)
 }
 
 fn write_package_skill_directory(
@@ -4335,7 +4348,7 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn install_mcs_skill_bundle_rejects_overwrite_without_force() {
+    fn install_mcs_skill_bundle_is_idempotent_without_force() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
             scope: InstallScope::Project,
@@ -4349,10 +4362,7 @@ codemod-skill-version: 0.1.0
             &install_request,
             &runtime_paths,
         );
-        assert!(matches!(
-            second_install,
-            Err(HarnessAdapterError::InstallFailed(message)) if message.contains("--force")
-        ));
+        assert!(second_install.is_ok());
     }
 
     #[test]
@@ -4615,6 +4625,85 @@ codemod-skill-version: 0.1.0
             Err(HarnessAdapterError::SkillPackageInstallFailed(message))
                 if message.contains("--force")
         ));
+    }
+
+    #[test]
+    fn mcs_install_requires_force_detects_conflicting_embedded_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        install_mcs_skill_bundle_with_runtime(Harness::Claude, &install_request, &runtime_paths)
+            .unwrap();
+
+        assert!(!mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+
+        let skill_path = runtime_paths.cwd.join(".claude/skills/codemod/SKILL.md");
+        fs::write(&skill_path, "# changed\n").unwrap();
+
+        assert!(mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn package_skill_install_requires_force_detects_conflicting_authored_content() {
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "jest-to-vitest");
+        let package_skill = SkillPackageInstallSpec {
+            id: "jest-to-vitest".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Migrate Jest test suites to Vitest.".to_string(),
+            source_dir: source_dir.clone(),
+        };
+
+        assert!(!package_skill_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &package_skill,
+            &runtime_paths
+        )
+        .unwrap());
+
+        install_package_skill_bundle_with_runtime(
+            Harness::Claude,
+            &package_skill,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert!(!package_skill_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &package_skill,
+            &runtime_paths
+        )
+        .unwrap());
+
+        fs::write(source_dir.join("references/new-notes.md"), "# New notes\n").unwrap();
+
+        assert!(package_skill_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &package_skill,
+            &runtime_paths
+        )
+        .unwrap());
     }
 
     #[test]

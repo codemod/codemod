@@ -1,16 +1,19 @@
 use crate::commands::harness_adapter::{
-    install_restart_hint, persist_managed_install_state, read_managed_install_state,
-    resolve_adapter, resolve_install_scope, skill_discovery_guide_paths,
-    upsert_periodic_update_trigger, upsert_skill_discovery_guides, Harness, HarnessAdapterError,
-    InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
-    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
+    install_restart_hint, mcs_install_requires_force, persist_managed_install_state,
+    read_managed_install_state, resolve_adapter, resolve_install_scope,
+    skill_discovery_guide_paths, upsert_periodic_update_trigger, upsert_skill_discovery_guides,
+    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill,
+    ManagedComponentKind, ManagedComponentSnapshot, OutputFormat, PeriodicUpdatePolicy,
+    ResolvedAdapter, VerificationStatus,
 };
-use crate::commands::output::{exit_adapter_error, format_output_path};
+use crate::commands::output::{
+    exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
+};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use codemod_telemetry::send_event::BaseEvent;
-use inquire::{Confirm, Select};
+use inquire::Select;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::IsTerminal;
@@ -209,6 +212,15 @@ async fn handle_install_like_action(
     let resolved_adapter = resolve_adapter(install_inputs.harness).unwrap_or_else(|error| {
         exit_adapter_error(error, command.format);
     });
+    if install_inputs.interactive && !install_inputs.force && !command.update {
+        let overwrite_required =
+            mcs_install_requires_force(resolved_adapter.harness, install_inputs.scope)
+                .unwrap_or_else(|error| exit_adapter_error(error, command.format));
+        if overwrite_required {
+            install_inputs.force = prompt_for_overwrite_confirmation()
+                .unwrap_or_else(|error| exit_adapter_error(error, command.format));
+        }
+    }
     let update_policy = resolve_update_policy_context(&UpdatePolicyResolveOptions {
         mode: install_inputs.update_policy,
         remote_source: install_inputs.update_source.clone(),
@@ -776,26 +788,11 @@ fn resolve_install_inputs(
             .scope
     };
 
-    let force = if command.update {
-        command.force
-    } else if command.force {
-        true
-    } else {
-        Confirm::new("Overwrite existing skill files if they already exist?")
-            .with_default(false)
-            .prompt()
-            .map_err(|error| {
-                HarnessAdapterError::InstallFailed(format!(
-                    "interactive overwrite prompt failed: {error}"
-                ))
-            })?
-    };
-
     Ok(InstallInputs {
         harness,
         scope,
         scope_explicit,
-        force,
+        force: command.force,
         interactive,
         update_policy: command.update_policy,
         update_source: command.update_source.clone(),

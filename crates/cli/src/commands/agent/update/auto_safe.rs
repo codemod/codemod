@@ -105,18 +105,6 @@ pub(in crate::commands::agent) async fn maybe_apply_auto_safe_updates(
 
     let mut execution = AutoSafeApplyExecution::default();
     let Some(remote_snapshot) = update_policy.remote_manifest.as_ref() else {
-        execution.warnings.push(
-            "Auto-safe update apply skipped because remote manifest is unavailable.".to_string(),
-        );
-        execution.result = Some(AutoSafeApplyResult {
-            attempted: 0,
-            applied: 0,
-            skipped: 0,
-            failed: 0,
-            rolled_back: false,
-            rollback_reason: Some("remote_manifest_unavailable".to_string()),
-            components: Vec::new(),
-        });
         return execution;
     };
 

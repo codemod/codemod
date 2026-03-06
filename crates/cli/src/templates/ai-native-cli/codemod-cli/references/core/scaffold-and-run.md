@@ -7,7 +7,8 @@ Use this guide for creating codemods and applying them.
 - Interactive setup:
   - `codemod init`
 - Non-interactive setup:
-  - `codemod init my-codemod --project-type ast-grep-js --language typescript --no-interactive`
+  - `codemod init my-codemod --project-type ast-grep-js --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
+  - `--project-type` and `--language` are required in non-interactive mode; `ast-grep-js` and `typescript` are example values.
 - Force overwrite existing files:
   - `codemod init my-codemod --force`
 

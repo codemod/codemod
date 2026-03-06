@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use butterflow_core::config::{DryRunCallback, DryRunChange, PreRunCallback, WorkflowRunConfig};
+use butterflow_core::config::{
+    DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback, WorkflowRunConfig,
+};
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
@@ -15,6 +17,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
+use crate::utils::env_paths::data_dir_from_env;
 use crate::{dirty_git_check, progress_bar};
 
 /// Create a callback for reporting dry-run changes with diffs.
@@ -148,6 +151,7 @@ pub fn create_engine(
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
     skip_install_skill_steps: bool,
     output_format: OutputFormat,
+    install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check(no_interactive);
     let bundle_path = if workflow_file_path.is_file() {
@@ -194,6 +198,7 @@ pub fn create_engine(
         dry_run_callback,
         skip_install_skill_steps,
         output_format,
+        install_skill_executor,
         ..WorkflowRunConfig::default()
     };
 
@@ -219,22 +224,35 @@ pub fn create_engine(
 }
 
 pub fn create_registry_client(registry: Option<String>) -> Result<RegistryClient> {
-    // Create auth provider
-    let auth_provider = CliAuthProvider::new()?;
+    create_registry_client_with_env(registry, None)
+}
 
-    // Get cache directory and default registry from config
-    let config = auth_provider.storage.load_config()?;
+pub fn create_registry_client_with_env(
+    registry: Option<String>,
+    env: Option<&HashMap<String, String>>,
+) -> Result<RegistryClient> {
+    let storage = crate::auth::TokenStorage::new_with_env(env)?;
+    let auth_provider = CliAuthProvider::from_storage(storage);
 
+    let config = auth_provider.storage.load_config_with_env(env)?;
     let registry_url = registry.unwrap_or(config.default_registry);
+    let cache_dir = get_cache_dir_with_env(env)?;
 
-    // Create registry configuration
     let registry_config = RegistryConfig {
         default_registry: registry_url.clone(),
-        cache_dir: get_cache_dir().unwrap(),
+        cache_dir,
     };
 
     Ok(RegistryClient::new(
         registry_config,
         Some(Arc::new(auth_provider)),
     ))
+}
+
+fn get_cache_dir_with_env(env: Option<&HashMap<String, String>>) -> Result<PathBuf> {
+    if let Some(data_dir) = data_dir_from_env(env) {
+        return Ok(data_dir.join("codemod").join("cache").join("packages"));
+    }
+
+    Ok(get_cache_dir()?)
 }

@@ -1,4 +1,5 @@
 use crate::utils::manifest::CodemodManifest;
+use crate::utils::path_safety::{has_parent_path_components, resolve_relative_path_within_root};
 use crate::utils::skill_layout::{
     expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
     AGENTS_SKILL_ROOT_RELATIVE_PATH, SKILL_FILE_NAME,
@@ -224,7 +225,15 @@ pub(crate) fn validate_skill_behavior(
             continue;
         }
 
-        let resolved_path = references_dir.join(link_target);
+        let resolved_path = resolve_relative_path_within_root(&references_dir, link_target)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Skill references index {} has invalid relative link target `{}`. Links must stay within {}.",
+                    references_index_path.display(),
+                    link_target,
+                    references_dir.display()
+                )
+            })?;
         if !resolved_path.exists() {
             return Err(anyhow!(
                 "Skill references index {} links missing path: {}",
@@ -396,6 +405,14 @@ fn configured_path_from_matching_steps(
         if Path::new(trimmed).is_absolute() {
             return Err(anyhow!(
                 "Workflow file {} has an install-skill step with absolute `path` value `{}` for package `{}`. Use a package-relative path.",
+                workflow_path.display(),
+                trimmed,
+                install_skill.package.trim()
+            ));
+        }
+        if has_parent_path_components(Path::new(trimmed)) {
+            return Err(anyhow!(
+                "Workflow file {} has an install-skill step with parent-directory traversal in `path` value `{}` for package `{}`. Use a package-relative path inside the package root.",
                 workflow_path.display(),
                 trimmed,
                 install_skill.package.trim()
@@ -731,6 +748,50 @@ nodes:
         let validation = validate_skill_behavior(temp_dir.path(), &manifest)
             .expect("skill validation should use custom path");
         assert!(validation.skill_dir.ends_with("skills/agents/example"));
+    }
+
+    #[test]
+    fn validate_skill_behavior_rejects_reference_links_with_parent_traversal() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("@codemod/example");
+        write_valid_skill_bundle(temp_dir.path(), "example");
+
+        let references_index = temp_dir
+            .path()
+            .join("agents/skill/example/references/index.md");
+        fs::write(references_index, "[escape](../outside.md)\n").unwrap();
+
+        let error = validate_skill_behavior(temp_dir.path(), &manifest).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("has invalid relative link target"));
+    }
+
+    #[test]
+    fn authored_skill_file_candidate_rejects_parent_traversal_path() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("@codemod/example");
+        write_workflow(
+            temp_dir.path(),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - name: install
+        install-skill:
+          package: "@codemod/example"
+          path: "../outside/SKILL.md"
+"#,
+        );
+
+        let error = authored_skill_file_candidate(temp_dir.path(), Some(&manifest), &manifest.name)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("parent-directory traversal in `path` value"));
     }
 
     #[test]

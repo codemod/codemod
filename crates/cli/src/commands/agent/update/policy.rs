@@ -62,9 +62,13 @@ pub(in crate::commands::agent) async fn resolve_update_policy_context(
                     warnings.extend(resolution.warnings);
                     remote_manifest = Some(resolution.snapshot);
                 }
-                Err(error) => warnings.push(format!(
-                    "Remote update manifest lookup failed ({error}). Applying deterministic local fallback."
-                )),
+                Err(error) => {
+                    if !should_suppress_remote_manifest_lookup_warning(&remote_source, &error) {
+                        warnings.push(format!(
+                            "Remote update manifest lookup failed ({error}). Applying deterministic local fallback."
+                        ));
+                    }
+                }
             }
         }
     }
@@ -289,6 +293,10 @@ fn summarize_http_error_body(body: &str) -> String {
         .take(MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS)
         .collect::<String>()
         + "..."
+}
+
+fn should_suppress_remote_manifest_lookup_warning(remote_source: &str, error: &str) -> bool {
+    remote_source.starts_with("registry:") && error.starts_with("HTTP 404 ")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

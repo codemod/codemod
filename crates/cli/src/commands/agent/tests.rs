@@ -1439,3 +1439,57 @@ fn resolve_update_policy_context_hides_server_configuration_details_for_5xx() {
         server.shutdown().await;
     });
 }
+
+#[test]
+fn resolve_update_policy_context_suppresses_expected_registry_404_manifest_warning() {
+    let _env_lock = ENV_GUARD.lock().expect("expected env lock");
+    let runtime = Runtime::new().expect("expected runtime");
+    runtime.block_on(async {
+        let manifest_path = "/api/v1/agent/managed-components/manifest".to_string();
+        let server = TestHttpServer::start_with_builder(|_| {
+            HashMap::from([(
+                manifest_path.clone(),
+                TestHttpFixture {
+                    status: StatusCode::NOT_FOUND,
+                    body: b"not found".to_vec(),
+                    headers: Vec::new(),
+                },
+            )])
+        })
+        .await;
+
+        let _env_restore =
+            EnvRestoreGuard::set(&[("CODEMOD_REGISTRY_URL", server.base_url.clone())]);
+        let context = resolve_update_policy_context(&UpdatePolicyResolveOptions {
+            mode: UpdatePolicyMode::AutoSafe,
+            remote_source: "registry".to_string(),
+            require_signed_manifest: Some(true),
+        })
+        .await
+        .expect("expected update policy context");
+
+        assert!(context.fallback_applied);
+        assert!(context.remote_manifest.is_none());
+        assert!(context.warnings.is_empty());
+
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn maybe_apply_auto_safe_updates_silently_skips_when_remote_manifest_is_unavailable() {
+    let runtime = Runtime::new().expect("expected runtime");
+    runtime.block_on(async {
+        let context = UpdatePolicyContext {
+            mode: UpdatePolicyMode::AutoSafe,
+            remote_source: MANAGED_UPDATE_POLICY_LOCAL_SOURCE.to_string(),
+            fallback_applied: true,
+            remote_manifest: None,
+            warnings: Vec::new(),
+        };
+
+        let apply = maybe_apply_auto_safe_updates(&context, &[], &[]).await;
+        assert!(apply.warnings.is_empty());
+        assert!(apply.result.is_none());
+    });
+}

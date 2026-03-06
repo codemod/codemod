@@ -60,7 +60,9 @@
         "claude",
         "goose",
         "opencode",
-        "cursor"
+        "cursor",
+        "codex",
+        "antigravity"
       ]
     },
     "InstallSkillScope": {

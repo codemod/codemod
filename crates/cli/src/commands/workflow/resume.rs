@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::engine::create_engine;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::resolve_workflow_source;
+use crate::TelemetrySenderMutex;
 use anyhow::{Context, Result};
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
 use clap::Args;
@@ -70,7 +71,7 @@ pub struct Command {
 }
 
 /// Resume a workflow
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let target_path = args
         .target_path
         .clone()
@@ -113,6 +114,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
         args.no_interactive && !args.install_skill,
         output_format,
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry)),
     )?;
 
     if args.trigger_all {

@@ -1,4 +1,5 @@
 use crate::commands::harness_adapter::{HarnessAdapterError, OutputFormat};
+use inquire::Confirm;
 use serde::Serialize;
 use std::path::Path;
 
@@ -36,6 +37,27 @@ pub(crate) fn exit_adapter_error(error: HarnessAdapterError, format: OutputForma
     }
 
     std::process::exit(envelope.exit_code);
+}
+
+pub(crate) fn prompt_for_overwrite_confirmation() -> std::result::Result<bool, HarnessAdapterError>
+{
+    let confirmed = Confirm::new("Overwrite existing skill files if they already exist?")
+        .with_default(false)
+        .prompt()
+        .map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "interactive overwrite prompt failed: {error}"
+            ))
+        })?;
+
+    if confirmed {
+        return Ok(true);
+    }
+
+    Err(HarnessAdapterError::InstallFailed(
+        "Installation cancelled because existing skill files would be overwritten. Re-run with --force to overwrite."
+            .to_string(),
+    ))
 }
 
 pub(crate) fn format_output_path(path: &Path) -> String {

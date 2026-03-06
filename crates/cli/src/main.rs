@@ -85,10 +85,6 @@ enum Commands {
 
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
-
-    /// Internal command used by workflow install-skill steps
-    #[command(name = "internal-install-skill", hide = true)]
-    InternalInstallSkill(commands::package_skill::InternalInstallSkillStepCommand),
 }
 
 #[derive(Args, Debug)]
@@ -287,7 +283,7 @@ async fn main() -> Result<()> {
                 commands::workflow::run::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Resume(args) => {
-                commands::workflow::resume::handler(args).await?;
+                commands::workflow::resume::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Validate(args) => {
                 commands::workflow::validate::handler(args)?;
@@ -352,9 +348,6 @@ async fn main() -> Result<()> {
         Some(Commands::Mcp(args)) => {
             args.run().await?;
         }
-        Some(Commands::InternalInstallSkill(args)) => {
-            commands::package_skill::handle_internal_install_step(args, &telemetry_sender).await?;
-        }
         None => {
             // Try to parse as implicit run command
             if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
@@ -377,7 +370,7 @@ mod tests {
     use clap::{error::ErrorKind, CommandFactory};
 
     #[test]
-    fn top_level_help_lists_agent_and_omits_removed_subcommands() {
+    fn top_level_help_lists_agent_and_mcp() {
         let help_text = Cli::command().render_long_help().to_string();
         assert!(help_text.contains("agent"));
         assert!(help_text.contains("mcp"));
@@ -460,18 +453,6 @@ mod tests {
         let trailing_args = vec!["jest-to-vitest".to_string(), "--dry-run".to_string()];
         let route = classify_implicit_route(&trailing_args);
         assert!(matches!(route, Some(ImplicitRoute::Run(_))));
-    }
-
-    #[test]
-    fn parser_accepts_hidden_internal_install_skill_command() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "internal-install-skill",
-            "@codemod/example",
-            "--project",
-            "--no-interactive",
-        ]);
-        assert!(parse_result.is_ok());
     }
 
     #[test]

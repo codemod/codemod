@@ -118,6 +118,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         diff_collector.clone(),
         args.no_interactive && !args.install_skill,
         output_format,
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
     // Run workflow using the extracted workflow runner

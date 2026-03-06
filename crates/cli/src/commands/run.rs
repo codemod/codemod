@@ -208,6 +208,7 @@ pub async fn handler(
             crate::commands::package_skill::install_from_run_request(
                 &args.package,
                 args.no_interactive,
+                Some(target_path.clone()),
                 &telemetry,
             )
             .await?;
@@ -279,6 +280,7 @@ pub async fn handler(
             package_behavior_shape,
         ),
         output_format,
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
     if let Err(e) = run_workflow(&engine, config).await {
@@ -498,7 +500,12 @@ async fn maybe_offer_skill_install(
         return Ok(false);
     }
 
-    crate::commands::package_skill::install_from_run_prompt(&args.package, telemetry).await?;
+    crate::commands::package_skill::install_from_run_prompt(
+        &args.package,
+        args.target_path.clone(),
+        telemetry,
+    )
+    .await?;
 
     Ok(true)
 }
