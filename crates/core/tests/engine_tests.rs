@@ -12,7 +12,7 @@ use butterflow_core::{
 };
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAstGrep, UseJSAstGrep,
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseJSAstGrep,
 };
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
@@ -21,7 +21,43 @@ use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use serde_json::json;
+use serial_test::serial;
 use uuid::Uuid;
+
+struct EnvVarGuard {
+    key: String,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn unset(key: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
+
+    fn set(key: &str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.original {
+            std::env::set_var(&self.key, value);
+        } else {
+            std::env::remove_var(&self.key);
+        }
+    }
+}
 
 // Helper function to create a simple test workflow
 fn create_long_running_workflow() -> Workflow {
@@ -955,6 +991,63 @@ echo "workflow_run_id_valid=$(if [ "$CODEMOD_WORKFLOW_RUN_ID" != "" ] && [ ${#CO
     }
 }
 
+fn create_ai_no_key_fallback_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "ai-fallback-node".to_string(),
+            name: "AI Fallback Node".to_string(),
+            description: Some("Ensure AI fallback does not break the node".to_string()),
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![
+                Step {
+                    id: Some("ai-step-no-key".to_string()),
+                    name: "AI Step Without API Key".to_string(),
+                    action: StepAction::AI(UseAI {
+                        prompt: "Print these instructions when no key is available.".to_string(),
+                        working_dir: None,
+                        timeout_ms: None,
+                        env: None,
+                        dry_run: None,
+                        model: None,
+                        system_prompt: Some("You are a test system prompt.".to_string()),
+                        max_steps: None,
+                        tools: None,
+                        endpoint: None,
+                        api_key: None,
+                        enable_lakeview: None,
+                        llm_protocol: None,
+                    }),
+                    env: None,
+                    condition: None,
+                },
+                Step {
+                    id: Some("after-ai-step".to_string()),
+                    name: "Step After AI".to_string(),
+                    action: StepAction::RunScript("echo 'AFTER_AI_STEP_EXECUTED'".to_string()),
+                    env: None,
+                    condition: None,
+                },
+            ],
+            env: HashMap::new(),
+        }],
+    }
+}
+
 #[tokio::test]
 async fn test_matrix_recompilation_with_direct_adapter() {
     // Create a mock state adapter
@@ -1388,6 +1481,115 @@ async fn test_codemod_environment_variables() {
             "CODEMOD_WORKFLOW_RUN_ID should be a valid UUID format"
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_ai_step_no_api_key_fallback_allows_following_steps() {
+    let api_key_guard = EnvVarGuard::unset("LLM_API_KEY");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_ai_no_key_fallback_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let mut completion_logs: Option<String> = None;
+    for _ in 0..50 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let Some(ai_task) = tasks.iter().find(|t| t.node_id == "ai-fallback-node") else {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            continue;
+        };
+
+        if ai_task.status == TaskStatus::Completed {
+            completion_logs = Some(ai_task.logs.join("\n"));
+            break;
+        }
+
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::Failed,
+            "AI fallback node should not fail when API key is missing"
+        );
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::WontDo,
+            "AI fallback node should execute following steps when API key is missing"
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    let log_output = completion_logs.expect("AI fallback node did not complete within 5 seconds");
+    assert!(
+        log_output.contains("AFTER_AI_STEP_EXECUTED"),
+        "Step after AI should execute even when AI step is skipped due to missing key"
+    );
+
+    drop(api_key_guard);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_ai_step_detected_agent_handoff_skips_rig_with_api_key() {
+    let api_key_guard = EnvVarGuard::set("LLM_API_KEY", "test-key");
+    let provider_guard = EnvVarGuard::set("LLM_PROVIDER", "openai");
+    let base_url_guard = EnvVarGuard::set("LLM_BASE_URL", "http://127.0.0.1:1");
+    let marker_one_guard = EnvVarGuard::set("CODEX_SESSION_ID", "test-session");
+    let marker_two_guard = EnvVarGuard::set("CODEX_SANDBOX", "1");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_ai_no_key_fallback_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let mut completion_logs: Option<String> = None;
+    for _ in 0..50 {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let Some(ai_task) = tasks.iter().find(|t| t.node_id == "ai-fallback-node") else {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            continue;
+        };
+
+        if ai_task.status == TaskStatus::Completed {
+            completion_logs = Some(ai_task.logs.join("\n"));
+            break;
+        }
+
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::Failed,
+            "AI step should hand off instructions and avoid Rig call when coding-agent context is detected"
+        );
+        assert_ne!(
+            ai_task.status,
+            TaskStatus::WontDo,
+            "AI handoff path should keep the node running to completion"
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    let log_output = completion_logs.expect("AI handoff node did not complete within 5 seconds");
+    assert!(
+        log_output.contains("AFTER_AI_STEP_EXECUTED"),
+        "Step after AI should execute when handoff mode skips Rig"
+    );
+
+    drop(marker_two_guard);
+    drop(marker_one_guard);
+    drop(base_url_guard);
+    drop(provider_guard);
+    drop(api_key_guard);
 }
 
 #[tokio::test]

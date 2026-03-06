@@ -10,8 +10,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
-coro-core = "0.0.7"
+rig-core = { version = "0.31.0", features = ["derive"] }
+rmcp = { version = "0.13", features = ["client", "transport-child-process"] }
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"
@@ -22,6 +22,7 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-go = "0.25"
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 walkdir = "2.0"
@@ -29,6 +30,7 @@ ignore = { workspace = true }
 jsonpath-rust = "0.7"
 tracing = "0.1"
 log = { workspace = true }
+thiserror = { workspace = true }
 # We need this vendored openssl for cross-compilation
 # openssl = { version = "0.10", features = ["vendored"] }
 

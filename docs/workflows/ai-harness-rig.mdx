@@ -1,0 +1,117 @@
+---
+title: "Rig AI Harness"
+sidebarTitle: "Rig AI Harness."
+---
+
+This page documents the internal runtime behavior of the `ai` step when executed by Codemod's Rig-based harness.
+
+<Note>
+The workflow contract does not change. Keep using the same `ai.*` fields documented in [Workflow Reference](/workflows/reference#ai-step).
+</Note>
+
+## What the harness provides
+
+- [Rig-based](https://rig.rs/) agent loop for `ai` steps.
+- Multi-provider execution with protocol-specific clients.
+- Built-in tool server wiring for Codemod CLI tools.
+- Parent coding-agent handoff mode.
+- Context compaction with bounded retries.
+- Structured logs for long-running steps and compaction events.
+
+## Supported LLM protocols
+
+The harness supports:
+
+- `openai`
+- `anthropic`
+- `google_ai`
+- `azure_openai`
+
+Unknown protocol values fail fast.
+
+## Built-in tools
+
+Default enabled tools:
+
+- `bash`
+- `str_replace_based_edit_tool`
+- `glob`
+- `sequentialthinking`
+- `task_done`
+- `json_edit_tool`
+- `ckg_tool`
+
+Available but not default-enabled:
+
+- `mcp_tool`
+
+## Parent-agent handoff mode
+
+Before running Rig, Codemod checks whether it is executing under a known coding-agent parent context.
+
+Recognized agent families include:
+
+- `codex`
+- `claude-code`
+- `aider`
+- `cursor`
+- `windsurf`
+- `goose`
+- `opencode`
+- `openclaw`
+
+If detection confidence is `detected`, the step emits:
+
+- `[AI INSTRUCTIONS]`
+- prompt/system content
+- `[/AI INSTRUCTIONS]`
+
+and skips Rig execution for that step.
+
+If confidence is `uncertain` or `not_detected`, normal Rig execution continues.
+
+## Memory and context management
+
+The harness controls context growth with a hybrid strategy:
+
+1. Proactive guard:
+- Estimates prompt + history size before each completion turn.
+- Triggers compaction when the soft budget is exceeded.
+
+2. Reactive guard:
+- Detects provider context-limit style failures.
+- Triggers compaction and retries.
+
+3. Compaction pipeline:
+- Deterministic pruning of older turns while preserving anchors/recent history.
+- Hierarchical summarization of archived context.
+- Memory packet rebuild of history.
+
+4. Bounded retries:
+- Maximum compaction attempts: `5`.
+- If still oversized, returns explicit memory exhaustion error.
+
+## Semantic retrieval behavior
+
+When embeddings are available for the selected provider path, the harness builds an in-memory vector index and injects retrieved dynamic context into agent calls.
+
+- Enabled path: `openai`, `google_ai`, `azure_openai`.
+- Fallback path: `anthropic` runs without dynamic vector context injection.
+
+## Token behavior
+
+The harness does not force an explicit `max_tokens` request. Output token limits are left to provider/model defaults.
+
+Context-window handling is managed separately through compaction and bounded retry behavior.
+
+## Observability
+
+Engine logs include:
+
+- handoff detection decision (`handoff` vs `rig`)
+- periodic progress (`AI step still running ...`)
+- compaction events (`AI memory compaction applied ...`)
+- explicit memory exhaustion diagnostics when retries are exhausted
+
+
+
