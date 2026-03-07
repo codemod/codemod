@@ -260,6 +260,7 @@ impl JssgTestHandler {
                         shared_state_context: None,
                         test_mode: true,
                         target_directory: None,
+                        console_log_collector: None,
                     };
                     let CodemodOutput { primary, .. } =
                         execute_codemod_with_quickjs(options).await?;

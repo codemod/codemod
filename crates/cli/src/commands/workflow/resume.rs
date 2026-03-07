@@ -63,6 +63,11 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value = "text")]
     format: String,
+
+    /// Exit when the specified task(s) complete (Completed or Failed), instead of waiting for the whole workflow.
+    /// Used by TUI when spawning one task per terminal.
+    #[arg(long)]
+    exit_on_task_complete: bool,
 }
 
 /// Resume a workflow
@@ -124,12 +129,45 @@ pub async fn handler(args: &Command) -> Result<()> {
         println!("Triggered all awaiting tasks");
     } else if !args.task.is_empty() {
         // Trigger specific tasks
+        let task_ids = args.task.to_vec();
         engine
-            .resume_workflow(args.id, args.task.to_vec())
+            .resume_workflow(args.id, task_ids.clone())
             .await
             .context("Failed to resume workflow")?;
 
-        println!("Triggered {} tasks", args.task.len());
+        println!("Triggered {} tasks", task_ids.len());
+
+        // When exit_on_task_complete: poll until our task(s) reach Completed or Failed,
+        // then force-exit the process. We MUST use std::process::exit() because
+        // resume_workflow spawns execute_workflow via spawn_blocking which cannot be
+        // cancelled by tokio runtime shutdown — without exit() the process hangs forever.
+        if args.exit_on_task_complete {
+            loop {
+                let tasks = engine
+                    .get_tasks(args.id)
+                    .await
+                    .context("Failed to get tasks")?;
+
+                let our_tasks: Vec<_> = tasks
+                    .iter()
+                    .filter(|t| task_ids.contains(&t.id))
+                    .collect();
+
+                let all_done = our_tasks.iter().all(|t| {
+                    t.status == TaskStatus::Completed || t.status == TaskStatus::Failed
+                });
+
+                if all_done {
+                    let any_failed = our_tasks
+                        .iter()
+                        .any(|t| t.status == TaskStatus::Failed);
+                    let exit_code = if any_failed { 1 } else { 0 };
+                    std::process::exit(exit_code);
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        }
     } else {
         error!("No tasks specified to trigger. Use --task or --trigger-all");
         return Ok(());

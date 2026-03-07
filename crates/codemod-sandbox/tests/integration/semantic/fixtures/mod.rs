@@ -240,6 +240,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         shared_state_context: None,
         test_mode: false,
         target_directory: None,
+        console_log_collector: None,
     };
 
     let result = execute_codemod_with_quickjs(options).await;
