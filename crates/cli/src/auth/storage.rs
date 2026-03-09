@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use butterflow_core::registry::RegistryConfig;
+use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
-use crate::utils::env_paths::config_dir_from_env;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -68,11 +68,7 @@ pub struct TokenStorage {
 
 impl TokenStorage {
     pub fn new() -> Result<Self> {
-        Self::new_with_env(None)
-    }
-
-    pub fn new_with_env(env: Option<&HashMap<String, String>>) -> Result<Self> {
-        let config_dir = config_dir_from_env(env)
+        let config_dir = config_dir()
             .context("Could not determine config directory")?
             .join("codemod");
         Self::with_config_dir(config_dir)

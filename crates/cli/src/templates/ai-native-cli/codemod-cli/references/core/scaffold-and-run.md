@@ -1,16 +1,4 @@
-# Codemod CLI Core: Scaffold and Run
-
-Use this guide for creating codemods and applying them.
-
-## Scaffold a New Codemod
-
-- Interactive setup:
-  - `codemod init`
-- Non-interactive setup:
-  - `codemod init my-codemod --project-type ast-grep-js --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
-  - `--project-type` and `--language` are required in non-interactive mode; `ast-grep-js` and `typescript` are example values.
-- Force overwrite existing files:
-  - `codemod init my-codemod --force`
+# Codemod CLI Core: Run and Validate
 
 ## Validate Before Running
 
@@ -30,6 +18,8 @@ Use this guide for creating codemods and applying them.
   - `codemod run <package-name> --target <repo-path>`
 - Run published package via implicit package mode:
   - `codemod <package-name> --target <repo-path>`
+
+For codemod creation workflows, use `references/core/create-codemods.md`.
 
 ## Direct jssg Development Loop
 

@@ -25,13 +25,6 @@ pub(crate) fn home_dir_from_env(env: Option<&HashMap<String, String>>) -> Option
         .or_else(dirs::home_dir)
 }
 
-pub(crate) fn config_dir_from_env(env: Option<&HashMap<String, String>>) -> Option<PathBuf> {
-    env_path(env, "XDG_CONFIG_HOME")
-        .or_else(|| env_path(env, "APPDATA"))
-        .or_else(|| home_dir_from_env(env).map(|home| home.join(".config")))
-        .or_else(dirs::config_dir)
-}
-
 pub(crate) fn data_dir_from_env(env: Option<&HashMap<String, String>>) -> Option<PathBuf> {
     env_path(env, "XDG_DATA_HOME")
         .or_else(|| env_path(env, "LOCALAPPDATA"))
@@ -43,19 +36,6 @@ pub(crate) fn data_dir_from_env(env: Option<&HashMap<String, String>>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn config_dir_from_env_prefers_xdg_override() {
-        let env = HashMap::from([(
-            "XDG_CONFIG_HOME".to_string(),
-            "/tmp/custom-config".to_string(),
-        )]);
-
-        assert_eq!(
-            config_dir_from_env(Some(&env)),
-            Some(PathBuf::from("/tmp/custom-config"))
-        );
-    }
 
     #[test]
     fn home_dir_from_env_prefers_home_override() {

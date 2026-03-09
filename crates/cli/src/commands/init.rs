@@ -140,6 +140,8 @@ const SKILL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/skill/workflow.
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
 const SKILL_README_TEMPLATE: &str = include_str!("../templates/skill/README.md");
+const WORKSPACE_SKILL_ROOT_README_TEMPLATE: &str =
+    include_str!("../templates/common/workspace-skill-root-README.md");
 const GITHUB_ACTION_TEMPLATE: &str = include_str!("../templates/common/publish.yml");
 const GITHUB_ACTION_WORKSPACE_TEMPLATE: &str =
     include_str!("../templates/common/publish-workspace.yml");
@@ -461,6 +463,40 @@ fn get_codemod_dir_name(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+fn codemod_scope(name: &str) -> Option<&str> {
+    let trimmed = name.trim();
+    if !trimmed.starts_with('@') {
+        return None;
+    }
+
+    let scope_end = trimmed.find('/')?;
+    Some(&trimmed[1..scope_end])
+}
+
+fn workspace_root_readme_title(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| format!("# @{} Codemods", scope))
+        .unwrap_or_else(|| "# Organization Codemods".to_string())
+}
+
+fn workspace_root_readme_org_label(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| format!("the `@{scope}` organization scope"))
+        .unwrap_or_else(|| "your organization".to_string())
+}
+
+fn workspace_root_readme_scope_guidance(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| {
+            format!(
+                "Publish packages under the `@{scope}/*` scope so they stay grouped in the Codemod Registry."
+            )
+        })
+        .unwrap_or_else(|| {
+            "Reserve an organization scope in Codemod before publishing so your packages stay grouped in the Codemod Registry.".to_string()
+        })
 }
 
 fn normalize_project_type(selected: ProjectType) -> ProjectType {
@@ -1312,6 +1348,22 @@ fn create_github_action(project_path: &Path, workspace: bool) -> Result<()> {
     Ok(())
 }
 
+fn create_workspace_root_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let readme_content = WORKSPACE_SKILL_ROOT_README_TEMPLATE
+        .replace("{title}", &workspace_root_readme_title(&config.name))
+        .replace(
+            "{org_label}",
+            &workspace_root_readme_org_label(&config.name),
+        )
+        .replace(
+            "{scope_guidance}",
+            &workspace_root_readme_scope_guidance(&config.name),
+        );
+
+    fs::write(project_path.join("README.md"), readme_content)?;
+    Ok(())
+}
+
 fn create_workspace_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     // Create root workspace directory
     fs::create_dir_all(project_path)?;
@@ -1330,6 +1382,9 @@ fn create_workspace_project(project_path: &Path, config: &ProjectConfig) -> Resu
     // Create root workspace files
     create_workspace_root_package_json(project_path, config)?;
     create_gitignore(project_path)?;
+    if config.package_behavior.includes_skill() {
+        create_workspace_root_readme(project_path, config)?;
+    }
 
     // Create GitHub Actions workflow at root level if requested
     if config.github_action {
@@ -1767,8 +1822,10 @@ mod tests {
         let skill_root = codemod_path
             .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
             .join("sample-skill");
+        let root_readme = fs::read_to_string(workspace_path.join("README.md")).unwrap();
         assert!(workspace_path.join("package.json").is_file());
         assert!(workspace_path.join(".gitignore").is_file());
+        assert!(workspace_path.join("README.md").is_file());
         assert!(codemod_path.join("codemod.yaml").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
@@ -1783,6 +1840,10 @@ mod tests {
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
         assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(root_readme.contains("## One-time setup"));
+        assert!(root_readme.contains("codemods/<slug>/"));
+        assert!(root_readme.contains("`@codemod/*`"));
+        assert!(root_readme.contains("## Running codemods"));
     }
 
     #[test]
@@ -1850,6 +1911,60 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
         assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
+    }
+
+    #[test]
+    fn create_workspace_with_skill_generates_root_readme() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path().join("workspace");
+
+        let config = ProjectConfig {
+            name: "sample-workflow-skill".to_string(),
+            description: "Workflow + skill package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowAndSkill,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: true,
+        };
+
+        create_workspace_project(&workspace_path, &config).unwrap();
+
+        let root_readme = fs::read_to_string(workspace_path.join("README.md")).unwrap();
+        assert!(root_readme.contains("## Repository layout"));
+        assert!(root_readme.contains("## One-time setup"));
+        assert!(root_readme.contains("your organization"));
+        assert!(root_readme.contains("Reserve an organization scope in Codemod"));
+    }
+
+    #[test]
+    fn create_workspace_workflow_only_does_not_generate_root_readme() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path().join("workspace");
+
+        let config = ProjectConfig {
+            name: "workflow-only".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: true,
+        };
+
+        create_workspace_project(&workspace_path, &config).unwrap();
+
+        assert!(!workspace_path.join("README.md").exists());
     }
 
     #[test]

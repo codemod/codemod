@@ -231,7 +231,7 @@ pub fn create_registry_client_with_env(
     registry: Option<String>,
     env: Option<&HashMap<String, String>>,
 ) -> Result<RegistryClient> {
-    let storage = crate::auth::TokenStorage::new_with_env(env)?;
+    let storage = crate::auth::TokenStorage::new()?;
     let auth_provider = CliAuthProvider::from_storage(storage);
 
     let config = auth_provider.storage.load_config_with_env(env)?;

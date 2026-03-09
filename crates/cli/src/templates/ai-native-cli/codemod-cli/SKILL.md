@@ -1,6 +1,6 @@
 ---
 name: codemod
-description: Plan and execute code migrations with Codemod CLI using safe, repeatable workflows.
+description: Plan and execute code migrations, and create codemod packages or monorepos with Codemod CLI using safe, repeatable workflows.
 allowed-tools:
   - Bash(codemod *)
 argument-hint: "<migration-intent>"
@@ -18,6 +18,10 @@ Recommended runtime flow:
 2. Run workflow-capable packages with `codemod run --dry-run` before apply.
 3. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior (required for skill-only packages).
 4. Enforce verification with tests and dry-run summaries before apply.
+
+For codemod creation:
+- Start with `references/core/create-codemods.md`.
+- Load `references/core/maintainer-monorepo.md` when the user is building or maintaining a codemod monorepo.
 
 For command-level guidance:
 - Start with `references/index.md`.

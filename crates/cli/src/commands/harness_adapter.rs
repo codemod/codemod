@@ -31,6 +31,8 @@ const MCP_SERVER_ARG_PACKAGE: &str = "codemod@latest";
 const MCP_SERVER_ARG_COMMAND: &str = "mcp";
 const MCS_REFERENCE_INDEX_RELATIVE_PATH: &str = "references/index.md";
 const MCS_AI_NATIVE_RECIPES_RELATIVE_PATH: &str = "references/ai-native/recipes.md";
+const MCS_CREATE_CODEMODS_RELATIVE_PATH: &str = "references/core/create-codemods.md";
+const MCS_MAINTAINER_MONOREPO_RELATIVE_PATH: &str = "references/core/maintainer-monorepo.md";
 const MCS_SEARCH_DISCOVERY_RELATIVE_PATH: &str = "references/core/search-and-discovery.md";
 const MCS_SCAFFOLD_RUN_RELATIVE_PATH: &str = "references/core/scaffold-and-run.md";
 const MCS_DRY_RUN_VERIFY_RELATIVE_PATH: &str = "references/core/dry-run-and-verify.md";
@@ -41,6 +43,10 @@ const MCS_REFERENCE_INDEX_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/index.md");
 const MCS_AI_NATIVE_RECIPES_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/ai-native/recipes.md");
+const MCS_CREATE_CODEMODS_MD: &str =
+    include_str!("../templates/ai-native-cli/codemod-cli/references/core/create-codemods.md");
+const MCS_MAINTAINER_MONOREPO_MD: &str =
+    include_str!("../templates/ai-native-cli/codemod-cli/references/core/maintainer-monorepo.md");
 const MCS_SEARCH_DISCOVERY_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/search-and-discovery.md");
 const MCS_SCAFFOLD_RUN_MD: &str =
@@ -49,19 +55,26 @@ const MCS_DRY_RUN_VERIFY_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/dry-run-and-verify.md");
 const MCS_TROUBLESHOOTING_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/troubleshooting.md");
-const MCS_REFERENCE_FILES: [(&str, &str); 6] = [
+const MCS_REFERENCE_FILES: [(&str, &str); 8] = [
     (MCS_REFERENCE_INDEX_RELATIVE_PATH, MCS_REFERENCE_INDEX_MD),
     (
         MCS_AI_NATIVE_RECIPES_RELATIVE_PATH,
         MCS_AI_NATIVE_RECIPES_MD,
+    ),
+    (MCS_CREATE_CODEMODS_RELATIVE_PATH, MCS_CREATE_CODEMODS_MD),
+    (
+        MCS_MAINTAINER_MONOREPO_RELATIVE_PATH,
+        MCS_MAINTAINER_MONOREPO_MD,
     ),
     (MCS_SEARCH_DISCOVERY_RELATIVE_PATH, MCS_SEARCH_DISCOVERY_MD),
     (MCS_SCAFFOLD_RUN_RELATIVE_PATH, MCS_SCAFFOLD_RUN_MD),
     (MCS_DRY_RUN_VERIFY_RELATIVE_PATH, MCS_DRY_RUN_VERIFY_MD),
     (MCS_TROUBLESHOOTING_RELATIVE_PATH, MCS_TROUBLESHOOTING_MD),
 ];
-const MCS_INDEX_LINKED_REFERENCE_PATHS: [&str; 5] = [
+const MCS_INDEX_LINKED_REFERENCE_PATHS: [&str; 7] = [
     MCS_AI_NATIVE_RECIPES_RELATIVE_PATH,
+    MCS_CREATE_CODEMODS_RELATIVE_PATH,
+    MCS_MAINTAINER_MONOREPO_RELATIVE_PATH,
     MCS_SEARCH_DISCOVERY_RELATIVE_PATH,
     MCS_SCAFFOLD_RUN_RELATIVE_PATH,
     MCS_DRY_RUN_VERIFY_RELATIVE_PATH,
@@ -4345,6 +4358,12 @@ codemod-skill-version: 0.1.0
                 reference_path
             );
         }
+    }
+
+    #[test]
+    fn skill_md_routes_creation_tasks_to_creation_references() {
+        assert!(MCS_SKILL_MD.contains(MCS_CREATE_CODEMODS_RELATIVE_PATH));
+        assert!(MCS_SKILL_MD.contains(MCS_MAINTAINER_MONOREPO_RELATIVE_PATH));
     }
 
     #[test]
