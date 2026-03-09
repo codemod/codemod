@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
+use crate::config::{
+    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, WorkflowRunConfig,
+};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -86,6 +88,22 @@ impl Drop for TaskCleanupGuard {
             debug!("TaskCleanupGuard: Sending task completion notification on cleanup");
             self.notify.notify_one();
         }
+    }
+}
+
+struct PreparedStepExecution {
+    env: HashMap<String, String>,
+    state_outputs_path: PathBuf,
+    state_input_path: PathBuf,
+}
+
+fn log_step_output(logger: &StructuredLogger, output: &str) {
+    if !logger.is_jsonl() {
+        return;
+    }
+
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        logger.log("info", line);
     }
 }
 
@@ -1626,6 +1644,57 @@ impl Engine {
                 self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
                     .await
             }
+            StepAction::InstallSkill(install_skill) => {
+                if self.workflow_run_config.skip_install_skill_steps {
+                    if self.workflow_run_config.no_interactive {
+                        eprintln!(
+                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
+                            install_skill.package
+                        );
+                    } else {
+                        eprintln!(
+                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
+                            install_skill.package
+                        );
+                    }
+                    return Ok(());
+                }
+
+                if self.workflow_run_config.dry_run {
+                    eprintln!(
+                        "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
+                        install_skill.package
+                    );
+                    return Ok(());
+                }
+
+                let Some(install_skill_executor) =
+                    self.workflow_run_config.install_skill_executor.as_ref()
+                else {
+                    return Err(Error::Runtime(
+                        "install-skill step requested but no install-skill executor is configured"
+                            .to_string(),
+                    ));
+                };
+
+                let prepared =
+                    self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+                let output = install_skill_executor
+                    .execute(InstallSkillExecutionRequest {
+                        install_skill: install_skill.clone(),
+                        no_interactive: self.workflow_run_config.no_interactive,
+                        target_path: self.workflow_run_config.target_path.clone(),
+                        env: prepared.env.clone(),
+                        output_format: self.workflow_run_config.output_format,
+                    })
+                    .await
+                    .map_err(|error| {
+                        Error::Runtime(format!("Failed to execute install-skill step: {error}"))
+                    })?;
+
+                log_step_output(logger, &output);
+                self.finalize_step_execution(task, output, prepared).await
+            }
         }
     }
 
@@ -2616,6 +2685,24 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<()> {
+        // Resolve variables
+        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
+        let resolved_command =
+            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+
+        let output = runner.run_command(&resolved_command, &prepared.env).await?;
+        self.finalize_step_execution(task, output, prepared).await
+    }
+
+    fn prepare_step_execution(
+        &self,
+        step_env: &Option<HashMap<String, String>>,
+        node: &Node,
+        task: &Task,
+        state: &HashMap<String, serde_json::Value>,
+        bundle_path: &Option<PathBuf>,
+    ) -> Result<PreparedStepExecution> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
 
@@ -2698,14 +2785,19 @@ impl Engine {
             task.workflow_run_id.to_string(),
         );
 
-        // Resolve variables
-        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-        let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        Ok(PreparedStepExecution {
+            env,
+            state_outputs_path,
+            state_input_path,
+        })
+    }
 
-        // Execute the command
-        let output = runner.run_command(&resolved_command, &env).await?;
-
+    async fn finalize_step_execution(
+        &self,
+        task: &Task,
+        output: String,
+        prepared: PreparedStepExecution,
+    ) -> Result<()> {
         // Get the current task
         let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
 
@@ -2719,11 +2811,11 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        let outputs = read_to_string(&state_outputs_path).await?;
+        let outputs = read_to_string(&prepared.state_outputs_path).await?;
 
         // Clean up the temporary files
-        std::fs::remove_file(&state_outputs_path).ok();
-        std::fs::remove_file(&state_input_path).ok();
+        std::fs::remove_file(&prepared.state_outputs_path).ok();
+        std::fs::remove_file(&prepared.state_input_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();

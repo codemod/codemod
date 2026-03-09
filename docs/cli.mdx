@@ -56,6 +56,121 @@ npx codemod publish
 
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
+### `codemod agent`
+
+Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
+
+**`agent install`**
+
+Install the `codemod` MCS skill package and configure Codemod MCP.
+
+```bash
+npx codemod agent install [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+```
+
+Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
+
+Along with skill files, install writes or updates a Codemod MCP server entry:
+
+```json
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}
+```
+
+MCP config paths by harness and scope:
+- `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
+- `goose`: `./.goose/mcp.json` (project), `~/.goose/mcp.json` (user)
+- `opencode`: `./.opencode/mcp.json` (project), `~/.opencode/mcp.json` (user)
+- `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
+- `codex` (CLI + macOS app): `./.codex/config.toml` (project), `~/.codex/config.toml` (user) under `[mcp_servers.codemod]`
+- `antigravity`: not configured yet (skill install only)
+
+If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
+
+`agent install` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
+- `claude`: `CLAUDE.md`
+- `goose`, `opencode`, `cursor`: `AGENTS.md` and `CLAUDE.md`
+- `codex`, `antigravity`: `AGENTS.md`
+`agent install` also wires a periodic, cooldown-protected update check trigger:
+- `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
+- `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
+- `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
+- `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.goosehints` (user) as fallback guidance
+- `codex`: `notify = ["sh", "<runner>"]` in `./.codex/config.toml` (project) or `~/.codex/config.toml` (user)
+- `antigravity`: managed guidance in `./.agents/CODEMOD_PERIODIC_UPDATE.md` (project) or `~/.gemini/antigravity/CODEMOD_PERIODIC_UPDATE.md` (user)
+Managed update policy is install-flag driven and shared by install-time reconciliation and periodic checks:
+- `--update-policy <manual|notify|auto-safe>` (default: `auto-safe`)
+- `--update-source <local|registry|URL>` (default: `registry`)
+- `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
+  `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
+Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
+After install, restart or reload your harness session so newly installed skills are picked up.
+
+**`agent update`**
+
+Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
+
+```bash
+npx codemod agent update [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+```
+
+If managed install state is missing, `agent update` automatically falls back to an install flow and then applies update reconciliation.
+
+**`agent list`**
+
+List installed codemod-managed skills (MCS and package skills).
+
+```bash
+npx codemod agent list [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--format <logs|table|json|yaml>]
+```
+
+`agent install` performs internal skill validation checks during install flow.
+
+### Package skill install (prompted from package run)
+
+Install a package skill from registry metadata into harness skill paths.
+The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/OpenCode/Cursor, `AGENTS.md` for Codex/Antigravity) without duplication, then prompts you to restart/reload the harness session.
+
+```bash
+npx codemod <package-id>
+```
+
+In interactive TTY sessions, `npx codemod <package-id>` prompts for harness/scope/overwrite when installable skill behavior is available.
+
+<Info>
+  Behavior-aware package runtime:
+
+  - **Workflow-only package**: `npx codemod <package-id>` runs the workflow behavior.
+  - **Skill-only package**: `npx codemod <package-id>` does not run a no-op workflow. It returns install guidance and, in interactive terminals, can prompt to install the skill.
+  - **Workflow + skill package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
+</Info>
+
+**AI-native error codes**
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `E_SKILL_PACKAGE_NOT_FOUND` | `27` | Unknown package id / unresolved package version |
+| `E_SKILL_PACKAGE_INSTALL_FAILED` | `28` | Registry resolution, metadata parse, or install write failure |
+
+Example machine-readable failure (`--format json`):
+
+```json
+{
+  "ok": false,
+  "code": "E_SKILL_PACKAGE_NOT_FOUND",
+  "exit_code": 27,
+  "message": "Unknown skill package id: jest-to-vitestx",
+  "hint": "Run `codemod search <migration> --format json` to locate a valid package id."
+}
+```
+
 ### `codemod workflow`
 
 Manage and execute [Codemod packages](/package-structure).
@@ -117,6 +232,15 @@ npx codemod <package-name>
   ```
 </ResponseField>
 
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive runs, execute `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow run -w workflow.yaml --no-interactive --install-skill
+  npx codemod <package-name> --no-interactive --install-skill
+  ```
+</ResponseField>
+
 **`workflow resume`**
 
 Resume a paused workflow.
@@ -137,6 +261,14 @@ npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
   Trigger all awaiting tasks.
 </ResponseField>
 
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive resume runs, execute pending `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow resume -w workflow.yaml -i <ID> --trigger-all --no-interactive --install-skill
+  ```
+</ResponseField>
+
 **`workflow validate`**
 
 Validate a workflow file.
@@ -145,8 +277,14 @@ Validate a workflow file.
 npx codemod workflow validate -w <workflow.yaml>
 ```
 
+`workflow validate` is capability-aware for codemod packages:
+
+- **Workflow-only** package: validates workflow behavior.
+- **Skill-only** package: validates workflow `install-skill` behavior plus authored skill layout (`agents/skill/<skill-name>/...`).
+- **Workflow + skill** package: validates both executable workflow and authored skill behavior.
+
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
-  Path to workflow file.
+  Path to workflow file or codemod package directory.
 </ResponseField>
 
 | Check                       | Ensures                                |
@@ -167,7 +305,7 @@ npx codemod workflow validate -w <workflow.yaml>
 </Info>
 
 <Accordion title="Validation vs. Logical Correctness">
-  The `workflow validate` command ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
+  For workflow behavior, `workflow validate` ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
 
   - **Logical correctness**: Whether your workflow does what you intend
   - **Runtime behavior**: How your workflow behaves with real data
@@ -434,12 +572,23 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
-  Project type: `ast-grep-js`.
+  Workflow project type: `ast-grep-js` or `hybrid`.
+  Mutually exclusive with `--skill`.
 
   <Accordion title="More package types (advanced)">
     - `shell`: Shell script-based codemods
     - `ast-grep-yaml`: YAML-based ast-grep codemods
   </Accordion>
+</ResponseField>
+
+<ResponseField name="--skill" type="boolean">
+  Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+  Mutually exclusive with `--with-skill` and `--project-type`.
+</ResponseField>
+
+<ResponseField name="--with-skill" type="boolean">
+  Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+  Mutually exclusive with `--skill`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">

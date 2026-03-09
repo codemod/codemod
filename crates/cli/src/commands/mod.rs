@@ -1,9 +1,13 @@
+pub mod agent;
 pub mod cache;
+pub mod harness_adapter;
 pub mod init;
 pub mod jssg;
 pub mod login;
 pub mod logout;
 pub mod mcp;
+pub mod output;
+pub mod package_skill;
 pub mod publish;
 pub mod run;
 pub mod search;
