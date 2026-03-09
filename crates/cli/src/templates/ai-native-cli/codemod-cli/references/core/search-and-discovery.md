@@ -6,12 +6,8 @@ Use these commands to find the best existing codemod before creating a new one.
 
 - Basic query:
   - `codemod search react`
-- Language and category filters:
-  - `codemod search --language typescript --category migration`
-- Scope filter:
-  - `codemod search --scope my-org next`
-- Framework filter:
-  - `codemod search --framework nextjs "next 15"`
+- Scope filter (@scope/codemod-name):
+  - `codemod search "scope:nodejs rmdir"`
 
 ## Output Formats
 
