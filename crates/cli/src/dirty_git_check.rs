@@ -1,24 +1,60 @@
+use inquire::Confirm;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 type GitDirtyCheckCallback = Arc<Box<dyn Fn(&Path, bool) + Send + Sync>>;
 
-/// Prints an error message about the path not being tracked by Git and exits.
-fn exit_not_tracked(path: &Path) -> ! {
+/// Prompts the user or exits when uncommitted changes are detected.
+fn handle_dirty(path: &Path, no_interactive: bool) {
+    if !no_interactive {
+        let proceed = Confirm::new(&format!(
+            "You have uncommitted changes in {}. Do you want to proceed anyway?",
+            path.display()
+        ))
+        .with_default(false)
+        .prompt()
+        .unwrap_or(false);
+
+        if proceed {
+            return;
+        }
+    }
+    eprintln!(
+        "Error: You have uncommitted changes in {}. Use --allow-dirty to proceed anyway.",
+        path.display()
+    );
+    std::process::exit(1);
+}
+
+/// Prompts the user or exits when the path is not tracked by Git.
+fn handle_not_tracked(path: &Path, no_interactive: bool) {
+    if !no_interactive {
+        let proceed = Confirm::new(&format!(
+            "The target path '{}' is not tracked by Git. Do you want to proceed anyway?",
+            path.display()
+        ))
+        .with_default(false)
+        .prompt()
+        .unwrap_or(false);
+
+        if proceed {
+            return;
+        }
+    }
     eprintln!(
         "Error: The target path '{}' is not tracked by Git. Use --allow-dirty to proceed anyway.",
         path.display()
     );
-    std::process::exit(1)
+    std::process::exit(1);
 }
 
 /// Creates a callback that checks if a git repository has uncommitted changes.
 ///
-/// The callback will exit with an error if:
-/// - The path has uncommitted changes and `allow_dirty` is false
-/// - The path is not tracked by git and `allow_dirty` is false
-pub fn dirty_check() -> GitDirtyCheckCallback {
+/// When `no_interactive` is false and the repo is dirty, prompts the user to proceed.
+/// When `no_interactive` is true and the repo is dirty, exits with an error.
+/// The callback skips the check entirely if `allow_dirty` is true.
+pub fn dirty_check(no_interactive: bool) -> GitDirtyCheckCallback {
     let checked_paths = Arc::new(Mutex::new(Vec::new()));
 
     Arc::new(Box::new(move |path: &Path, allow_dirty: bool| {
@@ -50,7 +86,8 @@ pub fn dirty_check() -> GitDirtyCheckCallback {
                     .eq_ignore_ascii_case("true");
 
                 if !is_inside_work_tree {
-                    exit_not_tracked(path);
+                    handle_not_tracked(path, no_interactive);
+                    return;
                 }
 
                 // Check for uncommitted changes
@@ -61,14 +98,10 @@ pub fn dirty_check() -> GitDirtyCheckCallback {
                     .expect("Failed to run git status");
 
                 if !status_output.stdout.is_empty() {
-                    eprintln!(
-                        "Error: You have uncommitted changes in {}. Use --allow-dirty to proceed anyway.",
-                        path.display()
-                    );
-                    std::process::exit(1);
+                    handle_dirty(path, no_interactive);
                 }
             }
-            _ => exit_not_tracked(path),
+            _ => handle_not_tracked(path, no_interactive),
         }
     }))
 }

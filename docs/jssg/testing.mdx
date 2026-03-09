@@ -23,6 +23,10 @@ tests/
 - Expected files must be named `expected.ts` (or appropriate extension)
 - File extensions should match your target language (`.ts`, `.tsx`, `.js`, `.jsx`)
 
+<Warning>
+The test directory must be the **parent** folder that contains your test case subdirectories (e.g., `./tests`). Passing a specific test case directory like `./tests/basic-transform` will result in a "No test cases found" error. To run a specific test case, use the `--filter` flag instead.
+</Warning>
+
 ## Command reference
 
 ### Basic syntax
@@ -41,7 +45,7 @@ npx codemod jssg test -l <language> <codemod-file> [test-directory]
 # Update expected outputs when changes are intentional
 npx codemod jssg test -l tsx ./scripts/codemod.ts -u
 
-# Run only tests matching a pattern
+# Run only tests matching a pattern (matches against test case directory names)
 npx codemod jssg test -l tsx ./scripts/codemod.ts --filter "edge-cases"
 
 # Show detailed output for debugging
@@ -133,10 +137,18 @@ function Component() {
     # Verify structure
     ls -la tests/basic-transform/
     # Should show: input.ts  expected.ts
-    
+
     # Check file names are correct
     ls tests/basic-transform/
     # Should show: input.ts  expected.ts
+    ```
+  </Accordion>
+
+  <Accordion title="No test cases found when pointing to a subdirectory">
+    **Problem:** Running `npx codemod jssg test ... ./tests/my-case` gives "No test cases found".<br/><br/>
+    **Solution:** The test directory argument must be the parent `tests/` folder, not a specific test case subdirectory. Use `--filter` to run a specific case:
+    ```bash
+    npx codemod jssg test -l tsx ./scripts/codemod.ts ./tests --filter "my-case"
     ```
   </Accordion>
   

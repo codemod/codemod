@@ -53,6 +53,25 @@
     "nodes"
   ],
   "$defs": {
+    "InstallSkillHarness": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "claude",
+        "goose",
+        "opencode",
+        "cursor",
+        "codex",
+        "antigravity"
+      ]
+    },
+    "InstallSkillScope": {
+      "type": "string",
+      "enum": [
+        "project",
+        "user"
+      ]
+    },
     "Node": {
       "description": "Represents a node in a workflow",
       "type": "object",
@@ -582,6 +601,18 @@
           "required": [
             "ai"
           ]
+        },
+        {
+          "description": "Install package skill behavior via codemod CLI",
+          "type": "object",
+          "properties": {
+            "install-skill": {
+              "$ref": "#/$defs/UseInstallSkill"
+            }
+          },
+          "required": [
+            "install-skill"
+          ]
         }
       ],
       "required": [
@@ -1031,6 +1062,58 @@
       },
       "required": [
         "source"
+      ]
+    },
+    "UseInstallSkill": {
+      "type": "object",
+      "properties": {
+        "force": {
+          "description": "Overwrite existing skill files (optional, defaults to false)",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "harness": {
+          "description": "Target harness adapter (optional, defaults to auto)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstallSkillHarness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "package": {
+          "description": "Package identifier to install (for example `@codemod/jest-to-vitest`)",
+          "type": "string"
+        },
+        "path": {
+          "description": "Authored skill source path inside the package (optional, defaults to conventional layout)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scope": {
+          "description": "Install scope (optional, defaults to project)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstallSkillScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "package"
       ]
     },
     "UseJSAstGrep": {

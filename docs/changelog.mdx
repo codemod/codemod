@@ -5,6 +5,58 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="February 2026">
+- **Shareable reports**: Codemod execution reports can now be shared via URL, complete with metrics, file lists, and diff viewers — with Open Graph previews for social sharing. The CLI now also supports a `--report` flag to open reports locally in the browser.
+
+- **Code change previews in the registry**: Registry packages now display before/after diffs from cached test cases, so you can see exactly what a codemod will do before running it. Diffs are shown on click rather than hover for a cleaner experience.
+
+- **Redesigned navigation**: App navigation now mirrors the website with dropdown menus, grouped items, and improved visual hierarchy for easier feature discovery.
+
+- **New website**: Completely redesigned website with updated feature sections, case studies, client testimonials, and improved responsive design.
+
+- **Structured logging**: The CLI now supports a `--format jsonl` flag on `codemod run` and `codemod workflow run` for machine-readable JSONL output, enabling easier integration with CI pipelines and external tooling.
+
+- **JSSG & Insights improvements**:
+  - `jssgTransform()` API for applying multi-file transforms atomically and `SgRoot.rename()` for renaming files within codemods
+  - Cross-thread state management via the new `codemod:workflow` module for sharing state between workflow steps
+  - Metrics snapshot testing support in JSSG tests for validating metrics output alongside code transformations
+  - Indentation normalization in loose test comparison mode for more flexible test assertions
+  - Split-screen editor for side-by-side code editing and preview
+  - Variable and rule editor modals for managing template variables
+  - Running state indicator and ⌘↵ keyboard shortcut across all code editor modals
+  - Fixed include/exclude glob filtering and codeowner query double-counting
+  - Streaming timeseries results for faster dashboard loading
+
+- **New language templates**: `codemod init` now includes templates for PHP, C#, C++, C, Angular, Ruby, Elixir, CSS, HTML, and Kotlin — making it easier to scaffold codemods for additional languages.
+
+- **Less language support**: Studio and code analysis now support the Less CSS preprocessor for writing and running codemods on `.less` files.
+
+- **Grouped build logs**: Build logs now display in collapsible step groups with status icons, duration, and auto-expanding failed steps for easier debugging.
+
+- **SSO & authentication**:
+  - New SSO provider edit page for updating existing configurations
+  - Fixed SAML IdP parsing, domain verification, and relay state handling
+  - Faster GitHub login with optimized member sync
+
+- **Jira integration**: Added issue type support and enhanced project linking for more flexible task synchronization.
+
+- **Reliability improvements**:
+  - Fixed Windows path handling and line ending normalization for JSSG tests and bundler
+  - Improved error surfacing for async module evaluation in codemods
+  - Better JS code extraction from bundler output
+  - Legacy codemods can now be filtered out of the registry
+  - Team switching properly refreshes all data
+  - Diff viewer displays correctly in light mode
+  - Fixed navigation links and logo home link
+  - Corrected date handling and article styling in registry package details
+  - Restored Open Graph images for registry templates
+
+- **Performance**:
+  - Code indexer rewritten in Rust for significantly faster repository analysis
+  - Large widget payloads offloaded to Redis for snappier dashboards
+  - Database query planner optimizations for improved query performance
+</Update>
+
 <Update label="January 2026">
 - **Multi-repo insights**: Select multiple repositories in the Insights dashboard to analyze patterns across your entire codebase at once. Template variables are now always visible and editable.
 

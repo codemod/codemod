@@ -58,6 +58,10 @@ pub struct Command {
     #[arg(long)]
     agent: Option<String>,
 
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
+
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
@@ -116,8 +120,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         args.no_interactive,
         args.no_color,
         diff_collector.clone(),
+        args.no_interactive && !args.install_skill,
         output_format,
         args.agent.clone(),
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
     // Run workflow using the extracted workflow runner
@@ -127,15 +133,20 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let metrics_data = engine.metrics_context.get_all();
 
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
+    let stats = engine.execution_stats.clone();
+    let files_modified = stats.files_modified.load(Ordering::Relaxed);
+    let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
+    let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
         let collected_diffs = diff_collector
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();
-
-        let stats = engine.execution_stats.clone();
-        let files_modified = stats.files_modified.load(Ordering::Relaxed);
-        let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
-        let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
         let report = ExecutionReport::build(
             args.workflow.clone(),

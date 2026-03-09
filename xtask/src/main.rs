@@ -47,6 +47,7 @@ async fn main() {
                 panic!("Cannot create file: {json_schema_path:?}");
             };
             to_writer_pretty(&mut json_file, &schema).unwrap();
+            json_file.write_all(b"\n").unwrap();
         }
         Commands::Ts => {
             let Ok(xtask_path) = std::env::var("CARGO_MANIFEST_DIR") else {

@@ -32,26 +32,6 @@
             "pages": ["introduction"]
           },
           {
-            "group": "Enterprise",
-            "pages": [
-              "platform/quickstart",
-              "platform/campaigns",
-              "platform/insights",
-              "platform/registry",
-              "platform/codemod-studio",
-              {
-                "icon": "plug",
-                "group": "Integrations",
-                "pages": [
-                  "platform/integrations/github",
-                  "platform/integrations/gitlab",
-                  "platform/integrations/jira",
-                  "platform/saml"
-                ]
-              }
-            ]
-          },
-          {
             "group": "Community",
             "pages": [
               "oss-quickstart",
@@ -81,6 +61,26 @@
               "publishing",
               "model-context-protocol",
               "oss"
+            ]
+          },
+          {
+            "group": "Enterprise",
+            "pages": [
+              "platform/quickstart",
+              "platform/campaigns",
+              "platform/insights",
+              "platform/registry",
+              "platform/codemod-studio",
+              {
+                "icon": "plug",
+                "group": "Integrations",
+                "pages": [
+                  "platform/integrations/github",
+                  "platform/integrations/gitlab",
+                  "platform/integrations/jira",
+                  "platform/saml"
+                ]
+              }
             ]
           },
           {

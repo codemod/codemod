@@ -52,6 +52,35 @@ npx codemod init
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
 </Info>
 
+## Package Behavior
+
+Codemod packages use a workflow-first model and can be:
+- **Workflow-only**: `workflow.yaml` has executable steps and no `install-skill` steps.
+- **Skill-only**: `workflow.yaml` has `install-skill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Workflow + skill**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
+
+Current CLI behavior:
+- `codemod init` (default) scaffolds workflow-only packages.
+- `codemod init --skill` scaffolds skill-only packages.
+- `codemod init --with-skill` scaffolds workflow + skill packages.
+- `--skill` and `--with-skill` are mutually exclusive.
+- `--skill` and `--project-type` are mutually exclusive.
+- `codemod publish` supports workflow-only, skill-only, and workflow + skill packages by validating workflow behavior and skill layout.
+- `codemod workflow validate -w <package-root>` validates package behavior:
+  - workflow-only: workflow checks
+  - skill-only: skill structure/frontmatter/reference checks
+  - workflow + skill: both workflow and skill checks
+
+Skill-capable packages should keep authored skill content under:
+
+```text
+agents/skill/<skill-name>/
+  SKILL.md
+  references/
+```
+
+All files in this authored skill directory are treated as install payload and copied recursively when users run `npx codemod <package-id>` and accept the skill-install prompt.
+
 ## Package Metadata (codemod.yaml)
 
 The `codemod.yaml` file defines your package's metadata and configuration.
@@ -76,6 +105,8 @@ registry:
   access: "public"
   visibility: "public"
 ```
+
+For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
 
 **Available fields:**
 
@@ -112,7 +143,7 @@ License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
 <ParamField path="workflow" type="string" required default="workflow.yaml">
-Relative path to your workflow file.
+Relative path to your workflow file (required for workflow-only, skill-only, and workflow + skill packages).
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">

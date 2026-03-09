@@ -14,7 +14,9 @@ use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
-use crate::config::{CapabilitiesSecurityCallback, DryRunChange, WorkflowRunConfig};
+use crate::config::{
+    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, WorkflowRunConfig,
+};
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -30,6 +32,7 @@ use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use tokio::fs::read_to_string;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::time;
 use uuid::Uuid;
@@ -89,6 +92,22 @@ impl Drop for TaskCleanupGuard {
             debug!("TaskCleanupGuard: Sending task completion notification on cleanup");
             self.notify.notify_one();
         }
+    }
+}
+
+struct PreparedStepExecution {
+    env: HashMap<String, String>,
+    state_outputs_path: PathBuf,
+    state_input_path: PathBuf,
+}
+
+fn log_step_output(logger: &StructuredLogger, output: &str) {
+    if !logger.is_jsonl() {
+        return;
+    }
+
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        logger.log("info", line);
     }
 }
 
@@ -1423,6 +1442,9 @@ impl Engine {
             };
 
             step_logger.step_start();
+            if !step_logger.is_jsonl() {
+                println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
+            }
             let step_start_time = std::time::Instant::now();
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
@@ -1604,7 +1626,6 @@ impl Engine {
                     params,
                     state,
                     bundle_path,
-                    logger,
                 )
                 .await
             }
@@ -1707,6 +1728,57 @@ impl Engine {
             StepAction::AI(ai_config) => {
                 self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
                     .await
+            }
+            StepAction::InstallSkill(install_skill) => {
+                if self.workflow_run_config.skip_install_skill_steps {
+                    if self.workflow_run_config.no_interactive {
+                        eprintln!(
+                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
+                            install_skill.package
+                        );
+                    } else {
+                        eprintln!(
+                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
+                            install_skill.package
+                        );
+                    }
+                    return Ok(());
+                }
+
+                if self.workflow_run_config.dry_run {
+                    eprintln!(
+                        "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
+                        install_skill.package
+                    );
+                    return Ok(());
+                }
+
+                let Some(install_skill_executor) =
+                    self.workflow_run_config.install_skill_executor.as_ref()
+                else {
+                    return Err(Error::Runtime(
+                        "install-skill step requested but no install-skill executor is configured"
+                            .to_string(),
+                    ));
+                };
+
+                let prepared =
+                    self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+                let output = install_skill_executor
+                    .execute(InstallSkillExecutionRequest {
+                        install_skill: install_skill.clone(),
+                        no_interactive: self.workflow_run_config.no_interactive,
+                        target_path: self.workflow_run_config.target_path.clone(),
+                        env: prepared.env.clone(),
+                        output_format: self.workflow_run_config.output_format,
+                    })
+                    .await
+                    .map_err(|error| {
+                        Error::Runtime(format!("Failed to execute install-skill step: {error}"))
+                    })?;
+
+                log_step_output(logger, &output);
+                self.finalize_step_execution(task, output, prepared).await
             }
         }
     }
@@ -2415,6 +2487,16 @@ impl Engine {
             }
         };
 
+        // Check if Codex CLI agent is requested via LLM_AGENT env var
+        if std::env::var("LLM_AGENT")
+            .map(|v| v.eq_ignore_ascii_case("codex"))
+            .unwrap_or(false)
+        {
+            return self
+                .execute_codex_cli_step(&api_key, &resolved_prompt, logger)
+                .await;
+        }
+
         let model = ai_config
             .model
             .clone()
@@ -2520,6 +2602,84 @@ impl Engine {
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
         slog!(logger, info, "AI agent step completed successfully");
+        Ok(())
+    }
+
+    /// Execute an AI step using OpenAI Codex CLI as the agent backend.
+    /// Invoked when the LLM_AGENT=codex environment variable is set.
+    async fn execute_codex_cli_step(
+        &self,
+        api_key: &str,
+        prompt: &str,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        slog!(logger, info, "Using Codex CLI agent");
+
+        let mut cmd = tokio::process::Command::new("npx");
+        cmd.arg("-y")
+            .arg("@openai/codex@0.101.0")
+            .arg("exec")
+            .arg("-") // read prompt from stdin
+            .current_dir(&self.workflow_run_config.target_path)
+            .env("OPENAI_API_KEY", api_key)
+            .env_remove("RUST_LOG")
+            .env_remove("RUST_BACKTRACE")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        if let Ok(base_url) = std::env::var("LLM_BASE_URL") {
+            cmd.env("OPENAI_BASE_URL", &base_url);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::StepExecution(format!("Failed to spawn Codex CLI: {e}")))?;
+
+        // Write prompt to stdin and close it
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                Error::StepExecution(format!("Failed to write prompt to stdin: {e}"))
+            })?;
+            // stdin is dropped here, closing the pipe
+        }
+
+        // Stream stdout line-by-line
+        let stdout = child.stdout.take();
+
+        let stdout_logger = logger.clone();
+        let stdout_handle = tokio::spawn(async move {
+            if let Some(stdout) = stdout {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    slog!(stdout_logger, info, "{line}");
+                }
+            }
+        });
+
+        let (_, status) = tokio::try_join!(
+            async {
+                stdout_handle
+                    .await
+                    .map_err(|e| Error::StepExecution(e.to_string()))
+            },
+            async {
+                child
+                    .wait()
+                    .await
+                    .map_err(|e| Error::StepExecution(format!("Codex CLI process error: {e}")))
+            },
+        )?;
+
+        if !status.success() {
+            return Err(Error::StepExecution(format!(
+                "Codex CLI exited with status {}",
+                status,
+            )));
+        }
+
+        slog!(logger, info, "Codex CLI step completed successfully");
         Ok(())
     }
 
@@ -2755,8 +2915,25 @@ impl Engine {
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
-        logger: &StructuredLogger,
     ) -> Result<()> {
+        // Resolve variables
+        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
+        let resolved_command =
+            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+
+        let output = runner.run_command(&resolved_command, &prepared.env).await?;
+        self.finalize_step_execution(task, output, prepared).await
+    }
+
+    fn prepare_step_execution(
+        &self,
+        step_env: &Option<HashMap<String, String>>,
+        node: &Node,
+        task: &Task,
+        state: &HashMap<String, serde_json::Value>,
+        bundle_path: &Option<PathBuf>,
+    ) -> Result<PreparedStepExecution> {
         // Start with a copy of the parent process's environment
         let mut env: HashMap<String, String> = std::env::vars().collect();
 
@@ -2839,14 +3016,19 @@ impl Engine {
             task.workflow_run_id.to_string(),
         );
 
-        // Resolve variables
-        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-        let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        Ok(PreparedStepExecution {
+            env,
+            state_outputs_path,
+            state_input_path,
+        })
+    }
 
-        // Execute the command
-        let output = runner.run_command(&resolved_command, &env).await?;
-
+    async fn finalize_step_execution(
+        &self,
+        task: &Task,
+        output: String,
+        prepared: PreparedStepExecution,
+    ) -> Result<()> {
         // Get the current task
         let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
 
@@ -2860,18 +3042,11 @@ impl Engine {
             .save_task(&current_task)
             .await?;
 
-        if logger.is_jsonl() {
-            logger.log("info", &format!("Step output:\n{output}"));
-        } else {
-            println!("Step output:");
-            println!("{output}");
-        }
-
-        let outputs = read_to_string(&state_outputs_path).await?;
+        let outputs = read_to_string(&prepared.state_outputs_path).await?;
 
         // Clean up the temporary files
-        std::fs::remove_file(&state_outputs_path).ok();
-        std::fs::remove_file(&state_input_path).ok();
+        std::fs::remove_file(&prepared.state_outputs_path).ok();
+        std::fs::remove_file(&prepared.state_input_path).ok();
 
         // Update state
         let mut state_diff = HashMap::new();
