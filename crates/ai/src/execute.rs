@@ -27,7 +27,7 @@ pub struct ExecuteAiStepConfig {
     pub model: String,
     pub system_prompt: Option<String>,
     pub max_steps: Option<usize>,
-    pub enable_lakeview: Option<bool>,
+    pub tools: Option<Vec<String>>,
     pub prompt: String,
     pub working_dir: PathBuf,
     pub llm_protocol: String,
@@ -145,7 +145,7 @@ struct NormalizedAiExecutionConfig {
 
 impl From<ExecuteAiStepConfig> for NormalizedAiExecutionConfig {
     fn from(value: ExecuteAiStepConfig) -> Self {
-        let tools = get_default_cli_tools();
+        let tools = value.tools.unwrap_or_else(get_default_cli_tools);
 
         Self {
             endpoint: value.endpoint,
@@ -785,13 +785,30 @@ mod tests {
             model: "gpt-4o".to_string(),
             system_prompt: None,
             max_steps: None,
-            enable_lakeview: None,
+            tools: None,
             prompt: "Test".to_string(),
             working_dir: PathBuf::from("/tmp/project"),
             llm_protocol: "openai".to_string(),
         });
 
         assert_eq!(normalized.tools, get_default_cli_tools());
+    }
+
+    #[test]
+    fn test_explicit_tools_are_forwarded() {
+        let normalized = NormalizedAiExecutionConfig::from(ExecuteAiStepConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-4o".to_string(),
+            system_prompt: None,
+            max_steps: None,
+            tools: Some(vec!["bash".to_string(), "glob".to_string()]),
+            prompt: "Test".to_string(),
+            working_dir: PathBuf::from("/tmp/project"),
+            llm_protocol: "openai".to_string(),
+        });
+
+        assert_eq!(normalized.tools, vec!["bash".to_string(), "glob".to_string()]);
     }
 
     #[test]

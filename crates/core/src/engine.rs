@@ -154,7 +154,7 @@ pub struct CapabilitiesData {
 }
 
 impl Engine {
-    fn launch_agent(
+    async fn launch_agent(
         &self,
         canonical: &str,
         executable: &Path,
@@ -186,7 +186,14 @@ impl Engine {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
-        let status = cmd.status()?;
+        let status = tokio::task::spawn_blocking(move || cmd.status())
+            .await
+            .map_err(|error| {
+                Error::StepExecution(format!(
+                    "Failed to join agent process for '{}': {}",
+                    canonical, error
+                ))
+            })??;
 
         if status.success() {
             slog!(logger, info, "Agent '{}' completed successfully", canonical);
@@ -2393,13 +2400,15 @@ impl Engine {
             if let Some(canonical) = resolve_agent_name(agent_name) {
                 slog!(logger, info, "Agent specified via --agent: {}", canonical);
                 if let Some(executable) = find_agent_executable(canonical) {
-                    return self.launch_agent(
-                        canonical,
-                        &executable,
-                        ai_config.system_prompt.as_deref(),
-                        &resolved_prompt,
-                        logger,
-                    );
+                    return self
+                        .launch_agent(
+                            canonical,
+                            &executable,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                            logger,
+                        )
+                        .await;
                 } else {
                     slog!(
                         logger,
@@ -2435,13 +2444,15 @@ impl Engine {
 
                     slog!(logger, info, "User selected agent: {}", selected);
                     if let Some(executable) = find_agent_executable(&selected) {
-                        return self.launch_agent(
+                        return self
+                            .launch_agent(
                             &selected,
                             &executable,
                             ai_config.system_prompt.as_deref(),
                             &resolved_prompt,
                             logger,
-                        );
+                            )
+                            .await;
                     } else {
                         slog!(
                             logger,
@@ -2527,7 +2538,7 @@ impl Engine {
             model,
             system_prompt: ai_config.system_prompt.clone(),
             max_steps: ai_config.max_steps,
-            enable_lakeview: ai_config.enable_lakeview,
+            tools: ai_config.tools.clone(),
             prompt: resolved_prompt,
             working_dir: self.workflow_run_config.target_path.clone(),
             llm_protocol: llm_provider,
