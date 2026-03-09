@@ -19,6 +19,7 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
 const MCS_SKILL_VERSION: &str = "1.0.0";
+const MCS_CREATE_COMMAND_NAME: &str = "codemod-create";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
@@ -55,6 +56,8 @@ const MCS_DRY_RUN_VERIFY_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/dry-run-and-verify.md");
 const MCS_TROUBLESHOOTING_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/troubleshooting.md");
+const MCS_CREATE_COMMAND_MD: &str =
+    include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod-create.md");
 const MCS_REFERENCE_FILES: [(&str, &str); 8] = [
     (MCS_REFERENCE_INDEX_RELATIVE_PATH, MCS_REFERENCE_INDEX_MD),
     (
@@ -96,6 +99,8 @@ const CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS: u64 = 21_600;
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME: &str = ".goosehints";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN: &str = "<!-- codemod-periodic-update:begin -->";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
+const GOOSE_CONFIG_RELATIVE_PATH: &str = ".config/goose/config.yaml";
+const GOOSE_GLOBAL_RECIPES_RELATIVE_DIR: &str = ".config/goose/recipes";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME: &str = "hooks.json";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME: &str = "afterAgentResponse";
 const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME: &str = "plugins";
@@ -217,6 +222,7 @@ pub enum ManagedComponentKind {
     Skill,
     McpConfig,
     DiscoveryGuide,
+    Command,
 }
 
 impl ManagedComponentKind {
@@ -225,6 +231,7 @@ impl ManagedComponentKind {
             Self::Skill => "skill",
             Self::McpConfig => "mcp_config",
             Self::DiscoveryGuide => "discovery_guide",
+            Self::Command => "command",
         }
     }
 }
@@ -695,7 +702,7 @@ pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<Install
 
 pub fn install_restart_hint(harness: Harness) -> String {
     format!(
-        "Restart or reload your {} session so newly installed skills are picked up.",
+        "Restart or reload your {} session so newly installed Codemod integrations are picked up.",
         harness.as_str()
     )
 }
@@ -1545,7 +1552,7 @@ pub(crate) fn upsert_skill_discovery_guides_with_runtime(
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
     let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
+    let discovery_block = render_skill_discovery_block(harness, scope, &skill_root_hint);
     let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
     let mut updated_files = Vec::new();
 
@@ -1616,7 +1623,16 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
     })
 }
 
-fn render_skill_discovery_block(harness: Harness, skill_root_hint: &str) -> String {
+fn render_skill_discovery_block(
+    harness: Harness,
+    scope: InstallScope,
+    skill_root_hint: &str,
+) -> String {
+    let command_line = if mcs_create_command_is_available(harness, scope) {
+        format!("- Codemod creation command: `/{MCS_CREATE_COMMAND_NAME}`\n")
+    } else {
+        String::new()
+    };
     format!(
         "{SKILL_DISCOVERY_SECTION_BEGIN}
 ## Codemod Skill Discovery
@@ -1624,10 +1640,11 @@ This section is managed by `codemod` CLI.
 
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
-- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+{command_line}- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
-        harness.as_str()
+        harness.as_str(),
+        command_line = command_line
     )
 }
 
@@ -2153,6 +2170,7 @@ fn managed_component_kind_from_state(kind: &str) -> AdapterResult<ManagedCompone
         "skill" => Ok(ManagedComponentKind::Skill),
         "mcp_config" => Ok(ManagedComponentKind::McpConfig),
         "discovery_guide" => Ok(ManagedComponentKind::DiscoveryGuide),
+        "command" => Ok(ManagedComponentKind::Command),
         unknown => Err(HarnessAdapterError::InstallFailed(format!(
             "Managed install state contains unsupported component kind `{unknown}`"
         ))),
@@ -2202,6 +2220,27 @@ fn install_mcs_skill_bundle_with_runtime(
     Ok(installed)
 }
 
+pub(crate) fn upsert_mcs_command_entrypoints_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    match harness {
+        Harness::Goose => upsert_goose_mcs_command_with_runtime(scope, force, runtime_paths),
+        _ => {
+            let Some(command_path) =
+                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
+            else {
+                return Ok(Vec::new());
+            };
+
+            write_skill_file(&command_path, MCS_CREATE_COMMAND_MD, force)?;
+            Ok(vec![command_path])
+        }
+    }
+}
+
 fn mcs_install_requires_force_with_runtime(
     harness: Harness,
     scope: InstallScope,
@@ -2218,6 +2257,23 @@ fn mcs_install_requires_force_with_runtime(
     for (relative_path, content) in MCS_REFERENCE_FILES {
         if managed_text_file_requires_force(&skill_root.join(relative_path), content)? {
             return Ok(true);
+        }
+    }
+
+    match harness {
+        Harness::Goose => {
+            if goose_mcs_command_requires_force(scope, runtime_paths)? {
+                return Ok(true);
+            }
+        }
+        _ => {
+            if let Some(command_path) =
+                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
+            {
+                if managed_text_file_requires_force(&command_path, MCS_CREATE_COMMAND_MD)? {
+                    return Ok(true);
+                }
+            }
         }
     }
 
@@ -3039,6 +3095,12 @@ fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
         }
     }
 
+    if MCS_CREATE_COMMAND_MD.trim().is_empty() {
+        return Err(HarnessAdapterError::InvalidSkillPackage(
+            "commands/codemod-create.md is empty".to_string(),
+        ));
+    }
+
     for reference_path in MCS_INDEX_LINKED_REFERENCE_PATHS {
         if !MCS_REFERENCE_INDEX_MD.contains(reference_path) {
             return Err(HarnessAdapterError::InvalidSkillPackage(format!(
@@ -3092,6 +3154,300 @@ fn skills_root_for_harness(
                 }
             }),
     }
+}
+
+fn mcs_create_command_is_available(harness: Harness, scope: InstallScope) -> bool {
+    match harness {
+        Harness::Claude | Harness::Opencode | Harness::Cursor | Harness::Antigravity => true,
+        Harness::Goose => scope == InstallScope::User,
+        Harness::Codex | Harness::Auto => false,
+    }
+}
+
+fn mcs_command_entrypoint_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<PathBuf>> {
+    let file_name = format!("{MCS_CREATE_COMMAND_NAME}.md");
+    match harness {
+        Harness::Claude => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".claude/commands").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".claude/commands")
+                .join(&file_name),
+        })),
+        Harness::Opencode => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths
+                .cwd
+                .join(".opencode/commands")
+                .join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".config/opencode/commands")
+                .join(&file_name),
+        })),
+        Harness::Cursor => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".cursor/commands").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".cursor/commands")
+                .join(&file_name),
+        })),
+        Harness::Antigravity => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".agents/workflows").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".gemini/antigravity/global_workflows")
+                .join(&file_name),
+        })),
+        Harness::Goose | Harness::Codex => Ok(None),
+        Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
+    }
+}
+
+fn goose_mcs_command_requires_force(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<bool> {
+    let Some((recipe_path, config_path)) = goose_mcs_command_paths(scope, runtime_paths)? else {
+        return Ok(false);
+    };
+
+    if managed_text_file_requires_force(&recipe_path, goose_mcs_recipe_content())? {
+        return Ok(true);
+    }
+
+    goose_config_requires_force(&config_path, &recipe_path)
+}
+
+fn upsert_goose_mcs_command_with_runtime(
+    scope: InstallScope,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    let Some((recipe_path, config_path)) = goose_mcs_command_paths(scope, runtime_paths)? else {
+        return Ok(Vec::new());
+    };
+
+    write_skill_file(&recipe_path, goose_mcs_recipe_content(), force)?;
+    upsert_goose_slash_command_config(&config_path, &recipe_path, force)?;
+
+    Ok(vec![recipe_path, config_path])
+}
+
+fn goose_mcs_command_paths(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<(PathBuf, PathBuf)>> {
+    if scope == InstallScope::Project {
+        return Ok(None);
+    }
+
+    let home_dir = runtime_paths.home_dir.as_ref().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(
+            "Could not determine home directory for --user install".to_string(),
+        )
+    })?;
+
+    let recipe_path = home_dir
+        .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
+        .join(format!("{MCS_CREATE_COMMAND_NAME}.yaml"));
+    let config_path = home_dir.join(GOOSE_CONFIG_RELATIVE_PATH);
+    Ok(Some((recipe_path, config_path)))
+}
+
+fn goose_mcs_recipe_content() -> &'static str {
+    r#"version: 1.0.0
+title: codemod-create
+description: Create or refine codemods with the installed Codemod master skill.
+instructions: |
+  Treat any text passed with `/codemod-create` as a codemod-authoring request.
+
+  Use the installed `codemod` skill as the source of truth.
+
+  Routing:
+  - Start with `codemod` skill creation guidance in `references/core/create-codemods.md`.
+  - If the request implies a monorepo, maintainer workflow, or multi-hop version series, also load `references/core/maintainer-monorepo.md`.
+  - Do not treat this command as codemod execution; treat it as codemod creation and refinement.
+"#
+}
+
+fn goose_config_requires_force(config_path: &Path, recipe_path: &Path) -> AdapterResult<bool> {
+    let existing = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Goose config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        return Ok(false);
+    };
+
+    let document = serde_yaml::from_str::<serde_yaml::Value>(&existing).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} is not valid YAML: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let Some(entry) = goose_slash_command_entry(document, MCS_CREATE_COMMAND_NAME) else {
+        return Ok(false);
+    };
+
+    let existing_recipe_path = entry
+        .get(&serde_yaml::Value::String("recipe_path".to_string()))
+        .and_then(serde_yaml::Value::as_str)
+        .unwrap_or_default();
+
+    Ok(existing_recipe_path != recipe_path.to_string_lossy())
+}
+
+fn upsert_goose_slash_command_config(
+    config_path: &Path,
+    recipe_path: &Path,
+    force: bool,
+) -> AdapterResult<()> {
+    let existing = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Goose config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut document = if existing.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        serde_yaml::from_str::<serde_yaml::Value>(&existing).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Goose config {} is not valid YAML: {error}",
+                config_path.display()
+            ))
+        })?
+    };
+
+    let Some(root) = document.as_mapping_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} must contain a top-level YAML mapping",
+            config_path.display()
+        )));
+    };
+
+    let slash_commands_key = serde_yaml::Value::String("slash_commands".to_string());
+    let commands_value = root
+        .entry(slash_commands_key)
+        .or_insert_with(|| serde_yaml::Value::Sequence(Vec::new()));
+    let Some(commands) = commands_value.as_sequence_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} has non-sequence `slash_commands` entry",
+            config_path.display()
+        )));
+    };
+
+    let recipe_path_str = recipe_path.to_string_lossy().to_string();
+    let mut found = false;
+
+    for command in commands.iter_mut() {
+        let Some(mapping) = command.as_mapping_mut() else {
+            continue;
+        };
+
+        let command_name = mapping
+            .get(&serde_yaml::Value::String("command".to_string()))
+            .and_then(serde_yaml::Value::as_str);
+        if command_name != Some(MCS_CREATE_COMMAND_NAME) {
+            continue;
+        }
+
+        let recipe_key = serde_yaml::Value::String("recipe_path".to_string());
+        let current_recipe = mapping
+            .get(&recipe_key)
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or_default();
+        if current_recipe != recipe_path_str && !force {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "Goose config already registers /{MCS_CREATE_COMMAND_NAME}. Re-run with --force to overwrite."
+            )));
+        }
+
+        mapping.insert(
+            recipe_key,
+            serde_yaml::Value::String(recipe_path_str.clone()),
+        );
+        found = true;
+        break;
+    }
+
+    if !found {
+        let mut mapping = serde_yaml::Mapping::new();
+        mapping.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(MCS_CREATE_COMMAND_NAME.to_string()),
+        );
+        mapping.insert(
+            serde_yaml::Value::String("recipe_path".to_string()),
+            serde_yaml::Value::String(recipe_path_str),
+        );
+        commands.push(serde_yaml::Value::Mapping(mapping));
+    }
+
+    let serialized = serde_yaml::to_string(&document).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize Goose config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    write_file_if_changed(config_path, serialized.as_bytes())?;
+    Ok(())
+}
+
+fn goose_slash_command_entry(
+    document: serde_yaml::Value,
+    command_name: &str,
+) -> Option<serde_yaml::Mapping> {
+    document
+        .as_mapping()?
+        .get(&serde_yaml::Value::String("slash_commands".to_string()))?
+        .as_sequence()?
+        .iter()
+        .filter_map(serde_yaml::Value::as_mapping)
+        .find(|mapping| {
+            mapping
+                .get(&serde_yaml::Value::String("command".to_string()))
+                .and_then(serde_yaml::Value::as_str)
+                == Some(command_name)
+        })
+        .cloned()
 }
 
 fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()> {
@@ -3371,6 +3727,72 @@ mod tests {
         }
     }
 
+    fn expected_mcs_command_path(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> Option<PathBuf> {
+        let file_name = format!("{MCS_CREATE_COMMAND_NAME}.md");
+        match harness {
+            Harness::Claude => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".claude/commands").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".claude/commands")
+                    .join(&file_name),
+            }),
+            Harness::Opencode => Some(match scope {
+                InstallScope::Project => runtime_paths
+                    .cwd
+                    .join(".opencode/commands")
+                    .join(&file_name),
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".config/opencode/commands")
+                    .join(&file_name),
+            }),
+            Harness::Cursor => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".cursor/commands").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".cursor/commands")
+                    .join(&file_name),
+            }),
+            Harness::Antigravity => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".agents/workflows").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".gemini/antigravity/global_workflows")
+                    .join(&file_name),
+            }),
+            Harness::Goose | Harness::Codex | Harness::Auto => None,
+        }
+    }
+
+    fn expected_goose_mcs_command_paths(runtime_paths: &RuntimePaths) -> Vec<PathBuf> {
+        let home_dir = runtime_paths.home_dir.as_ref().unwrap();
+        vec![
+            home_dir
+                .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
+                .join(format!("{MCS_CREATE_COMMAND_NAME}.yaml")),
+            home_dir.join(GOOSE_CONFIG_RELATIVE_PATH),
+        ]
+    }
+
     fn expected_managed_state_path(
         runtime_paths: &RuntimePaths,
         harness: Harness,
@@ -3457,6 +3879,7 @@ codemod-skill-version: 0.1.0
 
     fn managed_snapshots_from_install(
         installed: &[InstalledSkill],
+        command_paths: &[PathBuf],
         discovery_paths: &[PathBuf],
     ) -> Vec<ManagedComponentSnapshot> {
         let mut snapshots = installed
@@ -3472,6 +3895,20 @@ codemod-skill-version: 0.1.0
                 version: entry.version.clone(),
             })
             .collect::<Vec<_>>();
+
+        for path in command_paths {
+            let id = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(|name| format!("command:{name}"))
+                .unwrap_or_else(|| format!("command:{}", path.to_string_lossy()));
+            snapshots.push(ManagedComponentSnapshot {
+                id,
+                kind: ManagedComponentKind::Command,
+                path: path.clone(),
+                version: Some(MCS_SKILL_VERSION.to_string()),
+            });
+        }
 
         for path in discovery_paths {
             let id = path
@@ -3606,6 +4043,7 @@ codemod-skill-version: 0.1.0
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_END));
         assert!(claude_content.contains("Core skill: `.claude/skills/codemod/SKILL.md`"));
+        assert!(claude_content.contains("/codemod-create"));
         assert!(claude_content.contains(".claude/skills/codemod/SKILL.md"));
         assert!(!claude_content.contains("Installed Codemod skills root"));
         assert!(!claude_content.contains("Restart or reload your claude session"));
@@ -3658,6 +4096,76 @@ codemod-skill-version: 0.1.0
         let content = fs::read_to_string(&agents_path).unwrap();
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
         assert!(content.contains("npx codemod agent list --harness cursor --format json"));
+        assert!(content.contains("/codemod-create"));
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_writes_supported_harness_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in [
+            Harness::Claude,
+            Harness::Opencode,
+            Harness::Cursor,
+            Harness::Antigravity,
+        ] {
+            let paths = upsert_mcs_command_entrypoints_with_runtime(
+                harness,
+                InstallScope::Project,
+                false,
+                &runtime_paths,
+            )
+            .unwrap();
+
+            let expected =
+                expected_mcs_command_path(&runtime_paths, harness, InstallScope::Project)
+                    .expect("expected command path");
+            assert_eq!(paths, vec![expected.clone()]);
+            let content = fs::read_to_string(expected).unwrap();
+            assert!(content.contains("/codemod-create"));
+            assert!(content.contains("Use the installed `codemod` skill"));
+        }
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_skips_unsupported_harnesses() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in [Harness::Goose, Harness::Codex] {
+            let paths = upsert_mcs_command_entrypoints_with_runtime(
+                harness,
+                InstallScope::Project,
+                false,
+                &runtime_paths,
+            )
+            .unwrap();
+            assert!(paths.is_empty());
+        }
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_writes_goose_user_recipe_and_config() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let paths = upsert_mcs_command_entrypoints_with_runtime(
+            Harness::Goose,
+            InstallScope::User,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let expected = expected_goose_mcs_command_paths(&runtime_paths);
+        assert_eq!(paths, expected);
+
+        let recipe_content = fs::read_to_string(&paths[0]).unwrap();
+        assert!(recipe_content.contains("title: codemod-create"));
+        assert!(recipe_content.contains("Use the installed `codemod` skill"));
+
+        let config_content = fs::read_to_string(&paths[1]).unwrap();
+        assert!(config_content.contains("slash_commands"));
+        assert!(config_content.contains("command: codemod-create"));
+        assert!(config_content.contains(&paths[0].to_string_lossy().to_string()));
     }
 
     #[test]
@@ -4106,7 +4614,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
         let first = persist_managed_install_state_with_runtime(
             Harness::Claude,
@@ -4156,7 +4664,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
         let first = persist_managed_install_state_with_runtime(
             Harness::Claude,
@@ -4207,7 +4715,7 @@ codemod-skill-version: 0.1.0
                 upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths).unwrap();
                 let discovery_paths =
                     discovery_guide_paths_with_runtime(harness, scope, &runtime_paths).unwrap();
-                let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+                let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
                 let state_write = persist_managed_install_state_with_runtime(
                     harness,
@@ -4257,7 +4765,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
         persist_managed_install_state_with_runtime(
             Harness::Claude,
             InstallScope::Project,

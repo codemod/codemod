@@ -21,7 +21,7 @@ Recommended runtime flow:
 
 For codemod creation:
 - Start with `references/core/create-codemods.md`.
-- Load `references/core/maintainer-monorepo.md` when the user is building or maintaining a codemod monorepo.
+- Load `references/core/maintainer-monorepo.md` when the user is building or maintaining a codemod monorepo, or when the migration spans multiple documented version hops.
 
 For command-level guidance:
 - Start with `references/index.md`.

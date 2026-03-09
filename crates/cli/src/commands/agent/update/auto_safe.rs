@@ -669,7 +669,9 @@ pub(in crate::commands::agent) fn staged_component_update_from_payload(
                 writes,
             })
         }
-        ManagedComponentKind::McpConfig | ManagedComponentKind::DiscoveryGuide => {
+        ManagedComponentKind::McpConfig
+        | ManagedComponentKind::DiscoveryGuide
+        | ManagedComponentKind::Command => {
             if is_archive_source_url(&remote_component.source_url) {
                 return Err("archive_payload_not_supported_for_file_component".to_string());
             }
@@ -865,6 +867,7 @@ pub(in crate::commands::agent) fn is_auto_safe_apply_supported_kind(
         ManagedComponentKind::Skill
             | ManagedComponentKind::McpConfig
             | ManagedComponentKind::DiscoveryGuide
+            | ManagedComponentKind::Command
     )
 }
 

@@ -62,7 +62,7 @@ Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 
 **`agent install`**
 
-Install the `codemod` MCS skill package and configure Codemod MCP.
+Install the `codemod` MCS skill package, configure Codemod MCP, and install the Codemod creation entrypoint where the harness supports it.
 
 ```bash
 npx codemod agent install [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
@@ -97,6 +97,12 @@ If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force
 - `claude`: `CLAUDE.md`
 - `goose`, `opencode`, `cursor`: `AGENTS.md` and `CLAUDE.md`
 - `codex`, `antigravity`: `AGENTS.md`
+`agent install` also installs `/codemod-create` where the harness has a native command or workflow file surface:
+- `claude`: `./.claude/commands/codemod-create.md` (project), `~/.claude/commands/codemod-create.md` (user)
+- `goose`: `~/.config/goose/recipes/codemod-create.yaml` + `~/.config/goose/config.yaml` registration (user only)
+- `opencode`: `./.opencode/commands/codemod-create.md` (project), `~/.config/opencode/commands/codemod-create.md` (user)
+- `cursor`: `./.cursor/commands/codemod-create.md` (project), `~/.cursor/commands/codemod-create.md` (user)
+- `antigravity`: `./.agents/workflows/codemod-create.md` (project), `~/.gemini/antigravity/global_workflows/codemod-create.md` (user)
 `agent install` also wires a periodic, cooldown-protected update check trigger:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
@@ -110,7 +116,7 @@ Managed update policy is install-flag driven and shared by install-time reconcil
 - `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
   `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
 Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
-After install, restart or reload your harness session so newly installed skills are picked up.
+After install, restart or reload your harness session so newly installed skills and command entrypoints are picked up.
 
 **`agent update`**
 
