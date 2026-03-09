@@ -808,7 +808,10 @@ mod tests {
             llm_protocol: "openai".to_string(),
         });
 
-        assert_eq!(normalized.tools, vec!["bash".to_string(), "glob".to_string()]);
+        assert_eq!(
+            normalized.tools,
+            vec!["bash".to_string(), "glob".to_string()]
+        );
     }
 
     #[test]

@@ -2446,11 +2446,11 @@ impl Engine {
                     if let Some(executable) = find_agent_executable(&selected) {
                         return self
                             .launch_agent(
-                            &selected,
-                            &executable,
-                            ai_config.system_prompt.as_deref(),
-                            &resolved_prompt,
-                            logger,
+                                &selected,
+                                &executable,
+                                ai_config.system_prompt.as_deref(),
+                                &resolved_prompt,
+                                logger,
                             )
                             .await;
                     } else {
