@@ -152,6 +152,7 @@ pub fn create_engine(
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
     skip_install_skill_steps: bool,
     output_format: OutputFormat,
+    pre_approved_capabilities: Option<HashSet<LlrtSupportedModules>>,
     agent: Option<String>,
     install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
@@ -177,7 +178,8 @@ pub fn create_engine(
 
     let registry_client = create_registry_client(registry)?;
 
-    let capabilities_security_callback = capabilities_security_callback(no_interactive);
+    let capabilities_security_callback =
+        capabilities_security_callback(no_interactive, pre_approved_capabilities);
     let dry_run_callback = if dry_run {
         // In dry-run mode: print diffs to terminal + optionally collect for report
         Some(create_dry_run_callback(no_color, diff_collector))

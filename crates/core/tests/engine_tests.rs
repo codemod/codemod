@@ -1068,6 +1068,8 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -2990,6 +2992,8 @@ async fn test_workflow_with_state_write_and_matrix() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3153,6 +3157,8 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3396,6 +3402,8 @@ async fn test_empty_state_matrix_workflow() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3499,6 +3507,8 @@ async fn test_malformed_state_matrix_workflow() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run
@@ -3615,6 +3625,8 @@ async fn test_matrix_hash_based_deduplication() {
         ended_at: None,
         bundle_path: None,
         capabilities: None,
+        name: None,
+        target_path: None,
     };
 
     // Save the workflow run

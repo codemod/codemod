@@ -11,12 +11,20 @@ use butterflow_models::Result;
 use crate::Runner;
 
 /// Direct runner (runs commands directly on the host)
-pub struct DirectRunner;
+pub struct DirectRunner {
+    /// When true, suppress real-time stdout/stderr printing
+    quiet: bool,
+}
 
 impl DirectRunner {
     /// Create a new direct runner
     pub fn new() -> Self {
-        Self
+        Self { quiet: false }
+    }
+
+    /// Create a new direct runner with quiet mode
+    pub fn with_quiet(quiet: bool) -> Self {
+        Self { quiet }
     }
 
     /// Execute a command with streaming output
@@ -43,19 +51,24 @@ impl DirectRunner {
         let stdout_reader = BufReader::new(stdout);
         let stderr_reader = BufReader::new(stderr);
 
+        let quiet = self.quiet;
+
         // Handle stdout in a separate task
         let stdout_handle = task::spawn_blocking(move || {
             let mut collected_output = String::new();
             for line in stdout_reader.lines() {
                 match line {
                     Ok(line) => {
-                        // Print to stdout in real-time
-                        println!("{}", line);
+                        if !quiet {
+                            println!("{}", line);
+                        }
                         collected_output.push_str(&line);
                         collected_output.push('\n');
                     }
                     Err(e) => {
-                        eprintln!("Error reading stdout: {}", e);
+                        if !quiet {
+                            eprintln!("Error reading stdout: {}", e);
+                        }
                         break;
                     }
                 }
@@ -69,13 +82,16 @@ impl DirectRunner {
             for line in stderr_reader.lines() {
                 match line {
                     Ok(line) => {
-                        // Print to stderr in real-time
-                        eprintln!("{}", line);
+                        if !quiet {
+                            eprintln!("{}", line);
+                        }
                         collected_output.push_str(&line);
                         collected_output.push('\n');
                     }
                     Err(e) => {
-                        eprintln!("Error reading stderr: {}", e);
+                        if !quiet {
+                            eprintln!("Error reading stderr: {}", e);
+                        }
                         break;
                     }
                 }

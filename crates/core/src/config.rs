@@ -78,6 +78,10 @@ pub struct WorkflowRunConfig {
     pub skip_install_skill_steps: bool,
     /// Output format for structured logging (Text or Jsonl)
     pub output_format: OutputFormat,
+    /// Human-readable name for this workflow run
+    pub name: Option<String>,
+    /// Suppress stdout/stderr output (used when TUI is active)
+    pub quiet: bool,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 }
@@ -102,6 +106,8 @@ impl Default for WorkflowRunConfig {
             dry_run_callback: None,
             skip_install_skill_steps: false,
             output_format: OutputFormat::Text,
+            name: None,
+            quiet: false,
             install_skill_executor: None,
         }
     }

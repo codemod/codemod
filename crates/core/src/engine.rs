@@ -297,9 +297,39 @@ impl Engine {
         }
     }
 
+    /// Enable or disable quiet mode (suppresses stdout/stderr when TUI is active)
+    pub fn set_quiet(&mut self, quiet: bool) {
+        self.workflow_run_config.quiet = quiet;
+    }
+
+    /// Set the human-readable name for this workflow run
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.workflow_run_config.name = name;
+    }
+
     /// Get the workflow file path
     pub fn get_workflow_file_path(&self) -> PathBuf {
         self.workflow_run_config.workflow_file_path.clone()
+    }
+
+    /// Check if the engine is in dry-run mode
+    pub fn is_dry_run(&self) -> bool {
+        self.workflow_run_config.dry_run
+    }
+
+    /// Enable or disable dry-run mode
+    pub fn set_dry_run(&mut self, dry_run: bool) {
+        self.workflow_run_config.dry_run = dry_run;
+    }
+
+    /// Get the current capabilities
+    pub fn get_capabilities(&self) -> &Option<HashSet<LlrtSupportedModules>> {
+        &self.workflow_run_config.capabilities
+    }
+
+    /// Set the capabilities
+    pub fn set_capabilities(&mut self, capabilities: Option<HashSet<LlrtSupportedModules>>) {
+        self.workflow_run_config.capabilities = capabilities;
     }
 
     /// Spawn a task asynchronously
@@ -460,6 +490,8 @@ impl Engine {
             started_at: Utc::now(),
             ended_at: None,
             capabilities: capabilities.cloned(),
+            name: self.workflow_run_config.name.clone(),
+            target_path: Some(self.workflow_run_config.target_path.clone()),
         };
 
         self.state_adapter
@@ -468,7 +500,7 @@ impl Engine {
             .save_workflow_run(&workflow_run)
             .await?;
 
-        let engine = self.clone();
+        let mut engine = self.clone();
         let runtime_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             runtime_handle.block_on(async move {
@@ -551,7 +583,7 @@ impl Engine {
             .apply_workflow_run_diff(&workflow_run_diff)
             .await?;
 
-        let engine = self.clone();
+        let mut engine = self.clone();
         let runtime_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             runtime_handle.block_on(async move {
@@ -680,7 +712,7 @@ impl Engine {
             .apply_workflow_run_diff(&workflow_run_diff)
             .await?;
 
-        let engine = self.clone();
+        let mut engine = self.clone();
         let runtime_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             runtime_handle.block_on(async move {
@@ -944,7 +976,7 @@ impl Engine {
     }
 
     /// Execute a workflow
-    async fn execute_workflow(&self, workflow_run_id: Uuid) -> Result<()> {
+    async fn execute_workflow(&mut self, workflow_run_id: Uuid) -> Result<()> {
         // Get the workflow run
         let workflow_run = self
             .state_adapter
@@ -952,6 +984,13 @@ impl Engine {
             .await
             .get_workflow_run(workflow_run_id)
             .await?;
+
+        // Use the stored target path from the workflow run so that the engine
+        // operates on the correct directory, even when launched from a
+        // different cwd (e.g. via `workflow tui`).
+        if let Some(target_path) = &workflow_run.target_path {
+            self.workflow_run_config.target_path = target_path.clone();
+        }
 
         // Create a workflow run diff to update the status
         let mut fields = HashMap::new();
@@ -1425,7 +1464,9 @@ impl Engine {
             });
 
             let runner: Box<dyn Runner> = match runtime_type {
-                RuntimeType::Direct => Box::new(DirectRunner::new()),
+                RuntimeType::Direct => {
+                    Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet))
+                }
                 RuntimeType::Docker => {
                     #[cfg(feature = "docker")]
                     {
@@ -1618,10 +1659,12 @@ impl Engine {
             StepAction::RunScript(run) => {
                 // Skip run script steps in dry-run mode
                 if self.workflow_run_config.dry_run {
-                    eprintln!(
-                        "\n[WARN] Skipping run: script step (cannot preview):\n  {}...",
-                        run.chars().take(80).collect::<String>()
-                    );
+                    if !self.workflow_run_config.quiet {
+                        eprintln!(
+                            "\n[WARN] Skipping run: script step (cannot preview):\n  {}...",
+                            run.chars().take(80).collect::<String>()
+                        );
+                    }
                     return Ok(());
                 }
                 self.execute_run_script_step(
@@ -2866,7 +2909,8 @@ impl Engine {
         slog!(logger, info, "Executing codemod workflow steps directly");
 
         // Create a direct runner for executing the codemod steps
-        let runner: Box<dyn Runner> = Box::new(DirectRunner::new());
+        let runner: Box<dyn Runner> =
+            Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet));
 
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
