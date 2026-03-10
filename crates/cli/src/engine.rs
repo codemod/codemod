@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use butterflow_core::config::{
-    DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback, WorkflowRunConfig,
+    AgentSelectionCallback, DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback,
+    WorkflowRunConfig,
 };
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::engine::Engine;
@@ -151,6 +152,7 @@ pub fn create_engine(
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
     skip_install_skill_steps: bool,
     output_format: OutputFormat,
+    agent: Option<String>,
     install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 ) -> Result<(Engine, WorkflowRunConfig)> {
     let dirty_check = dirty_git_check::dirty_check(no_interactive);
@@ -183,6 +185,12 @@ pub fn create_engine(
         diff_collector.map(create_silent_diff_collector)
     };
 
+    let agent_selection_callback: Option<AgentSelectionCallback> = if no_interactive {
+        None
+    } else {
+        Some(crate::agent_select::create_agent_selection_callback())
+    };
+
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
         progress_callback: Arc::new(progress_callback),
@@ -195,6 +203,8 @@ pub fn create_engine(
         capabilities_security_callback: Some(capabilities_security_callback),
         capabilities,
         no_interactive,
+        agent,
+        agent_selection_callback,
         dry_run_callback,
         skip_install_skill_steps,
         output_format,

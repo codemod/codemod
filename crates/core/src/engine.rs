@@ -10,6 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
+use crate::ai_handoff::{
+    build_agent_command, detect_parent_coding_agent, discover_installed_agents,
+    find_agent_executable, resolve_agent_name, DetectionConfidence,
+};
 use crate::config::{
     CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, WorkflowRunConfig,
 };
@@ -150,6 +154,94 @@ pub struct CapabilitiesData {
 }
 
 impl Engine {
+    async fn launch_agent(
+        &self,
+        canonical: &str,
+        executable: &Path,
+        system_prompt: Option<&str>,
+        prompt: &str,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        let working_dir = &self.workflow_run_config.target_path;
+
+        let mut cmd =
+            build_agent_command(canonical, executable, prompt, system_prompt, working_dir)
+                .ok_or_else(|| {
+                    Error::StepExecution(format!(
+                        "Failed to build command for agent '{}'",
+                        canonical
+                    ))
+                })?;
+
+        slog!(
+            logger,
+            info,
+            "Launching agent '{}' at {}",
+            canonical,
+            executable.display()
+        );
+
+        // Inherit stdio so user can interact with the agent
+        cmd.stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+
+        let status = tokio::task::spawn_blocking(move || cmd.status())
+            .await
+            .map_err(|error| {
+                Error::StepExecution(format!(
+                    "Failed to join agent process for '{}': {}",
+                    canonical, error
+                ))
+            })??;
+
+        if status.success() {
+            slog!(logger, info, "Agent '{}' completed successfully", canonical);
+            Ok(())
+        } else {
+            let code = status.code().unwrap_or(-1);
+            slog!(
+                logger,
+                warn,
+                "Agent '{}' exited with code {}",
+                canonical,
+                code
+            );
+            Err(Error::StepExecution(format!(
+                "Agent '{}' exited with code {}",
+                canonical, code
+            )))
+        }
+    }
+
+    fn emit_ai_instructions(
+        &self,
+        logger: &StructuredLogger,
+        system_prompt: Option<&str>,
+        resolved_prompt: &str,
+    ) {
+        if logger.is_jsonl() {
+            logger.log("info", "[AI INSTRUCTIONS]");
+            if let Some(system_prompt) = system_prompt {
+                logger.log("info", system_prompt);
+            }
+            logger.log("info", resolved_prompt);
+            logger.log("info", "[/AI INSTRUCTIONS]");
+        } else {
+            println!();
+            println!("[AI INSTRUCTIONS]");
+            println!();
+            if let Some(system_prompt) = system_prompt {
+                println!("{system_prompt}");
+                println!();
+            }
+            println!("{resolved_prompt}");
+            println!();
+            println!("[/AI INSTRUCTIONS]");
+            println!();
+        }
+    }
+
     /// Create a new engine with a local state adapter
     pub fn new() -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
@@ -2279,6 +2371,109 @@ impl Engine {
             resolved_prompt
         );
 
+        // 1. Check if running inside a parent coding agent
+        let handoff_detection = detect_parent_coding_agent();
+        let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
+        slog!(
+            logger,
+            info,
+            "AI handoff detection confidence={} agent={} reasons={}",
+            handoff_detection.confidence.as_str(),
+            detected_agent,
+            handoff_detection.reasons.join(" | ")
+        );
+
+        if handoff_detection.confidence == DetectionConfidence::Detected {
+            self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
+            slog!(
+                logger,
+                info,
+                "AI handoff mode=handoff confidence={} agent={}",
+                handoff_detection.confidence.as_str(),
+                detected_agent
+            );
+            return Ok(());
+        }
+
+        // 2. Check if agent was explicitly specified via --agent
+        if let Some(ref agent_name) = self.workflow_run_config.agent {
+            if let Some(canonical) = resolve_agent_name(agent_name) {
+                slog!(logger, info, "Agent specified via --agent: {}", canonical);
+                if let Some(executable) = find_agent_executable(canonical) {
+                    return self
+                        .launch_agent(
+                            canonical,
+                            &executable,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                            logger,
+                        )
+                        .await;
+                } else {
+                    slog!(
+                        logger,
+                        warn,
+                        "Agent '{}' is not installed, falling back to built-in AI",
+                        canonical
+                    );
+                }
+            } else {
+                slog!(
+                    logger,
+                    warn,
+                    "Unknown agent '{}' specified via --agent, ignoring",
+                    agent_name
+                );
+            }
+        }
+
+        // 3. If interactive, discover installed agents and prompt user to select
+        if !self.workflow_run_config.no_interactive {
+            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
+                let agents = discover_installed_agents();
+                if let Some(selected) = callback(&agents) {
+                    if selected == "__print_prompt__" {
+                        slog!(logger, info, "User chose to print prompt");
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        return Ok(());
+                    }
+
+                    slog!(logger, info, "User selected agent: {}", selected);
+                    if let Some(executable) = find_agent_executable(&selected) {
+                        return self
+                            .launch_agent(
+                                &selected,
+                                &executable,
+                                ai_config.system_prompt.as_deref(),
+                                &resolved_prompt,
+                                logger,
+                            )
+                            .await;
+                    } else {
+                        slog!(
+                            logger,
+                            warn,
+                            "Agent '{}' executable not found, falling back to built-in AI",
+                            selected
+                        );
+                    }
+                }
+                // User dismissed the selection — fall through to built-in AI
+            }
+        }
+
+        slog!(
+            logger,
+            info,
+            "AI handoff mode=rig confidence={} agent={}",
+            handoff_detection.confidence.as_str(),
+            detected_agent
+        );
+
         // Configure LLM settings - check for API key from config or environment
         let api_key = match ai_config
             .api_key
@@ -2288,26 +2483,11 @@ impl Engine {
             Some(key) => key,
             None => {
                 // No API key - surface instructions for coding agents and skip the step
-                if logger.is_jsonl() {
-                    logger.log("info", "[AI INSTRUCTIONS]");
-                    if let Some(system_prompt) = &ai_config.system_prompt {
-                        logger.log("info", system_prompt);
-                    }
-                    logger.log("info", &resolved_prompt);
-                    logger.log("info", "[/AI INSTRUCTIONS]");
-                } else {
-                    println!();
-                    println!("[AI INSTRUCTIONS]");
-                    println!();
-                    if let Some(system_prompt) = &ai_config.system_prompt {
-                        println!("{system_prompt}");
-                        println!();
-                    }
-                    println!("{resolved_prompt}");
-                    println!();
-                    println!("[/AI INSTRUCTIONS]");
-                    println!();
-                }
+                self.emit_ai_instructions(
+                    logger,
+                    ai_config.system_prompt.as_deref(),
+                    &resolved_prompt,
+                );
 
                 slog!(
                     logger,
@@ -2358,15 +2538,77 @@ impl Engine {
             model,
             system_prompt: ai_config.system_prompt.clone(),
             max_steps: ai_config.max_steps,
-            enable_lakeview: ai_config.enable_lakeview,
+            tools: ai_config.tools.clone(),
             prompt: resolved_prompt,
             working_dir: self.workflow_run_config.target_path.clone(),
             llm_protocol: llm_provider,
         };
 
-        let output = execute_ai_step(config)
-            .await
-            .map_err(|e| Error::StepExecution(e.to_string()))?;
+        let mut ai_future = std::pin::pin!(execute_ai_step(config));
+        let mut progress_interval = time::interval_at(
+            time::Instant::now() + Duration::from_secs(20),
+            Duration::from_secs(20),
+        );
+        progress_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut elapsed_seconds = 0u64;
+
+        let ai_result = loop {
+            tokio::select! {
+                result = &mut ai_future => {
+                    break result;
+                }
+                _ = progress_interval.tick() => {
+                    elapsed_seconds += 20;
+                    slog!(
+                        logger,
+                        info,
+                        "AI step still running ({}s elapsed); waiting for model/tool completion...",
+                        elapsed_seconds
+                    );
+                }
+            }
+        };
+
+        let output = match ai_result {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(diagnostics) = error.memory_exhaustion_diagnostics() {
+                    let trigger = diagnostics.trigger.as_deref().unwrap_or("unknown");
+                    let before_chars = diagnostics.before_chars.unwrap_or(0);
+                    let after_chars = diagnostics.after_chars.unwrap_or(0);
+                    let archived_docs = diagnostics.archived_docs.unwrap_or(0);
+                    let retrieved_docs = diagnostics.retrieved_docs.unwrap_or(0);
+                    slog!(
+                        logger,
+                        info,
+                        "AI memory exhaustion: attempts={} trigger={} before_chars={} after_chars={} archived_docs={} retrieved_docs={} soft_char_budget={} soft_token_budget={}",
+                        diagnostics.attempts,
+                        trigger,
+                        before_chars,
+                        after_chars,
+                        archived_docs,
+                        retrieved_docs,
+                        diagnostics.soft_char_budget,
+                        diagnostics.soft_token_budget
+                    );
+                }
+                return Err(Error::StepExecution(error.to_string()));
+            }
+        };
+
+        for event in &output.compaction_events {
+            slog!(
+                logger,
+                info,
+                "AI memory compaction applied: attempt={} trigger={} before_chars={} after_chars={} archived_docs={} retrieved_docs={}",
+                event.attempt,
+                event.trigger,
+                event.before_chars,
+                event.after_chars,
+                event.archived_docs,
+                event.retrieved_docs
+            );
+        }
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");

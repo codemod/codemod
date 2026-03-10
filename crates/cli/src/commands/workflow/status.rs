@@ -56,6 +56,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         false,
         Default::default(),
         None,
+        None,
     )?;
 
     // Get workflow run

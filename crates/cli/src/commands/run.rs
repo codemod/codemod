@@ -91,6 +91,10 @@ pub struct Command {
     #[arg(long)]
     no_interactive: bool,
 
+    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
+    #[arg(long)]
+    agent: Option<String>,
+
     /// Execute install-skill steps when running in non-interactive mode
     #[arg(long)]
     install_skill: bool,
@@ -280,6 +284,7 @@ pub async fn handler(
             package_behavior_shape,
         ),
         output_format,
+        args.agent.clone(),
         Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 

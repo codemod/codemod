@@ -2,15 +2,12 @@
 
 pub mod bash;
 pub mod ckg;
+pub mod core;
 pub mod edit;
 pub mod glob;
 pub mod json_edit;
+pub mod mcp;
 pub mod registry;
-// pub mod status_report;
-
-pub use bash::BashToolFactory;
-pub use ckg::CkgToolFactory;
-pub use edit::EditToolFactory;
-pub use glob::GlobToolFactory;
-pub use json_edit::JsonEditToolFactory;
-// pub use status_report::StatusReportToolFactory;
+pub mod sequential_thinking;
+pub mod task_done;
+pub mod utils;
