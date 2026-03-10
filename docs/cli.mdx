@@ -204,13 +204,17 @@ npx codemod <package-name>
 
 </CodeGroup>
 
+<Info>
+  **TUI auto-launch**: On Unix systems (macOS, Linux), if the workflow contains [manual nodes or manual triggers](/workflows/reference#manual-triggers), an interactive TUI dashboard launches automatically so you can monitor progress and trigger tasks in real time. Use `--no-interactive` to disable this behavior.
+</Info>
+
 <ResponseField name="-w, --workflow <PATH>" type="string" required>
   Path to workflow file or directory.
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
   Target directory to run the workflow on.
-  
+
   ```bash
   # Specify a target directory
   npx codemod workflow run -w ./my-codemod -t /abs/path/to/repo
@@ -226,7 +230,7 @@ npx codemod <package-name>
   ```bash
   # Single parameter:
   npx codemod workflow run -w workflow.yaml --param format=cjs
-  
+
   # Multiple parameters:
   npx codemod workflow run -w workflow.yaml --param format=cjs --param strict=true
   ```
@@ -348,6 +352,45 @@ npx codemod workflow cancel -i <ID>
 <ResponseField name="-i, --id <ID>" type="string" required>
   Workflow run ID.
 </ResponseField>
+
+**`workflow tui`**
+
+Launch an interactive terminal dashboard to browse workflow runs and manage tasks. Available on Unix systems (macOS, Linux) only.
+
+```bash
+npx codemod workflow tui
+```
+
+<ResponseField name="-i, --id <ID>" type="string">
+  Go directly to the task list for a specific workflow run.
+</ResponseField>
+
+<ResponseField name="-l, --limit <LIMIT>" type="number">
+  Maximum number of workflow runs to display (default: 20).
+</ResponseField>
+
+The TUI provides two main views:
+
+- **Run list**: Shows recent workflow runs with status, name, timing, and duration.
+- **Task list**: Shows individual tasks within a run with their status and logs.
+
+**Keyboard shortcuts**:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` or arrow keys | Navigate up/down |
+| `Enter` or `l` | View task logs |
+| `t` | Trigger a single awaiting task |
+| `T` | Trigger all awaiting tasks |
+| `R` | Retry a failed task |
+| `c` | Cancel the workflow |
+| `s` | Open settings |
+| `Esc` | Go back |
+| `q` | Quit |
+
+<Info>
+  The TUI also launches automatically when running `workflow run` on a workflow that contains [manual nodes or triggers](/workflows/reference#manual-triggers). Use `--no-interactive` to keep the text-based interface instead.
+</Info>
 
 ### `codemod jssg`
 
