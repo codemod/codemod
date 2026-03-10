@@ -1581,9 +1581,8 @@ fn discovery_guide_paths_with_runtime(
 
     let file_names = match harness {
         Harness::Claude => vec![CLAUDE_GUIDE_FILE_NAME],
-        Harness::Goose | Harness::Opencode | Harness::Cursor => {
-            vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME]
-        }
+        Harness::Opencode => vec![AGENTS_GUIDE_FILE_NAME],
+        Harness::Goose | Harness::Cursor => vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME],
         Harness::Codex | Harness::Antigravity => vec![AGENTS_GUIDE_FILE_NAME],
         Harness::Auto => {
             return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
@@ -3239,7 +3238,8 @@ fn goose_mcs_command_requires_force(
         return Ok(false);
     };
 
-    if managed_text_file_requires_force(&recipe_path, goose_mcs_recipe_content())? {
+    let recipe_content = goose_mcs_recipe_content();
+    if managed_text_file_requires_force(&recipe_path, &recipe_content)? {
         return Ok(true);
     }
 
@@ -3255,7 +3255,8 @@ fn upsert_goose_mcs_command_with_runtime(
         return Ok(Vec::new());
     };
 
-    write_skill_file(&recipe_path, goose_mcs_recipe_content(), force)?;
+    let recipe_content = goose_mcs_recipe_content();
+    write_skill_file(&recipe_path, &recipe_content, force)?;
     upsert_goose_slash_command_config(&config_path, &recipe_path, force)?;
 
     Ok(vec![recipe_path, config_path])
@@ -3282,20 +3283,16 @@ fn goose_mcs_command_paths(
     Ok(Some((recipe_path, config_path)))
 }
 
-fn goose_mcs_recipe_content() -> &'static str {
-    r#"version: 1.0.0
-title: codemod-create
-description: Create or refine codemods with the installed Codemod master skill.
-instructions: |
-  Treat any text passed with `/codemod-create` as a codemod-authoring request.
-
-  Use the installed `codemod` skill as the source of truth.
-
-  Routing:
-  - Start with `codemod` skill creation guidance in `references/core/create-codemods.md`.
-  - If the request implies a monorepo, maintainer workflow, or multi-hop version series, also load `references/core/maintainer-monorepo.md`.
-  - Do not treat this command as codemod execution; treat it as codemod creation and refinement.
-"#
+fn goose_mcs_recipe_content() -> String {
+    let indented_instructions = MCS_CREATE_COMMAND_MD
+        .trim()
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "version: 1.0.0\ntitle: codemod-create\ndescription: Create or refine codemods with the installed Codemod master skill.\ninstructions: |\n{indented_instructions}\n"
+    )
 }
 
 fn goose_config_requires_force(config_path: &Path, recipe_path: &Path) -> AdapterResult<bool> {
@@ -4097,6 +4094,30 @@ codemod-skill-version: 0.1.0
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
         assert!(content.contains("npx codemod agent list --harness cursor --format json"));
         assert!(content.contains("/codemod-create"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_for_opencode_only_writes_agents_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Opencode,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 1);
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        assert!(agents_path.exists());
+        assert!(!claude_path.exists());
+
+        let agents_content = fs::read_to_string(&agents_path).unwrap();
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
+        assert!(agents_content.contains("Core skill: `.opencode/skills/codemod/SKILL.md`"));
+        assert!(agents_content.contains("/codemod-create"));
     }
 
     #[test]

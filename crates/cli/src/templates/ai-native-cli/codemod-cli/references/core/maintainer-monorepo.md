@@ -28,15 +28,19 @@ Use this guide when the user is setting up or maintaining a codemod monorepo for
 - Start with `codemod init --workspace` when the repository does not exist yet.
 - Add the first codemod during workspace init so the repo starts with a valid package under `codemods/`.
 - If the user asks for a migration to the latest supported version and official docs show intermediate hops, plan the full series first and then add one package per hop.
+- Search the target codebase for real examples before finalizing hop boundaries or test scope.
 - Use Codemod MCP while implementing complex codemods, especially when semantic analysis is needed.
 - Validate and test each codemod from its package directory before proposing publish automation.
+- Require AST-based transforms for JS/TS code edits across the workspace. If a hop cannot be automated safely with AST tooling, mark it manual-only and explain why.
 
 ## Version-hop series guidance
 
 - Prefer official migration docs and release notes when deciding the hop boundaries.
 - A version-hop workspace should make the execution order obvious from package names, README guidance, and package descriptions.
 - Research each documented hop separately; do that in parallel when the hop guides are independent and the source material is already known.
+- Split large workspace efforts across focused sub-agents so research, repo analysis, implementation, and testing do not share one bloated context.
 - Keep any manual checkpoints in the workspace documentation even if they are not automated by a codemod.
+- For any manual-only hop, keep a concise rationale in the package README so maintainers know why it is not automated.
 - If the user later narrows the request to a specific `from -> to` pair, it is acceptable to create or expose only the relevant package instead of the full series.
 
 ## Repo-level expectations
@@ -45,3 +49,6 @@ Use this guide when the user is setting up or maintaining a codemod monorepo for
 - Keep the root README focused on maintainer setup and how users can run codemods.
 - For version-hop workspaces, the root README should describe the supported upgrade chain and the recommended package execution order.
 - Treat publish automation as repo-level infrastructure; keep codemod logic inside the package directories.
+- Keep tests close to each codemod package and ensure every hop has its own fixture coverage and green test run before the workspace is considered complete.
+- Test coverage should reflect the real migration scope for each hop, including realistic/doc-derived cases, representative repo examples when available, edge cases, preserve/no-op coverage, and negative cases.
+- Verify README command examples against the current CLI help before treating the workspace docs as complete.
