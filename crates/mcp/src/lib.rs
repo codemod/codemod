@@ -3,6 +3,10 @@ use rmcp::{
     tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod handlers;
 use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler};
@@ -12,26 +16,50 @@ pub struct CodemodMcpServer {
     ast_dump_handler: AstDumpHandler,
     node_types_handler: NodeTypesHandler,
     jssg_test_handler: JssgTestHandler,
+    usage_log_path: Option<PathBuf>,
     tool_router: ToolRouter<CodemodMcpServer>,
 }
 
 impl Default for CodemodMcpServer {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl CodemodMcpServer {
+    pub fn new(usage_log_path: Option<PathBuf>) -> Self {
         Self {
             ast_dump_handler: AstDumpHandler::new(),
             node_types_handler: NodeTypesHandler::new(),
             jssg_test_handler: JssgTestHandler::new(),
+            usage_log_path,
             tool_router: Self::tool_router(),
         }
+    }
+
+    fn log_usage(&self, event: &str) {
+        let Some(path) = self.usage_log_path.as_ref() else {
+            return;
+        };
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+            return;
+        };
+        let _ = writeln!(file, "{timestamp}\t{event}");
     }
 }
 
 #[tool_router]
 impl CodemodMcpServer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn _create_resource_text(&self, uri: &str, name: &str, description: Option<&str>) -> Resource {
         RawResource {
             uri: uri.to_string(),
@@ -53,6 +81,7 @@ impl CodemodMcpServer {
         &self,
         params: rmcp::handler::server::wrapper::Parameters<handlers::ast_dump::DumpAstRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:dump_ast");
         self.ast_dump_handler.dump_ast(params).await
     }
 
@@ -66,6 +95,7 @@ impl CodemodMcpServer {
             handlers::node_types::GetNodeTypesRequest,
         >,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_node_types");
         self.node_types_handler.get_node_types(params).await
     }
 
@@ -76,6 +106,7 @@ impl CodemodMcpServer {
         &self,
         params: rmcp::handler::server::wrapper::Parameters<handlers::jssg_test::RunJssgTestRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:run_jssg_tests");
         self.jssg_test_handler.run_jssg_tests(params).await
     }
 
@@ -86,6 +117,7 @@ impl CodemodMcpServer {
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_instructions");
         let instructions_content = include_str!("data/prompts/jssg-instructions.md");
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
@@ -99,6 +131,7 @@ impl CodemodMcpServer {
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_utils_instructions");
         let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
@@ -112,6 +145,7 @@ impl CodemodMcpServer {
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_cli_instructions");
         let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
@@ -139,6 +173,7 @@ impl ServerHandler for CodemodMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         tracing::info!("MCP server initialized");
+        self.log_usage("server:initialize");
         Ok(self.get_info())
     }
 
@@ -225,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_server_creation() {
-        let server = CodemodMcpServer::new();
+        let server = CodemodMcpServer::default();
         let info = server.get_info();
 
         assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);

@@ -8,14 +8,21 @@ Use this guide when the task is to create or improve codemods, not just run them
 2. Search the target codebase for representative "before" examples before choosing package shape.
 3. Research the migration path on the web before choosing package shape.
 4. Scaffold with `codemod init`.
-5. Use Codemod MCP while authoring the codemod.
-6. Generate tests that cover the discovered scope.
-7. Run the codemod test suite and fix failures before finishing.
-8. Iterate on tricky cases before publishing.
+5. Define the test matrix from the discovered repo patterns and migration docs before implementing transforms.
+6. Create the initial test fixtures before implementing transforms.
+7. Use Codemod MCP while authoring the codemod against those tests.
+8. Run the codemod test suite, fix failures, and iterate on tricky cases before publishing.
 
 ## Hard rules
 
 - Use AST-based edits for JS/TS code transforms. Do not implement JS/TS codemods as raw source-string replacement or regex replacement over the full file text.
+- Do not use broad identifier sweeps that rename every matching token by text alone. Match the intended API context explicitly, for example import specifiers, namespaced/member expressions, relevant object properties, or specific constructor/call-expression sites.
+- Default to ast-grep-based codemod packages when creating codemods. Use `js-ast-grep` for JS/TS-family source changes and `ast-grep` workflow steps for other deterministic structured edits when possible.
+- Use multi-step workflows when the migration spans multiple safe transformation surfaces, for example JS/TS source plus JSON manifests plus Gradle or Podfile edits.
+- Do not switch to shell/native scripts as the primary transformation engine unless the user explicitly asked for that implementation style or no ast-grep-based path is viable.
+- If the researched migration includes native/build/config work, automate the safe deterministic edits with `ast-grep` workflow steps when possible and leave only the unsafe or environment-specific remainder as manual follow-up.
+- Do not fall back to an analysis-only codemod if the user asked for an actual migration codemod and there are safe, meaningful automatable source edits available.
+- An analysis-only codemod is acceptable only when research shows there are no safe, meaningful automatable source edits for the requested migration, or when the user explicitly asked for analysis/reporting output.
 - If a code change cannot be encoded safely with AST tooling, document it as a manual step instead of shipping a brittle transform.
 - A manual-only hop is acceptable only when the research shows there is no safe, meaningful automatable source change for that hop.
 - Tests must be comprehensive relative to the user's request, not just the easiest documented example.
@@ -27,8 +34,8 @@ Use this guide when the task is to create or improve codemods, not just run them
 - For non-trivial work, split the job into focused sub-agents:
   - research agent for web/docs gathering,
   - codebase analysis agent for "before" examples and edge-case discovery,
-  - implementation agent for the transform,
-  - test agent for snapshot generation and verification.
+  - test agent for test-matrix definition and initial fixture generation,
+  - implementation agent for the transform against the defined fixtures.
 - For multi-hop upgrades, use one coordinator plus per-hop research and implementation/test agents when parallel work is possible.
 - Keep the coordinator responsible for the final package shape, execution order, and summary.
 
@@ -40,6 +47,8 @@ Use this guide when the task is to create or improve codemods, not just run them
 - Before deciding, inspect official migration docs, changelogs, or upgrade guides and determine whether the migration is documented as sequential version hops.
 - If the docs show separate upgrade guides for intermediate versions, create a workspace and generate one codemod per documented hop.
 - If the docs show one direct path with no intermediate hops, keep a single package unless the user explicitly wants a monorepo.
+- Keep the generated packages inside the requested migration scope. If research reveals adjacent or optional migrations, list them as follow-up recommendations instead of scaffolding them automatically.
+- Only add an adjacent migration package when the user explicitly asked for it or clearly approved expanding scope beyond the original request.
 
 ## Search the target codebase first
 
@@ -76,16 +85,13 @@ Example: if official docs expose separate guides such as `before-v5`, `v5-to-v6`
 
 ## Scaffold
 
+- Default to workflow-only ast-grep-based codemods and workspaces. Do not add package skill assets unless the user explicitly asked for agent-skill behavior.
 - Interactive:
   - `codemod init`
 - Non-interactive jssg:
   - `codemod init my-codemod --project-type ast-grep-js --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
-- Non-interactive workflow + skill:
-  - `codemod init my-codemod --project-type ast-grep-js --with-skill --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
-- Non-interactive skill-only:
-  - `codemod init my-codemod --skill --language typescript --description "Example codemod skill" --author "Your Name" --license MIT --no-interactive`
 - Monorepo workspace:
-  - `codemod init my-codemod-repo --workspace --with-skill --project-type ast-grep-js --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
+  - `codemod init my-codemod-repo --workspace --project-type ast-grep-js --language typescript --package-manager npm --description "Example codemod" --author "Your Name" --license MIT --no-interactive`
 
 ## Multi-hop workspace execution
 
@@ -96,25 +102,37 @@ Example: if official docs expose separate guides such as `before-v5`, `v5-to-v6`
 
 ## Codemod MCP guidance
 
-- Use Codemod MCP when you need jssg instructions or deeper package-authoring help.
-- Call `get_jssg_instructions` before writing non-trivial jssg transforms.
+- For non-trivial codemod creation, use Codemod MCP throughout the authoring loop, not just once at startup.
+- Planning stage:
+  - Call `get_jssg_instructions` before writing non-trivial jssg transforms.
+  - Call `get_codemod_cli_instructions` before finalizing project/workflow setup and README command examples.
+  - Call `get_jssg_utils_instructions` when imports or import helpers are part of the codemod work.
+- AST/pattern refinement stage:
+  - Use `dump_ast` while narrowing patterns, validating AST shapes, and confirming that a transform is matching the intended code context.
+- Test/debug stage:
+  - Use Codemod MCP again while iterating on failing tests or unclear transform behavior instead of treating MCP as a one-time bootstrap.
+  - When available for the current task, prefer MCP-assisted test execution or AST inspection before falling back to ad hoc shell debugging.
 - When migration patterns depend on symbol origin or cross-file references, use semantic analysis.
 - Enable `semantic_analysis: workspace` in the workflow when symbol definition or reference checks matter.
-- Prefer AST-targeted edits through jssg patterns and semantic analysis.
+- If Codemod MCP is unavailable, fall back to the installed `codemod` skill references and current Codemod CLI help instead of inventing workflow or command behavior.
 
 ## Expected package shape
 
 - Every codemod package should have `workflow.yaml` and `codemod.yaml`.
-- Workflow-capable packages usually include `scripts/codemod.ts` and tests.
-- Skill-capable packages should include authored skill files under `agents/skill/<skill-name>/`.
+- The default codemod package shape is ast-grep-based, typically `js-ast-grep` with `scripts/codemod.ts` for JS/TS-family source edits and additional `ast-grep` workflow steps when the migration also includes other deterministic structured files.
+- Do not replace that default package shape with shell scripts unless the user explicitly asked for a shell/native workflow or there is no viable ast-grep-based path.
 - In monorepos, each codemod should live under `codemods/<slug>/`.
 
 ## Validate and test
 
 - Validate workflow/package structure:
   - `codemod workflow validate -w codemods/<slug>/workflow.yaml`
-- Run jssg tests from the package directory:
-  - `npm test`
+- Define the test matrix before implementing transforms, using the repo-derived examples and migration-doc cases you already collected.
+- Create the initial fixtures before writing the transform so implementation is driven by expected behavior rather than post-hoc patching.
+- During implementation and debugging, run the direct JSSG test command rather than `npm test`, so you control verbosity, strictness, and filtering and get actionable failure output:
+  - `codemod jssg test -l <language> ./scripts/codemod.ts -v --strictness loose`
+- Use `--filter <case>` when isolating failures.
+- Prefer `--strictness loose` for codemod verification so formatting-only differences do not hide semantic progress. Only tighten strictness when exact formatting is part of the requested outcome.
 - Create snapshot-style test fixtures that cover the actual discovered scope, following the documented JSSG test layout:
   - `tests/<case>/input.*`
   - `tests/<case>/expected.*`
@@ -133,16 +151,22 @@ Example: if official docs expose separate guides such as `before-v5`, `v5-to-v6`
   - one negative case,
   - and one repo-derived case when the target repo exposes relevant examples.
 - Run the codemod test suite after implementation and fix the codemod or the test fixture set until the suite passes.
+- Use `--strictness loose` while iterating when formatting noise would otherwise hide semantic mismatches, but do not stop there.
+- As the final verification step, update snapshots only after the transform behavior is settled, then rerun the package's normal/default test command, for example `npm test`, so the checked-in fixtures pass for users without requiring loose-mode flags.
+- Treat metrics snapshots the same as code snapshots: if `metrics.json` mismatches, refresh or fix the expected metrics and rerun the default package tests before summarizing.
 - For local verification against a repo:
   - `codemod workflow run -w codemods/<slug>/workflow.yaml --target <repo-path>`
 
 ## Test loop expectations
 
+- Do not implement the codemod blindly and generate tests afterward; define the expected cases first and implement against them.
 - After writing or updating the codemod, run the test suite before presenting the result.
-- If tests fail, debug and fix the codemod rather than leaving the failure unexplained.
+- If tests fail, rerun the failing case with `codemod jssg test -l <language> ./scripts/codemod.ts -v --strictness loose --filter <case>`, inspect the expected-vs-actual diff, and fix the codemod rather than leaving the failure unexplained.
 - If the migration scope is broad, keep expanding the tests until the discovered codebase patterns are covered.
 - For multi-hop workspaces, run tests per package and keep each hop green independently.
 - Do not present a codemod as complete if the tests only prove a trivial happy path.
+- Do not present a codemod as complete while any package default test command is failing, including failures caused only by snapshot or metrics ordering mismatches.
+- If you used loose-mode during debugging, the final step before summarizing is to refresh the expected fixtures as needed and rerun the default test command without extra debugging flags.
 - Before documenting local run or validation commands in a README, verify them against `codemod --help`, `codemod workflow --help`, or the relevant subcommand help.
 
 ## Publish expectations

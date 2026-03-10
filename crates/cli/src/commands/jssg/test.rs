@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::metrics::MetricEntry;
 use codemod_sandbox::MetricsData;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
@@ -408,12 +409,31 @@ fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
 /// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
 /// Deterministic regardless of HashMap iteration order.
 fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
-    let json_value = serde_json::to_value(metrics)?;
+    let normalized_metrics = normalize_metrics_data(metrics);
+    let json_value = serde_json::to_value(normalized_metrics)?;
     let canonical = String::from_utf8(serde_json_canonicalizer::to_vec(&json_value)?)?;
     // Re-parse and pretty-print the canonicalized JSON
     let reparsed: serde_json::Value = serde_json::from_str(&canonical)?;
     let pretty = serde_json::to_string_pretty(&reparsed)?;
     Ok(pretty)
+}
+
+fn normalize_metrics_data(metrics: &MetricsData) -> MetricsData {
+    let mut normalized = metrics.clone();
+    for entries in normalized.values_mut() {
+        entries.sort_by(|left, right| metric_entry_sort_key(left).cmp(&metric_entry_sort_key(right)));
+    }
+    normalized
+}
+
+fn metric_entry_sort_key(entry: &MetricEntry) -> (Vec<(String, String)>, u64) {
+    let mut cardinality_pairs: Vec<(String, String)> = entry
+        .cardinality
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    cardinality_pairs.sort();
+    (cardinality_pairs, entry.count)
 }
 
 fn generate_metrics_diff(expected: &str, actual: &str) -> String {
@@ -441,7 +461,13 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_and_sanitize_error, generate_metrics_diff, normalize_line_endings};
+    use super::{
+        classify_and_sanitize_error, generate_metrics_diff, metric_entry_sort_key,
+        metrics_to_canonical_json, normalize_line_endings,
+    };
+    use codemod_sandbox::metrics::MetricEntry;
+    use codemod_sandbox::MetricsData;
+    use std::collections::HashMap;
 
     #[test]
     fn normalize_line_endings_converts_crlf_to_lf() {
@@ -480,6 +506,59 @@ mod tests {
             diff.contains("+  \"count\": 2"),
             "expected inserted line in diff, got: {diff}"
         );
+    }
+
+    #[test]
+    fn metric_entry_sort_key_sorts_cardinality_pairs() {
+        let entry = MetricEntry {
+            cardinality: HashMap::from([
+                ("to".to_string(), "b".to_string()),
+                ("from".to_string(), "a".to_string()),
+            ]),
+            count: 2,
+        };
+
+        let key = metric_entry_sort_key(&entry);
+        assert_eq!(
+            key,
+            (
+                vec![
+                    ("from".to_string(), "a".to_string()),
+                    ("to".to_string(), "b".to_string())
+                ],
+                2
+            )
+        );
+    }
+
+    #[test]
+    fn metrics_canonical_json_ignores_entry_order() {
+        let entry_a = MetricEntry {
+            cardinality: HashMap::from([
+                ("from".to_string(), "Cold App Start".to_string()),
+                ("to".to_string(), "Cold Start".to_string()),
+            ]),
+            count: 1,
+        };
+        let entry_b = MetricEntry {
+            cardinality: HashMap::from([
+                ("from".to_string(), "Warm App Start".to_string()),
+                ("to".to_string(), "Warm Start".to_string()),
+            ]),
+            count: 1,
+        };
+
+        let metrics_a: MetricsData = HashMap::from([(
+            "rename-metric".to_string(),
+            vec![entry_a.clone(), entry_b.clone()],
+        )]);
+        let metrics_b: MetricsData =
+            HashMap::from([("rename-metric".to_string(), vec![entry_b, entry_a])]);
+
+        let canonical_a = metrics_to_canonical_json(&metrics_a).unwrap();
+        let canonical_b = metrics_to_canonical_json(&metrics_b).unwrap();
+
+        assert_eq!(canonical_a, canonical_b);
     }
 
     #[test]

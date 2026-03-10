@@ -1627,6 +1627,11 @@ fn render_skill_discovery_block(
     scope: InstallScope,
     skill_root_hint: &str,
 ) -> String {
+    let mcp_line = if harness_supports_mcp(harness) {
+        "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work.\n".to_string()
+    } else {
+        String::new()
+    };
     let command_line = if mcs_create_command_is_available(harness, scope) {
         format!("- Codemod creation command: `/{MCS_CREATE_COMMAND_NAME}`\n")
     } else {
@@ -1639,10 +1644,11 @@ This section is managed by `codemod` CLI.
 
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
-{command_line}- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+{mcp_line}{command_line}- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
         harness.as_str(),
+        mcp_line = mcp_line,
         command_line = command_line
     )
 }
@@ -2421,6 +2427,7 @@ fn install_mcp_server_config(
 ) -> AdapterResult<PathBuf> {
     let mcp_config_path = mcp_config_path_for_harness(harness, request.scope, runtime_paths)?;
     upsert_codemod_mcp_server(harness, &mcp_config_path, request.force, runtime_paths)?;
+    cleanup_legacy_mcp_config(harness, request.scope, runtime_paths)?;
     Ok(mcp_config_path)
 }
 
@@ -2437,6 +2444,51 @@ fn maybe_install_mcp_server_config(
 
 fn harness_supports_mcp(harness: Harness) -> bool {
     !matches!(harness, Harness::Antigravity)
+}
+
+fn cleanup_legacy_mcp_config(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    let Some(legacy_path) = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)? else {
+        return Ok(());
+    };
+
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(&legacy_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to remove legacy MCP config {}: {error}",
+            legacy_path.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn legacy_mcp_config_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<PathBuf>> {
+    match (harness, scope) {
+        (Harness::Opencode, InstallScope::Project) => {
+            Ok(Some(runtime_paths.cwd.join(".opencode/mcp.json")))
+        }
+        (Harness::Opencode, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| Some(home_dir.join(".opencode/mcp.json")))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        _ => Ok(None),
+    }
 }
 
 fn mcp_config_path_for_harness(
@@ -2465,13 +2517,11 @@ fn mcp_config_path_for_harness(
                     "Could not determine home directory for --user install".to_string(),
                 )
             }),
-        (Harness::Opencode, InstallScope::Project) => {
-            Ok(runtime_paths.cwd.join(".opencode/mcp.json"))
-        }
+        (Harness::Opencode, InstallScope::Project) => Ok(runtime_paths.cwd.join("opencode.json")),
         (Harness::Opencode, InstallScope::User) => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home_dir| home_dir.join(".opencode/mcp.json"))
+            .map(|home_dir| home_dir.join(".config/opencode/opencode.json"))
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -2504,13 +2554,29 @@ fn mcp_config_path_for_harness(
     }
 }
 
-fn expected_codemod_mcp_server_entry(runtime_paths: &RuntimePaths) -> Value {
+fn expected_codemod_mcp_server_entry_json(runtime_paths: &RuntimePaths) -> Value {
     let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
     let mut args = invocation.args_prefix;
     args.push(MCP_SERVER_ARG_COMMAND.to_string());
     json!({
         "command": invocation.command,
         "args": args
+    })
+}
+
+fn expected_codemod_mcp_server_command(runtime_paths: &RuntimePaths) -> Vec<String> {
+    let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
+    let mut command = vec![invocation.command];
+    command.extend(invocation.args_prefix);
+    command.push(MCP_SERVER_ARG_COMMAND.to_string());
+    command
+}
+
+fn expected_codemod_mcp_server_entry_opencode(runtime_paths: &RuntimePaths) -> Value {
+    json!({
+        "type": "local",
+        "enabled": true,
+        "command": expected_codemod_mcp_server_command(runtime_paths)
     })
 }
 
@@ -2522,7 +2588,10 @@ fn upsert_codemod_mcp_server(
 ) -> AdapterResult<()> {
     match harness {
         Harness::Codex => upsert_codemod_mcp_server_toml(config_path, force, runtime_paths),
-        Harness::Claude | Harness::Goose | Harness::Opencode | Harness::Cursor => {
+        Harness::Opencode => {
+            upsert_codemod_mcp_server_opencode_json(config_path, force, runtime_paths)
+        }
+        Harness::Claude | Harness::Goose | Harness::Cursor => {
             upsert_codemod_mcp_server_json(config_path, force, runtime_paths)
         }
         Harness::Antigravity => Err(HarnessAdapterError::UnsupportedHarness(
@@ -2546,7 +2615,7 @@ fn upsert_codemod_mcp_server_json(
         })?;
     }
 
-    let expected_entry = expected_codemod_mcp_server_entry(runtime_paths);
+    let expected_entry = expected_codemod_mcp_server_entry_json(runtime_paths);
     let mut config_root = if config_path.exists() {
         let existing_content = fs::read_to_string(config_path).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
@@ -2597,6 +2666,89 @@ fn upsert_codemod_mcp_server_json(
     }
 
     mcp_servers.insert(MCP_SERVER_NAME.to_string(), expected_entry);
+
+    let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to write MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn upsert_codemod_mcp_server_opencode_json(
+    config_path: &Path,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    if let Some(parent_dir) = config_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let expected_entry = expected_codemod_mcp_server_entry_opencode(runtime_paths);
+    let mut config_root = if config_path.exists() {
+        let existing_content = fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read MCP config {}: {error}",
+                config_path.display()
+            ))
+        })?;
+
+        serde_json::from_str::<Value>(&existing_content).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "MCP config {} is not valid JSON: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let Some(root_object) = config_root.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} must contain a top-level JSON object",
+            config_path.display()
+        )));
+    };
+
+    let mcp_value = root_object
+        .entry("mcp".to_string())
+        .or_insert_with(|| json!({}));
+
+    let Some(mcp_object) = mcp_value.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} has non-object `mcp`; update manually or re-run with --force after fixing JSON",
+            config_path.display()
+        )));
+    };
+
+    if let Some(existing_entry) = mcp_object.get(MCP_SERVER_NAME) {
+        if existing_entry == &expected_entry {
+            return Ok(());
+        }
+
+        if !force {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "MCP server `{MCP_SERVER_NAME}` already exists in {} with different settings. Re-run with --force to overwrite.",
+                config_path.display()
+            )));
+        }
+    }
+
+    mcp_object.insert(MCP_SERVER_NAME.to_string(), expected_entry);
 
     let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
         HarnessAdapterError::InstallFailed(format!(
@@ -3716,7 +3868,7 @@ mod tests {
         match harness {
             Harness::Claude => runtime_paths.cwd.join(".mcp.json"),
             Harness::Goose => runtime_paths.cwd.join(".goose/mcp.json"),
-            Harness::Opencode => runtime_paths.cwd.join(".opencode/mcp.json"),
+            Harness::Opencode => runtime_paths.cwd.join("opencode.json"),
             Harness::Cursor => runtime_paths.cwd.join(".cursor/mcp.json"),
             Harness::Codex => runtime_paths.cwd.join(".codex/config.toml"),
             Harness::Antigravity => panic!("antigravity does not have MCP config support"),
@@ -4117,6 +4269,9 @@ codemod-skill-version: 0.1.0
         assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
         assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
         assert!(agents_content.contains("Core skill: `.opencode/skills/codemod/SKILL.md`"));
+        assert!(agents_content.contains(
+            "Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work."
+        ));
         assert!(agents_content.contains("/codemod-create"));
     }
 
@@ -5676,6 +5831,64 @@ codemod-skill-version: 0.1.0
                 .unwrap()
         );
         assert_eq!(server.args.last().map(String::as_str), Some("mcp"));
+    }
+
+    #[test]
+    fn upsert_mcp_server_writes_opencode_json_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join("opencode.json");
+
+        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths)
+            .unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let server = parsed
+            .get("mcp")
+            .and_then(|servers| servers.get("codemod"))
+            .expect("expected opencode MCP server entry");
+
+        assert_eq!(
+            server.get("type").and_then(|value| value.as_str()),
+            Some("local")
+        );
+        assert_eq!(
+            server.get("enabled").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        let command = server
+            .get("command")
+            .and_then(|value| value.as_array())
+            .expect("expected command array");
+        assert_eq!(
+            command.first().and_then(|value| value.as_str()),
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .as_deref()
+        );
+        assert_eq!(command.last().and_then(|value| value.as_str()), Some("mcp"));
+    }
+
+    #[test]
+    fn install_mcp_server_config_removes_legacy_opencode_mcp_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let legacy_path = runtime_paths.cwd.join(".opencode/mcp.json");
+        fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        fs::write(&legacy_path, "{\"mcpServers\":{}}").unwrap();
+
+        let request = InstallRequest {
+            scope: InstallScope::Project,
+            force: true,
+        };
+
+        let config_path =
+            install_mcp_server_config(Harness::Opencode, &request, &runtime_paths).unwrap();
+
+        assert_eq!(config_path, runtime_paths.cwd.join("opencode.json"));
+        assert!(config_path.exists());
+        assert!(!legacy_path.exists());
     }
 
     #[test]
