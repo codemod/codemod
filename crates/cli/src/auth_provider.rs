@@ -1,4 +1,3 @@
-use anyhow::Result;
 use butterflow_core::registry::{
     AuthProvider, AuthTokens, RegistryAuth, RegistryError, Result as RegistryResult,
 };
@@ -10,10 +9,8 @@ pub struct CliAuthProvider {
 }
 
 impl CliAuthProvider {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            storage: TokenStorage::new()?,
-        })
+    pub fn from_storage(storage: TokenStorage) -> Self {
+        Self { storage }
     }
 }
 

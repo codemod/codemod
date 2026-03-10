@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use log::info;
 use std::sync::Arc;
+mod agent_select;
 mod ascii_art;
 mod auth;
 mod auth_provider;
@@ -11,6 +11,7 @@ mod dirty_git_check;
 mod engine;
 mod progress_bar;
 mod report_server;
+mod suitability;
 #[cfg(unix)]
 mod tui;
 mod utils;
@@ -82,6 +83,9 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
+    /// AI-native codemod agent workflows and skill lifecycle commands
+    Agent(commands::agent::Command),
+
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
 }
@@ -139,6 +143,10 @@ enum JssgCommands {
 
 /// Check if a string looks like a package name that should be run
 fn is_package_name(arg: &str) -> bool {
+    if arg.starts_with('-') {
+        return false;
+    }
+
     // Check for scoped packages (@org/package)
     if arg.starts_with('@') && arg.contains('/') {
         return true;
@@ -162,6 +170,8 @@ fn is_package_name(arg: &str) -> bool {
         "run",
         "unpublish",
         "cache",
+        "agent",
+        "mcp",
     ];
 
     !known_commands.contains(&arg)
@@ -169,52 +179,57 @@ fn is_package_name(arg: &str) -> bool {
 
 type TelemetrySenderMutex = Arc<Box<dyn TelemetrySender + Send + Sync>>;
 
+enum ImplicitRoute {
+    Run(Vec<String>),
+}
+
+fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
+    if trailing_args.is_empty() {
+        return None;
+    }
+
+    let package = trailing_args.first()?;
+    if !is_package_name(package) {
+        return None;
+    }
+
+    let mut run_args = vec!["codemod".to_string(), "run".to_string()];
+    run_args.extend(trailing_args.iter().cloned());
+    Some(ImplicitRoute::Run(run_args))
+}
+
 /// Handle implicit run command from trailing arguments
 async fn handle_implicit_run_command(
     trailing_args: Vec<String>,
     telemetry_sender: TelemetrySenderMutex,
-    disable_analytics: bool,
 ) -> Result<bool> {
-    if trailing_args.is_empty() {
+    let Some(route) = classify_implicit_route(&trailing_args) else {
         return Ok(false);
-    }
-
-    let package = &trailing_args[0];
-    if !is_package_name(package) {
-        return Ok(false);
-    }
-
-    // Construct arguments for clap parsing as if "run" was specified
-    let mut full_args = vec!["codemod".to_string(), "run".to_string()];
-    full_args.extend(trailing_args.clone());
+    };
 
     // Re-parse the entire CLI with the run command included
-    match Cli::try_parse_from(&full_args) {
-        Ok(new_cli) => {
-            if let Some(Commands::Run(run_args)) = new_cli.command {
-                commands::run::handler(
-                    &run_args,
-                    telemetry_sender.clone(),
-                    new_cli.disable_analytics,
-                )
-                .await?;
-                Ok(true)
-            } else {
+    match route {
+        ImplicitRoute::Run(full_args) => match Cli::try_parse_from(&full_args) {
+            Ok(new_cli) => {
+                if let Some(Commands::Run(run_args)) = new_cli.command {
+                    commands::run::handler(
+                        &run_args,
+                        telemetry_sender.clone(),
+                        new_cli.disable_analytics,
+                    )
+                    .await?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            Err(e) => {
+                if e.kind() == clap::error::ErrorKind::UnknownArgument {
+                    return Ok(false);
+                }
                 Ok(false)
             }
-        }
-        Err(e) => {
-            if e.kind() == clap::error::ErrorKind::UnknownArgument {
-                info!("Unknown argument, falling back to legacy codemod runner.");
-                let mut trailing_args = trailing_args.clone();
-                if disable_analytics {
-                    trailing_args.push("--no-telemetry".to_string());
-                }
-                commands::run::run_legacy_codemod_with_raw_args(&trailing_args).await?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
+        },
     }
 }
 
@@ -275,7 +290,7 @@ async fn main() -> Result<()> {
                 commands::workflow::run::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Resume(args) => {
-                commands::workflow::resume::handler(args).await?;
+                commands::workflow::resume::handler(args, telemetry_sender.clone()).await?;
             }
             WorkflowCommands::Validate(args) => {
                 commands::workflow::validate::handler(args)?;
@@ -338,17 +353,16 @@ async fn main() -> Result<()> {
         Some(Commands::Cache(args)) => {
             commands::cache::handler(args).await?;
         }
+        Some(Commands::Agent(args)) => {
+            commands::agent::handler(args, telemetry_sender.clone()).await?;
+        }
         Some(Commands::Mcp(args)) => {
             args.run().await?;
         }
         None => {
             // Try to parse as implicit run command
-            if !handle_implicit_run_command(
-                cli.trailing_args.clone(),
-                telemetry_sender.clone(),
-                cli.disable_analytics,
-            )
-            .await?
+            if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
+                .await?
             {
                 // No valid subcommand or package name provided, show help
                 print_ascii_art();
@@ -359,4 +373,251 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{error::ErrorKind, CommandFactory};
+
+    #[test]
+    fn top_level_help_lists_agent_and_mcp() {
+        let help_text = Cli::command().render_long_help().to_string();
+        assert!(help_text.contains("agent"));
+        assert!(help_text.contains("mcp"));
+    }
+
+    #[test]
+    fn parser_accepts_agent_install() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_list() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "list"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_run_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "run",
+            "@codemod/sample",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_workflow_run_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "workflow",
+            "run",
+            "--workflow",
+            "workflow.yaml",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_workflow_resume_with_install_skill_override() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "workflow",
+            "resume",
+            "--workflow",
+            "workflow.yaml",
+            "--id",
+            "00000000-0000-0000-0000-000000000001",
+            "--trigger-all",
+            "--no-interactive",
+            "--install-skill",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn classify_implicit_route_ignores_non_package_keyword() {
+        let trailing_args = vec![
+            "workflow".to_string(),
+            "install".to_string(),
+            "jest-to-vitest".to_string(),
+        ];
+        let route = classify_implicit_route(&trailing_args);
+        assert!(route.is_none());
+    }
+
+    #[test]
+    fn is_package_name_rejects_flag_like_values() {
+        assert!(!is_package_name("--flag"));
+        assert!(!is_package_name("--dry-run"));
+    }
+
+    #[test]
+    fn classify_implicit_route_uses_run_when_skill_flag_absent() {
+        let trailing_args = vec!["jest-to-vitest".to_string(), "--dry-run".to_string()];
+        let route = classify_implicit_route(&trailing_args);
+        assert!(matches!(route, Some(ImplicitRoute::Run(_))));
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_opencode_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "opencode"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_cursor_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "cursor"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_codex_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "codex"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_antigravity_harness() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "antigravity"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_no_interactive() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--no-interactive"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_manual_update_policy() {
+        let parse_result =
+            Cli::try_parse_from(["codemod", "agent", "install", "--update-policy", "manual"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_runtime_update_policy_flags() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "agent",
+            "install",
+            "--update-policy",
+            "notify",
+            "--update-source",
+            "registry",
+            "--require-signed-manifest",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_install_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--format", "logs"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_update_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "update", "--format", "logs"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_agent_list_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "list", "--format", "logs"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_init_skill_flag() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "init",
+            "my-skill",
+            "--no-interactive",
+            "--skill",
+            "--language",
+            "typescript",
+            "--description",
+            "Skill package",
+            "--author",
+            "Author <author@example.com>",
+            "--license",
+            "MIT",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_init_with_skill_flag() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "init",
+            "my-with-skill",
+            "--no-interactive",
+            "--project-type",
+            "ast-grep-js",
+            "--with-skill",
+            "--language",
+            "typescript",
+            "--description",
+            "With skill package",
+            "--author",
+            "Author <author@example.com>",
+            "--license",
+            "MIT",
+            "--package-manager",
+            "npm",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn agent_help_lists_install_update_and_list_only() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
+        let error = match parse_result {
+            Err(error) => error,
+            Ok(_) => panic!("expected --help to return clap display help"),
+        };
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+
+        let help_text = error.to_string();
+        assert!(help_text.contains("install"));
+        assert!(help_text.contains("update"));
+        assert!(help_text.contains("list"));
+    }
+
+    #[test]
+    fn install_help_lists_opencode_and_cursor_harnesses() {
+        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--help"]);
+        let error = match parse_result {
+            Err(error) => error,
+            Ok(_) => panic!("expected --help to return clap display help"),
+        };
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+
+        let help_text = error.to_string();
+        assert!(help_text.contains("opencode"));
+        assert!(help_text.contains("cursor"));
+        assert!(help_text.contains("codex"));
+        assert!(help_text.contains("antigravity"));
+        assert!(help_text.contains("--no-interactive"));
+        assert!(help_text.contains("--update-policy"));
+        assert!(help_text.contains("--update-source"));
+        assert!(help_text.contains("--require-signed-manifest"));
+        assert!(help_text.contains("auto-safe"));
+        assert!(help_text.contains("logs"));
+    }
 }

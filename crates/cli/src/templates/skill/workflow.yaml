@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
+
+version: "1"
+
+nodes:
+  - id: install-package-skill
+    name: Install Package Skill
+    type: automatic
+    steps:
+      - id: install-package-skill
+        name: Install package skill
+        install-skill:
+          package: "{name}"
+          path: "{skill_path}"

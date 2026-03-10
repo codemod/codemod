@@ -32,7 +32,10 @@ pub async fn handler(args: &Command) -> Result<()> {
         true, // no_interactive
         false,
         None,
+        false,
         butterflow_core::structured_log::OutputFormat::Text,
+        None,
+        None,
         None,
     )?;
 

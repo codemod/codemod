@@ -98,7 +98,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let dirty_check = dirty_git_check::dirty_check();
+    let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty);
 
     std::env::set_var("CODEMOD_STEP_ID", "jssg");
@@ -372,13 +372,17 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         }
     }
 
-    if crate::utils::metrics::should_show_report(args.report, args.no_interactive, &metrics_data) {
-        let collected_diffs = diff_collector
-            .map(|c| c.lock().unwrap().clone())
-            .unwrap_or_default();
+    let collected_diffs = diff_collector
+        .map(|c| c.lock().unwrap().clone())
+        .unwrap_or_default();
+    let files_modified = collected_diffs.len();
 
-        let files_modified = collected_diffs.len();
-
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
         let report = ExecutionReport::build(
             args.js_file.clone(),
             None,

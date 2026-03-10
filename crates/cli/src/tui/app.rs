@@ -97,10 +97,7 @@ impl App {
     pub async fn refresh(&mut self) -> Result<bool> {
         match &self.screen {
             Screen::RunList => {
-                self.workflow_runs = self
-                    .engine
-                    .list_workflow_runs(self.run_list_limit)
-                    .await?;
+                self.workflow_runs = self.engine.list_workflow_runs(self.run_list_limit).await?;
             }
             Screen::TaskList { workflow_run_id } => {
                 let wf_id = *workflow_run_id;

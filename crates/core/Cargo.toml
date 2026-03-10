@@ -49,6 +49,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+serial_test = "3.2.0"
 
 [features]
 default = []
