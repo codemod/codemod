@@ -2451,7 +2451,8 @@ fn cleanup_legacy_mcp_config(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<()> {
-    let Some(legacy_path) = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)? else {
+    let Some(legacy_path) = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)?
+    else {
         return Ok(());
     };
 
@@ -3471,7 +3472,7 @@ fn goose_config_requires_force(config_path: &Path, recipe_path: &Path) -> Adapte
     };
 
     let existing_recipe_path = entry
-        .get(&serde_yaml::Value::String("recipe_path".to_string()))
+        .get(serde_yaml::Value::String("recipe_path".to_string()))
         .and_then(serde_yaml::Value::as_str)
         .unwrap_or_default();
 
@@ -3532,7 +3533,7 @@ fn upsert_goose_slash_command_config(
         };
 
         let command_name = mapping
-            .get(&serde_yaml::Value::String("command".to_string()))
+            .get(serde_yaml::Value::String("command".to_string()))
             .and_then(serde_yaml::Value::as_str);
         if command_name != Some(MCS_CREATE_COMMAND_NAME) {
             continue;
@@ -3586,13 +3587,13 @@ fn goose_slash_command_entry(
 ) -> Option<serde_yaml::Mapping> {
     document
         .as_mapping()?
-        .get(&serde_yaml::Value::String("slash_commands".to_string()))?
+        .get(serde_yaml::Value::String("slash_commands".to_string()))?
         .as_sequence()?
         .iter()
         .filter_map(serde_yaml::Value::as_mapping)
         .find(|mapping| {
             mapping
-                .get(&serde_yaml::Value::String("command".to_string()))
+                .get(serde_yaml::Value::String("command".to_string()))
                 .and_then(serde_yaml::Value::as_str)
                 == Some(command_name)
         })
@@ -5838,8 +5839,7 @@ codemod-skill-version: 0.1.0
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let config_path = runtime_paths.cwd.join("opencode.json");
 
-        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths)
-            .unwrap();
+        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths).unwrap();
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();

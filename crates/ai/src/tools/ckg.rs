@@ -1,10 +1,8 @@
 //! Code Knowledge Graph tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::validate_absolute_path;
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::validate_absolute_path;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashMap;
@@ -364,8 +362,7 @@ impl CkgTool {
     }
 }
 
-#[async_trait]
-impl Tool for CkgTool {
+impl CkgTool {
     fn name(&self) -> &str {
         "ckg_tool"
     }
@@ -466,49 +463,12 @@ impl Tool for CkgTool {
             "stats" => self.get_statistics(&call.id).await,
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unknown operation: {}. Supported operations: build, query, analyze, stats",
                     operation
                 ),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "Build knowledge graph from a directory".to_string(),
-                parameters: json!({
-                    "operation": "build",
-                    "path": "/project/src",
-                    "recursive": true
-                }),
-                expected_result: "Knowledge graph built successfully".to_string(),
-            },
-            ToolExample {
-                description: "Query symbols by name".to_string(),
-                parameters: json!({
-                    "operation": "query",
-                    "query": "main"
-                }),
-                expected_result: "List of symbols matching 'main'".to_string(),
-            },
-            ToolExample {
-                description: "Analyze a specific file".to_string(),
-                parameters: json!({
-                    "operation": "analyze",
-                    "path": "/project/src/main.rs"
-                }),
-                expected_result: "Detailed analysis of the file".to_string(),
-            },
-            ToolExample {
-                description: "Get codebase statistics".to_string(),
-                parameters: json!({
-                    "operation": "stats"
-                }),
-                expected_result: "Statistics about the codebase".to_string(),
-            },
-        ]
     }
 }
 
@@ -527,14 +487,14 @@ impl CkgTool {
         if !path.exists() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path does not exist: {}", path.display()),
+                format!("Path does not exist: {}", path.display()),
             ));
         }
 
         if !path.is_dir() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path is not a directory: {}", path.display()),
+                format!("Path is not a directory: {}", path.display()),
             ));
         }
 
@@ -638,7 +598,7 @@ impl CkgTool {
         if symbols.is_empty() {
             return Ok(ToolResult::success(
                 call_id,
-                &format!("No symbols found matching query: '{}'", query),
+                format!("No symbols found matching query: '{}'", query),
             ));
         }
 
@@ -681,14 +641,14 @@ impl CkgTool {
         if !path.exists() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("File does not exist: {}", path.display()),
+                format!("File does not exist: {}", path.display()),
             ));
         }
 
         if !path.is_file() {
             return Ok(ToolResult::error(
                 call_id,
-                &format!("Path is not a file: {}", path.display()),
+                format!("Path is not a file: {}", path.display()),
             ));
         }
 
@@ -788,9 +748,4 @@ impl CkgTool {
     }
 }
 
-impl_tool_factory!(
-    CkgToolFactory,
-    CkgTool,
-    "ckg_tool",
-    "Code Knowledge Graph tool for analyzing and querying code structure"
-);
+crate::impl_rig_tooldyn!(CkgTool);

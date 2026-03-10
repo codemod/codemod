@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::metrics::MetricEntry;
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
 use codemod_sandbox::MetricsData;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
@@ -421,7 +421,7 @@ fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
 fn normalize_metrics_data(metrics: &MetricsData) -> MetricsData {
     let mut normalized = metrics.clone();
     for entries in normalized.values_mut() {
-        entries.sort_by(|left, right| metric_entry_sort_key(left).cmp(&metric_entry_sort_key(right)));
+        entries.sort_by_key(metric_entry_sort_key);
     }
     normalized
 }

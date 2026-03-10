@@ -1,9 +1,7 @@
 //! Cross-platform glob pattern matching tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
 use ignore::{
     gitignore::{Gitignore, GitignoreBuilder},
     Match,
@@ -38,8 +36,7 @@ impl GlobTool {
     }
 }
 
-#[async_trait]
-impl Tool for GlobTool {
+impl GlobTool {
     fn name(&self) -> &str {
         "glob"
     }
@@ -121,7 +118,7 @@ impl Tool for GlobTool {
         if files_only && dirs_only {
             return Ok(ToolResult::error(
                 &call.id,
-                &"Cannot specify both files_only and dirs_only as true".to_string(),
+                "Cannot specify both files_only and dirs_only as true".to_string(),
             ));
         }
 
@@ -129,7 +126,7 @@ impl Tool for GlobTool {
         if !base_path.exists() {
             return Ok(ToolResult::error(
                 &call.id,
-                &format!("Base path does not exist: {}", base_path.display()),
+                format!("Base path does not exist: {}", base_path.display()),
             ));
         }
 
@@ -158,7 +155,7 @@ impl Tool for GlobTool {
                 if matches.is_empty() {
                     Ok(ToolResult::success(
                         &call.id,
-                        &format!(
+                        format!(
                             "No files found matching pattern '{}' in {}",
                             pattern,
                             base_path.display()
@@ -198,59 +195,9 @@ impl Tool for GlobTool {
             }
             Err(e) => Ok(ToolResult::error(
                 &call.id,
-                &format!("Error finding files: {}", e),
+                format!("Error finding files: {}", e),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "Find all Rust files in current directory".to_string(),
-                parameters: json!({"pattern": "*.rs"}),
-                expected_result: "List of all .rs files in current directory".to_string(),
-            },
-            ToolExample {
-                description: "Find all JavaScript and TypeScript files recursively".to_string(),
-                parameters: json!({"pattern": "**/*.{js,ts}"}),
-                expected_result: "List of all .js and .ts files in all subdirectories".to_string(),
-            },
-            ToolExample {
-                description: "Find all test files in src directory".to_string(),
-                parameters: json!({
-                    "pattern": "**/test_*.py",
-                    "base_path": "src"
-                }),
-                expected_result: "List of all Python test files in src directory".to_string(),
-            },
-            ToolExample {
-                description: "Find only directories with case-sensitive matching".to_string(),
-                parameters: json!({
-                    "pattern": "**/[Dd]ocs",
-                    "dirs_only": true,
-                    "case_sensitive": true
-                }),
-                expected_result: "List of directories named 'Docs' or 'docs'".to_string(),
-            },
-            ToolExample {
-                description: "Find files including hidden ones, ignoring .gitignore".to_string(),
-                parameters: json!({
-                    "pattern": "**/.env*",
-                    "include_hidden": true,
-                    "respect_gitignore": false
-                }),
-                expected_result: "List of all .env files including hidden ones".to_string(),
-            },
-            ToolExample {
-                description: "Find config files with depth limit".to_string(),
-                parameters: json!({
-                    "pattern": "**/config.*",
-                    "max_depth": 3,
-                    "files_only": true
-                }),
-                expected_result: "List of config files within 3 directory levels".to_string(),
-            },
-        ]
     }
 }
 
@@ -509,9 +456,4 @@ impl GlobMatcher {
     }
 }
 
-impl_tool_factory!(
-    GlobToolFactory,
-    GlobTool,
-    "glob",
-    "Find files and directories using cross-platform glob patterns"
-);
+crate::impl_rig_tooldyn!(GlobTool);

@@ -135,7 +135,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(script_base_dir.to_path_buf()),
     );
 
-    let capabilities_security_callback = capabilities_security_callback(args.no_interactive);
+    let capabilities_security_callback = capabilities_security_callback(args.no_interactive, None);
     let pre_run_callback = PreRunCallback {
         callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
             capabilities_security_callback(config).unwrap_or_else(|e| {

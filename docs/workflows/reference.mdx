@@ -265,7 +265,7 @@ steps:
 </ParamField>
 
 <ParamField path="ai.llm_protocol" type="string" default="openai">
-  LLM provider/protocol. Supported: `openai`, `anthropic`, `azure_openai`.
+  LLM provider/protocol. Supported: `openai`, `anthropic`, `google_ai`, `azure_openai`.
 </ParamField>
 
 <ParamField path="ai.endpoint" type="string">
@@ -277,7 +277,7 @@ steps:
 
   ```bash Environment variables for AI steps
   LLM_API_KEY=YOUR_KEY
-  LLM_PROVIDER=openai  # or anthropic, azure_openai
+  LLM_PROVIDER=openai  # or anthropic, google_ai, azure_openai
   LLM_MODEL=gpt-4o
   LLM_BASE_URL=https://api.openai.com/v1  # optional
   ```
