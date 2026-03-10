@@ -6,6 +6,7 @@ Non-negotiable constraints:
 - Use AST-based edits for JS/TS code transforms. If a code change is not safe to implement with AST tooling, leave it manual.
 - Default to ast-grep-based codemods when creating codemod packages: use `js-ast-grep` for JS/TS-family source changes and `ast-grep` workflow steps for other deterministic structured edits when possible.
 - Multi-step workflows are acceptable and preferred when the migration spans multiple safe transformation surfaces. Do not use shell/native scripts as the primary transformation engine unless the user explicitly asked for that implementation style or no ast-grep-based path is viable.
+- Treat dependency/version manifest upgrades as part of the core migration surface when the researched upgrade path requires them. If official docs require package, SDK, plugin, or toolchain version bumps and those edits are deterministic, automate them instead of leaving them implicit or optional.
 - Do not default to analysis-only codemods when the user asked for an actual migration codemod. Use analysis-only output only when the researched migration has no safe, meaningful automatable source edits or when the user explicitly asked for analysis/reporting.
 - Verify README command examples against the current Codemod CLI help before presenting them.
 - Do not claim completion with a trivial one-fixture suite; tests must match the requested migration scope.

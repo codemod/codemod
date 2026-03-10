@@ -20,7 +20,8 @@ Use this guide when the task is to create or improve codemods, not just run them
 - Default to ast-grep-based codemod packages when creating codemods. Use `js-ast-grep` for JS/TS-family source changes and `ast-grep` workflow steps for other deterministic structured edits when possible.
 - Use multi-step workflows when the migration spans multiple safe transformation surfaces, for example JS/TS source plus JSON manifests plus Gradle or Podfile edits.
 - Do not switch to shell/native scripts as the primary transformation engine unless the user explicitly asked for that implementation style or no ast-grep-based path is viable.
-- If the researched migration includes native/build/config work, automate the safe deterministic edits with `ast-grep` workflow steps when possible and leave only the unsafe or environment-specific remainder as manual follow-up.
+- Treat dependency/version manifest upgrades as part of the core migration surface when the researched upgrade path requires them. If official docs call for package, SDK, plugin, or toolchain version bumps and the edits are deterministic, automate them in the workflow.
+- If the researched migration includes native/build/config work, automate the safe deterministic edits with `ast-grep` workflow steps when possible, including manifest/version bumps, and leave only the unsafe or environment-specific remainder as manual follow-up.
 - Do not fall back to an analysis-only codemod if the user asked for an actual migration codemod and there are safe, meaningful automatable source edits available.
 - An analysis-only codemod is acceptable only when research shows there are no safe, meaningful automatable source edits for the requested migration, or when the user explicitly asked for analysis/reporting output.
 - If a code change cannot be encoded safely with AST tooling, document it as a manual step instead of shipping a brittle transform.
