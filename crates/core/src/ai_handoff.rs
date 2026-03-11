@@ -142,6 +142,7 @@ pub fn build_agent_command(
         "codex" => {
             // Pipe the prompt via stdin using `codex e -`
             let _ = full_prompt;
+            cmd.env("RUST_LOG", "error");
             cmd.arg("--full-auto").arg("e").arg("-");
         }
         "aider" => {
