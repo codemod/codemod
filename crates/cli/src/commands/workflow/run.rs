@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{
     prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
 };
@@ -112,10 +113,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let capabilities = prompt_capabilities(capabilities, &cli_granted, args.no_interactive);
 
-    let target_path = args
-        .target_path
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let target_path = normalize_target_path(
+        args.target_path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap()),
+    )?;
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -127,11 +129,33 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
+    // Determine TUI mode early so we can run the dirty-git-check before the
+    // TUI redirects stdout/stderr to /dev/null (which would hang the prompt).
+    #[cfg(unix)]
+    let use_tui = {
+        let workflow = butterflow_core::utils::parse_workflow_file(&workflow_file_path)?;
+        !args.no_interactive && workflow_has_manual_nodes(&workflow)
+    };
+    #[cfg(not(unix))]
+    let use_tui = false;
+
+    // When TUI is active, run the dirty check now while the terminal is still
+    // available for interactive prompts. Then tell the engine to skip it later.
+    let allow_dirty = if use_tui && !args.allow_dirty {
+        let check = crate::dirty_git_check::dirty_check(false);
+        // This will prompt the user or exit(1) if they decline.
+        // If it returns, the user approved (or the repo is clean).
+        check(&target_path, false);
+        true
+    } else {
+        args.allow_dirty
+    };
+
     let (mut engine, mut config) = create_engine(
         workflow_file_path,
         target_path.clone(),
         args.dry_run,
-        args.allow_dirty,
+        allow_dirty,
         params,
         None,
         Some(capabilities.clone()),
@@ -148,20 +172,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Set the workflow name so it's stored on the WorkflowRun for TUI display
     engine.set_name(Some(args.workflow.clone()));
 
-    // Check if workflow has manual nodes and should launch TUI (Unix only)
-    #[cfg(unix)]
-    let use_tui = {
-        let workflow =
-            butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
-        !args.no_interactive && workflow_has_manual_nodes(&workflow)
-    };
-    #[cfg(not(unix))]
-    let use_tui = false;
-
     if use_tui {
-        config.quiet = true;
+        // Don't set quiet=true on the engine — the TUI's StdioGuard already
+        // redirects fd 1/2 to /dev/null, so runner println! is suppressed.
+        // During passthrough (log viewer), stdout is restored and we *want*
+        // runner output to reach the terminal.
         config.progress_callback = Arc::new(None);
-        engine.set_quiet(true);
     }
 
     // Run workflow -- with TUI if manual nodes, otherwise text-based

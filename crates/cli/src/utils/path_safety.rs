@@ -31,6 +31,23 @@ pub(crate) fn normalize_relative_path(configured_path: &str) -> Option<PathBuf> 
     (!normalized.as_os_str().is_empty()).then_some(normalized)
 }
 
+/// Normalize a target path to an absolute, canonicalized form.
+/// If the path is relative, it is joined with the current directory.
+/// If the resulting path exists, it is canonicalized to resolve symlinks.
+pub(crate) fn normalize_target_path(path: PathBuf) -> anyhow::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    if absolute.exists() {
+        Ok(absolute.canonicalize()?)
+    } else {
+        Ok(absolute)
+    }
+}
+
 pub(crate) fn resolve_relative_path_within_root(
     root: &Path,
     relative_path: &str,

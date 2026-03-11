@@ -4,7 +4,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,7 +34,6 @@ use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use tokio::fs::read_to_string;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::time;
 use uuid::Uuid;
@@ -163,6 +164,12 @@ impl Engine {
         logger: &StructuredLogger,
     ) -> Result<()> {
         let working_dir = &self.workflow_run_config.target_path;
+        let full_prompt = if let Some(sys) = system_prompt {
+            format!("{}\n\n{}", sys, prompt)
+        } else {
+            prompt.to_string()
+        };
+        let full_prompt_len = full_prompt.len();
 
         let mut cmd =
             build_agent_command(canonical, executable, prompt, system_prompt, working_dir)
@@ -180,20 +187,113 @@ impl Engine {
             canonical,
             executable.display()
         );
+        slog!(
+            logger,
+            info,
+            "Agent launch details: cwd={}, prompt_len={} chars",
+            working_dir.display(),
+            full_prompt_len
+        );
 
-        // Inherit stdio so user can interact with the agent
-        cmd.stdin(std::process::Stdio::inherit())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit());
+        if canonical == "claude-code" || canonical == "codex" {
+            slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+        } else {
+            cmd.stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+        }
 
-        let status = tokio::task::spawn_blocking(move || cmd.status())
+        let launch_args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        slog!(
+            logger,
+            info,
+            "Agent argv: program={}, args={:?}",
+            cmd.get_program().to_string_lossy(),
+            launch_args
+        );
+
+        let mut child = cmd.spawn().map_err(|error| {
+            Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
+        })?;
+        if canonical == "claude-code" || canonical == "codex" {
+            let mut stdin = child.stdin.take().ok_or_else(|| {
+                Error::StepExecution(format!("{} stdin pipe was not available", canonical))
+            })?;
+            let stdin_payload = full_prompt.clone();
+            let agent_name = canonical.to_string();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                stdin.write_all(stdin_payload.as_bytes()).map_err(|error| {
+                    Error::StepExecution(format!(
+                        "Failed to write {} prompt to stdin: {error}",
+                        agent_name
+                    ))
+                })?;
+                stdin.write_all(b"\n").map_err(|error| {
+                    Error::StepExecution(format!(
+                        "Failed to terminate {} prompt on stdin: {error}",
+                        agent_name
+                    ))
+                })?;
+                stdin.flush().map_err(|error| {
+                    Error::StepExecution(format!("Failed to flush {} stdin: {error}", agent_name))
+                })?;
+                // Explicitly drop stdin to close the pipe and signal EOF to the child
+                drop(stdin);
+                Ok(())
+            })
             .await
             .map_err(|error| {
                 Error::StepExecution(format!(
-                    "Failed to join agent process for '{}': {}",
+                    "Failed to join {} stdin writer task: {}",
                     canonical, error
                 ))
             })??;
+        }
+        let child_pid = child.id();
+        slog!(
+            logger,
+            info,
+            "Spawned agent '{}' with pid {:?}; waiting for it to exit",
+            canonical,
+            child_pid
+        );
+
+        let started_waiting = std::time::Instant::now();
+        let wait_task = tokio::task::spawn_blocking(move || child.wait());
+        let mut wait_task = std::pin::pin!(wait_task);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let status = loop {
+            tokio::select! {
+                result = &mut wait_task => {
+                    let status = result.map_err(|error| {
+                        Error::StepExecution(format!(
+                            "Failed to join agent process for '{}': {}",
+                            canonical, error
+                        ))
+                    })??;
+                    break status;
+                }
+                _ = heartbeat.tick() => {
+                    let waited = started_waiting.elapsed().as_secs();
+                    slog!(
+                        logger,
+                        info,
+                        "Still waiting on agent '{}' pid {:?} after {}s",
+                        canonical,
+                        child_pid,
+                        waited
+                    );
+                }
+            }
+        };
 
         if status.success() {
             slog!(logger, info, "Agent '{}' completed successfully", canonical);
@@ -312,6 +412,11 @@ impl Engine {
         self.workflow_run_config.workflow_file_path.clone()
     }
 
+    /// Get the target path for this workflow run
+    pub fn get_target_path(&self) -> PathBuf {
+        self.workflow_run_config.target_path.clone()
+    }
+
     /// Check if the engine is in dry-run mode
     pub fn is_dry_run(&self) -> bool {
         self.workflow_run_config.dry_run
@@ -332,24 +437,31 @@ impl Engine {
         self.workflow_run_config.capabilities = capabilities;
     }
 
-    /// Spawn a task asynchronously
+    /// Spawn a task asynchronously on a dedicated thread with its own runtime.
+    ///
+    /// Uses `std::thread::spawn` + `new_current_thread` runtime instead of
+    /// `spawn_blocking` + `Handle::block_on`, which stalls the main tokio
+    /// runtime's timer driver and prevents other async work from progressing.
     async fn spawn_task_with_handle(&self, task_id: Uuid) -> Result<()> {
         let engine = self.clone();
         let task_completion_notify = Arc::clone(&self.task_completion_notify);
 
-        let runtime_handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime_handle.block_on(async move {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build task runtime");
+
+            rt.block_on(async move {
                 // Always ensure task completion notification is sent, even on panic or hang
                 let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
 
                 // Add timeout to prevent infinite hanging
-                let task_timeout = tokio::time::Duration::from_secs(45 * 60); // 5 minutes timeout for AI tasks
+                let task_timeout = tokio::time::Duration::from_secs(45 * 60);
 
                 match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
                     Ok(Ok(())) => {
                         debug!("Task {} completed successfully", task_id);
-                        // Mark guard as sent since execute_task already sent notification
                         cleanup_guard.mark_sent();
                     }
                     Ok(Err(e)) => {
@@ -361,12 +473,10 @@ impl Engine {
                             task_id,
                             task_timeout.as_secs()
                         );
-                        // Mark task as failed due to timeout
                         if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
                         {
                             error!("Failed to mark task {} as failed: {}", task_id, e);
                         }
-                        // Let cleanup guard send notification for timeout case
                     }
                 }
             });
@@ -501,9 +611,12 @@ impl Engine {
             .await?;
 
         let mut engine = self.clone();
-        let runtime_handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime_handle.block_on(async move {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build workflow runtime");
+            rt.block_on(async move {
                 if let Err(e) = engine.execute_workflow(workflow_run_id).await {
                     error!("Workflow execution failed: {e}");
                 }
@@ -584,9 +697,12 @@ impl Engine {
             .await?;
 
         let mut engine = self.clone();
-        let runtime_handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime_handle.block_on(async move {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build workflow runtime");
+            rt.block_on(async move {
                 if let Err(e) = engine.execute_workflow(workflow_run_id).await {
                     error!("Workflow execution failed: {e}");
                 }
@@ -713,9 +829,12 @@ impl Engine {
             .await?;
 
         let mut engine = self.clone();
-        let runtime_handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime_handle.block_on(async move {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build workflow runtime");
+            rt.block_on(async move {
                 if let Err(e) = engine.execute_workflow(workflow_run_id).await {
                     error!("Workflow execution failed: {e}");
                 }
@@ -1531,9 +1650,17 @@ impl Engine {
             match result {
                 Ok(_) => {
                     step_logger.step_end("success", step_start_time.elapsed().as_millis() as u64);
+                    slog!(
+                        step_logger,
+                        info,
+                        "Step '{}' finished successfully for task {}",
+                        step.name,
+                        task_id
+                    );
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
+
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
                     fields.insert(
@@ -1580,6 +1707,7 @@ impl Engine {
         }
 
         // Prepare environment variables
+        info!("Task {} all steps finished; preparing completion", task_id);
         let mut env = HashMap::new();
 
         // Add workflow parameters
@@ -1618,21 +1746,33 @@ impl Engine {
         let task_diff = TaskDiff { task_id, fields };
 
         // Apply the diff
+        info!("Task {} applying completed status diff", task_id);
         self.state_adapter
             .lock()
             .await
             .apply_task_diff(&task_diff)
             .await?;
+        info!("Task {} completed status diff applied", task_id);
 
         info!("Task {} ({}) completed", task_id, node.id);
 
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = task.master_task_id {
+            info!(
+                "Task {} updating matrix master task status for {}",
+                task_id, master_task_id
+            );
             self.update_matrix_master_status(master_task_id).await?;
+            info!(
+                "Task {} finished updating matrix master task status for {}",
+                task_id, master_task_id
+            );
         }
 
         // Notify that a task has completed (for event-driven waiting)
+        info!("Task {} notifying task completion listeners", task_id);
         self.task_completion_notify.notify_one();
+        info!("Task {} completion notification sent", task_id);
 
         Ok(())
     }
@@ -2470,26 +2610,20 @@ impl Engine {
             }
         }
 
-        // 3. If interactive, discover installed agents and prompt user to select
-        if !self.workflow_run_config.no_interactive {
-            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
-                let agents = discover_installed_agents();
-                if let Some(selected) = callback(&agents) {
-                    if selected == "__print_prompt__" {
-                        slog!(logger, info, "User chose to print prompt");
-                        self.emit_ai_instructions(
-                            logger,
-                            ai_config.system_prompt.as_deref(),
-                            &resolved_prompt,
-                        );
-                        return Ok(());
-                    }
-
-                    slog!(logger, info, "User selected agent: {}", selected);
-                    if let Some(executable) = find_agent_executable(&selected) {
+        // 2b. Check for LLM_AGENT env var (useful in non-interactive mode)
+        if let Ok(env_agent) = std::env::var("LLM_AGENT") {
+            if !env_agent.is_empty() {
+                if let Some(canonical) = resolve_agent_name(&env_agent) {
+                    slog!(
+                        logger,
+                        info,
+                        "Agent specified via LLM_AGENT env var: {}",
+                        canonical
+                    );
+                    if let Some(executable) = find_agent_executable(canonical) {
                         return self
                             .launch_agent(
-                                &selected,
+                                canonical,
                                 &executable,
                                 ai_config.system_prompt.as_deref(),
                                 &resolved_prompt,
@@ -2500,12 +2634,77 @@ impl Engine {
                         slog!(
                             logger,
                             warn,
-                            "Agent '{}' executable not found, falling back to built-in AI",
-                            selected
+                            "Agent '{}' from LLM_AGENT is not installed, falling back to built-in AI",
+                            canonical
                         );
                     }
+                } else {
+                    slog!(
+                        logger,
+                        warn,
+                        "Unknown agent '{}' specified via LLM_AGENT, ignoring",
+                        env_agent
+                    );
                 }
-                // User dismissed the selection — fall through to built-in AI
+            }
+        }
+
+        // 3. If interactive, discover installed agents and prompt user to select
+        if !self.workflow_run_config.no_interactive {
+            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
+                let agents = discover_installed_agents();
+
+                // Loop to allow preview → re-select flow
+                let mut selection_result = callback(&agents);
+                loop {
+                    match selection_result.as_deref() {
+                        Some("__preview_prompt__") => {
+                            // Show the prompt, then re-prompt for agent selection
+                            self.emit_ai_instructions(
+                                logger,
+                                ai_config.system_prompt.as_deref(),
+                                &resolved_prompt,
+                            );
+                            eprintln!();
+                            selection_result = callback(&agents);
+                            continue;
+                        }
+                        Some("__print_prompt__") => {
+                            slog!(logger, info, "User chose to print prompt and skip");
+                            self.emit_ai_instructions(
+                                logger,
+                                ai_config.system_prompt.as_deref(),
+                                &resolved_prompt,
+                            );
+                            return Ok(());
+                        }
+                        Some(selected) => {
+                            slog!(logger, info, "User selected agent: {}", selected);
+                            if let Some(executable) = find_agent_executable(selected) {
+                                return self
+                                    .launch_agent(
+                                        selected,
+                                        &executable,
+                                        ai_config.system_prompt.as_deref(),
+                                        &resolved_prompt,
+                                        logger,
+                                    )
+                                    .await;
+                            } else {
+                                slog!(
+                                    logger,
+                                    warn,
+                                    "Agent '{}' executable not found, falling back to built-in AI",
+                                    selected
+                                );
+                            }
+                        }
+                        None => {
+                            // User dismissed the selection — fall through to built-in AI
+                        }
+                    }
+                    break;
+                }
             }
         }
 
@@ -2540,16 +2739,6 @@ impl Engine {
                 return Ok(());
             }
         };
-
-        // Check if Codex CLI agent is requested via LLM_AGENT env var
-        if std::env::var("LLM_AGENT")
-            .map(|v| v.eq_ignore_ascii_case("codex"))
-            .unwrap_or(false)
-        {
-            return self
-                .execute_codex_cli_step(&api_key, &resolved_prompt, logger)
-                .await;
-        }
 
         let model = ai_config
             .model
@@ -2656,84 +2845,6 @@ impl Engine {
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
         slog!(logger, info, "AI agent step completed successfully");
-        Ok(())
-    }
-
-    /// Execute an AI step using OpenAI Codex CLI as the agent backend.
-    /// Invoked when the LLM_AGENT=codex environment variable is set.
-    async fn execute_codex_cli_step(
-        &self,
-        api_key: &str,
-        prompt: &str,
-        logger: &StructuredLogger,
-    ) -> Result<()> {
-        slog!(logger, info, "Using Codex CLI agent");
-
-        let mut cmd = tokio::process::Command::new("npx");
-        cmd.arg("-y")
-            .arg("@openai/codex@0.101.0")
-            .arg("exec")
-            .arg("-") // read prompt from stdin
-            .current_dir(&self.workflow_run_config.target_path)
-            .env("OPENAI_API_KEY", api_key)
-            .env_remove("RUST_LOG")
-            .env_remove("RUST_BACKTRACE")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        if let Ok(base_url) = std::env::var("LLM_BASE_URL") {
-            cmd.env("OPENAI_BASE_URL", &base_url);
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::StepExecution(format!("Failed to spawn Codex CLI: {e}")))?;
-
-        // Write prompt to stdin and close it
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                Error::StepExecution(format!("Failed to write prompt to stdin: {e}"))
-            })?;
-            // stdin is dropped here, closing the pipe
-        }
-
-        // Stream stdout line-by-line
-        let stdout = child.stdout.take();
-
-        let stdout_logger = logger.clone();
-        let stdout_handle = tokio::spawn(async move {
-            if let Some(stdout) = stdout {
-                let mut reader = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    slog!(stdout_logger, info, "{line}");
-                }
-            }
-        });
-
-        let (_, status) = tokio::try_join!(
-            async {
-                stdout_handle
-                    .await
-                    .map_err(|e| Error::StepExecution(e.to_string()))
-            },
-            async {
-                child
-                    .wait()
-                    .await
-                    .map_err(|e| Error::StepExecution(format!("Codex CLI process error: {e}")))
-            },
-        )?;
-
-        if !status.success() {
-            return Err(Error::StepExecution(format!(
-                "Codex CLI exited with status {}",
-                status,
-            )));
-        }
-
-        slog!(logger, info, "Codex CLI step completed successfully");
         Ok(())
     }
 
