@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::engine::create_engine;
+use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::resolve_workflow_source;
 use crate::TelemetrySenderMutex;
@@ -72,20 +73,6 @@ pub struct Command {
     /// Exit once the triggered tasks reach a terminal state.
     #[arg(long, hide = true)]
     exit_when_triggered_tasks_finish: bool,
-}
-
-fn normalize_target_path(path: PathBuf) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(absolute)
-    }
 }
 
 /// Resume a workflow

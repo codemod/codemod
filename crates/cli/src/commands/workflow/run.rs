@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{
     prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
 };
@@ -77,20 +78,6 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value = "text")]
     format: String,
-}
-
-fn normalize_target_path(path: PathBuf) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(absolute)
-    }
 }
 
 /// Run a workflow

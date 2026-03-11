@@ -24,38 +24,7 @@ use app::{App, Screen};
 use event::{AppEvent, EventHandler};
 
 use self::actions::Action;
-
-fn append_tui_debug_log(message: impl AsRef<str>) {
-    let path = std::env::var("CODEMOD_TUI_DEBUG_LOG")
-        .unwrap_or_else(|_| "/tmp/codemod-tui-debug.log".to_string());
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        use std::io::Write;
-        let _ = writeln!(
-            file,
-            "[{}] {}",
-            chrono::Utc::now().to_rfc3339(),
-            message.as_ref()
-        );
-    }
-}
-
-fn normalize_target_path(path: std::path::PathBuf) -> Result<std::path::PathBuf> {
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(absolute)
-    }
-}
+use crate::utils::path_safety::normalize_target_path;
 
 /// Run the TUI starting at the run list
 pub async fn run_tui(engine: Engine, limit: usize) -> Result<()> {
@@ -488,11 +457,7 @@ fn run_tasks_via_child_process(
         }
     }
 
-    append_tui_debug_log(format!("launching resume subprocess: {:?}", cmd));
-    eprintln!("[tui-debug] launching resume subprocess: {:?}", cmd);
     let status = cmd.status()?;
-    append_tui_debug_log(format!("resume subprocess exited with status: {status}"));
-    eprintln!("[tui-debug] resume subprocess exited with status: {status}");
     if !status.success() {
         anyhow::bail!("resume command exited with status {status}");
     }

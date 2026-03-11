@@ -3,7 +3,6 @@ use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
@@ -113,14 +112,6 @@ fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
-fn append_agent_debug_log(message: impl AsRef<str>) {
-    let path = std::env::var("CODEMOD_AGENT_DEBUG_LOG")
-        .unwrap_or_else(|_| "/tmp/codemod-agent-debug.log".to_string());
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "[{}] {}", Utc::now().to_rfc3339(), message.as_ref());
-    }
-}
-
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -196,13 +187,6 @@ impl Engine {
             canonical,
             executable.display()
         );
-        append_agent_debug_log(format!(
-            "launch_agent start canonical={} executable={} cwd={} prompt_len={}",
-            canonical,
-            executable.display(),
-            working_dir.display(),
-            full_prompt_len
-        ));
         slog!(
             logger,
             info,
@@ -213,7 +197,6 @@ impl Engine {
 
         if canonical == "claude-code" || canonical == "codex" {
             slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
-            append_agent_debug_log(format!("{} configured for stdin pipe", canonical));
             cmd.stdin(Stdio::piped())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
@@ -234,14 +217,8 @@ impl Engine {
             cmd.get_program().to_string_lossy(),
             launch_args
         );
-        append_agent_debug_log(format!(
-            "about to spawn program={} args={:?}",
-            cmd.get_program().to_string_lossy(),
-            launch_args
-        ));
 
         let mut child = cmd.spawn().map_err(|error| {
-            append_agent_debug_log(format!("spawn failed for {}: {}", canonical, error));
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
         if canonical == "claude-code" || canonical == "codex" {
@@ -266,6 +243,8 @@ impl Engine {
                 stdin.flush().map_err(|error| {
                     Error::StepExecution(format!("Failed to flush {} stdin: {error}", agent_name))
                 })?;
+                // Explicitly drop stdin to close the pipe and signal EOF to the child
+                drop(stdin);
                 Ok(())
             })
             .await
@@ -275,13 +254,8 @@ impl Engine {
                     canonical, error
                 ))
             })??;
-            append_agent_debug_log(format!("finished writing {} prompt to stdin", canonical));
         }
         let child_pid = child.id();
-        append_agent_debug_log(format!(
-            "spawn returned for canonical={} pid={:?}",
-            canonical, child_pid
-        ));
         slog!(
             logger,
             info,
@@ -317,19 +291,9 @@ impl Engine {
                         child_pid,
                         waited
                     );
-                    append_agent_debug_log(format!(
-                        "still waiting canonical={} pid={:?} waited={}s",
-                        canonical,
-                        child_pid,
-                        waited
-                    ));
                 }
             }
         };
-        append_agent_debug_log(format!(
-            "agent process exited canonical={} pid={:?} status={}",
-            canonical, child_pid, status
-        ));
 
         if status.success() {
             slog!(logger, info, "Agent '{}' completed successfully", canonical);
