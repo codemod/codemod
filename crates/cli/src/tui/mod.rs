@@ -3,13 +3,17 @@ pub mod app;
 pub mod event;
 pub mod screens;
 
-use std::io::{self, stdout, Write};
+use std::collections::HashSet;
+use std::io::{self, stdout};
+use std::process::Command as ProcessCommand;
 
 use anyhow::Result;
 use butterflow_core::engine::Engine;
+use butterflow_models::WorkflowRun;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crossterm::{
     event::{KeyCode, KeyModifiers},
-    style::{self, Stylize},
+    style::Stylize,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -20,6 +24,38 @@ use app::{App, Screen};
 use event::{AppEvent, EventHandler};
 
 use self::actions::Action;
+
+fn append_tui_debug_log(message: impl AsRef<str>) {
+    let path = std::env::var("CODEMOD_TUI_DEBUG_LOG")
+        .unwrap_or_else(|_| "/tmp/codemod-tui-debug.log".to_string());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "[{}] {}",
+            chrono::Utc::now().to_rfc3339(),
+            message.as_ref()
+        );
+    }
+}
+
+fn normalize_target_path(path: std::path::PathBuf) -> Result<std::path::PathBuf> {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    if absolute.exists() {
+        Ok(absolute.canonicalize()?)
+    } else {
+        Ok(absolute)
+    }
+}
 
 /// Run the TUI starting at the run list
 pub async fn run_tui(engine: Engine, limit: usize) -> Result<()> {
@@ -112,7 +148,7 @@ impl StdioGuard {
         }
     }
 
-    /// Temporarily restore real stdout/stderr (e.g. for inline log viewer).
+    /// Temporarily restore real stdout/stderr (e.g. for child process).
     fn pause_redirect(&self) {
         unsafe {
             libc_dup2(self.saved_stdout_fd, 1);
@@ -267,25 +303,74 @@ async fn run_event_loop(
                             app.refresh().await?;
                         }
                         Action::ViewLogs(wf_id, task_id) => {
-                            // Restore real stdout/stderr for the log viewer
+                            events.pause();
                             stdio_guard.pause_redirect();
-                            view_logs_inline(terminal, events, &app.engine, wf_id, task_id).await?;
-                            stdio_guard.resume_redirect();
+                            let result = view_logs_inline(&app.engine, wf_id, task_id).await;
+                            restore_tui(terminal, stdio_guard, events).await?;
+                            if let Err(e) = result {
+                                app.status_message = Some(format!("Failed to view logs: {e}"));
+                            }
+                            app.refresh().await?;
                         }
                         Action::TriggerTask(wf_id, task_id) => {
-                            if let Err(e) = app.engine.resume_workflow(wf_id, vec![task_id]).await {
+                            events.pause();
+                            stdio_guard.pause_redirect();
+                            let result = app
+                                .current_workflow_run
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
+                                .and_then(|workflow_run| {
+                                    run_tasks_via_child_process(
+                                        &app.engine,
+                                        workflow_run,
+                                        wf_id,
+                                        &[task_id],
+                                    )
+                                });
+                            restore_tui(terminal, stdio_guard, events).await?;
+                            if let Err(e) = result {
                                 app.status_message = Some(format!("Failed to trigger task: {e}"));
                             }
                             app.refresh().await?;
                         }
                         Action::TriggerAll(wf_id) => {
-                            if let Err(e) = app.engine.trigger_all(wf_id).await {
+                            events.pause();
+                            stdio_guard.pause_redirect();
+                            let result = app
+                                .current_workflow_run
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
+                                .and_then(|workflow_run| {
+                                    run_tasks_via_child_process(
+                                        &app.engine,
+                                        workflow_run,
+                                        wf_id,
+                                        &[],
+                                    )
+                                });
+                            restore_tui(terminal, stdio_guard, events).await?;
+                            if let Err(e) = result {
                                 app.status_message = Some(format!("Failed to trigger all: {e}"));
                             }
                             app.refresh().await?;
                         }
                         Action::RetryFailed(wf_id, task_id) => {
-                            if let Err(e) = app.engine.resume_workflow(wf_id, vec![task_id]).await {
+                            events.pause();
+                            stdio_guard.pause_redirect();
+                            let result = app
+                                .current_workflow_run
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
+                                .and_then(|workflow_run| {
+                                    run_tasks_via_child_process(
+                                        &app.engine,
+                                        workflow_run,
+                                        wf_id,
+                                        &[task_id],
+                                    )
+                                });
+                            restore_tui(terminal, stdio_guard, events).await?;
+                            if let Err(e) = result {
                                 app.status_message = Some(format!("Failed to retry task: {e}"));
                             }
                             app.refresh().await?;
@@ -326,226 +411,243 @@ async fn run_event_loop(
     Ok(())
 }
 
-/// Returns true if the key should exit the log viewer (q, Esc, or Ctrl+C)
-fn is_exit_key(key: &crossterm::event::KeyEvent) -> bool {
-    key.code == KeyCode::Char('q') || key.code == KeyCode::Esc || is_ctrl_c(key)
+/// Restore the TUI after a passthrough view: re-redirect stdio, re-enter
+/// alternate screen, enable raw mode, resume the event handler, and force
+/// a full terminal redraw so the user sees the task list immediately.
+async fn restore_tui(
+    terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
+    stdio_guard: &StdioGuard,
+    events: &mut EventHandler,
+) -> Result<()> {
+    // Ensure clean terminal state — child process may have left raw mode on.
+    let _ = disable_raw_mode();
+
+    // Re-redirect stdout/stderr to /dev/null BEFORE entering the alternate
+    // screen — otherwise EnterAlternateScreen would go to the real terminal
+    // and the ratatui backend (which writes to the tty_file fd) would be
+    // out of sync.
+    stdio_guard.resume_redirect();
+    enable_raw_mode()?;
+
+    // Write EnterAlternateScreen to the tty file via the ratatui backend
+    // (not stdout, which now goes to /dev/null).
+    use std::io::Write;
+    let tty = terminal.backend_mut();
+    crossterm::queue!(tty, EnterAlternateScreen)?;
+    tty.flush()?;
+
+    terminal.clear()?;
+    events.resume();
+    Ok(())
 }
 
-/// View task logs inline.
-///
-/// We stay in the alternate screen (so the user's original terminal buffer is
-/// preserved) but disable raw mode so the terminal handles line wrapping and
-/// scrolling naturally.  The alt-screen content is cleared before printing so
-/// consecutive log views don't stack.
-async fn view_logs_inline(
-    terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
-    events: &mut EventHandler,
+/// Resume workflow tasks via a child `codemod workflow resume` process so the
+/// resumed execution gets a clean interactive terminal.
+fn run_tasks_via_child_process(
     engine: &Engine,
+    workflow_run: &WorkflowRun,
     workflow_run_id: Uuid,
-    task_id: Uuid,
+    task_ids: &[Uuid],
 ) -> Result<()> {
-    // Stay in the alternate screen -- only disable raw mode so println! works
-    // with normal line discipline (wrapping, scrolling, etc.)
     disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
 
-    // Clear the alternate screen so previous log views don't linger.
-    print!("\x1b[2J\x1b[H");
-    io::stdout().flush()?;
+    let workflow_source = resolve_workflow_source(engine, workflow_run)?;
+    let target_path = normalize_target_path(
+        workflow_run
+            .target_path
+            .clone()
+            .unwrap_or_else(|| engine.get_target_path()),
+    )?;
+    let current_executable = std::env::current_exe()?;
 
-    // Get tasks and find the specific one
-    let tasks = engine.get_tasks(workflow_run_id).await?;
-    let task = tasks.iter().find(|t| t.id == task_id);
+    let mut cmd = ProcessCommand::new(current_executable);
+    cmd.arg("workflow")
+        .arg("resume")
+        .arg("--workflow")
+        .arg(&workflow_source)
+        .arg("--id")
+        .arg(workflow_run_id.to_string())
+        .arg("--target")
+        .arg(&target_path)
+        .arg("--allow-dirty")
+        .arg("--exit-when-triggered-tasks-finish")
+        .current_dir(&target_path);
 
-    if let Some(task) = task {
-        println!();
-        println!(
-            "  {} {} {}",
-            style::style("task").bold(),
-            style::style(&task.node_id).with(style::Color::Rgb {
-                r: 110,
-                g: 140,
-                b: 255
-            }),
-            style::style(format!("({})", &task.id.to_string()[..8])).with(style::Color::Rgb {
-                r: 100,
-                g: 100,
-                b: 110
-            }),
-        );
+    if engine.is_dry_run() {
+        cmd.arg("--dry-run");
+    }
 
-        let status_color = match task.status {
-            butterflow_models::TaskStatus::Completed => style::Color::Rgb {
-                r: 80,
-                g: 200,
-                b: 120,
-            },
-            butterflow_models::TaskStatus::Failed => style::Color::Rgb {
-                r: 240,
-                g: 80,
-                b: 80,
-            },
-            butterflow_models::TaskStatus::Running => style::Color::Rgb {
-                r: 240,
-                g: 200,
-                b: 60,
-            },
-            butterflow_models::TaskStatus::AwaitingTrigger => style::Color::Rgb {
-                r: 80,
-                g: 210,
-                b: 220,
-            },
-            _ => style::Color::Rgb {
-                r: 100,
-                g: 100,
-                b: 110,
-            },
-        };
+    append_capability_flags(&mut cmd, workflow_run.capabilities.as_ref());
 
-        println!(
-            "  {} {}\n",
-            style::style("\u{25cf}").with(status_color),
-            style::style(format!("{:?}", task.status)).with(status_color),
-        );
-
-        if task.logs.is_empty() {
-            println!(
-                "  {}",
-                style::style("(no logs yet)").with(style::Color::Rgb {
-                    r: 100,
-                    g: 100,
-                    b: 110
-                })
-            );
-        } else {
-            for line in &task.logs {
-                println!("  {line}");
-            }
-        }
-
-        if let Some(error) = &task.error {
-            println!();
-            println!(
-                "  {} {}",
-                style::style("error:")
-                    .with(style::Color::Rgb {
-                        r: 240,
-                        g: 80,
-                        b: 80
-                    })
-                    .bold(),
-                error,
-            );
-        }
-
-        println!();
+    if task_ids.is_empty() {
+        cmd.arg("--trigger-all");
     } else {
-        println!(
-            "\n  {}",
-            style::style(format!("Task {task_id} not found.")).with(style::Color::Rgb {
-                r: 240,
-                g: 80,
-                b: 80
-            })
-        );
-    }
-
-    // If task is still running, poll for new logs
-    if task
-        .map(|t| t.status == butterflow_models::TaskStatus::Running)
-        .unwrap_or(false)
-    {
-        println!(
-            "  {}",
-            style::style("Streaming logs\u{2026} press q/Esc to return").with(style::Color::Rgb {
-                r: 130,
-                g: 130,
-                b: 145
-            })
-        );
-        let mut last_log_count = task.map(|t| t.logs.len()).unwrap_or(0);
-
-        enable_raw_mode()?;
-
-        loop {
-            let evt = events.next().await?;
-            match evt {
-                AppEvent::Key(key) => {
-                    if is_exit_key(&key) {
-                        break;
-                    }
-                }
-                AppEvent::Tick => {
-                    if let Ok(tasks) = engine.get_tasks(workflow_run_id).await {
-                        if let Some(t) = tasks.iter().find(|t| t.id == task_id) {
-                            if t.logs.len() > last_log_count {
-                                disable_raw_mode()?;
-                                for line in &t.logs[last_log_count..] {
-                                    println!("  {line}");
-                                }
-                                io::stdout().flush()?;
-                                enable_raw_mode()?;
-                                last_log_count = t.logs.len();
-                            }
-                            if t.status != butterflow_models::TaskStatus::Running {
-                                disable_raw_mode()?;
-                                let done_color = match t.status {
-                                    butterflow_models::TaskStatus::Completed => style::Color::Rgb {
-                                        r: 80,
-                                        g: 200,
-                                        b: 120,
-                                    },
-                                    butterflow_models::TaskStatus::Failed => style::Color::Rgb {
-                                        r: 240,
-                                        g: 80,
-                                        b: 80,
-                                    },
-                                    _ => style::Color::Rgb {
-                                        r: 130,
-                                        g: 130,
-                                        b: 145,
-                                    },
-                                };
-                                println!(
-                                    "\n  {} {}",
-                                    style::style("\u{25cf}").with(done_color),
-                                    style::style(format!("Task finished: {:?}", t.status))
-                                        .with(done_color),
-                                );
-                                enable_raw_mode()?;
-                                break;
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+        for task_id in task_ids {
+            cmd.arg("--tasks_ids").arg(task_id.to_string());
         }
-        disable_raw_mode()?;
     }
 
-    println!(
-        "  {}",
-        style::style("Press any key to return\u{2026}").with(style::Color::Rgb {
-            r: 130,
-            g: 130,
-            b: 145
-        })
-    );
-    io::stdout().flush()?;
+    append_tui_debug_log(format!("launching resume subprocess: {:?}", cmd));
+    eprintln!("[tui-debug] launching resume subprocess: {:?}", cmd);
+    let status = cmd.status()?;
+    append_tui_debug_log(format!("resume subprocess exited with status: {status}"));
+    eprintln!("[tui-debug] resume subprocess exited with status: {status}");
+    if !status.success() {
+        anyhow::bail!("resume command exited with status {status}");
+    }
+    wait_for_any_key("\nTask is done.\n\nPress any key to return to the tasks list...")?;
+    Ok(())
+}
 
-    // Wait for keypress
+fn wait_for_any_key(message: &str) -> Result<()> {
+    use std::io::Write;
+
+    println!("{message}");
+    std::io::stdout().flush()?;
+
     enable_raw_mode()?;
     loop {
-        let evt = events.next().await?;
-        if matches!(evt, AppEvent::Key(_)) {
+        if matches!(crossterm::event::read()?, crossterm::event::Event::Key(_)) {
             break;
         }
     }
-
-    // Re-enable raw mode and let ratatui redraw on the next frame.
-    // We're still in the alt screen -- terminal.clear() just tells ratatui
-    // to do a full repaint.
-    terminal.clear()?;
+    disable_raw_mode()?;
 
     Ok(())
+}
+
+/// View task logs inline (standalone, used by the ViewLogs action).
+///
+/// Leaves the alternate screen, prints stored logs, returns.
+async fn view_logs_inline(engine: &Engine, workflow_run_id: Uuid, task_id: Uuid) -> Result<()> {
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+
+    if let Ok(tasks) = engine.get_tasks(workflow_run_id).await {
+        if let Some(task) = tasks.iter().find(|t| t.id == task_id) {
+            println!(
+                "\n  {} {}",
+                crossterm::style::style("task").bold(),
+                crossterm::style::style(&task.node_id).with(crossterm::style::Color::Rgb {
+                    r: 110,
+                    g: 140,
+                    b: 255,
+                }),
+            );
+            println!(
+                "  {} {:?}\n",
+                crossterm::style::style("\u{25cf}").with(match task.status {
+                    butterflow_models::TaskStatus::Completed => crossterm::style::Color::Rgb {
+                        r: 80,
+                        g: 200,
+                        b: 120,
+                    },
+                    butterflow_models::TaskStatus::Failed => crossterm::style::Color::Rgb {
+                        r: 240,
+                        g: 80,
+                        b: 80,
+                    },
+                    _ => crossterm::style::Color::Rgb {
+                        r: 240,
+                        g: 200,
+                        b: 60,
+                    },
+                }),
+                task.status,
+            );
+
+            if task.logs.is_empty() {
+                println!(
+                    "  {}",
+                    crossterm::style::style("(no logs)").with(crossterm::style::Color::Rgb {
+                        r: 100,
+                        g: 100,
+                        b: 110,
+                    })
+                );
+            } else {
+                for line in &task.logs {
+                    println!("  {line}");
+                }
+            }
+
+            if let Some(error) = &task.error {
+                println!(
+                    "\n  {} {}",
+                    crossterm::style::style("error:")
+                        .with(crossterm::style::Color::Rgb {
+                            r: 240,
+                            g: 80,
+                            b: 80,
+                        })
+                        .bold(),
+                    error,
+                );
+            }
+        } else {
+            println!("\n  Task {task_id} not found.");
+        }
+    }
+
+    // Wait for any key before returning to TUI
+    println!(
+        "\n  {}",
+        crossterm::style::style("Press Enter to return\u{2026}").with(
+            crossterm::style::Color::Rgb {
+                r: 130,
+                g: 130,
+                b: 145,
+            }
+        )
+    );
+    tokio::task::spawn_blocking(|| {
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+    })
+    .await?;
+
+    Ok(())
+}
+
+fn resolve_workflow_source(
+    engine: &Engine,
+    workflow_run: &WorkflowRun,
+) -> Result<std::path::PathBuf> {
+    if let Some(bundle_path) = workflow_run
+        .bundle_path
+        .as_ref()
+        .filter(|path| path.exists())
+    {
+        return Ok(bundle_path.clone());
+    }
+
+    let workflow_file_path = engine.get_workflow_file_path();
+    if workflow_file_path.exists() {
+        return Ok(workflow_file_path);
+    }
+
+    anyhow::bail!(
+        "Unable to determine workflow source for run {}",
+        workflow_run.id
+    );
+}
+
+fn append_capability_flags(
+    cmd: &mut ProcessCommand,
+    capabilities: Option<&HashSet<LlrtSupportedModules>>,
+) {
+    let Some(capabilities) = capabilities else {
+        return;
+    };
+
+    if capabilities.contains(&LlrtSupportedModules::Fs) {
+        cmd.arg("--allow-fs");
+    }
+    if capabilities.contains(&LlrtSupportedModules::Fetch) {
+        cmd.arg("--allow-fetch");
+    }
+    if capabilities.contains(&LlrtSupportedModules::ChildProcess) {
+        cmd.arg("--allow-child-process");
+    }
 }
