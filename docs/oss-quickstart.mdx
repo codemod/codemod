@@ -276,7 +276,7 @@ Run tests against your input/expected fixtures:
 npx codemod jssg test ./scripts/codemod.ts --language tsx
 ```
 
-Tests use input/expected file pairs in the `tests/` directory. If MCP generated test fixtures, they will run automatically.
+Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expected.*` file pairs or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. If MCP generated test fixtures, they will run automatically.
 
 For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
 

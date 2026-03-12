@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// Represents a single transformation test case with input and expected output
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,17 @@ pub struct FileSystemTestCase {
     pub expected_files: HashMap<PathBuf, TestFile>,
     pub path: PathBuf,
     pub should_error: bool,
+    pub layout: FileSystemTestCaseLayout,
+    pub entrypoint_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSystemTestCaseLayout {
+    SingleFile,
+    DirectorySnapshot {
+        input_dir: PathBuf,
+        expected_dir: PathBuf,
+    },
 }
 
 /// A test file with its content and metadata
@@ -46,6 +58,7 @@ pub struct UnifiedTestCase {
     pub expected_output_code: String,
     pub should_error: bool,
     pub input_path: Option<PathBuf>,
+    pub logical_input_path: Option<PathBuf>,
     pub expected_output_path: Option<PathBuf>,
 }
 
@@ -101,6 +114,13 @@ impl TestSource {
                 let mut unified_cases = Vec::new();
 
                 for fs_case in fs_test_cases {
+                    if matches!(
+                        fs_case.layout,
+                        FileSystemTestCaseLayout::DirectorySnapshot { .. }
+                    ) {
+                        continue;
+                    }
+
                     let input_files_len = fs_case.input_files.len();
                     // For filesystem test cases, we need to handle multiple input/expected file pairs
                     // Handle cases where expected files might be missing (for --update-snapshots)
@@ -138,6 +158,7 @@ impl TestSource {
                             expected_output_code: expected_content,
                             should_error: fs_case.should_error,
                             input_path: Some(input_file.path.clone()),
+                            logical_input_path: Some(input_file.path.clone()),
                             expected_output_path: expected_path,
                         });
                     }
@@ -154,6 +175,7 @@ impl TestSource {
                         expected_output_code: case.expected_output_code.clone(),
                         should_error: false, // Direct cases don't have error expectations by default
                         input_path: None,    // Direct cases don't have a file path
+                        logical_input_path: None,
                         expected_output_path: None, // Direct cases don't have an expected output file
                     })
                     .collect())
@@ -245,6 +267,8 @@ impl FileSystemTestCase {
                 expected_files: expected_files_map,
                 path: test_dir.to_path_buf(),
                 should_error,
+                layout: FileSystemTestCaseLayout::SingleFile,
+                entrypoint_files: vec![PathBuf::from("input")],
             });
         }
 
@@ -253,8 +277,14 @@ impl FileSystemTestCase {
         let expected_dir = test_dir.join("expected");
 
         if input_dir.exists() && expected_dir.exists() {
-            let input_files = collect_files_in_directory(&input_dir, extensions)?;
-            let expected_files = collect_files_in_directory(&expected_dir, extensions)?;
+            let input_files = collect_files_in_directory(&input_dir, None)?;
+            let expected_files = collect_files_in_directory(&expected_dir, None)?;
+            let mut entrypoint_files: Vec<PathBuf> = input_files
+                .keys()
+                .filter(|path| has_matching_extension(path, extensions))
+                .cloned()
+                .collect();
+            entrypoint_files.sort();
 
             return Ok(FileSystemTestCase {
                 name,
@@ -262,6 +292,11 @@ impl FileSystemTestCase {
                 expected_files,
                 path: test_dir.to_path_buf(),
                 should_error,
+                layout: FileSystemTestCaseLayout::DirectorySnapshot {
+                    input_dir,
+                    expected_dir,
+                },
+                entrypoint_files,
             });
         }
 
@@ -270,6 +305,13 @@ impl FileSystemTestCase {
 
     /// Check if expected files exist, or return an error that can be handled by --update-snapshots
     pub fn validate_expected_files(&self) -> Result<(), TestError> {
+        if matches!(
+            self.layout,
+            FileSystemTestCaseLayout::DirectorySnapshot { .. }
+        ) {
+            return Ok(());
+        }
+
         if self.expected_files.is_empty() {
             // Return the first input file as context for the error
             if let Some((_, input_file)) = self.input_files.iter().next() {
@@ -315,11 +357,15 @@ impl UnifiedTestCase {
 
 impl TestFile {
     pub fn from_path(path: &Path) -> Result<TestFile, TestError> {
+        Self::from_path_with_base(path, path.parent().unwrap_or_else(|| Path::new("")))
+    }
+
+    pub fn from_path_with_base(path: &Path, base_dir: &Path) -> Result<TestFile, TestError> {
         let content = std::fs::read_to_string(path)?;
         let relative_path = path
-            .file_name()
-            .ok_or_else(|| TestError::InvalidFilePath(path.to_path_buf()))?
-            .into();
+            .strip_prefix(base_dir)
+            .map_err(|_| TestError::InvalidFilePath(path.to_path_buf()))?
+            .to_path_buf();
 
         Ok(TestFile {
             path: path.to_path_buf(),
@@ -398,28 +444,40 @@ fn find_expected_files(
 /// Collect files in a directory that match the extensions
 fn collect_files_in_directory(
     dir: &Path,
-    extensions: &[&str],
+    extensions: Option<&[&str]>,
 ) -> Result<HashMap<PathBuf, TestFile>, TestError> {
     let mut files = HashMap::new();
 
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    for entry in WalkDir::new(dir) {
+        let entry = entry.map_err(|e| TestError::Io(std::io::Error::other(e.to_string())))?;
         let path = entry.path();
 
-        if path.is_file() {
-            // Check if the file has a matching extension
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                let ext_with_dot = format!(".{ext}");
-                if extensions.contains(&ext_with_dot.as_str()) {
-                    if let Ok(file) = TestFile::from_path(&path) {
-                        files.insert(file.relative_path.clone(), file);
-                    }
-                }
+        if !path.is_file() {
+            continue;
+        }
+
+        if let Some(extensions) = extensions {
+            if !has_matching_extension(path, extensions) {
+                continue;
             }
+        }
+
+        if let Ok(file) = TestFile::from_path_with_base(path, dir) {
+            files.insert(file.relative_path.clone(), file);
         }
     }
 
     Ok(files)
+}
+
+fn has_matching_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| {
+            let ext_with_dot = format!(".{ext}");
+            extensions.contains(&ext_with_dot.as_str())
+        })
+        .unwrap_or(false)
 }
 
 fn build_expected_path(

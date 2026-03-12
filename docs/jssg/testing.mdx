@@ -2,11 +2,15 @@
 title: "Testing"
 ---
 
-Test your JSSG codemod using snapshot testing with input/expected file pairs.
+Test your JSSG codemod using snapshot testing with single-file fixtures or full directory snapshots.
 
 ## Test structure
 
-JSSG tests use a simple directory structure where each test case contains two files:
+JSSG tests support two fixture layouts:
+
+### Single-file fixtures
+
+Each test case contains one `input.*` file and one `expected.*` file:
 
 ```plaintext
 tests/
@@ -22,6 +26,29 @@ tests/
 - Input files must be named `input.ts` (or appropriate extension)
 - Expected files must be named `expected.ts` (or appropriate extension)
 - File extensions should match your target language (`.ts`, `.tsx`, `.js`, `.jsx`)
+
+### Directory snapshot fixtures
+
+Use `input/` and `expected/` directories when your codemod creates or deletes files, or when multiple files need to be transformed together:
+
+```plaintext
+tests/
+  multi-file-case/
+    input/
+      query_type.ts
+      legacy_custom_email.ts
+    expected/
+      query_type.ts
+      custom_email_resolver.ts
+```
+
+Directory fixtures are compared as snapshots of the whole tree:
+
+- Files present in both `input/` and `expected/` must match after the codemod runs
+- Files present only in `expected/` are treated as created-file assertions
+- Files present only in `input/` are treated as deleted-file assertions
+- Files produced by the codemod but absent from `expected/` fail as unexpected extra files
+- Test reporting still stays per file, using names like `<fixture>_<relative-path>`
 
 <Warning>
 The test directory must be the **parent** folder that contains your test case subdirectories (e.g., `./tests`). Passing a specific test case directory like `./tests/basic-transform` will result in a "No test cases found" error. To run a specific test case, use the `--filter` flag instead.
@@ -45,7 +72,7 @@ npx codemod jssg test -l <language> <codemod-file> [test-directory]
 # Update expected outputs when changes are intentional
 npx codemod jssg test -l tsx ./scripts/codemod.ts -u
 
-# Run only tests matching a pattern (matches against test case directory names)
+# Run only tests matching a pattern (matches reported test names)
 npx codemod jssg test -l tsx ./scripts/codemod.ts --filter "edge-cases"
 
 # Show detailed output for debugging
@@ -112,6 +139,15 @@ function Component() {
 **Pro tip:** Use `-v` flag for detailed output when debugging test failures.
 </Check>
 
+### Snapshot updates
+
+`--update-snapshots` behaves differently depending on fixture layout:
+
+- Single-file fixtures update the matching `expected.*` file
+- Directory fixtures update changed files, create missing expected files, and remove stale expected files that should no longer exist
+
+`metrics.json` snapshots continue to be handled separately from directory tree comparisons.
+
 ## Troubleshooting
 
 <AccordionGroup>
@@ -168,6 +204,7 @@ function Component() {
     # Update snapshots
     npx codemod jssg test -l tsx ./scripts/codemod.ts -u
     ```
+    For directory fixtures, this can also create new files in `expected/` or remove stale ones.
   </Accordion>
   
   <Accordion title="Codemod syntax errors">
@@ -274,5 +311,3 @@ AST comparison preserves order when it matters semantically. For example, spread
 - **Keep tests focused**: One transformation per test case
 - **Validate locally**: Always test before publishing
 - **Use `--strictness loose`**: When testing transforms that may produce semantically equivalent outputs with different formatting or ordering
-
-
