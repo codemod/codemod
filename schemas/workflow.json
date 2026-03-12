@@ -53,6 +53,35 @@
     "nodes"
   ],
   "$defs": {
+    "CommitConfig": {
+      "description": "Configuration for a commit checkpoint on a step.\nWhen present (and cloud mode is active), a git commit is created after the step runs.",
+      "type": "object",
+      "properties": {
+        "add": {
+          "description": "Paths to stage before committing (default: `[\".\"]` — stage everything)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_empty": {
+          "description": "If true, skip silently when there are no changes to commit (default: true)",
+          "type": "boolean",
+          "default": true
+        },
+        "message": {
+          "description": "Commit message (supports `${{ }}` template expressions)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
     "InstallSkillHarness": {
       "type": "string",
       "enum": [
@@ -76,6 +105,14 @@
       "description": "Represents a node in a workflow",
       "type": "object",
       "properties": {
+        "branch_name": {
+          "description": "Git branch name for cloud runs (supports `${{ }}` expressions).\nDefault: `codemod-{task.signature}`",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "depends_on": {
           "description": "IDs of nodes that must complete before this node can run",
           "type": "array",
@@ -107,6 +144,18 @@
         "name": {
           "description": "Human-readable name",
           "type": "string"
+        },
+        "pull_request": {
+          "description": "Pull request configuration. When present (and in cloud mode), a PR is\nautomatically created at the end of the node execution.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PullRequestConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "runtime": {
           "description": "Container runtime configuration",
@@ -176,6 +225,43 @@
           "type": "string",
           "const": "manual"
         }
+      ]
+    },
+    "PullRequestConfig": {
+      "description": "Configuration for automatic pull request creation at the end of a node.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "Base branch to merge into (auto-detected if omitted)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "body": {
+          "description": "PR body/description (supports `${{ }}` template expressions)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "draft": {
+          "description": "Create the pull request as a draft",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "title": {
+          "description": "PR title (supports `${{ }}` template expressions)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
       ]
     },
     "Runtime": {
@@ -497,6 +583,18 @@
       "description": "Represents a step in a node",
       "type": "object",
       "properties": {
+        "commit": {
+          "description": "Optional commit checkpoint — if present (and in cloud mode), a git commit\nis created after this step completes. The message supports `${{ }}` expressions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommitConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "env": {
           "description": "Environment variables specific to this step",
           "type": [

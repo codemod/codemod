@@ -32,6 +32,8 @@ pub struct StepContext {
     pub node_id: String,
     pub node_name: String,
     pub task_id: String,
+    /// Optional step identifier (e.g. user-defined id or synthetic like `_codemod_auto_push`)
+    pub step_id: Option<String>,
 }
 
 /// A JSONL log record emitted to stdout
@@ -45,6 +47,8 @@ struct JsonlRecord {
     msg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,6 +162,7 @@ impl StructuredLogger {
             event: "log".to_string(),
             msg: Some(msg.to_string()),
             step_name: self.context.as_ref().map(|c| c.step_name.clone()),
+            step_id: self.context.as_ref().and_then(|c| c.step_id.clone()),
             step_index: self.context.as_ref().map(|c| c.step_index),
             node_id: self.context.as_ref().map(|c| c.node_id.clone()),
             node_name: self.context.as_ref().map(|c| c.node_name.clone()),
@@ -186,6 +191,7 @@ impl StructuredLogger {
             event: "step_start".to_string(),
             msg: None,
             step_name: Some(ctx.step_name.clone()),
+            step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
             node_id: Some(ctx.node_id.clone()),
             node_name: Some(ctx.node_name.clone()),
@@ -214,6 +220,7 @@ impl StructuredLogger {
             event: "step_end".to_string(),
             msg: None,
             step_name: Some(ctx.step_name.clone()),
+            step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
             node_id: Some(ctx.node_id.clone()),
             node_name: Some(ctx.node_name.clone()),
@@ -381,6 +388,7 @@ mod tests {
             node_id: "n1".to_string(),
             node_name: "Node 1".to_string(),
             task_id: "t1".to_string(),
+            step_id: None,
         };
         let child = logger.with_context(ctx);
         // Both share the same seq counter
