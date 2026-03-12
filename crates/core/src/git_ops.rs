@@ -54,17 +54,18 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
 /// Checkout a new branch. Equivalent to `git checkout -b <branch>`.
 pub async fn checkout_branch(branch: &str, working_dir: &std::path::Path) -> Result<()> {
     info!("Checking out branch: {}", branch);
+    // Use -B to force-create (or reset) the branch, making retries idempotent.
     let output = Command::new("git")
-        .args(["checkout", "-b", branch])
+        .args(["checkout", "-B", branch])
         .current_dir(working_dir)
         .output()
         .await
-        .map_err(|e| butterflow_models::Error::Runtime(format!("git checkout -b failed: {e}")))?;
+        .map_err(|e| butterflow_models::Error::Runtime(format!("git checkout -B failed: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(butterflow_models::Error::Runtime(format!(
-            "git checkout -b {} failed: {}",
+            "git checkout -B {} failed: {}",
             branch, stderr
         )));
     }
@@ -179,7 +180,17 @@ pub async fn commit(
 }
 
 /// Detect the remote default branch (e.g. "main" or "master").
+///
+/// If the `CODEMOD_BASE_BRANCH` environment variable is set and non-empty,
+/// its value is used directly without any git detection.
 async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
+    // Honour explicit override from the environment
+    if let Ok(branch) = std::env::var("CODEMOD_BASE_BRANCH") {
+        if !branch.is_empty() {
+            return branch;
+        }
+    }
+
     // Try symbolic-ref first
     if let Ok(output) = Command::new("git")
         .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
@@ -198,17 +209,21 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
         }
     }
 
-    // Fallback: current branch
-    if let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(working_dir)
-        .output()
-        .await
-    {
-        if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch.is_empty() {
-                return branch;
+    // Fallback: try common default branch names on the remote.
+    for candidate in &["main", "master"] {
+        if let Ok(output) = Command::new("git")
+            .args([
+                "ls-remote",
+                "--exit-code",
+                "origin",
+                &format!("refs/heads/{candidate}"),
+            ])
+            .current_dir(working_dir)
+            .output()
+            .await
+        {
+            if output.status.success() {
+                return candidate.to_string();
             }
         }
     }
@@ -307,6 +322,7 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
 
 /// Create a pull request via the Codemod API.
 /// `task_id` is the workflow task UUID (available as `task.id` in the engine).
+/// Returns the PR URL on success, if the API response includes one.
 pub async fn create_pull_request(
     title: &str,
     body: Option<&str>,
@@ -315,7 +331,7 @@ pub async fn create_pull_request(
     base: Option<&str>,
     task_id: &str,
     working_dir: &std::path::Path,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let api_endpoint = std::env::var("BUTTERFLOW_API_ENDPOINT").map_err(|_| {
         butterflow_models::Error::Runtime(
             "BUTTERFLOW_API_ENDPOINT environment variable is required".to_string(),
@@ -375,6 +391,17 @@ pub async fn create_pull_request(
         )));
     }
 
-    info!("Pull request created successfully!");
-    Ok(())
+    // Extract the PR URL from the response if available
+    let pr_url = response
+        .json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|body| body.get("url").and_then(|v| v.as_str()).map(String::from));
+
+    match &pr_url {
+        Some(url) => info!("Pull request created: {}", url),
+        None => info!("Pull request created successfully!"),
+    }
+
+    Ok(pr_url)
 }

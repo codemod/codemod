@@ -1836,7 +1836,7 @@ impl Engine {
 
                 // Push and create PR if any commits were made
                 if had_commit_checkpoint {
-                    let push_and_pr_result: Result<()> = async {
+                    let push_and_pr_result: Result<Option<String>> = async {
                         crate::git_ops::push_branch(branch, target_path).await?;
 
                         // Resolve PR config or use defaults from node name
@@ -1886,6 +1886,16 @@ impl Engine {
                         .await
                     }
                     .await;
+
+                    match &push_and_pr_result {
+                        Ok(Some(pr_url)) => {
+                            slog!(git_step_logger, info, "Pull request created: {}", pr_url);
+                        }
+                        Ok(None) => {
+                            slog!(git_step_logger, info, "Pull request created successfully");
+                        }
+                        _ => {}
+                    }
 
                     if let Err(e) = push_and_pr_result {
                         git_step_logger
