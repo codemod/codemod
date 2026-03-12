@@ -88,8 +88,11 @@ fn create_long_running_workflow() -> Workflow {
                 action: StepAction::RunScript("sleep 2 && echo 'Done'".to_string()),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -123,8 +126,11 @@ fn create_test_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -148,8 +154,11 @@ fn create_test_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -185,8 +194,11 @@ fn create_manual_trigger_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -212,8 +224,11 @@ fn create_manual_trigger_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -249,8 +264,11 @@ fn create_manual_node_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -274,8 +292,11 @@ fn create_manual_node_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -311,8 +332,11 @@ fn create_matrix_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -353,8 +377,11 @@ fn create_matrix_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Processing region ${region}'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -398,6 +425,7 @@ fn create_template_workflow() -> Workflow {
             ),
             env: None,
             condition: None,
+            commit: None,
         }],
         outputs: vec![],
         env: HashMap::new(),
@@ -444,8 +472,11 @@ fn create_template_workflow() -> Workflow {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -485,8 +516,11 @@ fn create_matrix_from_state_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Setting up state'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -514,8 +548,11 @@ fn create_matrix_from_state_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'Processing file ${file}'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -899,11 +936,14 @@ fn create_env_var_workflow() -> Workflow {
                     "step-value".to_string(),
                 )])),
                 condition: None,
+                commit: None,
             }],
             env: HashMap::from([
                 ("TEST_ENV_VAR".to_string(), "test-value".to_string()),
                 ("NODE_SPECIFIC_VAR".to_string(), "node-value".to_string()),
             ]),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -940,11 +980,14 @@ fn create_variable_resolution_workflow() -> Workflow {
                 ),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::from([
                 ("REPO_URL".to_string(), "${params.repo_url}".to_string()),
                 ("DEBUG".to_string(), "${env.CI}".to_string()),
             ]),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -985,8 +1028,11 @@ echo "workflow_run_id_valid=$(if [ "$CODEMOD_WORKFLOW_RUN_ID" != "" ] && [ ${#CO
                 ),
                 env: None,
                 condition: None,
+                    commit: None,
             }],
             env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
         }],
     }
 }
@@ -1034,6 +1080,7 @@ fn create_ai_no_key_fallback_workflow() -> Workflow {
                     }),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
                 Step {
                     id: Some("after-ai-step".to_string()),
@@ -1041,9 +1088,12 @@ fn create_ai_no_key_fallback_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'AFTER_AI_STEP_EXECUTED'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
             ],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -1628,8 +1678,11 @@ async fn test_codemod_environment_variables_in_matrix() {
                     action: StepAction::RunScript("echo 'Setup complete'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "matrix-env-test-node".to_string(),
@@ -1672,8 +1725,11 @@ echo "env_vars_in_matrix=true""#
                     ),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -1769,8 +1825,11 @@ async fn test_cyclic_dependency_workflow() {
                     action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -1794,8 +1853,11 @@ async fn test_cyclic_dependency_workflow() {
                     action: StepAction::RunScript("echo 'Node 2 executed'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -1845,8 +1907,11 @@ async fn test_invalid_template_reference() {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -1933,6 +1998,7 @@ message: "Found var declaration"
         action: StepAction::AstGrep(ast_grep_step),
         env: None,
         condition: None,
+        commit: None,
     };
 
     // Create a simple node for testing
@@ -1947,6 +2013,8 @@ message: "Found var declaration"
         strategy: None,
         trigger: None,
         env: HashMap::new(),
+        branch_name: None,
+        pull_request: None,
     };
 
     // Create a dummy task
@@ -2667,8 +2735,11 @@ fn create_js_ast_grep_workflow() -> Workflow {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -2791,8 +2862,11 @@ cat $STATE_OUTPUTS"#.to_string(),
                     ),
                     env: None,
                 condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "run-codemod-ts".to_string(),
@@ -2822,8 +2896,11 @@ cat $STATE_OUTPUTS"#.to_string(),
                     ),
                     env: None,
                 condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "run-codemod-html".to_string(),
@@ -2853,8 +2930,11 @@ cat $STATE_OUTPUTS"#.to_string(),
                     ),
                     env: None,
                 condition: None,
+                    commit: None,
                 }],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     }
@@ -3870,6 +3950,7 @@ fn create_conditional_workflow() -> Workflow {
                     action: StepAction::RunScript("echo 'This step always runs'".to_string()),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
                 Step {
                     id: Some("conditional-step".to_string()),
@@ -3879,9 +3960,12 @@ fn create_conditional_workflow() -> Workflow {
                     ),
                     env: None,
                     condition: Some("params.my_cond".to_string()),
+                    commit: None,
                 },
             ],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     }
 }
@@ -3919,10 +4003,13 @@ fn create_nonexistent_variable_workflow() -> Workflow {
                         ("MISSING_PARAM".to_string(), "${params.does_not_exist}".to_string()),
                     ])),
                     condition: None,
+                    commit: None,
                 }],
                 env: HashMap::from([
                     ("NODE_VAR".to_string(), "${state.missing_state}".to_string()),
                 ]),
+            branch_name: None,
+            pull_request: None,
             },
         ],
     }

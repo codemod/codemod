@@ -222,6 +222,8 @@ fn test_validate_workflow_valid() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -234,6 +236,8 @@ fn test_validate_workflow_valid() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -265,6 +269,8 @@ fn test_validate_workflow_duplicate_node_id() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node1".to_string(), // Duplicate ID
@@ -277,6 +283,8 @@ fn test_validate_workflow_duplicate_node_id() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -313,6 +321,8 @@ fn test_validate_workflow_nonexistent_dependency() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -349,6 +359,8 @@ fn test_validate_workflow_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -361,6 +373,8 @@ fn test_validate_workflow_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -526,8 +540,11 @@ fn test_validate_workflow_nonexistent_template_reference() {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -567,6 +584,8 @@ fn test_validate_workflow_invalid_matrix_strategy() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -604,6 +623,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node_b".to_string(),
@@ -616,6 +637,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node_c".to_string(),
@@ -628,6 +651,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -759,6 +784,8 @@ fn test_validate_workflow_self_dependency() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -813,6 +840,8 @@ fn test_validate_workflow_valid_matrix_strategy_with_values() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -846,6 +875,8 @@ fn test_validate_workflow_valid_matrix_strategy_with_from_state() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -913,8 +944,11 @@ fn test_validate_workflow_with_step_env_vars() {
                 action: StepAction::RunScript("echo $STEP_VAR".to_string()),
                 env: Some(step_env),
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -978,6 +1012,7 @@ fix:
                     }),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
                 Step {
                     id: Some("step-2".to_string()),
@@ -997,9 +1032,12 @@ fix:
                     }),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
             ],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -1040,8 +1078,11 @@ fn test_validate_workflow_with_invalid_config_path() {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 

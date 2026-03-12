@@ -27,6 +27,12 @@ pub struct Step {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub condition: Option<String>,
+
+    /// Optional commit checkpoint — if present (and in cloud mode), a git commit
+    /// is created after this step completes. The message supports `${{ }}` expressions.
+    #[serde(default)]
+    #[ts(optional, as = "Option<CommitConfig>")]
+    pub commit: Option<CommitConfig>,
 }
 
 /// Represents the action a step can take - either using templates or running a script
@@ -321,4 +327,49 @@ pub enum InstallSkillHarness {
 pub enum InstallSkillScope {
     Project,
     User,
+}
+
+/// Configuration for a commit checkpoint on a step.
+/// When present (and cloud mode is active), a git commit is created after the step runs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct CommitConfig {
+    /// Commit message (supports `${{ }}` template expressions)
+    pub message: String,
+
+    /// Paths to stage before committing (default: `["."]` — stage everything)
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub add: Option<Vec<String>>,
+
+    /// If true, skip silently when there are no changes to commit (default: true)
+    #[serde(default = "default_allow_empty")]
+    pub allow_empty: bool,
+}
+
+fn default_allow_empty() -> bool {
+    true
+}
+
+/// Configuration for automatic pull request creation at the end of a node.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct PullRequestConfig {
+    /// PR title (supports `${{ }}` template expressions)
+    pub title: String,
+
+    /// PR body/description (supports `${{ }}` template expressions)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub body: Option<String>,
+
+    /// Create the pull request as a draft
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub draft: Option<bool>,
+
+    /// Base branch to merge into (auto-detected if omitted)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub base: Option<String>,
 }

@@ -68,12 +68,22 @@ pub fn resolve_state_path<'a>(state: &'a HashMap<String, Value>, path: &str) -> 
     Ok(current_value)
 }
 
+/// Extra context for task-level template variables (`task.id`, `task.signature`).
+#[derive(Debug, Clone)]
+pub struct TaskExpressionContext {
+    /// Raw task ID (e.g. the UUID string from `CODEMOD_TASK_ID`)
+    pub id: String,
+    /// Short deterministic hash derived from the task ID (first 8 hex chars of SHA-256)
+    pub signature: String,
+}
+
 pub fn resolve_expressions(
     expression: &str,
     params: &HashMap<String, Value>,
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
     steps: Option<&HashMap<String, HashMap<String, String>>>,
+    task_context: Option<&TaskExpressionContext>,
 ) -> Result<EvalValue> {
     let mut context = HashMapContext::new();
 
@@ -109,6 +119,17 @@ pub fn resolve_expressions(
         }
     }
 
+    if let Some(task_ctx) = task_context {
+        context.set_value(
+            "task.id".to_string(),
+            EvalValue::String(task_ctx.id.clone()),
+        )?;
+        context.set_value(
+            "task.signature".to_string(),
+            EvalValue::String(task_ctx.signature.clone()),
+        )?;
+    }
+
     eval_with_context(expression, &context).map_err(Error::ExpressionEvaluation)
 }
 
@@ -120,8 +141,9 @@ pub fn evaluate_condition(
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
     steps: Option<&HashMap<String, HashMap<String, String>>>,
+    task_context: Option<&TaskExpressionContext>,
 ) -> Result<bool> {
-    let result = resolve_expressions(condition, params, state, matrix_values, steps)?;
+    let result = resolve_expressions(condition, params, state, matrix_values, steps, task_context)?;
     match result {
         EvalValue::Boolean(v) => Ok(v),
         EvalValue::Empty => Ok(false),
@@ -140,6 +162,7 @@ pub fn resolve_string_with_expression(
     state: &HashMap<String, Value>,
     matrix_values: Option<&HashMap<String, Value>>,
     steps: Option<&HashMap<String, HashMap<String, String>>>,
+    task_context: Option<&TaskExpressionContext>,
 ) -> Result<String> {
     // regex to find all ${{ }} patterns
     let re = Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}")
@@ -151,7 +174,14 @@ pub fn resolve_string_with_expression(
         let full_match = captures.get(0).unwrap().as_str();
         let expression = captures.get(1).unwrap().as_str().trim();
 
-        let eval_result = resolve_expressions(expression, params, state, matrix_values, steps)?;
+        let eval_result = resolve_expressions(
+            expression,
+            params,
+            state,
+            matrix_values,
+            steps,
+            task_context,
+        )?;
 
         let replacement = match eval_result {
             EvalValue::String(s) => s,
@@ -215,7 +245,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -227,7 +258,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -240,7 +272,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -252,7 +285,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -265,7 +299,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -277,7 +312,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -292,8 +328,15 @@ mod tests {
 
         // Numeric comparisons - should return boolean results
         assert_eq!(
-            resolve_expressions("params.version > 2.0", &params, &state, Some(&matrix), None)
-                .unwrap(),
+            resolve_expressions(
+                "params.version > 2.0",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -303,7 +346,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -315,7 +359,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -327,15 +372,23 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
         );
 
         assert_eq!(
-            resolve_expressions("params.version < 2.0", &params, &state, Some(&matrix), None)
-                .unwrap(),
+            resolve_expressions(
+                "params.version < 2.0",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(false)
         );
 
@@ -345,7 +398,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -365,7 +419,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -377,7 +432,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -390,7 +446,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -402,7 +459,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -414,7 +472,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -427,7 +486,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -439,7 +499,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -451,7 +512,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(false)
@@ -471,7 +533,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             ).unwrap(),
             EvalValue::Boolean(true)
         );
@@ -483,7 +546,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -496,7 +560,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -511,20 +576,43 @@ mod tests {
 
         // Matrix value access
         assert_eq!(
-            resolve_expressions(r#"os == "linux""#, &params, &state, Some(&matrix), None).unwrap(),
+            resolve_expressions(
+                r#"os == "linux""#,
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Numeric matrix value
         assert_eq!(
-            resolve_expressions("node_version == 18", &params, &state, Some(&matrix), None)
-                .unwrap(),
+            resolve_expressions(
+                "node_version == 18",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Boolean matrix value
         assert_eq!(
-            resolve_expressions("parallel == true", &params, &state, Some(&matrix), None).unwrap(),
+            resolve_expressions(
+                "parallel == true",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -535,7 +623,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -554,7 +643,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -568,13 +658,15 @@ mod tests {
 
         // String numbers should work with numeric comparisons
         assert_eq!(
-            resolve_expressions("params.max_attempts > 3", &params, &state, None, None).unwrap(),
+            resolve_expressions("params.max_attempts > 3", &params, &state, None, None, None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
         // Numbers should work with other numbers (not mixed string/number)
         assert_eq!(
-            resolve_expressions("state.retry_count == 3", &params, &state, None, None).unwrap(),
+            resolve_expressions("state.retry_count == 3", &params, &state, None, None, None)
+                .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -585,7 +677,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Boolean(true)
@@ -599,14 +692,29 @@ mod tests {
 
         // Empty string should be falsy when compared to boolean
         assert_eq!(
-            resolve_expressions("params.empty_param == true", &params, &state, None, None).unwrap(),
+            resolve_expressions(
+                "params.empty_param == true",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(false)
         );
 
         // Empty string comparisons
         assert_eq!(
-            resolve_expressions(r#"params.empty_param == """#, &params, &state, None, None)
-                .unwrap(),
+            resolve_expressions(
+                r#"params.empty_param == """#,
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -622,26 +730,49 @@ mod tests {
 
         // Test that we can return string values
         assert_eq!(
-            resolve_expressions("params.environment", &params, &state, Some(&matrix), None)
-                .unwrap(),
+            resolve_expressions(
+                "params.environment",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::String("production".to_string())
         );
 
         // Test that we can return numeric values
         assert_eq!(
-            resolve_expressions("state.retry_count", &params, &state, Some(&matrix), None).unwrap(),
+            resolve_expressions(
+                "state.retry_count",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Int(3)
         );
 
         assert_eq!(
-            resolve_expressions("params.version", &params, &state, Some(&matrix), None).unwrap(),
+            resolve_expressions("params.version", &params, &state, Some(&matrix), None, None)
+                .unwrap(),
             EvalValue::Float(2.1)
         );
 
         // Test that we can return boolean values
         assert_eq!(
-            resolve_expressions("state.deploy_ready", &params, &state, Some(&matrix), None)
-                .unwrap(),
+            resolve_expressions(
+                "state.deploy_ready",
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
 
@@ -652,7 +783,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             EvalValue::Int(5)
@@ -664,6 +796,7 @@ mod tests {
             &params,
             &state,
             Some(&matrix),
+            None,
             None,
         ) {
             Ok(EvalValue::String(s)) => assert_eq!(s, "production-env"),
@@ -677,7 +810,8 @@ mod tests {
                         &params,
                         &state,
                         Some(&matrix),
-                        None
+                        None,
+                        None,
                     )
                     .unwrap(),
                     EvalValue::Float(5.0)
@@ -698,7 +832,8 @@ mod tests {
             &params,
             &state,
             Some(&matrix),
-            None
+            None,
+            None,
         )
         .unwrap());
 
@@ -707,7 +842,8 @@ mod tests {
             &params,
             &state,
             Some(&matrix),
-            None
+            None,
+            None,
         )
         .unwrap());
     }
@@ -719,15 +855,25 @@ mod tests {
 
         // Test that evaluate_condition properly converts non-boolean EvalValues to boolean
         // String values should be truthy if non-empty
-        assert!(evaluate_condition("params.environment", &params, &state, None, None).unwrap());
-        assert!(!evaluate_condition("params.empty_param", &params, &state, None, None).unwrap());
+        assert!(
+            evaluate_condition("params.environment", &params, &state, None, None, None).unwrap()
+        );
+        assert!(
+            !evaluate_condition("params.empty_param", &params, &state, None, None, None).unwrap()
+        );
 
         // Numeric values should be truthy if non-zero
-        assert!(evaluate_condition("state.retry_count", &params, &state, None, None).unwrap());
+        assert!(
+            evaluate_condition("state.retry_count", &params, &state, None, None, None).unwrap()
+        );
 
         // Boolean values should return as-is
-        assert!(evaluate_condition("state.deploy_ready", &params, &state, None, None).unwrap());
-        assert!(!evaluate_condition("state.config_loaded", &params, &state, None, None).unwrap());
+        assert!(
+            evaluate_condition("state.deploy_ready", &params, &state, None, None, None).unwrap()
+        );
+        assert!(
+            !evaluate_condition("state.config_loaded", &params, &state, None, None, None).unwrap()
+        );
 
         // Test string "false" should be falsy
         let mut test_params = HashMap::new();
@@ -736,6 +882,7 @@ mod tests {
             "params.false_string",
             &test_params,
             &HashMap::new(),
+            None,
             None,
             None
         )
@@ -754,21 +901,35 @@ mod tests {
         let state = HashMap::new();
 
         // Test truthy values using direct variable access
-        assert!(evaluate_condition("params.flag", &params, &state, None, None).unwrap());
-        assert!(evaluate_condition("params.number", &params, &state, None, None).unwrap());
+        assert!(evaluate_condition("params.flag", &params, &state, None, None, None).unwrap());
+        assert!(evaluate_condition("params.number", &params, &state, None, None, None).unwrap());
 
         // Test falsy values
-        assert!(!evaluate_condition("params.zero", &params, &state, None, None).unwrap());
-        assert!(!evaluate_condition("params.false_str", &params, &state, None, None).unwrap());
-        assert!(!evaluate_condition("params.empty", &params, &state, None, None).unwrap());
+        assert!(!evaluate_condition("params.zero", &params, &state, None, None, None).unwrap());
+        assert!(
+            !evaluate_condition("params.false_str", &params, &state, None, None, None).unwrap()
+        );
+        assert!(!evaluate_condition("params.empty", &params, &state, None, None, None).unwrap());
 
         // Test with comparison expressions to ensure they return proper booleans
-        assert!(
-            evaluate_condition(r#"params.flag == "true""#, &params, &state, None, None).unwrap()
-        );
-        assert!(
-            !evaluate_condition(r#"params.flag == "false""#, &params, &state, None, None).unwrap()
-        );
+        assert!(evaluate_condition(
+            r#"params.flag == "true""#,
+            &params,
+            &state,
+            None,
+            None,
+            None
+        )
+        .unwrap());
+        assert!(!evaluate_condition(
+            r#"params.flag == "false""#,
+            &params,
+            &state,
+            None,
+            None,
+            None
+        )
+        .unwrap());
     }
 
     #[test]
@@ -782,19 +943,32 @@ mod tests {
             &params,
             &state,
             None,
+            None,
             None
         )
         .is_err());
 
         // Undefined variable should return an error
-        assert!(
-            resolve_expressions("params.nonexistent == true", &params, &state, None, None).is_err()
-        );
+        assert!(resolve_expressions(
+            "params.nonexistent == true",
+            &params,
+            &state,
+            None,
+            None,
+            None
+        )
+        .is_err());
 
         // Test that evaluate_condition handles errors from resolve_expressions properly
-        assert!(
-            evaluate_condition("params.nonexistent == true", &params, &state, None, None).is_err()
-        );
+        assert!(evaluate_condition(
+            "params.nonexistent == true",
+            &params,
+            &state,
+            None,
+            None,
+            None
+        )
+        .is_err());
     }
 
     #[test]
@@ -807,8 +981,15 @@ mod tests {
 
         // Basic variable substitution
         assert_eq!(
-            resolve_string_with_expression("Hello ${{ params.name }}", &params, &state, None, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Hello ${{ params.name }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             "Hello John Doe"
         );
 
@@ -819,7 +1000,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Hello John Doe, you are 25 years old"
@@ -833,8 +1015,15 @@ mod tests {
 
         // Basic arithmetic
         assert_eq!(
-            resolve_string_with_expression("Result: ${{ 1 + 2 }}", &params, &state, None, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Result: ${{ 1 + 2 }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             "Result: 3"
         );
 
@@ -845,7 +1034,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Calculation: 25"
@@ -853,8 +1043,15 @@ mod tests {
 
         // Float arithmetic
         assert_eq!(
-            resolve_string_with_expression("Float: ${{ 2.5 + 1.5 }}", &params, &state, None, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Float: ${{ 2.5 + 1.5 }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             "Float: 4"
         );
     }
@@ -875,7 +1072,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Total: 35"
@@ -898,7 +1096,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Ready: true"
@@ -911,7 +1110,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Is production: true"
@@ -924,7 +1124,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             ).unwrap(),
             "Deploy ready: true"
         );
@@ -945,7 +1146,8 @@ mod tests {
                 &params,
                 &state,
                 Some(&matrix),
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Running on linux with version 18"
@@ -966,15 +1168,23 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Hello Alice"
         );
 
         assert_eq!(
-            resolve_string_with_expression("Math: ${{  1  +  2  }}", &params, &state, None, None)
-                .unwrap(),
+            resolve_string_with_expression(
+                "Math: ${{  1  +  2  }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap(),
             "Math: 3"
         );
     }
@@ -986,7 +1196,8 @@ mod tests {
 
         // String with no expressions should be returned as-is
         assert_eq!(
-            resolve_string_with_expression("Hello world", &params, &state, None, None).unwrap(),
+            resolve_string_with_expression("Hello world", &params, &state, None, None, None)
+                .unwrap(),
             "Hello world"
         );
 
@@ -997,7 +1208,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Not an expression: {{ params.name }}"
@@ -1015,6 +1227,7 @@ mod tests {
             &params,
             &state,
             None,
+            None,
             None
         )
         .is_err());
@@ -1024,6 +1237,7 @@ mod tests {
             "Invalid syntax: ${{ 1 + }}",
             &params,
             &state,
+            None,
             None,
             None
         )
@@ -1045,7 +1259,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Value: ''"
@@ -1058,7 +1273,8 @@ mod tests {
                 &params,
                 &state,
                 None,
-                None
+                None,
+                None,
             )
             .unwrap(),
             "Null: ''"
@@ -1074,6 +1290,7 @@ mod tests {
             "Hello ${{ params.name }}",
             &params,
             &state,
+            None,
             None,
             None
         )

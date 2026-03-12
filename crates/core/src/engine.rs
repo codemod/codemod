@@ -1536,11 +1536,44 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
+        // Cloud mode: checkout a task-specific branch before running steps
+        let cloud_mode = crate::git_ops::is_cloud_mode();
+        let task_expr_ctx = if cloud_mode {
+            Some(crate::git_ops::build_task_expression_context(
+                &task.id.to_string(),
+            ))
+        } else {
+            None
+        };
+        let cloud_branch_name = if cloud_mode {
+            let ctx = task_expr_ctx.as_ref().unwrap();
+            let configured_branch = node.branch_name.as_ref().map(|tmpl| {
+                resolve_string_with_expression(
+                    tmpl,
+                    &resolved_params,
+                    &HashMap::new(),
+                    task.matrix_values.as_ref(),
+                    None,
+                    Some(ctx),
+                )
+                .unwrap_or_else(|_| format!("codemod-{}", ctx.signature))
+            });
+            let branch =
+                crate::git_ops::resolve_branch_name(configured_branch.as_deref(), &ctx.signature);
+            crate::git_ops::checkout_branch(&branch, &self.workflow_run_config.target_path).await?;
+            Some(branch)
+        } else {
+            None
+        };
+
         let runtime_type = node
             .runtime
             .as_ref()
             .map(|r| r.r#type)
             .unwrap_or(RuntimeType::Direct);
+
+        // Track whether any commit checkpoint was created during the step loop
+        let mut had_commit_checkpoint = false;
 
         // Execute each step in the node
         for (step_index, step) in node.steps.iter().enumerate() {
@@ -1559,6 +1592,7 @@ impl Engine {
                     &state,
                     task.matrix_values.as_ref(),
                     None, // step outputs
+                    None, // task context
                 )
                 .unwrap_or_default();
 
@@ -1580,6 +1614,7 @@ impl Engine {
                 node_id: node.id.clone(),
                 node_name: node.name.clone(),
                 task_id: task_id.to_string(),
+                step_id: None,
             });
 
             let runner: Box<dyn Runner> = match runtime_type {
@@ -1657,6 +1692,56 @@ impl Engine {
                         step.name,
                         task_id
                     );
+
+                    // Cloud mode: execute commit checkpoint if configured on this step
+                    if cloud_mode {
+                        if let Some(commit_config) = &step.commit {
+                            let resolved_message = resolve_string_with_expression(
+                                &commit_config.message,
+                                &resolved_params,
+                                &state,
+                                task.matrix_values.as_ref(),
+                                None,
+                                task_expr_ctx.as_ref(),
+                            )
+                            .unwrap_or_else(|_| commit_config.message.clone());
+
+                            let paths = commit_config.add.clone().unwrap_or_default();
+                            match crate::git_ops::commit(
+                                &resolved_message,
+                                &paths,
+                                commit_config.allow_empty,
+                                &self.workflow_run_config.target_path,
+                            )
+                            .await
+                            {
+                                Ok(true) => {
+                                    had_commit_checkpoint = true;
+                                    slog!(
+                                        step_logger,
+                                        info,
+                                        "Commit checkpoint created: {}",
+                                        resolved_message
+                                    );
+                                }
+                                Ok(false) => {
+                                    slog!(
+                                        step_logger,
+                                        info,
+                                        "Commit checkpoint skipped (no changes): {}",
+                                        resolved_message
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Commit checkpoint failed for step '{}': {}",
+                                        step.name, e
+                                    );
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
@@ -1702,6 +1787,171 @@ impl Engine {
                     );
 
                     return Err(e);
+                }
+            }
+        }
+
+        // Cloud mode: finalize — fallback commit if needed, then push + create PR
+        if cloud_mode {
+            if let Some(ref branch) = cloud_branch_name {
+                let target_path = &self.workflow_run_config.target_path;
+
+                let git_step_logger = self.structured_logger.with_context(StepContext {
+                    step_name: "Push & create pull request".to_string(),
+                    step_index: node.steps.len(),
+                    node_id: node.id.clone(),
+                    node_name: node.name.clone(),
+                    task_id: task_id.to_string(),
+                    step_id: Some("_codemod_auto_push".to_string()),
+                });
+
+                git_step_logger.step_start();
+                if !git_step_logger.is_jsonl() {
+                    println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
+                }
+                let git_step_start = std::time::Instant::now();
+
+                // If no explicit commit checkpoints were created but there are
+                // uncommitted changes, create a fallback commit using the node name.
+                if !had_commit_checkpoint {
+                    if let Ok(true) = crate::git_ops::has_changes(target_path).await {
+                        slog!(
+                            git_step_logger,
+                            info,
+                            "No commit checkpoints in node '{}' but changes detected — creating fallback commit",
+                            node.name
+                        );
+                        match crate::git_ops::commit(&node.name, &[], true, target_path).await {
+                            Ok(true) => {
+                                had_commit_checkpoint = true;
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                error!("Fallback commit failed: {}", e);
+                                // Non-fatal: continue to PR creation attempt
+                            }
+                        }
+                    }
+                }
+
+                // Push and create PR if any commits were made
+                if had_commit_checkpoint {
+                    let push_and_pr_result: Result<Option<String>> = async {
+                        crate::git_ops::push_branch(branch, target_path).await?;
+
+                        // Resolve PR config or use defaults from node name
+                        let (pr_title, pr_body, pr_draft, pr_base) =
+                            if let Some(pr_config) = &node.pull_request {
+                                let title = resolve_string_with_expression(
+                                    &pr_config.title,
+                                    &resolved_params,
+                                    &HashMap::new(),
+                                    task.matrix_values.as_ref(),
+                                    None,
+                                    task_expr_ctx.as_ref(),
+                                )
+                                .unwrap_or_else(|_| pr_config.title.clone());
+
+                                let body = pr_config.body.as_ref().map(|b| {
+                                    resolve_string_with_expression(
+                                        b,
+                                        &resolved_params,
+                                        &HashMap::new(),
+                                        task.matrix_values.as_ref(),
+                                        None,
+                                        task_expr_ctx.as_ref(),
+                                    )
+                                    .unwrap_or_else(|_| b.clone())
+                                });
+
+                                (
+                                    title,
+                                    body,
+                                    pr_config.draft.unwrap_or(false),
+                                    pr_config.base.clone(),
+                                )
+                            } else {
+                                (node.name.clone(), None, false, None)
+                            };
+
+                        crate::git_ops::create_pull_request(
+                            &pr_title,
+                            pr_body.as_deref(),
+                            pr_draft,
+                            branch,
+                            pr_base.as_deref(),
+                            &task.id.to_string(),
+                            target_path,
+                        )
+                        .await
+                    }
+                    .await;
+
+                    match &push_and_pr_result {
+                        Ok(Some(pr_url)) => {
+                            slog!(git_step_logger, info, "Pull request created: {}", pr_url);
+                        }
+                        Ok(None) => {
+                            slog!(git_step_logger, info, "Pull request created successfully");
+                        }
+                        _ => {}
+                    }
+
+                    if let Err(e) = push_and_pr_result {
+                        git_step_logger
+                            .step_end("failure", git_step_start.elapsed().as_millis() as u64);
+
+                        // Mark the task as failed
+                        let mut fields = HashMap::new();
+                        fields.insert(
+                            "status".to_string(),
+                            FieldDiff {
+                                operation: DiffOperation::Update,
+                                value: Some(serde_json::to_value(TaskStatus::Failed)?),
+                            },
+                        );
+                        fields.insert(
+                            "ended_at".to_string(),
+                            FieldDiff {
+                                operation: DiffOperation::Update,
+                                value: Some(serde_json::to_value(Utc::now())?),
+                            },
+                        );
+                        fields.insert(
+                            "error".to_string(),
+                            FieldDiff {
+                                operation: DiffOperation::Add,
+                                value: Some(serde_json::to_value(format!(
+                                    "Push/PR creation failed: {}",
+                                    e
+                                ))?),
+                            },
+                        );
+                        let task_diff = TaskDiff { task_id, fields };
+                        self.state_adapter
+                            .lock()
+                            .await
+                            .apply_task_diff(&task_diff)
+                            .await?;
+
+                        error!(
+                            "Task {} ({}) push/PR creation failed: {}",
+                            task_id, node.id, e
+                        );
+                        return Err(e);
+                    }
+
+                    git_step_logger
+                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
+                } else {
+                    slog!(
+                        git_step_logger,
+                        info,
+                        "No changes detected in node '{}' — skipping push and PR creation",
+                        node.name
+                    );
+                    git_step_logger
+                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
                 }
             }
         }
@@ -1842,6 +2092,7 @@ impl Engine {
                             state,
                             task.matrix_values.as_ref(),
                             None, // step outputs
+                            None, // task context
                         )?;
 
                         if !should_execute {
@@ -2545,6 +2796,7 @@ impl Engine {
             state,
             task.matrix_values.as_ref(),
             None, // step outputs
+            None, // task context
         )?;
 
         slog!(
@@ -3033,6 +3285,7 @@ impl Engine {
                         state,
                         task.matrix_values.as_ref(),
                         None,
+                        None, // task context
                     )?;
                     if !should_execute {
                         slog!(
@@ -3084,8 +3337,14 @@ impl Engine {
     ) -> Result<()> {
         // Resolve variables
         // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-        let resolved_command =
-            resolve_string_with_expression(run, params, state, task.matrix_values.as_ref(), None)?;
+        let resolved_command = resolve_string_with_expression(
+            run,
+            params,
+            state,
+            task.matrix_values.as_ref(),
+            None,
+            None,
+        )?;
         let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
 
         let output = runner.run_command(&resolved_command, &prepared.env).await?;

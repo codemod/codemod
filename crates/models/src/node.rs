@@ -1,5 +1,5 @@
 use crate::runtime::Runtime;
-use crate::step::Step;
+use crate::step::{PullRequestConfig, Step};
 use crate::strategy::Strategy;
 use crate::trigger::Trigger;
 use schemars::JsonSchema;
@@ -63,6 +63,18 @@ pub struct Node {
     #[serde(default)]
     #[ts(optional, as = "Option<HashMap<String, String>>")]
     pub env: HashMap<String, String>,
+
+    /// Git branch name for cloud runs (supports `${{ }}` expressions).
+    /// Default: `codemod-{task.signature}`
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub branch_name: Option<String>,
+
+    /// Pull request configuration. When present (and in cloud mode), a PR is
+    /// automatically created at the end of the node execution.
+    #[serde(default)]
+    #[ts(optional, as = "Option<PullRequestConfig>")]
+    pub pull_request: Option<PullRequestConfig>,
 }
 
 fn default_node_type() -> NodeType {
