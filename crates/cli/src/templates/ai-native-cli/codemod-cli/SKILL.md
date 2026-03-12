@@ -36,17 +36,26 @@ First-turn behavior after this skill triggers:
 - Only inspect the repository after search results are summarized or when validating whether a discovered codemod matches the codebase.
 - If the search returns a plausible match, the next step is to inspect that package's README/limits and run a dry-run, not to draft a manual migration plan.
 
+When a registry package is selected for execution:
+- Read the package README and any linked migration/setup docs before running it.
+- Treat the package docs as the execution contract for scope, prerequisites, config, and known limitations.
+- Apply documented prerequisites first when they are required for a correct run, such as baseline dependency changes, framework setup, branch creation, config files, or repository preparation.
+- If the package docs recommend a phased or confidence-first flow, follow that flow instead of jumping straight to a full apply.
+- Summarize documented manual follow-up areas before or immediately after execution so the user understands what the package intentionally leaves behind.
+
 Recommended runtime flow:
 1. Discover candidates with `codemod search`.
-2. Run workflow-capable packages with `codemod run --dry-run` before apply.
-3. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior (required for skill-only packages).
-4. Enforce verification with tests and dry-run summaries before apply.
+2. Read the selected package's README/docs and perform any documented prerequisites or setup steps.
+3. Run workflow-capable packages with `codemod run --dry-run` before apply.
+4. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior (required for skill-only packages).
+5. Enforce verification with tests and dry-run summaries before apply.
 
 Anti-patterns to avoid:
 - Do not start by planning a manual migration when the request is an upgrade, update, or migration and the registry has not been searched yet.
 - Do not create a new codemod package before checking whether an existing registry package already covers the migration.
 - Do not start with package.json inspection, framework-config inspection, or codebase grep when the user intent can first be narrowed by registry discovery.
 - Do not ask broad strategy questions like "in-place vs side-by-side?" before checking whether an existing codemod already defines the practical migration surface.
+- Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
 
 For codemod creation:
 - Start with `references/core/create-codemods.md`.
