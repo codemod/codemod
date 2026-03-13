@@ -2581,6 +2581,8 @@ fn expected_codemod_mcp_server_entry_opencode(runtime_paths: &RuntimePaths) -> V
     })
 }
 
+const OPENCODE_CONFIG_SCHEMA_URL: &str = "https://opencode.ai/config.json";
+
 fn upsert_codemod_mcp_server(
     harness: Harness,
     config_path: &Path,
@@ -2725,6 +2727,15 @@ fn upsert_codemod_mcp_server_opencode_json(
         )));
     };
 
+    let mut config_changed = false;
+    if !root_object.contains_key("$schema") {
+        root_object.insert(
+            "$schema".to_string(),
+            json!(OPENCODE_CONFIG_SCHEMA_URL),
+        );
+        config_changed = true;
+    }
+
     let mcp_value = root_object
         .entry("mcp".to_string())
         .or_insert_with(|| json!({}));
@@ -2738,6 +2749,24 @@ fn upsert_codemod_mcp_server_opencode_json(
 
     if let Some(existing_entry) = mcp_object.get(MCP_SERVER_NAME) {
         if existing_entry == &expected_entry {
+            if !config_changed {
+                return Ok(());
+            }
+
+            let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to serialize MCP config {}: {error}",
+                    config_path.display()
+                ))
+            })?;
+
+            fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to write MCP config {}: {error}",
+                    config_path.display()
+                ))
+            })?;
+
             return Ok(());
         }
 
@@ -5843,6 +5872,10 @@ codemod-skill-version: 0.1.0
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.get("$schema").and_then(|value| value.as_str()),
+            Some(OPENCODE_CONFIG_SCHEMA_URL)
+        );
         let server = parsed
             .get("mcp")
             .and_then(|servers| servers.get("codemod"))
@@ -5869,6 +5902,36 @@ codemod-skill-version: 0.1.0
                 .as_deref()
         );
         assert_eq!(command.last().and_then(|value| value.as_str()), Some("mcp"));
+    }
+
+    #[test]
+    fn upsert_mcp_server_backfills_opencode_schema_on_existing_matching_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join("opencode.json");
+        let command = expected_codemod_mcp_server_command(&runtime_paths);
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&json!({
+                "mcp": {
+                    "codemod": {
+                        "type": "local",
+                        "enabled": true,
+                        "command": command,
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.get("$schema").and_then(|value| value.as_str()),
+            Some(OPENCODE_CONFIG_SCHEMA_URL)
+        );
     }
 
     #[test]
