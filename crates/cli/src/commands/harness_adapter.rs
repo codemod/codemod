@@ -19,7 +19,7 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
 const MCS_SKILL_VERSION: &str = "1.0.0";
-const MCS_CREATE_COMMAND_NAME: &str = "codemod-create";
+const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
@@ -56,8 +56,8 @@ const MCS_DRY_RUN_VERIFY_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/dry-run-and-verify.md");
 const MCS_TROUBLESHOOTING_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/troubleshooting.md");
-const MCS_CREATE_COMMAND_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod-create.md");
+const MCS_COMMAND_MD: &str =
+    include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod.md");
 const MCS_REFERENCE_FILES: [(&str, &str); 8] = [
     (MCS_REFERENCE_INDEX_RELATIVE_PATH, MCS_REFERENCE_INDEX_MD),
     (
@@ -1632,8 +1632,8 @@ fn render_skill_discovery_block(
     } else {
         String::new()
     };
-    let command_line = if mcs_create_command_is_available(harness, scope) {
-        format!("- Codemod creation command: `/{MCS_CREATE_COMMAND_NAME}`\n")
+    let command_line = if mcs_command_is_available(harness, scope) {
+        format!("- Codemod creation command: `/{MCS_COMMAND_NAME}`\n")
     } else {
         String::new()
     };
@@ -2240,7 +2240,7 @@ pub(crate) fn upsert_mcs_command_entrypoints_with_runtime(
                 return Ok(Vec::new());
             };
 
-            write_skill_file(&command_path, MCS_CREATE_COMMAND_MD, force)?;
+            write_skill_file(&command_path, MCS_COMMAND_MD, force)?;
             Ok(vec![command_path])
         }
     }
@@ -2275,7 +2275,7 @@ fn mcs_install_requires_force_with_runtime(
             if let Some(command_path) =
                 mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
             {
-                if managed_text_file_requires_force(&command_path, MCS_CREATE_COMMAND_MD)? {
+                if managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
                     return Ok(true);
                 }
             }
@@ -2729,10 +2729,7 @@ fn upsert_codemod_mcp_server_opencode_json(
 
     let mut config_changed = false;
     if !root_object.contains_key("$schema") {
-        root_object.insert(
-            "$schema".to_string(),
-            json!(OPENCODE_CONFIG_SCHEMA_URL),
-        );
+        root_object.insert("$schema".to_string(), json!(OPENCODE_CONFIG_SCHEMA_URL));
         config_changed = true;
     }
 
@@ -3276,9 +3273,9 @@ fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
         }
     }
 
-    if MCS_CREATE_COMMAND_MD.trim().is_empty() {
+    if MCS_COMMAND_MD.trim().is_empty() {
         return Err(HarnessAdapterError::InvalidSkillPackage(
-            "commands/codemod-create.md is empty".to_string(),
+            "commands/codemod.md is empty".to_string(),
         ));
     }
 
@@ -3337,7 +3334,7 @@ fn skills_root_for_harness(
     }
 }
 
-fn mcs_create_command_is_available(harness: Harness, scope: InstallScope) -> bool {
+fn mcs_command_is_available(harness: Harness, scope: InstallScope) -> bool {
     match harness {
         Harness::Claude | Harness::Opencode | Harness::Cursor | Harness::Antigravity => true,
         Harness::Goose => scope == InstallScope::User,
@@ -3350,7 +3347,7 @@ fn mcs_command_entrypoint_path_for_harness(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Option<PathBuf>> {
-    let file_name = format!("{MCS_CREATE_COMMAND_NAME}.md");
+    let file_name = format!("{MCS_COMMAND_NAME}.md");
     match harness {
         Harness::Claude => Ok(Some(match scope {
             InstallScope::Project => runtime_paths.cwd.join(".claude/commands").join(&file_name),
@@ -3460,20 +3457,20 @@ fn goose_mcs_command_paths(
 
     let recipe_path = home_dir
         .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
-        .join(format!("{MCS_CREATE_COMMAND_NAME}.yaml"));
+        .join(format!("{MCS_COMMAND_NAME}.yaml"));
     let config_path = home_dir.join(GOOSE_CONFIG_RELATIVE_PATH);
     Ok(Some((recipe_path, config_path)))
 }
 
 fn goose_mcs_recipe_content() -> String {
-    let indented_instructions = MCS_CREATE_COMMAND_MD
+    let indented_instructions = MCS_COMMAND_MD
         .trim()
         .lines()
         .map(|line| format!("  {line}"))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "version: 1.0.0\ntitle: codemod-create\ndescription: Create or refine codemods with the installed Codemod master skill.\ninstructions: |\n{indented_instructions}\n"
+        "version: 1.0.0\ntitle: codemod\ndescription: Search, run, or create codemods with the installed Codemod master skill.\ninstructions: |\n{indented_instructions}\n"
     )
 }
 
@@ -3496,7 +3493,7 @@ fn goose_config_requires_force(config_path: &Path, recipe_path: &Path) -> Adapte
         ))
     })?;
 
-    let Some(entry) = goose_slash_command_entry(document, MCS_CREATE_COMMAND_NAME) else {
+    let Some(entry) = goose_slash_command_entry(document, MCS_COMMAND_NAME) else {
         return Ok(false);
     };
 
@@ -3564,7 +3561,7 @@ fn upsert_goose_slash_command_config(
         let command_name = mapping
             .get(serde_yaml::Value::String("command".to_string()))
             .and_then(serde_yaml::Value::as_str);
-        if command_name != Some(MCS_CREATE_COMMAND_NAME) {
+        if command_name != Some(MCS_COMMAND_NAME) {
             continue;
         }
 
@@ -3575,7 +3572,7 @@ fn upsert_goose_slash_command_config(
             .unwrap_or_default();
         if current_recipe != recipe_path_str && !force {
             return Err(HarnessAdapterError::InstallFailed(format!(
-                "Goose config already registers /{MCS_CREATE_COMMAND_NAME}. Re-run with --force to overwrite."
+                "Goose config already registers /{MCS_COMMAND_NAME}. Re-run with --force to overwrite."
             )));
         }
 
@@ -3591,7 +3588,7 @@ fn upsert_goose_slash_command_config(
         let mut mapping = serde_yaml::Mapping::new();
         mapping.insert(
             serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(MCS_CREATE_COMMAND_NAME.to_string()),
+            serde_yaml::Value::String(MCS_COMMAND_NAME.to_string()),
         );
         mapping.insert(
             serde_yaml::Value::String("recipe_path".to_string()),
@@ -3911,7 +3908,7 @@ mod tests {
         harness: Harness,
         scope: InstallScope,
     ) -> Option<PathBuf> {
-        let file_name = format!("{MCS_CREATE_COMMAND_NAME}.md");
+        let file_name = format!("{MCS_COMMAND_NAME}.md");
         match harness {
             Harness::Claude => Some(match scope {
                 InstallScope::Project => {
@@ -3967,7 +3964,7 @@ mod tests {
         vec![
             home_dir
                 .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
-                .join(format!("{MCS_CREATE_COMMAND_NAME}.yaml")),
+                .join(format!("{MCS_COMMAND_NAME}.yaml")),
             home_dir.join(GOOSE_CONFIG_RELATIVE_PATH),
         ]
     }
@@ -4222,7 +4219,7 @@ codemod-skill-version: 0.1.0
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_END));
         assert!(claude_content.contains("Core skill: `.claude/skills/codemod/SKILL.md`"));
-        assert!(claude_content.contains("/codemod-create"));
+        assert!(claude_content.contains("/codemod"));
         assert!(claude_content.contains(".claude/skills/codemod/SKILL.md"));
         assert!(!claude_content.contains("Installed Codemod skills root"));
         assert!(!claude_content.contains("Restart or reload your claude session"));
@@ -4275,7 +4272,7 @@ codemod-skill-version: 0.1.0
         let content = fs::read_to_string(&agents_path).unwrap();
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
         assert!(content.contains("npx codemod agent list --harness cursor --format json"));
-        assert!(content.contains("/codemod-create"));
+        assert!(content.contains("/codemod"));
     }
 
     #[test]
@@ -4302,7 +4299,7 @@ codemod-skill-version: 0.1.0
         assert!(agents_content.contains(
             "Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work."
         ));
-        assert!(agents_content.contains("/codemod-create"));
+        assert!(agents_content.contains("/codemod"));
     }
 
     #[test]
@@ -4328,7 +4325,7 @@ codemod-skill-version: 0.1.0
                     .expect("expected command path");
             assert_eq!(paths, vec![expected.clone()]);
             let content = fs::read_to_string(expected).unwrap();
-            assert!(content.contains("/codemod-create"));
+            assert!(content.contains("/codemod"));
             assert!(content.contains("Use the installed `codemod` skill"));
         }
     }
@@ -4365,12 +4362,12 @@ codemod-skill-version: 0.1.0
         assert_eq!(paths, expected);
 
         let recipe_content = fs::read_to_string(&paths[0]).unwrap();
-        assert!(recipe_content.contains("title: codemod-create"));
+        assert!(recipe_content.contains("title: codemod"));
         assert!(recipe_content.contains("Use the installed `codemod` skill"));
 
         let config_content = fs::read_to_string(&paths[1]).unwrap();
         assert!(config_content.contains("slash_commands"));
-        assert!(config_content.contains("command: codemod-create"));
+        assert!(config_content.contains("command: codemod"));
         assert!(config_content.contains(&paths[0].to_string_lossy().to_string()));
     }
 

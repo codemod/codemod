@@ -907,14 +907,13 @@ fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
                 ScopePromptOption {
                     scope: InstallScope::User,
                     label:
-                        "user (recommended; enables Goose /codemod-create via ~/.config/goose/config.yaml)"
+                        "user (recommended; enables Goose /codemod via ~/.config/goose/config.yaml)"
                             .to_string(),
                 },
                 ScopePromptOption {
                     scope: InstallScope::Project,
-                    label:
-                        "project (current workspace; skills only, /codemod-create stays unavailable)"
-                            .to_string(),
+                    label: "project (current workspace; skills only, /codemod stays unavailable)"
+                        .to_string(),
                 },
             ],
             0,
@@ -939,7 +938,7 @@ fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
 fn goose_project_scope_command_warning(harness: Harness, scope: InstallScope) -> Option<String> {
     if harness == Harness::Goose && scope == InstallScope::Project {
         return Some(
-            "Goose /codemod-create is only documented via user config (`~/.config/goose/config.yaml`); project scope installed skills only. Re-run with `--user` to enable the slash command.".to_string(),
+            "Goose /codemod is only documented via user config (`~/.config/goose/config.yaml`); project scope installed skills only. Re-run with `--user` to enable the slash command.".to_string(),
         );
     }
 

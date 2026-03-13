@@ -213,7 +213,7 @@ fn goose_scope_prompt_defaults_to_user_with_command_explanation() {
     let (options, starting_cursor) = scope_prompt_options(Harness::Goose);
     assert_eq!(starting_cursor, 0);
     assert_eq!(options[0].scope, InstallScope::User);
-    assert!(options[0].label.contains("/codemod-create"));
+    assert!(options[0].label.contains("/codemod"));
     assert!(options[0].label.contains("recommended"));
     assert_eq!(options[1].scope, InstallScope::Project);
     assert!(options[1].label.contains("skills only"));
@@ -223,7 +223,7 @@ fn goose_scope_prompt_defaults_to_user_with_command_explanation() {
 fn goose_project_scope_warning_is_explicit() {
     let warning = goose_project_scope_command_warning(Harness::Goose, InstallScope::Project)
         .expect("expected goose project warning");
-    assert!(warning.contains("/codemod-create"));
+    assert!(warning.contains("/codemod"));
     assert!(warning.contains("project scope installed skills only"));
     assert!(warning.contains("--user"));
     assert!(goose_project_scope_command_warning(Harness::Goose, InstallScope::User).is_none());
@@ -368,7 +368,7 @@ fn managed_components_include_discovery_guides_and_mcp_kind() {
     let periodic_trigger_paths = vec![PathBuf::from(
         "/tmp/.claude/codemod/periodic-update/check-updates.sh",
     )];
-    let command_paths = vec![PathBuf::from("/tmp/.claude/commands/codemod-create.md")];
+    let command_paths = vec![PathBuf::from("/tmp/.claude/commands/codemod.md")];
     let components = managed_components_from_install(
         &installed,
         &command_paths,
@@ -403,8 +403,8 @@ fn managed_components_include_discovery_guides_and_mcp_kind() {
 
     let command_component = components
         .iter()
-        .find(|component| component.id == "command:codemod-create")
-        .expect("expected codemod-create command component");
+        .find(|component| component.id == "command:codemod")
+        .expect("expected codemod command component");
     assert_eq!(command_component.kind, ManagedComponentKind::Command);
 }
 
