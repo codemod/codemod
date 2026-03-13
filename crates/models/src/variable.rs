@@ -101,8 +101,9 @@ pub fn resolve_expressions(
 
     if let Some(matrix) = matrix_values {
         for (key, value) in matrix {
+            let context_key = format!("matrix.{}", key);
             let eval_value = convert_value_to_eval_value(value);
-            context.set_value(key.clone(), eval_value)?;
+            context.set_value(context_key, eval_value)?;
         }
     }
 
@@ -556,7 +557,7 @@ mod tests {
         // Mixed types in expression - use consistent numeric types
         assert_eq!(
             resolve_expressions(
-                r#"params.version >= 2.0 && state.deploy_ready == true && os == "linux""#,
+                r#"params.version >= 2.0 && state.deploy_ready == true && matrix.os == "linux""#,
                 &params,
                 &state,
                 Some(&matrix),
@@ -577,7 +578,7 @@ mod tests {
         // Matrix value access
         assert_eq!(
             resolve_expressions(
-                r#"os == "linux""#,
+                r#"matrix.os == "linux""#,
                 &params,
                 &state,
                 Some(&matrix),
@@ -591,7 +592,7 @@ mod tests {
         // Numeric matrix value
         assert_eq!(
             resolve_expressions(
-                "node_version == 18",
+                "matrix.node_version == 18",
                 &params,
                 &state,
                 Some(&matrix),
@@ -605,7 +606,7 @@ mod tests {
         // Boolean matrix value
         assert_eq!(
             resolve_expressions(
-                "parallel == true",
+                "matrix.parallel == true",
                 &params,
                 &state,
                 Some(&matrix),
@@ -619,7 +620,7 @@ mod tests {
         // Combined matrix and params
         assert_eq!(
             resolve_expressions(
-                r#"os == "linux" && params.environment == "production""#,
+                r#"matrix.os == "linux" && params.environment == "production""#,
                 &params,
                 &state,
                 Some(&matrix),
@@ -1142,7 +1143,7 @@ mod tests {
         // Matrix value substitution
         assert_eq!(
             resolve_string_with_expression(
-                "Running on ${{ os }} with version ${{ version }}",
+                "Running on ${{ matrix.os }} with version ${{ matrix.version }}",
                 &params,
                 &state,
                 Some(&matrix),
