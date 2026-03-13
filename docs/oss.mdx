@@ -182,15 +182,26 @@ import { MigrationsTemplateDemo } from "/snippets/migrations-template-demo.mdx";
 
 <Steps>
   <Step title="Create a dedicated repo to host your codemods">
-    - We recommend creating a dedicated repository under your project’s GitHub org to host codemods using this [repo template](https://github.com/codemod/migrations-template). 
-    - Using the included GitHub action, you can easily publish official codemods under your org scope, collaborate with trusted community members without giving access to your main repo, and keep migration logic cleanly separated from product code. 
-    - See the [ESLint codemods repo](https://github.com/eslint/codemods) for an example.
+    Scaffold a dedicated repository under your project’s GitHub organization to host official codemods:
+
+    ```bash
+    codemod init --workspace
+    ```
+    
+    The generated layout:
+    - keeps shared publishing and repo configuration at the root
+    - isolates each codemod under `codemods/<slug>/`
+    - keeps migration logic separate from product code
+    - gives maintainers a dedicated repo for collaboration and releases under the project scope
+    
+    See the [ESLint codemods repo](https://github.com/eslint/codemods) for an example.
   </Step>
   <Step title="Secure your official scope">
     - Create a free Codemod account and sign in.
     - Add your GitHub organization.
     - Install the Codemod GitHub App on your codemod repo.
-      - This enables trusted publishing under your org scope from GitHub Actions with no API keys or secrets to manage. See the [Node.js official codemods filtered via scope:nodejs in the registry](https://app.codemod.com/registry?q=scope%3Anodejs) for an example.
+    
+    This enables trusted publishing under your org scope from GitHub Actions with no API keys or secrets to manage. See the [Node.js official codemods filtered via scope:nodejs in the registry](https://app.codemod.com/registry?q=scope%3Anodejs) for an example.
       
   </Step>
   <Step title="Build and publish codemods">

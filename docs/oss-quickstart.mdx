@@ -3,42 +3,40 @@ title: "Quickstart"
 sidebarTitle: "Quickstart"
 ---
 
-This guide walks you through creating, testing, and publishing a codemod from scratch. You'll scaffold a project, build a multi-step workflow using Codemod MCP in your IDE, and publish it to the registry.
+This guide walks you through creating, testing, and publishing a codemod from scratch. You'll scaffold a package, bootstrap Codemod's AI-native CLI setup, build a workflow with Codemod MCP in your IDE, then test and publish it to the registry.
 
 ## 1. Scaffold your project
 
 Run the interactive scaffolder to create a new codemod package:
 
 ```bash
-npx codemod@latest init
+npx codemod@latest init my-codemod
 ```
 
-You'll be prompted for a codemod type (JSSG or multi-step workflow), target language, project name, and other details.
+You'll be prompted for a codemod type:
+- `jssg codemod` for TypeScript-based AST transformations
+- `multi-step workflow` for orchestrated migrations that combine shell, YAML, and JSSG steps
+- `agent skill codemod` for authored skill packages used in coding-agent workflows
 
-<Tip>
-  `codemod init` can also set up a **monorepo** to host multiple codemods with shared GitHub Actions for automated publishing. See [CLI reference](/cli#codemod-init) for all available options.
-</Tip>
+For this guide, choose `jssg codemod`.
 
-## 2. Install Codemod MCP
+The scaffolder may also ask whether to add an <Tooltip tip="Instructions that can be installed into tools like Codex, Claude Code, or Cursor, so the assistant can use this package during a session.">agent skill</Tooltip>. This quickstart builds a workflow package, so leave that option disabled.
 
-Codemod MCP gives your AI assistant tools for AST analysis, codemod creation, and testing, directly in your IDE.
+## 2. Bootstrap Codemod's AI-native CLI
 
-Add the following to your IDE's MCP configuration:
+Set up Codemod MCP in your IDE with Codemod's AI-native CLI:
 
-```json
-{
-  "mcpServers": {
-    "codemod": {
-      "command": "npx",
-      "args": ["codemod@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx codemod agent install --harness auto --project
 ```
+
+This installs Codemod's assistant-side skill bundle, adds the Codemod MCP server to the detected coding assistant, and updates local discovery guidance files.
+
+If you prefer to configure MCP yourself, see the manual setup in [Codemod MCP](/model-context-protocol#manual-mcp-setup).
 
 ## 3. Build your codemod
 
-With MCP installed, ask your AI assistant to create a codemod. Be specific about the transformation you need:
+With Codemod's MCP + skill bootstrap installed, ask your AI assistant to create a codemod. After restarting your IDE or harness session, it can discover Codemod guidance and MCP tools automatically. Be specific about the transformation you need:
 
 <Prompt
   description="Extract React components from inside other components to module scope to prevent re-creation on render."
@@ -273,7 +271,7 @@ npx codemod@latest workflow validate -w workflow.yaml
 Run tests against your input/expected fixtures:
 
 ```bash
-npx codemod jssg test ./scripts/codemod.ts --language tsx
+npx codemod jssg test -l tsx ./scripts/codemod.ts
 ```
 
 Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expected.*` file pairs or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. If MCP generated test fixtures, they will run automatically.
@@ -285,17 +283,17 @@ For test structure, CI integration, and debugging strategies, see [Testing](/jss
 Run your codemod on a target codebase:
 
 ```bash
-npx codemod workflow run -w ./my-codemod/ -t /path/to/your/project
+npx codemod workflow run -w . -t /path/to/your/project
 ```
 
 <Tip>
   **AI-powered steps**: If your workflow includes an AI step gated by a parameter, enable it at runtime:
 
   ```bash
-  LLM_API_KEY=your-key npx codemod workflow run -w ./my-codemod/ -t /path/to/project --param run_ai_step=true
+  LLM_API_KEY=your-key npx codemod workflow run -w . -t /path/to/project --param run_ai_step=true
   ```
 
-  Set `LLM_API_KEY` as an environment variable for your chosen provider. See [Workflow Reference — AI steps](/workflows/reference#ai-step) for provider configuration.
+  Set `LLM_API_KEY` as an environment variable for your chosen provider. With an API key, the built-in AI step runs normally. Without one, Codemod prints `[AI INSTRUCTIONS]`, which parent agents such as Codex- or Claude-style tooling can pick up. See [Workflow Reference — AI steps](/workflows/reference#ai-step) for provider configuration.
 </Tip>
 
 For all CLI options, see [CLI reference](/cli#codemod-workflow).

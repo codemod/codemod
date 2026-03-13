@@ -556,10 +556,12 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-When you run `codemod init` in interactive mode, you'll be prompted to create a GitHub Actions workflow for publishing. This creates `.github/workflows/publish.yml` with:
+In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
 
-- **Single codemod repository**: Triggers on `v*` tags (e.g., `v1.0.0`)
-- **Monorepo setup**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name from the tag
+You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
+
+- **Single codemod repo**: Triggers on `v*` tags (e.g., `v1.0.0`)
+- **Monorepo**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name
 
 Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing.
 
