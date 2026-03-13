@@ -9444,10 +9444,12 @@ version = "1.7.4"
 dependencies = [
  "anyhow",
  "codemod-llrt-capabilities",
+ "codemod-sandbox",
  "libtest-mimic",
  "once_cell",
  "serde",
  "similar",
+ "tempfile",
  "thiserror 2.0.16",
  "tokio",
  "tree-sitter",
@@ -9457,6 +9459,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "walkdir",
 ]
 
 [[package]]

@@ -327,6 +327,8 @@ npx codemod jssg test -l typescript ./codemods/transform.ts
 # Test with specific directory
 npx codemod jssg test -l typescript ./codemods/transform.ts ./tests
 
+# Directory fixtures can use input/ + expected/ snapshots to assert created and deleted files
+
 # Update test snapshots
 npx codemod jssg test -l typescript ./codemods/transform.ts -u
 
