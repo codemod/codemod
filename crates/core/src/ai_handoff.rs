@@ -141,9 +141,13 @@ pub fn build_agent_command(
         }
         "codex" => {
             // Pipe the prompt via stdin using `codex e -`
+            // Use --sandbox=none to prevent seccomp failures in containerized
+            // environments where the seccomp() syscall may be blocked.
             let _ = full_prompt;
             cmd.env("RUST_LOG", "error");
-            cmd.arg("--full-auto").arg("e").arg("-");
+            cmd.arg("--dangerously-bypass-approvals-and-sandbox")
+                .arg("e")
+                .arg("-");
         }
         "aider" => {
             cmd.arg("--message").arg(&full_prompt).arg("--yes");
