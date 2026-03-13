@@ -283,7 +283,48 @@ steps:
   ```
 </ParamField>
 
+### Install Skill Step
 
+Installs package skill behavior into a supported harness via the Codemod CLI. Use this in skill-only or workflow + skill packages when you want authored skill files from the package to be installable for coding-agent workflows.
+
+```yaml
+steps:
+  - name: Install package skill
+    install-skill:
+      package: "@your-scope/my-codemod"
+```
+
+In dry-run mode, this step is skipped. In non-interactive runs, it is also skipped by default unless the workflow is run with `--install-skill`. See [CLI reference](/cli#codemod-workflow).
+
+**Install Skill Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="install-skill.package" type="string" required>
+  Package identifier to install, for example `@codemod/jest-to-vitest`.
+</ParamField>
+
+<ParamField path="install-skill.path" type="string">
+  Optional authored skill source path inside the package. Defaults to the conventional `agents/skill/<skill-name>/SKILL.md` layout.
+</ParamField>
+
+<ParamField path="install-skill.harness" type="string" default="auto">
+  Target harness adapter: `auto`, `claude`, `goose`, `opencode`, `cursor`, `codex`, or `antigravity`.
+</ParamField>
+
+<ParamField path="install-skill.scope" type="string" default="project">
+  Install scope: `project` or `user`.
+</ParamField>
+
+<ParamField path="install-skill.force" type="boolean" default="false">
+  Overwrite existing skill files if needed.
+</ParamField>
 
 ### YAML ast-grep Step
 
