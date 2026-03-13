@@ -358,15 +358,15 @@ impl TestRunner {
                 .map(DiscoveredTestCase::Unified)
                 .collect()),
             TestSource::Directory(dir) => {
-                let unified_cases = self.test_source.to_unified_test_cases(
-                    extensions,
-                    self.options.expected_extension.as_deref(),
-                )?;
                 let fs_cases = FileSystemTestCase::discover_in_directory(
                     dir,
                     extensions,
                     self.options.expected_extension.as_deref(),
                 )?;
+                let unified_cases = FileSystemTestCase::into_unified_cases(
+                    fs_cases.clone(),
+                    self.options.expected_extension.as_deref(),
+                );
 
                 let mut discovered = unified_cases
                     .into_iter()
@@ -963,7 +963,9 @@ impl TestRunner {
                 continue;
             }
 
-            files.insert(relative_path, fs::read_to_string(path)?);
+            if let Ok(file) = crate::fixtures::TestFile::from_path_with_base(path, root) {
+                files.insert(relative_path, file.content);
+            }
         }
 
         Ok(files)
@@ -1255,6 +1257,34 @@ mod tests {
             "created-file"
         );
         assert!(!fixture_dir.join("expected/legacy.js").exists());
+    }
+
+    #[tokio::test]
+    async fn directory_fixture_ignores_non_utf8_workspace_files() {
+        let temp = TempDir::new().expect("temp dir");
+        let tests_dir = temp.path().join("tests");
+        let fixture_dir = tests_dir.join("non-utf8");
+        write_fixture_file(fixture_dir.join("input/main.js"), "before-main");
+        write_fixture_file(fixture_dir.join("expected/main.js"), "after-main");
+
+        let execution_fn = boxed_execution_fn(|request| async move {
+            let root = request.input_path.parent().expect("parent");
+            fs::write(root.join("binary.bin"), [0xff, 0xfe, 0xfd]).expect("write binary file");
+            Ok(TransformationResult::Success(TransformOutput {
+                content: "after-main".to_string(),
+                rename_to: None,
+            }))
+        });
+
+        let mut runner = TestRunner::new(test_options(false), TestSource::Directory(tests_dir));
+        let summary = runner
+            .run_tests(&[".js"], execution_fn, None)
+            .await
+            .expect("run tests");
+
+        assert!(summary.is_success());
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.details[0].name, "non-utf8_main.js");
     }
 
     #[tokio::test]

@@ -111,60 +111,10 @@ impl TestSource {
             TestSource::Directory(dir) => {
                 let fs_test_cases =
                     FileSystemTestCase::discover_in_directory(dir, extensions, expected_extension)?;
-                let mut unified_cases = Vec::new();
-
-                for fs_case in fs_test_cases {
-                    if matches!(
-                        fs_case.layout,
-                        FileSystemTestCaseLayout::DirectorySnapshot { .. }
-                    ) {
-                        continue;
-                    }
-
-                    let input_files_len = fs_case.input_files.len();
-                    // For filesystem test cases, we need to handle multiple input/expected file pairs
-                    // Handle cases where expected files might be missing (for --update-snapshots)
-                    for (key, input_file) in fs_case.input_files {
-                        let (expected_content, expected_path) =
-                            match fs_case.expected_files.get(&key) {
-                                Some(expected_file) => (
-                                    expected_file.content.clone(),
-                                    Some(expected_file.path.clone()),
-                                ),
-                                None => {
-                                    // Expected file doesn't exist - create placeholder path for snapshot updates
-                                    let expected_path = match build_expected_path(
-                                        &input_file.path,
-                                        expected_extension,
-                                    ) {
-                                        Ok(path) => Some(path),
-                                        Err(e) => {
-                                            eprintln!("error constructing path: {}", e);
-                                            None
-                                        }
-                                    };
-
-                                    (String::new(), expected_path)
-                                }
-                            };
-
-                        unified_cases.push(UnifiedTestCase {
-                            name: if input_files_len > 1 {
-                                format!("{}_{}", fs_case.name, input_file.relative_path.display())
-                            } else {
-                                fs_case.name.clone()
-                            },
-                            input_code: input_file.content.clone(),
-                            expected_output_code: expected_content,
-                            should_error: fs_case.should_error,
-                            input_path: Some(input_file.path.clone()),
-                            logical_input_path: Some(input_file.path.clone()),
-                            expected_output_path: expected_path,
-                        });
-                    }
-                }
-
-                Ok(unified_cases)
+                Ok(FileSystemTestCase::into_unified_cases(
+                    fs_test_cases,
+                    expected_extension,
+                ))
             }
             TestSource::Cases(cases) => {
                 Ok(cases
@@ -185,6 +135,60 @@ impl TestSource {
 }
 
 impl FileSystemTestCase {
+    pub fn into_unified_cases(
+        fs_test_cases: Vec<FileSystemTestCase>,
+        expected_extension: Option<&str>,
+    ) -> Vec<UnifiedTestCase> {
+        let mut unified_cases = Vec::new();
+
+        for fs_case in fs_test_cases {
+            if matches!(
+                fs_case.layout,
+                FileSystemTestCaseLayout::DirectorySnapshot { .. }
+            ) {
+                continue;
+            }
+
+            let input_files_len = fs_case.input_files.len();
+            for (key, input_file) in fs_case.input_files {
+                let (expected_content, expected_path) = match fs_case.expected_files.get(&key) {
+                    Some(expected_file) => (
+                        expected_file.content.clone(),
+                        Some(expected_file.path.clone()),
+                    ),
+                    None => {
+                        let expected_path =
+                            match build_expected_path(&input_file.path, expected_extension) {
+                                Ok(path) => Some(path),
+                                Err(e) => {
+                                    eprintln!("error constructing path: {}", e);
+                                    None
+                                }
+                            };
+
+                        (String::new(), expected_path)
+                    }
+                };
+
+                unified_cases.push(UnifiedTestCase {
+                    name: if input_files_len > 1 {
+                        format!("{}_{}", fs_case.name, input_file.relative_path.display())
+                    } else {
+                        fs_case.name.clone()
+                    },
+                    input_code: input_file.content.clone(),
+                    expected_output_code: expected_content,
+                    should_error: fs_case.should_error,
+                    input_path: Some(input_file.path.clone()),
+                    logical_input_path: Some(input_file.path.clone()),
+                    expected_output_path: expected_path,
+                });
+            }
+        }
+
+        unified_cases
+    }
+
     /// Discover all test cases in a directory
     pub fn discover_in_directory(
         test_dir: &Path,
@@ -268,7 +272,7 @@ impl FileSystemTestCase {
                 path: test_dir.to_path_buf(),
                 should_error,
                 layout: FileSystemTestCaseLayout::SingleFile,
-                entrypoint_files: vec![PathBuf::from("input")],
+                entrypoint_files: Vec::new(),
             });
         }
 
