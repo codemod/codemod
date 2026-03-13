@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use reqwest::{header, Client};
+use log::warn;
+use reqwest::{header, Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -14,7 +15,7 @@ use butterflow_models::{
 use crate::StateAdapter;
 
 /// API request for the sync endpoint
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct SyncRequest {
     #[serde(rename = "type")]
     request_type: String,
@@ -26,7 +27,7 @@ struct SyncRequest {
 }
 
 /// Field for the sync request
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct SyncField {
     operation: DiffOperation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,6 +40,42 @@ struct SyncResponse {
     success: bool,
     #[serde(default)]
     error: Option<String>,
+}
+
+const MAX_RETRIES: u32 = 5;
+const INITIAL_RETRY_DELAY_MS: u64 = 500;
+
+/// Send an HTTP request with retries on transient failures.
+///
+/// The `build_request` closure is called on each attempt because
+/// `RequestBuilder` is consumed by `send()`.
+async fn send_with_retry<F>(mut build_request: F) -> std::result::Result<Response, reqwest::Error>
+where
+    F: FnMut() -> RequestBuilder,
+{
+    let mut last_err = None;
+    for attempt in 0..=MAX_RETRIES {
+        match build_request().send().await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let is_transient = e.is_connect() || e.is_timeout() || e.is_request();
+                if !is_transient || attempt == MAX_RETRIES {
+                    return Err(e);
+                }
+                let delay = INITIAL_RETRY_DELAY_MS * 2u64.pow(attempt);
+                warn!(
+                    "HTTP request failed (attempt {}/{}), retrying in {}ms: {}",
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    delay,
+                    e
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap())
 }
 
 /// API state adapter (sends state updates to an API)
@@ -59,7 +96,10 @@ impl CloudStateAdapter {
         Self {
             endpoint,
             auth_token,
-            client: Client::new(),
+            client: Client::builder()
+                .http1_only()
+                .build()
+                .expect("Failed to build HTTP client"),
         }
     }
 
@@ -137,13 +177,13 @@ impl StateAdapter for CloudStateAdapter {
                 fields,
             };
 
-            let response = self
-                .client
-                .post(self.get_sync_url())
-                .header(header::AUTHORIZATION, self.get_auth_header())
-                .json(&request)
-                .send()
-                .await?;
+            let response = send_with_retry(|| {
+                self.client
+                    .post(self.get_sync_url())
+                    .header(header::AUTHORIZATION, self.get_auth_header())
+                    .json(&request)
+            })
+            .await?;
 
             if !response.status().is_success() {
                 let error_text = response
@@ -184,13 +224,13 @@ impl StateAdapter for CloudStateAdapter {
             fields,
         };
 
-        let response = self
-            .client
-            .post(self.get_sync_url())
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .json(&request)
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .post(self.get_sync_url())
+                .header(header::AUTHORIZATION, self.get_auth_header())
+                .json(&request)
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -216,12 +256,12 @@ impl StateAdapter for CloudStateAdapter {
     }
 
     async fn get_workflow_run(&self, workflow_run_id: Uuid) -> Result<WorkflowRun> {
-        let response = self
-            .client
-            .get(self.get_workflow_run_url(workflow_run_id))
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .get(self.get_workflow_run_url(workflow_run_id))
+                .header(header::AUTHORIZATION, self.get_auth_header())
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -238,12 +278,12 @@ impl StateAdapter for CloudStateAdapter {
     }
 
     async fn list_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
-        let response = self
-            .client
-            .get(self.get_workflow_runs_url())
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .get(self.get_workflow_runs_url())
+                .header(header::AUTHORIZATION, self.get_auth_header())
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -289,13 +329,13 @@ impl StateAdapter for CloudStateAdapter {
                 fields,
             };
 
-            let response = self
-                .client
-                .post(self.get_sync_url())
-                .header(header::AUTHORIZATION, self.get_auth_header())
-                .json(&request)
-                .send()
-                .await?;
+            let response = send_with_retry(|| {
+                self.client
+                    .post(self.get_sync_url())
+                    .header(header::AUTHORIZATION, self.get_auth_header())
+                    .json(&request)
+            })
+            .await?;
 
             if !response.status().is_success() {
                 let error_text = response
@@ -334,13 +374,13 @@ impl StateAdapter for CloudStateAdapter {
             fields,
         };
 
-        let response = self
-            .client
-            .post(self.get_sync_url())
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .json(&request)
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .post(self.get_sync_url())
+                .header(header::AUTHORIZATION, self.get_auth_header())
+                .json(&request)
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -366,12 +406,12 @@ impl StateAdapter for CloudStateAdapter {
     }
 
     async fn get_task(&self, task_id: Uuid) -> Result<Task> {
-        let response = self
-            .client
-            .get(self.get_task_url(task_id))
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .get(self.get_task_url(task_id))
+                .header(header::AUTHORIZATION, self.get_auth_header())
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -386,12 +426,12 @@ impl StateAdapter for CloudStateAdapter {
     }
 
     async fn get_tasks(&self, workflow_run_id: Uuid) -> Result<Vec<Task>> {
-        let response = self
-            .client
-            .get(self.get_tasks_for_workflow_url(workflow_run_id))
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .get(self.get_tasks_for_workflow_url(workflow_run_id))
+                .header(header::AUTHORIZATION, self.get_auth_header())
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -428,13 +468,13 @@ impl StateAdapter for CloudStateAdapter {
             fields,
         };
 
-        let response = self
-            .client
-            .post(self.get_sync_url())
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .json(&request)
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .post(self.get_sync_url())
+                .header(header::AUTHORIZATION, self.get_auth_header())
+                .json(&request)
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -472,13 +512,13 @@ impl StateAdapter for CloudStateAdapter {
             fields,
         };
 
-        let response = self
-            .client
-            .post(self.get_sync_url())
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .json(&request)
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .post(self.get_sync_url())
+                .header(header::AUTHORIZATION, self.get_auth_header())
+                .json(&request)
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response
@@ -504,12 +544,12 @@ impl StateAdapter for CloudStateAdapter {
     }
 
     async fn get_state(&self, workflow_run_id: Uuid) -> Result<HashMap<String, Value>> {
-        let response = self
-            .client
-            .get(self.get_state_url(workflow_run_id))
-            .header(header::AUTHORIZATION, self.get_auth_header())
-            .send()
-            .await?;
+        let response = send_with_retry(|| {
+            self.client
+                .get(self.get_state_url(workflow_run_id))
+                .header(header::AUTHORIZATION, self.get_auth_header())
+        })
+        .await?;
 
         if !response.status().is_success() {
             let error_text = response

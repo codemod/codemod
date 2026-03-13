@@ -43,6 +43,7 @@ semantic-factory = { workspace = true }
 language-core = { workspace = true }
 anyhow.workspace = true
 similar = "2.6.0"
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

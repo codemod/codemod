@@ -32,6 +32,8 @@ pub struct StepContext {
     pub node_id: String,
     pub node_name: String,
     pub task_id: String,
+    /// Optional step identifier (e.g. user-defined id or synthetic like `_codemod_auto_push`)
+    pub step_id: Option<String>,
 }
 
 /// A JSONL log record emitted to stdout
@@ -45,6 +47,8 @@ struct JsonlRecord {
     msg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +78,8 @@ pub struct StructuredLogger {
     /// When set, JSONL output is written to this raw fd instead of stdout.
     /// Used by `StdoutCaptureGuard` to bypass fd 1 redirects.
     override_fd: Arc<Mutex<Option<i32>>>,
+    /// Collects log messages for persistence to task.logs (shared across clones).
+    collected_logs: Arc<Mutex<Vec<String>>>,
 }
 
 impl Default for StructuredLogger {
@@ -90,6 +96,7 @@ impl StructuredLogger {
             seq: Arc::new(AtomicU64::new(0)),
             context: None,
             override_fd: Arc::new(Mutex::new(None)),
+            collected_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -101,6 +108,7 @@ impl StructuredLogger {
             seq: Arc::clone(&self.seq),
             context: Some(ctx),
             override_fd: Arc::clone(&self.override_fd),
+            collected_logs: Arc::clone(&self.collected_logs),
         }
     }
 
@@ -129,9 +137,21 @@ impl StructuredLogger {
         let _ = out.flush();
     }
 
+    /// Drain all collected log messages, leaving the collector empty.
+    pub fn drain_logs(&self) -> Vec<String> {
+        let mut logs = self.collected_logs.lock().unwrap();
+        std::mem::take(&mut *logs)
+    }
+
     /// Emit a log event. In JSONL mode, writes a JSON line to stdout.
     /// In Text mode, this is a no-op (caller should use `log!` macros).
+    /// In both modes the message is collected for task log persistence.
     pub fn log(&self, level: &str, msg: &str) {
+        // Always collect for task log persistence
+        if let Ok(mut logs) = self.collected_logs.lock() {
+            logs.push(msg.to_string());
+        }
+
         if self.format != OutputFormat::Jsonl {
             return;
         }
@@ -142,6 +162,7 @@ impl StructuredLogger {
             event: "log".to_string(),
             msg: Some(msg.to_string()),
             step_name: self.context.as_ref().map(|c| c.step_name.clone()),
+            step_id: self.context.as_ref().and_then(|c| c.step_id.clone()),
             step_index: self.context.as_ref().map(|c| c.step_index),
             node_id: self.context.as_ref().map(|c| c.node_id.clone()),
             node_name: self.context.as_ref().map(|c| c.node_name.clone()),
@@ -170,6 +191,7 @@ impl StructuredLogger {
             event: "step_start".to_string(),
             msg: None,
             step_name: Some(ctx.step_name.clone()),
+            step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
             node_id: Some(ctx.node_id.clone()),
             node_name: Some(ctx.node_name.clone()),
@@ -198,6 +220,7 @@ impl StructuredLogger {
             event: "step_end".to_string(),
             msg: None,
             step_name: Some(ctx.step_name.clone()),
+            step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
             node_id: Some(ctx.node_id.clone()),
             node_name: Some(ctx.node_name.clone()),
@@ -328,10 +351,12 @@ impl Drop for StdoutCaptureGuard {
 #[macro_export]
 macro_rules! slog {
     ($logger:expr, $level:ident, $($arg:tt)*) => {
-        if $logger.is_jsonl() {
-            $logger.log(stringify!($level), &format!($($arg)*));
-        } else {
-            log::$level!($($arg)*);
+        {
+            let msg = format!($($arg)*);
+            $logger.log(stringify!($level), &msg);
+            if !$logger.is_jsonl() {
+                log::$level!("{}", msg);
+            }
         }
     };
 }
@@ -363,6 +388,7 @@ mod tests {
             node_id: "n1".to_string(),
             node_name: "Node 1".to_string(),
             task_id: "t1".to_string(),
+            step_id: None,
         };
         let child = logger.with_context(ctx);
         // Both share the same seq counter

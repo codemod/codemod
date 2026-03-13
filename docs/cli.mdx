@@ -411,6 +411,8 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
       </Tree.Folder>
     </Tree>
 
+    Use the `input/` + `expected/` layout when the codemod creates or deletes files. The runner compares the whole directory snapshot but still reports results per file.
+
     Then run:
 
     ```bash
@@ -461,7 +463,7 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 
 **`jssg test`**
 
-Test a JS ast-grep(jssg) codemod using before/after fixtures.
+Test a JS ast-grep(jssg) codemod using before/after fixtures. Supports both single-file `input.*`/`expected.*` cases and directory snapshot fixtures using `input/` + `expected/`.
 
 ```bash
 npx codemod jssg test <codemod_file> [options]
@@ -480,7 +482,7 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--filter" type="string">
-  A pattern to run only tests whose names match the filter. Test names correspond to the subdirectory names within the test directory.
+  A pattern to run only tests whose names match the filter. Single-file fixtures use the test case directory name. Directory snapshot fixtures are still reported per file, using names like `<fixture>_<relative-path>`.
 </ResponseField>
 
 <ResponseField name="--reporter" type="string">
@@ -526,7 +528,7 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--update-snapshots, -u" type="boolean">
-  Create or update the `expected` files with the output of the codemod. (`-u` is a shorthand for `--update-snapshots`)
+  Create or update the `expected` files with the output of the codemod. For directory snapshot fixtures, this also creates missing expected files and removes stale ones. (`-u` is a shorthand for `--update-snapshots`)
 </ResponseField>
 
 <ResponseField name="--expect-errors" type="string">

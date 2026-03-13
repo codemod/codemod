@@ -46,7 +46,7 @@ npx codemod init
 | `workflow.yaml` | [Workflow definition](/workflows/reference) with nodes and steps |
 | `scripts/` | JavaScript/TypeScript codemods ([JSSG](/jssg/quickstart)) |
 | `rules/` | YAML ast-grep rule definitions |
-| `tests/` | Test fixtures with input/expected pairs |
+| `tests/` | Test fixtures with `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 
 <Info>
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.

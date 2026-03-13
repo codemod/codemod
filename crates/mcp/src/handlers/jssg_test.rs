@@ -1,4 +1,4 @@
-use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -18,8 +18,8 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    ReporterType, TestOptions, TestRunner, TestSource, TransformOutput, TransformationResult,
-    TransformationTestCase,
+    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
+    TransformationResult, TransformationTestCase,
 };
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -235,13 +235,12 @@ impl JssgTestHandler {
 
         // Create execution function
         let execution_fn = Box::new(
-            move |input_code: &str,
-                  input_path: &Path,
+            move |request: ExecutionRequest,
                   capabilities: Option<HashSet<LlrtSupportedModules>>| {
                 let codemod_path = codemod_path.clone();
                 let resolver = resolver.clone();
-                let input_code = input_code.to_string();
-                let input_path = input_path.to_path_buf();
+                let input_code = request.input_code;
+                let input_path = request.input_path;
                 let metrics_context = MetricsContext::new();
 
                 Box::pin(async move {
@@ -264,20 +263,7 @@ impl JssgTestHandler {
                     let CodemodOutput { primary, .. } =
                         execute_codemod_with_quickjs(options).await?;
 
-                    match primary {
-                        ExecutionResult::Modified(modified) => {
-                            Ok(TransformationResult::Success(TransformOutput {
-                                content: modified.content,
-                                rename_to: modified.rename_to,
-                            }))
-                        }
-                        ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                            Ok(TransformationResult::Success(TransformOutput {
-                                content: input_code,
-                                rename_to: None,
-                            }))
-                        }
-                    }
+                    Ok(map_execution_result(primary, input_code))
                 })
                     as Pin<
                         Box<

@@ -188,7 +188,7 @@ nodes:
 | Command | Description |
 |---------|-------------|
 | `npx codemod jssg run <file> <target> --language <lang>` | Run a jssg codemod directly |
-| `npx codemod jssg test <file> --language <lang>` | Test jssg codemod with fixtures |
+| `npx codemod jssg test <file> --language <lang>` | Test jssg codemod with single-file or directory-snapshot fixtures |
 
 ### Cache Management
 

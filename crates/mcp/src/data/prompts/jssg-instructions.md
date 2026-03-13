@@ -1244,6 +1244,13 @@ Options:
   -u, --update-snapshots Update expected outputs
   -v, --verbose         Show detailed output
   --fail-fast          Stop on first failure
+
+Fixture layouts:
+  - Single-file: input.ts + expected.ts
+  - Directory snapshot: input/ + expected/
+    - Files only in expected/ assert creation
+    - Files only in input/ assert deletion
+    - Extra produced files fail unless -u updates snapshots
 ```
 
 ## Publishing

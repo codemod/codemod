@@ -304,9 +304,11 @@ pub async fn handler(
     let use_tui = false;
 
     if use_tui {
-        config.quiet = true;
+        // Don't set quiet=true on the engine — the TUI's StdioGuard already
+        // redirects fd 1/2 to /dev/null, so runner println! is suppressed.
+        // During passthrough (log viewer), stdout is restored and we *want*
+        // runner output to reach the terminal.
         config.progress_callback = Arc::new(None);
-        engine.set_quiet(true);
     }
 
     #[cfg(unix)]

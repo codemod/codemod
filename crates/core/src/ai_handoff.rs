@@ -133,19 +133,29 @@ pub fn build_agent_command(
 
     match canonical {
         "claude-code" => {
-            cmd.arg("-p").arg(&full_prompt);
+            // Claude Code supports piping the prompt over stdin in print mode.
+            // This avoids very long argv payloads and is more compatible with
+            // the Bun-based CLI entrypoint.
+            let _ = full_prompt;
+            cmd.arg("--dangerously-skip-permissions").arg("-p");
         }
         "codex" => {
-            cmd.arg("--quiet").arg(&full_prompt);
+            // Pipe the prompt via stdin using `codex e -`
+            let _ = full_prompt;
+            cmd.env("RUST_LOG", "error");
+            cmd.arg("--full-auto").arg("e").arg("-");
         }
         "aider" => {
             cmd.arg("--message").arg(&full_prompt).arg("--yes");
         }
         "goose" => {
+            cmd.env("GOOSE_MODE", "auto");
             cmd.arg("run").arg("--text").arg(&full_prompt);
         }
         "opencode" | "openclaw" => {
-            cmd.arg("--message").arg(&full_prompt);
+            cmd.arg("--dangerously-skip-permissions")
+                .arg("--message")
+                .arg(&full_prompt);
         }
         _ => return None,
     }

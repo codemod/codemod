@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use codemod_sandbox::metrics::MetricEntry;
-use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
 use codemod_sandbox::MetricsData;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
@@ -21,7 +21,10 @@ use codemod_sandbox::{
     },
     utils::project_discovery::find_tsconfig,
 };
-use testing_utils::{TestOptions, TestRunner, TestSource, TransformOutput, TransformationResult};
+use testing_utils::{
+    map_execution_result, ExecutionRequest, TestOptions, TestRunner, TestSource,
+    TransformationResult,
+};
 
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
@@ -233,20 +236,22 @@ async fn handler_impl(args: &Command) -> Result<()> {
         };
     let update_snapshots = args.update_snapshots;
     let execution_fn = Box::new(
-        move |input_code: &str,
-              input_path: &Path,
-              capabilities: Option<HashSet<LlrtSupportedModules>>| {
+        move |request: ExecutionRequest, capabilities: Option<HashSet<LlrtSupportedModules>>| {
             let codemod_path = codemod_path_clone.clone();
             let resolver = resolver.clone();
-            let input_code = input_code.to_string();
-            let input_path = input_path.to_path_buf();
+            let input_code = request.input_code;
+            let input_path = request.input_path;
+            let logical_input_path = request.logical_input_path;
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
 
             Box::pin(async move {
-                let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
+                let logical_input_path = logical_input_path.unwrap_or_else(|| input_path.clone());
+                let test_case_dir = logical_input_path
+                    .parent()
+                    .unwrap_or(logical_input_path.as_path());
                 let per_test_config =
                     TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
 
@@ -322,20 +327,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     }
                 }
 
-                match primary {
-                    ExecutionResult::Modified(modified) => {
-                        Ok(TransformationResult::Success(TransformOutput {
-                            content: modified.content,
-                            rename_to: modified.rename_to,
-                        }))
-                    }
-                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                        Ok(TransformationResult::Success(TransformOutput {
-                            content: input_code,
-                            rename_to: None,
-                        }))
-                    }
-                }
+                Ok(map_execution_result(primary, input_code))
             })
                 as Pin<
                     Box<
