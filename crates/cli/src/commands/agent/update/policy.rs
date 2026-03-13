@@ -17,10 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(in crate::commands::agent) const DEFAULT_UPDATE_SOURCE: &str = "registry";
-// Temporary placeholder key until registry-backed signing key management is finalized.
-const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ID: &str = "default";
-const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_BASE64: &str =
-    "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=";
+// Temporary placeholder keyring until registry-backed signing key management is finalized.
+const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS: &[(&str, &str)] =
+    &[("default", "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=")];
 const MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
@@ -169,15 +168,13 @@ fn resolve_manifest_public_keys(
                 .map(Some)
         }
         Err(std::env::VarError::NotPresent) => {
-            let mut keyring = HashMap::new();
-            let bundled = parse_manifest_public_key(
-                DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_BASE64,
-                "bundled managed update manifest public key",
-            )?;
-            keyring.insert(
-                DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEY_ID.to_string(),
-                bundled,
-            );
+            let mut keyring =
+                HashMap::with_capacity(DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS.len());
+            for (kid, raw_key) in DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS {
+                let source_label = format!("bundled managed update manifest public key `{kid}`");
+                let bundled = parse_manifest_public_key(raw_key, &source_label)?;
+                keyring.insert((*kid).to_string(), bundled);
+            }
             Ok(Some(keyring))
         }
         Err(std::env::VarError::NotUnicode(_)) => Err(format!(

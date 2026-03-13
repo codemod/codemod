@@ -17,7 +17,10 @@ use super::update::types::{
     MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR, MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER,
     MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
 };
-use super::{interactive_user_scope_label, managed_components_from_install};
+use super::{
+    goose_project_scope_command_warning, interactive_user_scope_label,
+    managed_components_from_install, scope_prompt_options,
+};
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
     ManagedStateWriteResult,
@@ -198,6 +201,35 @@ fn interactive_user_scope_label_uses_explicit_harness_path() {
 }
 
 #[test]
+fn interactive_user_scope_label_uses_goose_command_config_hint() {
+    assert_eq!(
+        interactive_user_scope_label(Harness::Goose),
+        "user (goose: ~/.goose/skills + ~/.config/goose/config.yaml)"
+    );
+}
+
+#[test]
+fn goose_scope_prompt_defaults_to_user_with_command_explanation() {
+    let (options, starting_cursor) = scope_prompt_options(Harness::Goose);
+    assert_eq!(starting_cursor, 0);
+    assert_eq!(options[0].scope, InstallScope::User);
+    assert!(options[0].label.contains("/codemod"));
+    assert!(options[0].label.contains("recommended"));
+    assert_eq!(options[1].scope, InstallScope::Project);
+    assert!(options[1].label.contains("skills only"));
+}
+
+#[test]
+fn goose_project_scope_warning_is_explicit() {
+    let warning = goose_project_scope_command_warning(Harness::Goose, InstallScope::Project)
+        .expect("expected goose project warning");
+    assert!(warning.contains("/codemod"));
+    assert!(warning.contains("project scope installed skills only"));
+    assert!(warning.contains("--user"));
+    assert!(goose_project_scope_command_warning(Harness::Goose, InstallScope::User).is_none());
+}
+
+#[test]
 fn install_output_json_includes_codemod_mcp_entry() {
     let update_policy = UpdatePolicyContext {
         mode: UpdatePolicyMode::Manual,
@@ -220,7 +252,7 @@ fn install_output_json_includes_codemod_mcp_entry() {
             scope: Some(InstallScope::Project),
         },
     ];
-    let managed_components = managed_components_from_install(&installed, &[], &[]);
+    let managed_components = managed_components_from_install(&installed, &[], &[], &[]);
     let component_decisions =
         build_component_reconcile_decisions(&update_policy, Harness::Claude, &managed_components);
     let output = build_install_output(BuildInstallOutputInput {
@@ -336,9 +368,14 @@ fn managed_components_include_discovery_guides_and_mcp_kind() {
     let periodic_trigger_paths = vec![PathBuf::from(
         "/tmp/.claude/codemod/periodic-update/check-updates.sh",
     )];
-    let components =
-        managed_components_from_install(&installed, &discovery_paths, &periodic_trigger_paths);
-    assert_eq!(components.len(), 5);
+    let command_paths = vec![PathBuf::from("/tmp/.claude/commands/codemod.md")];
+    let components = managed_components_from_install(
+        &installed,
+        &command_paths,
+        &discovery_paths,
+        &periodic_trigger_paths,
+    );
+    assert_eq!(components.len(), 6);
 
     let mcp_component = components
         .iter()
@@ -363,6 +400,12 @@ fn managed_components_include_discovery_guides_and_mcp_kind() {
         periodic_component.kind,
         ManagedComponentKind::DiscoveryGuide
     );
+
+    let command_component = components
+        .iter()
+        .find(|component| component.id == "command:codemod")
+        .expect("expected codemod command component");
+    assert_eq!(command_component.kind, ManagedComponentKind::Command);
 }
 
 #[test]
