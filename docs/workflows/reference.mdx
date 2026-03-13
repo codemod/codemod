@@ -294,7 +294,9 @@ steps:
       package: "@your-scope/my-codemod"
 ```
 
-**Install Skill Step Parameters**
+In dry-run mode, this step is skipped. In non-interactive runs, it is also skipped by default unless the workflow is run with `--install-skill`. See [CLI reference](/cli#codemod-workflow).
+
+**Install Skill Step Parameters**:
 
 <ParamField path="name" type="string" required>
   Step label.
