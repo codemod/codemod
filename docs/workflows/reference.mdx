@@ -514,7 +514,31 @@ nodes:
         run: ./deploy.sh
 ```
 
-Resume paused tasks:
+### Interactive TUI
+
+On Unix systems (macOS, Linux), when you run a workflow that contains manual nodes or triggers, an interactive TUI dashboard launches automatically. The TUI lets you:
+
+- Monitor task progress in real time
+- Trigger awaiting tasks with a keypress (`t` for one, `T` for all)
+- Retry failed tasks (`R`)
+- View task logs inline
+- Cancel the workflow (`c`)
+
+You can also launch the TUI standalone to browse past workflow runs:
+
+```bash
+npx codemod workflow tui
+```
+
+See the [CLI reference](/cli#workflow-tui) for all TUI keyboard shortcuts and options.
+
+<Info>
+  The TUI is Unix-only (macOS, Linux). On Windows, use the CLI commands below to manage manual triggers. Use `--no-interactive` to disable TUI auto-launch.
+</Info>
+
+### CLI resume
+
+Resume paused tasks from the command line:
 ```bash
 # Resume all paused tasks
 npx codemod workflow resume -i <run-id> --trigger-all
