@@ -672,7 +672,7 @@ async fn test_run_workflow() {
 }
 
 #[tokio::test]
-async fn test_run_script_logs_command_notice_before_execution() {
+async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
 
@@ -684,7 +684,11 @@ async fn test_run_script_logs_command_notice_before_execution() {
         .await
         .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
 
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
     let task = tasks
@@ -694,12 +698,16 @@ async fn test_run_script_logs_command_notice_before_execution() {
 
     let logs = task.logs.join("\n");
     assert!(
-        logs.contains("About to execute shell command"),
-        "task logs should include a shell command notice, got: {logs}"
+        logs.contains("shell command executed"),
+        "task logs should include the command output, got: {logs}"
     );
     assert!(
-        logs.contains(&command),
-        "task logs should include the shell command, got: {logs}"
+        !logs.contains("About to execute shell command"),
+        "task logs should not persist the shell command notice, got: {logs}"
+    );
+    assert!(
+        !logs.contains(&command),
+        "task logs should not persist the raw shell command, got: {logs}"
     );
 }
 
@@ -725,7 +733,7 @@ async fn test_run_script_approval_callback_receives_command_to_be_executed() {
     let engine = Engine::with_state_adapter(state_adapter, config);
 
     let workflow =
-        create_single_run_script_workflow("echo 'Hello ${params.repo_name}'".to_string());
+        create_single_run_script_workflow("echo 'Hello ${{ params.repo_name }}'".to_string());
     let params = HashMap::from([("repo_name".to_string(), json!("butterflow"))]);
 
     let workflow_run_id = engine
@@ -733,7 +741,11 @@ async fn test_run_script_approval_callback_receives_command_to_be_executed() {
         .await
         .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
 
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
     let task = tasks
@@ -743,10 +755,7 @@ async fn test_run_script_approval_callback_receives_command_to_be_executed() {
     assert_eq!(task.status, TaskStatus::Completed);
 
     let observed_commands = observed_commands.lock().unwrap();
-    assert_eq!(
-        observed_commands.as_slice(),
-        ["echo 'Hello ${params.repo_name}'"]
-    );
+    assert_eq!(observed_commands.as_slice(), ["echo 'Hello butterflow'"]);
 }
 
 #[tokio::test]
@@ -771,7 +780,11 @@ async fn test_run_script_approval_callback_can_reject_execution() {
         .await
         .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Failed);
 
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
     let task = tasks
