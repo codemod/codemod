@@ -3,9 +3,9 @@ use crate::commands::harness_adapter::{
     read_managed_install_state, resolve_adapter, resolve_install_scope,
     runtime_paths_for_execution, skill_discovery_guide_paths,
     upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
-    upsert_skill_discovery_guides, Harness, HarnessAdapterError, InstallRequest, InstallScope,
-    InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot, OutputFormat,
-    PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
+    upsert_skill_discovery_guides_with_command_status, Harness, HarnessAdapterError,
+    InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
+    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
 };
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
@@ -622,21 +622,6 @@ fn run_install_flow(
         );
     }
 
-    match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
-        Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
-            "Updated discovery hints in: {}",
-            updated_files
-                .iter()
-                .map(|path| format_output_path(path))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-        Ok(_) => {}
-        Err(error) => warnings.push(format!(
-            "Installed skills, but failed to update harness discovery hints: {error}"
-        )),
-    }
-
     let command_paths = match runtime_paths_for_execution(None, None) {
         Ok(runtime_paths) => match upsert_mcs_command_entrypoints_with_runtime(
             resolved_adapter.harness,
@@ -671,6 +656,25 @@ fn run_install_flow(
             Vec::new()
         }
     };
+
+    match upsert_skill_discovery_guides_with_command_status(
+        resolved_adapter.harness,
+        install_inputs.scope,
+        !command_paths.is_empty(),
+    ) {
+        Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
+            "Updated discovery hints in: {}",
+            updated_files
+                .iter()
+                .map(|path| format_output_path(path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Ok(_) => {}
+        Err(error) => warnings.push(format!(
+            "Installed skills, but failed to update harness discovery hints: {error}"
+        )),
+    }
 
     let discovery_paths = match skill_discovery_guide_paths(
         resolved_adapter.harness,

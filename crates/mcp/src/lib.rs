@@ -38,23 +38,28 @@ impl CodemodMcpServer {
     }
 
     fn log_usage(&self, event: &str) {
-        let Some(path) = self.usage_log_path.as_ref() else {
+        let Some(path) = self.usage_log_path.clone() else {
             return;
         };
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        let Some(parent) = path.parent() else {
-            return;
-        };
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-        let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-            return;
-        };
-        let _ = writeln!(file, "{timestamp}\t{event}");
+        let event = event.to_string();
+        std::mem::drop(tokio::task::spawn_blocking(move || {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                if std::fs::create_dir_all(parent).is_err() {
+                    return;
+                }
+            }
+            let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+                return;
+            };
+            let _ = writeln!(file, "{timestamp}\t{event}");
+        }));
     }
 }
 
@@ -257,6 +262,47 @@ struct GetInstructionsRequest {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    static CURRENT_DIR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let original = std::env::current_dir().expect("expected current dir");
+            std::env::set_current_dir(path).expect("expected to switch current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("expected to restore current dir");
+        }
+    }
+
+    fn wait_for_usage_log(path: &std::path::Path) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(content) = fs::read_to_string(path) {
+                if !content.trim().is_empty() {
+                    return content;
+                }
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for usage log at {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[tokio::test]
     async fn test_mcp_server_creation() {
@@ -266,5 +312,28 @@ mod tests {
         assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_log_usage_supports_relative_paths() {
+        let _guard = CURRENT_DIR_GUARD.lock().unwrap();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("expected monotonic system time")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("codemod-mcp-log-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&temp_dir).expect("expected temp dir");
+        let _cwd_guard = CurrentDirGuard::set(&temp_dir);
+
+        let relative_log_path = PathBuf::from("usage.log");
+        let server = CodemodMcpServer::new(Some(relative_log_path.clone()));
+        server.log_usage("tool:get_jssg_instructions");
+
+        let content = wait_for_usage_log(&temp_dir.join(relative_log_path));
+        assert!(content.contains("tool:get_jssg_instructions"));
+
+        drop(_cwd_guard);
+        fs::remove_dir_all(&temp_dir).expect("expected temp dir cleanup");
     }
 }

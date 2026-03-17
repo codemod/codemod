@@ -707,12 +707,18 @@ pub fn install_restart_hint(harness: Harness) -> String {
     )
 }
 
-pub fn upsert_skill_discovery_guides(
+pub(crate) fn upsert_skill_discovery_guides_with_command_status(
     harness: Harness,
     scope: InstallScope,
+    command_available: bool,
 ) -> AdapterResult<Vec<PathBuf>> {
     let runtime_paths = RuntimePaths::current()?;
-    upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths)
+    upsert_skill_discovery_guides_with_runtime_and_command_status(
+        harness,
+        scope,
+        command_available,
+        &runtime_paths,
+    )
 }
 
 pub fn skill_discovery_guide_paths(
@@ -1550,8 +1556,23 @@ pub(crate) fn upsert_skill_discovery_guides_with_runtime(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
+    upsert_skill_discovery_guides_with_runtime_and_command_status(
+        harness,
+        scope,
+        mcs_command_is_available(harness, scope),
+        runtime_paths,
+    )
+}
+
+fn upsert_skill_discovery_guides_with_runtime_and_command_status(
+    harness: Harness,
+    scope: InstallScope,
+    command_available: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
     let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let discovery_block = render_skill_discovery_block(harness, scope, &skill_root_hint);
+    let discovery_block =
+        render_skill_discovery_block(harness, &skill_root_hint, command_available);
     let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
     let mut updated_files = Vec::new();
 
@@ -1623,15 +1644,15 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
 
 fn render_skill_discovery_block(
     harness: Harness,
-    scope: InstallScope,
     skill_root_hint: &str,
+    command_available: bool,
 ) -> String {
     let mcp_line = if harness_supports_mcp(harness) {
         "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work.\n".to_string()
     } else {
         String::new()
     };
-    let command_line = if mcs_command_is_available(harness, scope) {
+    let command_line = if command_available {
         format!("- Codemod creation command: `/{MCS_COMMAND_NAME}`\n")
     } else {
         String::new()
@@ -2450,22 +2471,9 @@ fn cleanup_legacy_mcp_config(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<()> {
-    let Some(legacy_path) = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)?
-    else {
-        return Ok(());
-    };
-
-    if !legacy_path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(&legacy_path).map_err(|error| {
-        HarnessAdapterError::InstallFailed(format!(
-            "Failed to remove legacy MCP config {}: {error}",
-            legacy_path.display()
-        ))
-    })?;
-
+    let _ = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)?;
+    // Intentionally leave legacy MCP config files in place. The shared legacy
+    // Opencode mcp.json format can contain unrelated user-managed MCP servers.
     Ok(())
 }
 
@@ -4302,6 +4310,24 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn upsert_skill_discovery_guides_can_omit_command_line_when_command_install_fails() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime_and_command_status(
+            Harness::Claude,
+            InstallScope::Project,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 1);
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        let claude_content = fs::read_to_string(&claude_path).unwrap();
+        assert!(!claude_content.contains("Codemod creation command: `/codemod`"));
+    }
+
+    #[test]
     fn upsert_mcs_command_entrypoints_writes_supported_harness_files() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
 
@@ -5931,7 +5957,7 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn install_mcp_server_config_removes_legacy_opencode_mcp_file() {
+    fn install_mcp_server_config_preserves_legacy_opencode_mcp_file() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let legacy_path = runtime_paths.cwd.join(".opencode/mcp.json");
         fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
@@ -5947,7 +5973,7 @@ codemod-skill-version: 0.1.0
 
         assert_eq!(config_path, runtime_paths.cwd.join("opencode.json"));
         assert!(config_path.exists());
-        assert!(!legacy_path.exists());
+        assert!(legacy_path.exists());
     }
 
     #[test]

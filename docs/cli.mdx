@@ -83,19 +83,22 @@ Along with skill files, install writes or updates a Codemod MCP server entry:
 }
 ```
 
+For Opencode, install writes `opencode.json` using the Opencode-specific `mcp` schema instead of `mcpServers`.
+
 MCP config paths by harness and scope:
 - `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
 - `goose`: `./.goose/mcp.json` (project), `~/.goose/mcp.json` (user)
-- `opencode`: `./.opencode/mcp.json` (project), `~/.opencode/mcp.json` (user)
+- `opencode`: `./opencode.json` (project), `~/.config/opencode/opencode.json` (user)
 - `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
 - `codex` (CLI + macOS app): `./.codex/config.toml` (project), `~/.codex/config.toml` (user) under `[mcp_servers.codemod]`
 - `antigravity`: not configured yet (skill install only)
 
-If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
+If a conflicting Codemod MCP entry already exists, re-run with `--force` to overwrite it. For Opencode, Codemod leaves any legacy `./.opencode/mcp.json` or `~/.opencode/mcp.json` file in place to avoid deleting unrelated MCP servers.
 
 `ai` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
 - `claude`: `CLAUDE.md`
-- `goose`, `opencode`, `cursor`: `AGENTS.md` and `CLAUDE.md`
+- `goose`, `cursor`: `AGENTS.md` and `CLAUDE.md`
+- `opencode`: `AGENTS.md`
 - `codex`, `antigravity`: `AGENTS.md`
 `ai` also installs `/codemod` where the harness has a native command or workflow file surface:
 - `claude`: `./.claude/commands/codemod.md` (project), `~/.claude/commands/codemod.md` (user)
@@ -137,7 +140,7 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
-This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/OpenCode/Cursor, `AGENTS.md` for Codex/Antigravity) without duplication, then prompts you to restart/reload the harness session.
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/Cursor, `AGENTS.md` for OpenCode/Codex/Antigravity) without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
 npx codemod <package-id>
