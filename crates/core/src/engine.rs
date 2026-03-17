@@ -3480,7 +3480,7 @@ impl Engine {
                     .workflow_run_config
                     .capabilities_security_callback
                     .as_ref()
-                    .map(|callback| Arc::new(callback.clone())),
+                    .map(|callback| callback.clone()),
             },
             &None,
             None,

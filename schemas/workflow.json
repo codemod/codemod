@@ -53,6 +53,51 @@
     "nodes"
   ],
   "$defs": {
+    "BuiltinShardMethod": {
+      "description": "Built-in sharding method configuration.",
+      "type": "object",
+      "properties": {
+        "max_files_per_shard": {
+          "description": "Target number of files per shard",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "min_shard_size": {
+          "description": "Minimum shard size — trailing shards smaller than this are merged\ninto the previous shard (optional)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "type": {
+          "description": "Built-in method type",
+          "$ref": "#/$defs/BuiltinShardType"
+        }
+      },
+      "required": [
+        "type",
+        "max_files_per_shard"
+      ]
+    },
+    "BuiltinShardType": {
+      "description": "Type of built-in sharding method.",
+      "oneOf": [
+        {
+          "description": "Group by immediate subdirectory under target, then bin-pack",
+          "type": "string",
+          "const": "directory"
+        },
+        {
+          "description": "Group by CODEOWNERS team, then bin-pack",
+          "type": "string",
+          "const": "codeowner"
+        }
+      ]
+    },
     "CommitConfig": {
       "description": "Configuration for a commit checkpoint on a step.\nWhen present (and cloud mode is active), a git commit is created after the step runs.",
       "type": "object",
@@ -80,6 +125,19 @@
       },
       "required": [
         "message"
+      ]
+    },
+    "CustomShardFunction": {
+      "description": "Custom shard function configuration.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "description": "Path to JS/TS shard function file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "function"
       ]
     },
     "InstallSkillHarness": {
@@ -386,6 +444,19 @@
           "description": "Workspace-wide analysis with cross-file support",
           "type": "string",
           "const": "workspace"
+        }
+      ]
+    },
+    "ShardMethod": {
+      "description": "Sharding method — either a built-in algorithm or a custom JS/TS function.\n\nDeserialized from YAML as:\n  `{ type: directory, max_files_per_shard: 30 }`\n  `{ function: \"./scripts/shard.ts\" }`",
+      "anyOf": [
+        {
+          "description": "Built-in sharding method with sizing parameters",
+          "$ref": "#/$defs/BuiltinShardMethod"
+        },
+        {
+          "description": "Custom JS/TS shard function",
+          "$ref": "#/$defs/CustomShardFunction"
         }
       ]
     },
@@ -1226,121 +1297,6 @@
         "package"
       ]
     },
-    "UseShard": {
-      "description": "Configuration for the shard step action. Evaluates file shards and writes results to workflow state.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "description": "Sharding method configuration — either a built-in algorithm or a custom function",
-          "$ref": "#/$defs/ShardMethod"
-        },
-        "target": {
-          "description": "Root directory to scan for files (required for built-in methods)",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "output_state": {
-          "description": "State key to write shard results to",
-          "type": "string"
-        },
-        "file_pattern": {
-          "description": "Glob pattern for eligible files (used when js-ast-grep is not set)",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "js-ast-grep": {
-          "description": "Optional js-ast-grep configuration for codemod-based pre-filtering. When set, the engine dry-runs the codemod and only includes files where the transform produces changes.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UseJSAstGrep"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "method",
-        "output_state"
-      ]
-    },
-    "ShardMethod": {
-      "description": "Sharding method — either a built-in algorithm or a custom JS/TS function",
-      "oneOf": [
-        {
-          "description": "Built-in sharding method with sizing parameters",
-          "$ref": "#/$defs/BuiltinShardMethod"
-        },
-        {
-          "description": "Custom JS/TS shard function",
-          "$ref": "#/$defs/CustomShardFunction"
-        }
-      ]
-    },
-    "BuiltinShardMethod": {
-      "description": "Built-in sharding method configuration",
-      "type": "object",
-      "properties": {
-        "type": {
-          "description": "Built-in method type",
-          "$ref": "#/$defs/BuiltinShardType"
-        },
-        "max_files_per_shard": {
-          "description": "Target number of files per shard",
-          "type": "integer",
-          "minimum": 1
-        },
-        "min_shard_size": {
-          "description": "Minimum shard size — trailing shards smaller than this are merged into the previous shard (optional)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "default": null,
-          "minimum": 1
-        }
-      },
-      "required": [
-        "type",
-        "max_files_per_shard"
-      ]
-    },
-    "BuiltinShardType": {
-      "description": "Type of built-in sharding method",
-      "oneOf": [
-        {
-          "description": "Group by immediate subdirectory under target, then bin-pack",
-          "type": "string",
-          "const": "directory"
-        },
-        {
-          "description": "Group by CODEOWNERS team, then bin-pack",
-          "type": "string",
-          "const": "codeowner"
-        }
-      ]
-    },
-    "CustomShardFunction": {
-      "description": "Custom shard function executed in the jssg engine. The function exports a default that receives ShardInput and returns ShardResult[].",
-      "type": "object",
-      "properties": {
-        "function": {
-          "description": "Path to JS/TS shard function file (runs in jssg engine with access to codemod:ast-grep and codemod:workflow)",
-          "type": "string"
-        }
-      },
-      "required": [
-        "function"
-      ]
-    },
     "UseJSAstGrep": {
       "type": "object",
       "properties": {
@@ -1430,6 +1386,52 @@
       },
       "required": [
         "js_file"
+      ]
+    },
+    "UseShard": {
+      "description": "Configuration for the `shard` step action.\nEvaluates file shards and writes results to workflow state.",
+      "type": "object",
+      "properties": {
+        "file_pattern": {
+          "description": "Glob pattern for eligible files (used when js-ast-grep is not set)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "js-ast-grep": {
+          "description": "Optional js-ast-grep configuration for codemod-based pre-filtering.\nWhen set, the engine dry-runs the codemod against matched files and\nonly includes files where the transform produces changes.\nThe `include` field also serves as the file pattern for discovery.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UseJSAstGrep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "description": "Sharding method configuration — either a built-in algorithm or a custom function",
+          "$ref": "#/$defs/ShardMethod"
+        },
+        "output_state": {
+          "description": "State key to write shard results to",
+          "type": "string"
+        },
+        "target": {
+          "description": "Root directory to scan for files",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "method",
+        "output_state"
       ]
     },
     "WorkflowParams": {
