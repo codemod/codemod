@@ -1,7 +1,10 @@
-use butterflow_core::config::WorkflowRunConfig;
+use butterflow_core::config::{
+    ShellCommandApprovalCallback, ShellCommandExecutionRequest, WorkflowRunConfig,
+};
 use butterflow_state::mock_adapter::MockStateAdapter;
 use std::collections::HashMap;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use butterflow_core::engine::{CapabilitiesData, Engine};
@@ -56,6 +59,42 @@ impl Drop for EnvVarGuard {
         } else {
             std::env::remove_var(&self.key);
         }
+    }
+}
+
+async fn wait_for_task_status<F>(
+    engine: &Engine,
+    workflow_run_id: Uuid,
+    node_id: &str,
+    predicate: F,
+) -> TaskStatus
+where
+    F: Fn(TaskStatus) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(3);
+
+    loop {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let task = tasks.iter().find(|task| task.node_id == node_id);
+
+        if let Some(task) = task {
+            if predicate(task.status) {
+                return task.status;
+            }
+
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for node '{node_id}' to reach expected status, last status was {:?}",
+                task.status
+            );
+        } else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for task for node '{node_id}' to be created"
+            );
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 }
 
@@ -161,6 +200,43 @@ fn create_test_workflow() -> Workflow {
                 pull_request: None,
             },
         ],
+    }
+}
+
+fn create_single_run_script_workflow(command: String) -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "shell-node".to_string(),
+            name: "Shell Node".to_string(),
+            description: Some("Workflow with a single shell command step".to_string()),
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("shell-step".to_string()),
+                name: "Shell Step".to_string(),
+                action: StepAction::RunScript(command),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
     }
 }
 
@@ -596,6 +672,126 @@ async fn test_run_workflow() {
 }
 
 #[tokio::test]
+async fn test_run_script_logs_command_notice_before_execution() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let command = "echo 'shell command executed'".to_string();
+    let workflow = create_single_run_script_workflow(command.clone());
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("About to execute shell command"),
+        "task logs should include a shell command notice, got: {logs}"
+    );
+    assert!(
+        logs.contains(&command),
+        "task logs should include the shell command, got: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn test_run_script_approval_callback_receives_command_to_be_executed() {
+    let observed_commands = Arc::new(Mutex::new(Vec::<String>::new()));
+    let approval_callback: ShellCommandApprovalCallback = {
+        let observed_commands = Arc::clone(&observed_commands);
+        Arc::new(move |request: &ShellCommandExecutionRequest| {
+            observed_commands
+                .lock()
+                .unwrap()
+                .push(request.command.clone());
+            Ok(true)
+        })
+    };
+
+    let config = WorkflowRunConfig {
+        shell_command_approval_callback: Some(approval_callback),
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow =
+        create_single_run_script_workflow("echo 'Hello ${params.repo_name}'".to_string());
+    let params = HashMap::from([("repo_name".to_string(), json!("butterflow"))]);
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, params, None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+    assert_eq!(task.status, TaskStatus::Completed);
+
+    let observed_commands = observed_commands.lock().unwrap();
+    assert_eq!(
+        observed_commands.as_slice(),
+        ["echo 'Hello ${params.repo_name}'"]
+    );
+}
+
+#[tokio::test]
+async fn test_run_script_approval_callback_can_reject_execution() {
+    let temp_dir = TempDir::new().unwrap();
+    let output_path = temp_dir.path().join("should-not-exist.txt");
+    let approval_callback: ShellCommandApprovalCallback =
+        Arc::new(|_request: &ShellCommandExecutionRequest| Ok(false));
+
+    let config = WorkflowRunConfig {
+        shell_command_approval_callback: Some(approval_callback),
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow =
+        create_single_run_script_workflow(format!("echo blocked > {}", output_path.display()));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    assert_eq!(task.status, TaskStatus::Failed);
+    assert!(task
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("declined by the user"));
+    assert!(
+        !output_path.exists(),
+        "rejected shell command should not create files"
+    );
+}
+
+#[tokio::test]
 async fn test_get_workflow_status() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -714,16 +910,14 @@ async fn test_manual_trigger_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start and scheduler to process
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let node2_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(node2_status, TaskStatus::AwaitingTrigger);
 
-    // Get the tasks
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the task for node2 which should be awaiting trigger
     let node2_task = tasks.iter().find(|t| t.node_id == "node2").unwrap();
-    // Check that the task is awaiting trigger
-    assert_eq!(node2_task.status, TaskStatus::AwaitingTrigger);
 
     // Trigger the task using resume_workflow
     engine
@@ -731,23 +925,11 @@ async fn test_manual_trigger_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the task to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the updated tasks
-    let updated_tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the updated task for node2
-    let updated_node2_task = updated_tasks
-        .iter()
-        .find(|t| t.id == node2_task.id)
-        .unwrap();
-
-    // Check that the task is now running or completed
-    assert!(
-        updated_node2_task.status == TaskStatus::Running
-            || updated_node2_task.status == TaskStatus::Completed
-    );
+    let updated_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::Running || status == TaskStatus::Completed
+    })
+    .await;
+    assert!(updated_status == TaskStatus::Running || updated_status == TaskStatus::Completed);
 }
 
 #[tokio::test]
@@ -763,17 +945,14 @@ async fn test_manual_node_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    let node2_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(node2_status, TaskStatus::AwaitingTrigger);
 
-    // Get the tasks
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the task for node2 which should be awaiting trigger
     let node2_task = tasks.iter().find(|t| t.node_id == "node2").unwrap();
-
-    // Check that the task is awaiting trigger
-    assert_eq!(node2_task.status, TaskStatus::AwaitingTrigger);
 
     // Trigger the task using resume_workflow
     engine
@@ -781,23 +960,11 @@ async fn test_manual_node_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the task to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the updated tasks
-    let updated_tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the updated task for node2
-    let updated_node2_task = updated_tasks
-        .iter()
-        .find(|t| t.id == node2_task.id)
-        .unwrap();
-
-    // Check that the task is now running or completed
-    assert!(
-        updated_node2_task.status == TaskStatus::Running
-            || updated_node2_task.status == TaskStatus::Completed
-    );
+    let updated_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::Running || status == TaskStatus::Completed
+    })
+    .await;
+    assert!(updated_status == TaskStatus::Running || updated_status == TaskStatus::Completed);
 }
 
 #[tokio::test]

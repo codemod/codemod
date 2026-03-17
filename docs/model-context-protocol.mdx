@@ -7,45 +7,42 @@ import { MCPDemo } from "/snippets/mcp-demo.mdx";
 
 Codemod MCP (Model Context Protocol) provides AI assistants with tools for code analysis, AST manipulation, and codemod creation. The MCP server enables AI tools like Claude, Cursor, and others to understand code structure, create codemods, and perform automated code transformations.
 
-If you are using the AI-native Codemod CLI flow, you can bootstrap MCS + MCP together:
-
-```bash
-npx codemod agent install --harness auto --project
-```
-
-This command installs the MCS skill package and writes a Codemod MCP server entry for the detected harness.
-
 <Frame>
   <MCPDemo />
 </Frame>
 
 ## Quick setup
 
-<Steps>
-  <Step title="Open IDE settings">
-    **For Cursor IDE:**
-    - Open Cursor Settings
-    - Navigate to **MCP & Integrations**
-    - Click **New MCP Server** under MCP Tools
-  </Step>
-  <Step title="Add MCP server configuration">
-    Add the following configuration to your MCP settings:
+Run the bootstrap command from the repository root:
 
-    ```json
-    {
-      "mcpServers": {
-        "codemod": {
-          "command": "npx",
-          "args": ["codemod@latest", "mcp"]
-        }
+```bash
+npx codemod agent install --harness auto --project
+```
+
+This is the default setup path for the AI-native CLI experience. After it finishes, restart your IDE or harness session so the Codemod MCP server and discovery guidance are picked up.
+
+<Accordion title="Manual MCP setup">
+  If you prefer to configure MCP yourself:
+
+  - Open your IDE MCP settings.
+  - Add the following MCP server entry:
+
+  ```json
+  {
+    "mcpServers": {
+      "codemod": {
+        "command": "npx",
+        "args": ["codemod@latest", "mcp"]
       }
     }
-    ```
-  </Step>
-  <Step title="Restart your IDE">
-    Save the configuration file and restart your IDE to activate the Codemod MCP server.
-  </Step>
-</Steps>
+  }
+  ```
+
+  For Cursor IDE:
+  - Open Cursor Settings
+  - Navigate to **MCP & Integrations**
+  - Click **New MCP Server** under MCP Tools
+</Accordion>
 
 <Tip>
   **Ready to build?** Follow the [Quickstart](/oss-quickstart) for a complete walkthrough of building, testing, and publishing a codemod using MCP.

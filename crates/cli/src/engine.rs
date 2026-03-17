@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use butterflow_core::config::{
     AgentSelectionCallback, DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback,
-    WorkflowRunConfig,
+    ShellCommandApprovalCallback, WorkflowRunConfig,
 };
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::engine::Engine;
@@ -15,6 +15,8 @@ use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::get_cache_dir;
 use butterflow_state::cloud_adapter::CloudStateAdapter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use console::style;
+use inquire::Confirm;
 
 use crate::auth_provider::CliAuthProvider;
 use crate::capabilities_security_callback::capabilities_security_callback;
@@ -29,7 +31,7 @@ pub fn create_dry_run_callback(
 ) -> DryRunCallback {
     let config = DiffConfig::with_color_control(no_color);
 
-    Arc::new(Box::new(move |change: DryRunChange| {
+    Arc::new(move |change: DryRunChange| {
         let diff = generate_unified_diff(
             &change.file_path,
             &change.original_content,
@@ -54,13 +56,13 @@ pub fn create_dry_run_callback(
                 diffs.push(plain_diff);
             }
         }
-    }))
+    })
 }
 
 /// Create a callback that silently collects diffs without printing to terminal.
 /// Used when --report is passed without --dry-run.
 pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> DryRunCallback {
-    Arc::new(Box::new(move |change: DryRunChange| {
+    Arc::new(move |change: DryRunChange| {
         let config = DiffConfig {
             color: false,
             ..DiffConfig::default()
@@ -74,7 +76,7 @@ pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> Dry
         if let Ok(mut diffs) = collector.lock() {
             diffs.push(diff);
         }
-    }))
+    })
 }
 
 pub fn create_progress_callback() -> ProgressCallback {
@@ -137,6 +139,37 @@ pub fn create_progress_callback() -> ProgressCallback {
     }
 }
 
+fn create_shell_command_approval_callback(
+    no_interactive: bool,
+) -> Option<ShellCommandApprovalCallback> {
+    if no_interactive {
+        return None;
+    }
+
+    let prompt_lock = Arc::new(Mutex::new(()));
+    Some(Arc::new(move |request| {
+        let _prompt_guard = prompt_lock.lock().unwrap();
+
+        eprintln!();
+        eprintln!(
+            "  {}",
+            style("⚠  Shell command requires approval").yellow().bold()
+        );
+        eprintln!("  {} {}", style("Step:").dim(), request.step_name);
+        eprintln!("  {} {}", style("Node:").dim(), request.node_name);
+        eprintln!("  {}", style("Command:").dim());
+        for line in request.command.lines() {
+            eprintln!("    {line}");
+        }
+        eprintln!();
+
+        Confirm::new("Run this command?")
+            .with_default(false)
+            .prompt()
+            .map_err(|error| anyhow::anyhow!("Failed to get user input: {error}"))
+    }))
+}
+
 /// Create an engine based on configuration
 #[allow(clippy::too_many_arguments)]
 pub fn create_engine(
@@ -192,6 +225,7 @@ pub fn create_engine(
     } else {
         Some(crate::agent_select::create_agent_selection_callback())
     };
+    let shell_command_approval_callback = create_shell_command_approval_callback(no_interactive);
 
     let config = WorkflowRunConfig {
         pre_run_callback: Arc::new(Some(pre_run_callback)),
@@ -210,6 +244,7 @@ pub fn create_engine(
         dry_run_callback,
         skip_install_skill_steps,
         output_format,
+        shell_command_approval_callback,
         install_skill_executor,
         ..WorkflowRunConfig::default()
     };
@@ -267,4 +302,15 @@ fn get_cache_dir_with_env(env: Option<&HashMap<String, String>>) -> Result<PathB
     }
 
     Ok(get_cache_dir()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_prompt_for_shell_command_confirmation_only_depends_on_interactive_mode() {
+        assert!(create_shell_command_approval_callback(false).is_some());
+        assert!(create_shell_command_approval_callback(true).is_none());
+    }
 }

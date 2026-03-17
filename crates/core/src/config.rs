@@ -17,12 +17,12 @@ use crate::{
 };
 
 pub type CapabilitiesSecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+    Arc<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
 /// Callback for selecting an agent from available options.
 /// Returns the canonical name of the selected agent, or None to skip.
-pub type AgentSelectionCallback = Arc<Box<dyn Fn(&[AgentOption]) -> Option<String> + Send + Sync>>;
+pub type AgentSelectionCallback = Arc<dyn Fn(&[AgentOption]) -> Option<String> + Send + Sync>;
 
 /// Info about a file that would be modified in dry-run mode
 #[derive(Clone, Debug)]
@@ -36,7 +36,20 @@ pub struct DryRunChange {
 }
 
 /// Callback type for reporting dry-run changes
-pub type DryRunCallback = Arc<Box<dyn Fn(DryRunChange) + Send + Sync>>;
+pub type DryRunCallback = Arc<dyn Fn(DryRunChange) + Send + Sync>;
+
+#[derive(Clone, Debug)]
+pub struct ShellCommandExecutionRequest {
+    pub command: String,
+    pub node_id: String,
+    pub node_name: String,
+    pub step_id: Option<String>,
+    pub step_name: String,
+    pub task_id: String,
+}
+
+pub type ShellCommandApprovalCallback =
+    Arc<dyn Fn(&ShellCommandExecutionRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct InstallSkillExecutionRequest {
@@ -82,6 +95,8 @@ pub struct WorkflowRunConfig {
     pub name: Option<String>,
     /// Suppress stdout/stderr output (used when TUI is active)
     pub quiet: bool,
+    /// Optional interactive approval callback for shell-command workflow steps
+    pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
 }
@@ -108,6 +123,7 @@ impl Default for WorkflowRunConfig {
             output_format: OutputFormat::Text,
             name: None,
             quiet: false,
+            shell_command_approval_callback: None,
             install_skill_executor: None,
         }
     }
