@@ -6,7 +6,7 @@ use console::style;
 use inquire::Select;
 
 pub fn create_agent_selection_callback() -> AgentSelectionCallback {
-    Arc::new(Box::new(|agents: &[AgentOption]| {
+    Arc::new(|agents: &[AgentOption]| {
         if agents.is_empty() {
             return None;
         }
@@ -94,7 +94,7 @@ pub fn create_agent_selection_callback() -> AgentSelectionCallback {
             },
             _ => None,
         }
-    }))
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
