@@ -62,6 +62,42 @@ impl Drop for EnvVarGuard {
     }
 }
 
+async fn wait_for_task_status<F>(
+    engine: &Engine,
+    workflow_run_id: Uuid,
+    node_id: &str,
+    predicate: F,
+) -> TaskStatus
+where
+    F: Fn(TaskStatus) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(3);
+
+    loop {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let task = tasks.iter().find(|task| task.node_id == node_id);
+
+        if let Some(task) = task {
+            if predicate(task.status) {
+                return task.status;
+            }
+
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for node '{node_id}' to reach expected status, last status was {:?}",
+                task.status
+            );
+        } else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for task for node '{node_id}' to be created"
+            );
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+}
+
 // Helper function to create a simple test workflow
 fn create_long_running_workflow() -> Workflow {
     Workflow {
@@ -874,16 +910,14 @@ async fn test_manual_trigger_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start and scheduler to process
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let node2_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(node2_status, TaskStatus::AwaitingTrigger);
 
-    // Get the tasks
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the task for node2 which should be awaiting trigger
     let node2_task = tasks.iter().find(|t| t.node_id == "node2").unwrap();
-    // Check that the task is awaiting trigger
-    assert_eq!(node2_task.status, TaskStatus::AwaitingTrigger);
 
     // Trigger the task using resume_workflow
     engine
@@ -891,23 +925,11 @@ async fn test_manual_trigger_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the task to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the updated tasks
-    let updated_tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the updated task for node2
-    let updated_node2_task = updated_tasks
-        .iter()
-        .find(|t| t.id == node2_task.id)
-        .unwrap();
-
-    // Check that the task is now running or completed
-    assert!(
-        updated_node2_task.status == TaskStatus::Running
-            || updated_node2_task.status == TaskStatus::Completed
-    );
+    let updated_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::Running || status == TaskStatus::Completed
+    })
+    .await;
+    assert!(updated_status == TaskStatus::Running || updated_status == TaskStatus::Completed);
 }
 
 #[tokio::test]
@@ -923,17 +945,14 @@ async fn test_manual_node_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    let node2_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(node2_status, TaskStatus::AwaitingTrigger);
 
-    // Get the tasks
     let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the task for node2 which should be awaiting trigger
     let node2_task = tasks.iter().find(|t| t.node_id == "node2").unwrap();
-
-    // Check that the task is awaiting trigger
-    assert_eq!(node2_task.status, TaskStatus::AwaitingTrigger);
 
     // Trigger the task using resume_workflow
     engine
@@ -941,23 +960,11 @@ async fn test_manual_node_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the task to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the updated tasks
-    let updated_tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // Find the updated task for node2
-    let updated_node2_task = updated_tasks
-        .iter()
-        .find(|t| t.id == node2_task.id)
-        .unwrap();
-
-    // Check that the task is now running or completed
-    assert!(
-        updated_node2_task.status == TaskStatus::Running
-            || updated_node2_task.status == TaskStatus::Completed
-    );
+    let updated_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
+        status == TaskStatus::Running || status == TaskStatus::Completed
+    })
+    .await;
+    assert!(updated_status == TaskStatus::Running || updated_status == TaskStatus::Completed);
 }
 
 #[tokio::test]
