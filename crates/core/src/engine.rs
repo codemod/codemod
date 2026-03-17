@@ -2166,6 +2166,7 @@ impl Engine {
                     Some(task.workflow_run_id),
                     Some(state),
                     logger,
+                    None,
                 )
                 .await
             }
@@ -2187,6 +2188,9 @@ impl Engine {
             StepAction::AI(ai_config) => {
                 self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
                     .await
+            }
+            StepAction::Shard(shard_config) => {
+                self.execute_shard_step(shard_config, task, logger).await
             }
             StepAction::InstallSkill(install_skill) => {
                 if self.workflow_run_config.skip_install_skill_steps {
@@ -2382,6 +2386,7 @@ impl Engine {
         workflow_run_id: Option<Uuid>,
         initial_state: Option<&HashMap<String, serde_json::Value>>,
         logger: &StructuredLogger,
+        modified_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
 
@@ -2546,6 +2551,7 @@ impl Engine {
         let metrics_context_clone = metrics_context.clone();
         let shared_state_context_clone = shared_state_context.clone();
         let logger = logger.clone();
+        let modified_files_collector_clone = modified_files_collector.clone();
 
         // Execute the codemod on each file using the config's multi-threading
         config
@@ -2715,6 +2721,9 @@ impl Engine {
                         match &primary {
                             ExecutionResult::Modified(_) => {
                                 apply_change(file_path, &primary);
+                                if let Some(ref collector) = modified_files_collector_clone {
+                                    collector.lock().unwrap().push(file_path.to_path_buf());
+                                }
                             }
                             ExecutionResult::Unmodified | ExecutionResult::Skipped => {
                                 self.execution_stats
@@ -3339,6 +3348,263 @@ impl Engine {
 
         slog!(logger, info, "Codemod workflow completed successfully");
         Ok(())
+    }
+
+    /// Execute a shard step — evaluate file shards and write results to workflow state.
+    async fn execute_shard_step(
+        &self,
+        shard_config: &butterflow_models::step::UseShard,
+        task: &Task,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        use crate::shard::evaluate_builtin_shards;
+        use butterflow_models::step::ShardMethod;
+
+        let target_path = self.workflow_run_config.target_path.clone();
+
+        // If a js-ast-grep config is set, pre-scan to find only files with matches
+        let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
+            Some(
+                self.scan_eligible_files_with_jssg(shard_config, js_ast_grep, &target_path, logger)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        // Load previous shard state for incremental evaluation
+        let previous_shards = {
+            let state = self
+                .state_adapter
+                .lock()
+                .await
+                .get_state(task.workflow_run_id)
+                .await?;
+            state
+                .get(&shard_config.output_state)
+                .and_then(|v| v.as_array())
+                .cloned()
+        };
+
+        let shards = match &shard_config.method {
+            ShardMethod::Builtin(_) => evaluate_builtin_shards(
+                shard_config,
+                &target_path,
+                eligible_files.as_deref(),
+                previous_shards.as_ref(),
+            )
+            .map_err(|e| Error::Runtime(format!("Shard evaluation failed: {e}")))?,
+            ShardMethod::Function(func) => {
+                self.execute_custom_shard_function(
+                    shard_config,
+                    func,
+                    eligible_files.as_deref(),
+                    previous_shards.as_ref(),
+                    &target_path,
+                    logger,
+                )
+                .await?
+            }
+        };
+
+        let total_files: usize = shards.iter().map(|s| s._meta_files.len()).sum();
+        slog!(
+            logger,
+            info,
+            "Evaluated {} files into {} shards",
+            total_files,
+            shards.len()
+        );
+
+        // Write shard results to workflow state via StateDiff
+        let shard_value = serde_json::to_value(&shards)
+            .map_err(|e| Error::Runtime(format!("Failed to serialize shard results: {e}")))?;
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            shard_config.output_state.clone(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(shard_value),
+            },
+        );
+
+        self.state_adapter
+            .lock()
+            .await
+            .apply_state_diff(&StateDiff {
+                workflow_run_id: task.workflow_run_id,
+                fields,
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    /// Dry-run the js-ast-grep step via `execute_js_ast_grep_step` to find which files
+    /// would be modified. Returns relative file paths (relative to target_path).
+    async fn scan_eligible_files_with_jssg(
+        &self,
+        shard_config: &butterflow_models::step::UseShard,
+        js_ast_grep: &butterflow_models::step::UseJSAstGrep,
+        target_path: &Path,
+        logger: &StructuredLogger,
+    ) -> Result<Vec<String>> {
+        // Clone the config and force dry_run mode
+        let mut dry_run_config = js_ast_grep.clone();
+        dry_run_config.dry_run = Some(true);
+
+        // Override base_path with the shard target so the executor scans the right directory
+        if let Some(target) = &shard_config.target {
+            dry_run_config.base_path = Some(target.clone());
+        }
+
+        let collector: Arc<std::sync::Mutex<Vec<PathBuf>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let capabilities = self
+            .workflow_run_config
+            .capabilities
+            .as_ref()
+            .map(|v| v.clone().into_iter().collect());
+
+        self.execute_js_ast_grep_step(
+            "shard-scan".to_string(),
+            "shard-scan".to_string(),
+            &dry_run_config,
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities,
+                capabilities_security_callback: self
+                    .workflow_run_config
+                    .capabilities_security_callback
+                    .as_ref()
+                    .map(|callback| Arc::new(callback.clone())),
+            },
+            &None,
+            None,
+            None,
+            logger,
+            Some(collector.clone()),
+        )
+        .await?;
+
+        let modified_paths = Arc::try_unwrap(collector)
+            .map(|mutex| mutex.into_inner().unwrap())
+            .unwrap_or_else(|arc| arc.lock().unwrap().clone());
+
+        let eligible: Vec<String> = modified_paths
+            .into_iter()
+            .filter_map(|p| {
+                p.strip_prefix(target_path)
+                    .ok()
+                    .map(|rel| rel.to_string_lossy().to_string())
+            })
+            .collect();
+
+        slog!(
+            logger,
+            info,
+            "Found {} eligible files for sharding",
+            eligible.len()
+        );
+
+        Ok(eligible)
+    }
+
+    /// Execute a custom shard function using the jssg engine (QuickJS).
+    ///
+    /// The user's script exports a default function that receives a typed `ShardInput`
+    /// and returns `ShardResult[]`. The engine handles all file I/O and serialization.
+    async fn execute_custom_shard_function(
+        &self,
+        shard_config: &butterflow_models::step::UseShard,
+        func: &butterflow_models::step::CustomShardFunction,
+        eligible_files: Option<&[String]>,
+        previous_shards: Option<&Vec<serde_json::Value>>,
+        target_path: &Path,
+        logger: &StructuredLogger,
+    ) -> Result<Vec<crate::shard::ShardResult>> {
+        use crate::shard::collect_files_with_pattern;
+        use codemod_sandbox::sandbox::engine::execution_engine::{
+            execute_shard_function_with_quickjs, ShardFunctionOptions,
+        };
+        use codemod_sandbox::sandbox::resolvers::OxcResolver;
+        use codemod_sandbox::utils::project_discovery::find_tsconfig;
+
+        let effective_bundle_path = &self.workflow_run_config.bundle_path;
+        let func_path = effective_bundle_path.join(&func.function);
+
+        if !func_path.exists() {
+            return Err(Error::Runtime(format!(
+                "Custom shard function '{}' does not exist",
+                func_path.display()
+            )));
+        }
+
+        // Collect the file list to pass to the function
+        let files: Vec<String> = if let Some(eligible) = eligible_files {
+            eligible.to_vec()
+        } else if let Some(file_pattern) = &shard_config.file_pattern {
+            let target = shard_config.target.as_deref().unwrap_or(".");
+            let search_base = if Path::new(target).is_absolute() {
+                PathBuf::from(target)
+            } else {
+                target_path.join(target)
+            };
+            let found = collect_files_with_pattern(&search_base, file_pattern)
+                .map_err(|e| Error::Runtime(format!("Failed to collect files: {e}")))?;
+            found
+                .iter()
+                .filter_map(|f| {
+                    f.strip_prefix(target_path)
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
+                .collect()
+        } else {
+            return Err(Error::Runtime(
+                "Custom shard function requires either 'file_pattern' or 'js-ast-grep' to collect files".to_string(),
+            ));
+        };
+
+        slog!(
+            logger,
+            info,
+            "Running custom shard function with {} files...",
+            files.len()
+        );
+
+        let input = serde_json::json!({
+            "files": files,
+            "targetDir": target_path.to_string_lossy(),
+            "previousShards": previous_shards.unwrap_or(&Vec::new()),
+        });
+
+        let script_base_dir = func_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+        let tsconfig_path = find_tsconfig(&script_base_dir);
+        let resolver = Arc::new(
+            OxcResolver::new(script_base_dir, tsconfig_path).map_err(|e| {
+                Error::Runtime(format!("Failed to create resolver for shard function: {e}"))
+            })?,
+        );
+
+        let options = ShardFunctionOptions {
+            script_path: &func_path,
+            resolver,
+            input,
+        };
+
+        let result = execute_shard_function_with_quickjs(options)
+            .await
+            .map_err(|e| Error::Runtime(format!("Shard function execution failed: {e}")))?;
+
+        let shards: Vec<crate::shard::ShardResult> = serde_json::from_value(result)
+            .map_err(|e| Error::Runtime(format!("Failed to parse shard function output: {e}")))?;
+
+        Ok(shards)
     }
 
     /// Execute a single RunScript step

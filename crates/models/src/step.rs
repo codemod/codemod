@@ -66,6 +66,10 @@ pub enum StepAction {
     /// Install package skill behavior via codemod CLI
     #[serde(rename = "install-skill")]
     InstallSkill(UseInstallSkill),
+
+    /// Evaluate file shards and write results to workflow state
+    #[serde(rename = "shard")]
+    Shard(UseShard),
 }
 
 /// Represents a template use in a step
@@ -327,6 +331,86 @@ pub enum InstallSkillHarness {
 pub enum InstallSkillScope {
     Project,
     User,
+}
+
+/// Configuration for the `shard` step action.
+/// Evaluates file shards and writes results to workflow state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseShard {
+    /// Sharding method configuration — either a built-in algorithm or a custom function
+    pub method: ShardMethod,
+
+    /// Root directory to scan for files
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub target: Option<String>,
+
+    /// State key to write shard results to
+    pub output_state: String,
+
+    /// Glob pattern for eligible files (used when js-ast-grep is not set)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub file_pattern: Option<String>,
+
+    /// Optional js-ast-grep configuration for codemod-based pre-filtering.
+    /// When set, the engine dry-runs the codemod against matched files and
+    /// only includes files where the transform produces changes.
+    /// The `include` field also serves as the file pattern for discovery.
+    #[serde(rename = "js-ast-grep")]
+    #[serde(default)]
+    #[ts(optional, as = "Option<UseJSAstGrep>")]
+    pub js_ast_grep: Option<UseJSAstGrep>,
+}
+
+/// Sharding method — either a built-in algorithm or a custom JS/TS function.
+///
+/// Deserialized from YAML as:
+///   `{ type: directory, max_files_per_shard: 30 }`
+///   `{ function: "./scripts/shard.ts" }`
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ShardMethod {
+    /// Built-in sharding method with sizing parameters
+    Builtin(BuiltinShardMethod),
+    /// Custom JS/TS shard function
+    Function(CustomShardFunction),
+}
+
+/// Built-in sharding method configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct BuiltinShardMethod {
+    /// Built-in method type
+    pub r#type: BuiltinShardType,
+
+    /// Target number of files per shard
+    pub max_files_per_shard: usize,
+
+    /// Minimum shard size — trailing shards smaller than this are merged
+    /// into the previous shard (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<usize>")]
+    pub min_shard_size: Option<usize>,
+}
+
+/// Type of built-in sharding method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinShardType {
+    /// Group by immediate subdirectory under target, then bin-pack
+    Directory,
+    /// Group by CODEOWNERS team, then bin-pack
+    Codeowner,
+}
+
+/// Custom shard function configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct CustomShardFunction {
+    /// Path to JS/TS shard function file
+    pub function: String,
 }
 
 /// Configuration for a commit checkpoint on a step.

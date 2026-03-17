@@ -104,6 +104,42 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                         ast_file_path.display()
                     )));
                 }
+            } else if let StepAction::Shard(shard) = &step.action {
+                use butterflow_models::step::ShardMethod;
+                // Validate file discovery — shared across all methods
+                if shard.file_pattern.is_none() && shard.js_ast_grep.is_none() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step '{}' in node '{}': shard step requires either 'file_pattern' or 'js-ast-grep'",
+                        step.name, node.id
+                    )));
+                }
+                if let Some(js_ast_grep) = &shard.js_ast_grep {
+                    let js_file_path = package_path.join(&js_ast_grep.js_file);
+                    if !js_file_path.exists() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "JS file referenced in shard js-ast-grep not found: {}",
+                            js_file_path.display()
+                        )));
+                    }
+                }
+                match &shard.method {
+                    ShardMethod::Builtin(_) => {}
+                    ShardMethod::Function(func) => {
+                        let func_path = package_path.join(&func.function);
+                        if !func_path.exists() {
+                            return Err(Error::WorkflowValidation(format!(
+                                "Shard function referenced in workflow not found: {}",
+                                func_path.display()
+                            )));
+                        }
+                    }
+                }
+                if shard.output_state.trim().is_empty() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step '{}' in node '{}': shard step requires non-empty 'output_state' field",
+                        step.name, node.id
+                    )));
+                }
             } else if let StepAction::InstallSkill(install_skill) = &step.action {
                 if install_skill.package.trim().is_empty() {
                     return Err(Error::WorkflowValidation(format!(
