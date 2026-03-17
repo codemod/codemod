@@ -17,7 +17,8 @@ use crate::ai_handoff::{
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
 use crate::config::{
-    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, WorkflowRunConfig,
+    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest,
+    ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use crate::execution::{CodemodExecutionConfig, PreRunCallback};
 use crate::execution_stats::ExecutionStats;
@@ -112,6 +113,18 @@ fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
+fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
+    let mut message = format!(
+        "About to execute shell command for step '{}' in node '{}':",
+        request.step_name, request.node_name
+    );
+    for line in request.command.lines() {
+        message.push_str("\n  ");
+        message.push_str(line);
+    }
+    message
+}
+
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -151,7 +164,7 @@ impl Default for Engine {
 
 pub struct CapabilitiesData {
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
-    pub capabilities_security_callback: Option<Arc<CapabilitiesSecurityCallback>>,
+    pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
 }
 
 impl Engine {
@@ -1664,6 +1677,7 @@ impl Engine {
                 .execute_step_action(
                     runner.as_ref(),
                     &step.action,
+                    &step.name,
                     &step.env,
                     &step.id,
                     node,
@@ -2033,6 +2047,7 @@ impl Engine {
         &self,
         runner: &dyn Runner,
         action: &StepAction,
+        step_name: &str,
         step_env: &Option<HashMap<String, String>>,
         step_id: &Option<String>,
         node: &Node,
@@ -2060,12 +2075,15 @@ impl Engine {
                 self.execute_run_script_step(
                     runner,
                     run,
+                    step_name,
                     step_env,
+                    step_id,
                     node,
                     task,
                     params,
                     state,
                     bundle_path,
+                    logger,
                 )
                 .await
             }
@@ -2107,6 +2125,7 @@ impl Engine {
                     Box::pin(self.execute_step_action(
                         runner,
                         &template_step.action,
+                        &template_step.name,
                         &template_step.env,
                         &template_step.id,
                         node,
@@ -2141,8 +2160,7 @@ impl Engine {
                         capabilities_security_callback: self
                             .workflow_run_config
                             .capabilities_security_callback
-                            .as_ref()
-                            .map(|callback| Arc::new(callback.clone())),
+                            .clone(),
                     },
                     bundle_path,
                     Some(task.workflow_run_id),
@@ -3302,6 +3320,7 @@ impl Engine {
                 Box::pin(self.execute_step_action(
                     runner.as_ref(),
                     &step.action,
+                    &step.name,
                     &step.env,
                     &step.id,
                     node,
@@ -3328,12 +3347,15 @@ impl Engine {
         &self,
         runner: &dyn Runner,
         run: &str,
+        step_name: &str,
         step_env: &Option<HashMap<String, String>>,
+        step_id: &Option<String>,
         node: &Node,
         task: &Task,
         params: &HashMap<String, serde_json::Value>,
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
+        logger: &StructuredLogger,
     ) -> Result<()> {
         // Resolve variables
         // TODO: Load step outputs from STEP_OUTPUTS file and pass here
@@ -3345,9 +3367,55 @@ impl Engine {
             None,
             None,
         )?;
+        let request = ShellCommandExecutionRequest {
+            command: resolved_command.clone(),
+            node_id: node.id.clone(),
+            node_name: node.name.clone(),
+            step_id: step_id.clone(),
+            step_name: step_name.to_string(),
+            task_id: task.id.to_string(),
+        };
+        let notice = format_shell_command_notice(&request);
+        logger.log("info", &notice);
+
+        if self
+            .workflow_run_config
+            .shell_command_approval_callback
+            .is_none()
+            && !logger.is_jsonl()
+            && !self.workflow_run_config.quiet
+        {
+            eprintln!();
+            eprintln!("{notice}");
+            eprintln!();
+        }
+
+        if let Some(approval_callback) = &self.workflow_run_config.shell_command_approval_callback {
+            let approved = approval_callback(&request).map_err(|error| {
+                Error::StepExecution(format!(
+                    "Failed to confirm shell command execution for step '{}': {error}",
+                    step_name
+                ))
+            })?;
+
+            if !approved {
+                let message = format!(
+                    "Shell command execution was declined by the user for step '{}'",
+                    step_name
+                );
+                logger.log("warn", &message);
+                return Err(Error::StepExecution(message));
+            }
+        }
+
         let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
 
         let output = runner.run_command(&resolved_command, &prepared.env).await?;
+        let output = if output.trim().is_empty() {
+            notice
+        } else {
+            format!("{notice}\n\n{output}")
+        };
         self.finalize_step_execution(task, output, prepared).await
     }
 

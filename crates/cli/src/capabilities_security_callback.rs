@@ -6,7 +6,7 @@ use butterflow_core::execution::CodemodExecutionConfig;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 type CapabilitiesSecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+    Arc<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>;
 
 pub fn capabilities_security_callback(
     no_interaction: bool,
@@ -14,7 +14,7 @@ pub fn capabilities_security_callback(
 ) -> CapabilitiesSecurityCallback {
     let checked_capabilities = Arc::new(Mutex::new(pre_approved.unwrap_or_default()));
 
-    Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
+    Arc::new(move |config: &CodemodExecutionConfig| {
         if no_interaction {
             return Ok(());
         }
@@ -47,5 +47,5 @@ pub fn capabilities_security_callback(
             return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
         }
         Ok(())
-    }))
+    })
 }
