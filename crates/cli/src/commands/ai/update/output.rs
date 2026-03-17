@@ -15,78 +15,78 @@ use tabled::settings::{object::Columns, Alignment, Modify, Style};
 use tabled::{Table, Tabled};
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct InstallSkillsOutput {
-    pub(in crate::commands::agent) ok: bool,
-    pub(in crate::commands::agent) harness: String,
-    pub(in crate::commands::agent) scope: String,
-    pub(in crate::commands::agent) installed: Vec<InstalledSkillOutput>,
-    pub(in crate::commands::agent) managed_state: Option<ManagedStateOutput>,
-    pub(in crate::commands::agent) update_policy: UpdatePolicyOutput,
-    pub(in crate::commands::agent) notes: Vec<String>,
-    pub(in crate::commands::agent) warnings: Vec<String>,
-    pub(in crate::commands::agent) restart_hint: Option<String>,
+pub(in crate::commands::ai) struct InstallSkillsOutput {
+    pub(in crate::commands::ai) ok: bool,
+    pub(in crate::commands::ai) harness: String,
+    pub(in crate::commands::ai) scope: String,
+    pub(in crate::commands::ai) installed: Vec<InstalledSkillOutput>,
+    pub(in crate::commands::ai) managed_state: Option<ManagedStateOutput>,
+    pub(in crate::commands::ai) update_policy: UpdatePolicyOutput,
+    pub(in crate::commands::ai) notes: Vec<String>,
+    pub(in crate::commands::ai) warnings: Vec<String>,
+    pub(in crate::commands::ai) restart_hint: Option<String>,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct ManagedStateOutput {
-    pub(in crate::commands::agent) path: String,
-    pub(in crate::commands::agent) status: String,
+pub(in crate::commands::ai) struct ManagedStateOutput {
+    pub(in crate::commands::ai) path: String,
+    pub(in crate::commands::ai) status: String,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct UpdatePolicyOutput {
-    pub(in crate::commands::agent) mode: String,
-    pub(in crate::commands::agent) trigger: String,
-    pub(in crate::commands::agent) behavior: String,
-    pub(in crate::commands::agent) remote_source: String,
-    pub(in crate::commands::agent) fallback_applied: bool,
-    pub(in crate::commands::agent) remote_manifest: Option<RemoteManifestOutput>,
-    pub(in crate::commands::agent) component_decisions: Vec<ComponentDecisionOutput>,
-    pub(in crate::commands::agent) auto_safe_apply: Option<AutoSafeApplyOutput>,
+pub(in crate::commands::ai) struct UpdatePolicyOutput {
+    pub(in crate::commands::ai) mode: String,
+    pub(in crate::commands::ai) trigger: String,
+    pub(in crate::commands::ai) behavior: String,
+    pub(in crate::commands::ai) remote_source: String,
+    pub(in crate::commands::ai) fallback_applied: bool,
+    pub(in crate::commands::ai) remote_manifest: Option<RemoteManifestOutput>,
+    pub(in crate::commands::ai) component_decisions: Vec<ComponentDecisionOutput>,
+    pub(in crate::commands::ai) auto_safe_apply: Option<AutoSafeApplyOutput>,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct RemoteManifestOutput {
-    pub(in crate::commands::agent) source: String,
-    pub(in crate::commands::agent) schema_version: String,
-    pub(in crate::commands::agent) component_count: usize,
-    pub(in crate::commands::agent) authenticity_verified: bool,
+pub(in crate::commands::ai) struct RemoteManifestOutput {
+    pub(in crate::commands::ai) source: String,
+    pub(in crate::commands::ai) schema_version: String,
+    pub(in crate::commands::ai) component_count: usize,
+    pub(in crate::commands::ai) authenticity_verified: bool,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct ComponentDecisionOutput {
-    pub(in crate::commands::agent) id: String,
-    pub(in crate::commands::agent) kind: String,
-    pub(in crate::commands::agent) local_version: Option<String>,
-    pub(in crate::commands::agent) remote_version: Option<String>,
-    pub(in crate::commands::agent) status: String,
-    pub(in crate::commands::agent) reason: String,
+pub(in crate::commands::ai) struct ComponentDecisionOutput {
+    pub(in crate::commands::ai) id: String,
+    pub(in crate::commands::ai) kind: String,
+    pub(in crate::commands::ai) local_version: Option<String>,
+    pub(in crate::commands::ai) remote_version: Option<String>,
+    pub(in crate::commands::ai) status: String,
+    pub(in crate::commands::ai) reason: String,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct AutoSafeApplyOutput {
-    pub(in crate::commands::agent) attempted: usize,
-    pub(in crate::commands::agent) applied: usize,
-    pub(in crate::commands::agent) skipped: usize,
-    pub(in crate::commands::agent) failed: usize,
-    pub(in crate::commands::agent) rolled_back: bool,
-    pub(in crate::commands::agent) rollback_reason: Option<String>,
-    pub(in crate::commands::agent) components: Vec<AutoSafeComponentOutput>,
+pub(in crate::commands::ai) struct AutoSafeApplyOutput {
+    pub(in crate::commands::ai) attempted: usize,
+    pub(in crate::commands::ai) applied: usize,
+    pub(in crate::commands::ai) skipped: usize,
+    pub(in crate::commands::ai) failed: usize,
+    pub(in crate::commands::ai) rolled_back: bool,
+    pub(in crate::commands::ai) rollback_reason: Option<String>,
+    pub(in crate::commands::ai) components: Vec<AutoSafeComponentOutput>,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct AutoSafeComponentOutput {
-    pub(in crate::commands::agent) id: String,
-    pub(in crate::commands::agent) path: String,
-    pub(in crate::commands::agent) status: String,
-    pub(in crate::commands::agent) reason: String,
+pub(in crate::commands::ai) struct AutoSafeComponentOutput {
+    pub(in crate::commands::ai) id: String,
+    pub(in crate::commands::ai) path: String,
+    pub(in crate::commands::ai) status: String,
+    pub(in crate::commands::ai) reason: String,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct InstalledSkillOutput {
-    pub(in crate::commands::agent) name: String,
-    pub(in crate::commands::agent) path: String,
-    pub(in crate::commands::agent) version: Option<String>,
+pub(in crate::commands::ai) struct InstalledSkillOutput {
+    pub(in crate::commands::ai) name: String,
+    pub(in crate::commands::ai) path: String,
+    pub(in crate::commands::ai) version: Option<String>,
 }
 
 #[derive(Tabled)]
@@ -100,19 +100,19 @@ struct InstalledSkillRow {
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct ListSkillsOutput {
-    pub(in crate::commands::agent) ok: bool,
-    pub(in crate::commands::agent) harness: String,
-    pub(in crate::commands::agent) skills: Vec<ListedSkillOutput>,
-    pub(in crate::commands::agent) warnings: Vec<String>,
+pub(in crate::commands::ai) struct ListSkillsOutput {
+    pub(in crate::commands::ai) ok: bool,
+    pub(in crate::commands::ai) harness: String,
+    pub(in crate::commands::ai) skills: Vec<ListedSkillOutput>,
+    pub(in crate::commands::ai) warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::agent) struct ListedSkillOutput {
-    pub(in crate::commands::agent) name: String,
-    pub(in crate::commands::agent) scope: Option<String>,
-    pub(in crate::commands::agent) path: String,
-    pub(in crate::commands::agent) version: Option<String>,
+pub(in crate::commands::ai) struct ListedSkillOutput {
+    pub(in crate::commands::ai) name: String,
+    pub(in crate::commands::ai) scope: Option<String>,
+    pub(in crate::commands::ai) path: String,
+    pub(in crate::commands::ai) version: Option<String>,
 }
 
 #[derive(Tabled)]
@@ -127,20 +127,20 @@ struct ListedSkillRow {
     path: String,
 }
 
-pub(in crate::commands::agent) struct BuildInstallOutputInput<'a> {
-    pub(in crate::commands::agent) harness: Harness,
-    pub(in crate::commands::agent) scope: InstallScope,
-    pub(in crate::commands::agent) installed: Vec<InstalledSkill>,
-    pub(in crate::commands::agent) managed_state: Option<ManagedStateWriteResult>,
-    pub(in crate::commands::agent) update_policy: &'a UpdatePolicyContext,
-    pub(in crate::commands::agent) component_decisions: Vec<ComponentReconcileDecision>,
-    pub(in crate::commands::agent) auto_safe_apply: Option<AutoSafeApplyResult>,
-    pub(in crate::commands::agent) notes: Vec<String>,
-    pub(in crate::commands::agent) warnings: Vec<String>,
-    pub(in crate::commands::agent) restart_hint: Option<String>,
+pub(in crate::commands::ai) struct BuildInstallOutputInput<'a> {
+    pub(in crate::commands::ai) harness: Harness,
+    pub(in crate::commands::ai) scope: InstallScope,
+    pub(in crate::commands::ai) installed: Vec<InstalledSkill>,
+    pub(in crate::commands::ai) managed_state: Option<ManagedStateWriteResult>,
+    pub(in crate::commands::ai) update_policy: &'a UpdatePolicyContext,
+    pub(in crate::commands::ai) component_decisions: Vec<ComponentReconcileDecision>,
+    pub(in crate::commands::ai) auto_safe_apply: Option<AutoSafeApplyResult>,
+    pub(in crate::commands::ai) notes: Vec<String>,
+    pub(in crate::commands::ai) warnings: Vec<String>,
+    pub(in crate::commands::ai) restart_hint: Option<String>,
 }
 
-pub(in crate::commands::agent) fn build_install_output(
+pub(in crate::commands::ai) fn build_install_output(
     input: BuildInstallOutputInput<'_>,
 ) -> InstallSkillsOutput {
     let BuildInstallOutputInput {
@@ -212,7 +212,7 @@ fn codemod_mcp_configured_package_version(config_path: &Path) -> Option<String> 
     Some(version.to_string())
 }
 
-pub(in crate::commands::agent) fn print_install_output(
+pub(in crate::commands::ai) fn print_install_output(
     output: &InstallSkillsOutput,
     format: OutputFormat,
 ) -> Result<()> {
@@ -234,7 +234,7 @@ pub(in crate::commands::agent) fn print_install_output(
     Ok(())
 }
 
-pub(in crate::commands::agent) fn print_install_output_logs(output: &InstallSkillsOutput) {
+pub(in crate::commands::ai) fn print_install_output_logs(output: &InstallSkillsOutput) {
     println!(
         "Installed codemod skills for `{}` ({})",
         output.harness, output.scope
@@ -272,7 +272,7 @@ pub(in crate::commands::agent) fn print_install_output_logs(output: &InstallSkil
     }
 }
 
-pub(in crate::commands::agent) fn print_install_output_table(output: &InstallSkillsOutput) {
+pub(in crate::commands::ai) fn print_install_output_table(output: &InstallSkillsOutput) {
     println!("Harness: {}", output.harness);
     println!("Scope: {}", output.scope);
 
@@ -319,7 +319,7 @@ pub(in crate::commands::agent) fn print_install_output_table(output: &InstallSki
     }
 }
 
-pub(in crate::commands::agent) fn build_list_output(
+pub(in crate::commands::ai) fn build_list_output(
     harness: Harness,
     listed_skills: Vec<InstalledSkill>,
     warnings: Vec<String>,
@@ -340,7 +340,7 @@ pub(in crate::commands::agent) fn build_list_output(
     }
 }
 
-pub(in crate::commands::agent) fn print_list_output(
+pub(in crate::commands::ai) fn print_list_output(
     output: &ListSkillsOutput,
     format: OutputFormat,
 ) -> Result<()> {
@@ -362,7 +362,7 @@ pub(in crate::commands::agent) fn print_list_output(
     Ok(())
 }
 
-pub(in crate::commands::agent) fn print_list_output_logs(output: &ListSkillsOutput) {
+pub(in crate::commands::ai) fn print_list_output_logs(output: &ListSkillsOutput) {
     println!(
         "Found {} codemod skill(s) for `{}`",
         output.skills.len(),
@@ -390,7 +390,7 @@ pub(in crate::commands::agent) fn print_list_output_logs(output: &ListSkillsOutp
     }
 }
 
-pub(in crate::commands::agent) fn print_list_output_table(output: &ListSkillsOutput) {
+pub(in crate::commands::ai) fn print_list_output_table(output: &ListSkillsOutput) {
     println!("Harness: {}", output.harness);
     if !output.warnings.is_empty() {
         println!("Warnings:");
@@ -422,7 +422,7 @@ pub(in crate::commands::agent) fn print_list_output_table(output: &ListSkillsOut
     println!("{table}");
 }
 
-pub(in crate::commands::agent) fn build_update_policy_output(
+pub(in crate::commands::ai) fn build_update_policy_output(
     context: &UpdatePolicyContext,
     component_decisions: Vec<ComponentReconcileDecision>,
     auto_safe_apply: Option<AutoSafeApplyResult>,
@@ -457,7 +457,7 @@ pub(in crate::commands::agent) fn build_update_policy_output(
     }
 }
 
-pub(in crate::commands::agent) fn auto_safe_apply_output_from_result(
+pub(in crate::commands::ai) fn auto_safe_apply_output_from_result(
     result: AutoSafeApplyResult,
 ) -> AutoSafeApplyOutput {
     AutoSafeApplyOutput {

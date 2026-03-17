@@ -432,7 +432,7 @@ impl HarnessAdapterError {
                 "Use --harness claude, --harness goose, --harness opencode, --harness cursor, --harness codex, or --harness antigravity."
             }
             Self::InvalidSkillPackage(_) => {
-                "Retry with `codemod agent install --force` and inspect installed entries via `codemod agent list --format json`."
+                "Retry with `codemod ai --force` and inspect installed entries via `codemod ai list --format json`."
             }
             Self::InstallFailed(_) => "Retry with --force or check filesystem permissions.",
             Self::SkillPackageNotFound(_) => {
@@ -1024,8 +1024,7 @@ fn build_periodic_update_runner_script(
 ) -> String {
     let quoted_state_path = shell_single_quote(&state_path.to_string_lossy());
     let install_args = vec![
-        "agent".to_string(),
-        "install".to_string(),
+        "ai".to_string(),
         "--harness".to_string(),
         harness.as_str().to_string(),
         scope_flag.to_string(),
@@ -1644,7 +1643,7 @@ This section is managed by `codemod` CLI.
 
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
-{mcp_line}{command_line}- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+{mcp_line}{command_line}- List installed Codemod skills: `npx codemod ai list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
         harness.as_str(),
@@ -4271,7 +4270,7 @@ codemod-skill-version: 0.1.0
         let agents_path = runtime_paths.home_dir.as_ref().unwrap().join("AGENTS.md");
         let content = fs::read_to_string(&agents_path).unwrap();
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
-        assert!(content.contains("npx codemod agent list --harness cursor --format json"));
+        assert!(content.contains("npx codemod ai list --harness cursor --format json"));
         assert!(content.contains("/codemod"));
     }
 

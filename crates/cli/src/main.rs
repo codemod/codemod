@@ -83,8 +83,8 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
-    /// AI-native codemod agent workflows and skill lifecycle commands
-    Agent(commands::agent::Command),
+    /// Install and manage Codemod AI integrations
+    Ai(commands::ai::Command),
 
     /// Start MCP (Model Context Protocol) server
     Mcp(commands::mcp::Command),
@@ -170,7 +170,7 @@ fn is_package_name(arg: &str) -> bool {
         "run",
         "unpublish",
         "cache",
-        "agent",
+        "ai",
         "mcp",
     ];
 
@@ -353,8 +353,8 @@ async fn main() -> Result<()> {
         Some(Commands::Cache(args)) => {
             commands::cache::handler(args).await?;
         }
-        Some(Commands::Agent(args)) => {
-            commands::agent::handler(args, telemetry_sender.clone()).await?;
+        Some(Commands::Ai(args)) => {
+            commands::ai::handler(args, telemetry_sender.clone()).await?;
         }
         Some(Commands::Mcp(args)) => {
             args.run().await?;
@@ -381,21 +381,21 @@ mod tests {
     use clap::{error::ErrorKind, CommandFactory};
 
     #[test]
-    fn top_level_help_lists_agent_and_mcp() {
+    fn top_level_help_lists_ai_and_mcp() {
         let help_text = Cli::command().render_long_help().to_string();
-        assert!(help_text.contains("agent"));
+        assert!(help_text.contains("ai"));
         assert!(help_text.contains("mcp"));
     }
 
     #[test]
-    fn parser_accepts_agent_install() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install"]);
+    fn parser_accepts_ai_install_without_subcommand() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_list() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "list"]);
+    fn parser_accepts_ai_list() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "list"]);
         assert!(parse_result.is_ok());
     }
 
@@ -467,52 +467,46 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_opencode_harness() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "opencode"]);
+    fn parser_accepts_ai_install_with_opencode_harness() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--harness", "opencode"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_cursor_harness() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "cursor"]);
+    fn parser_accepts_ai_install_with_cursor_harness() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--harness", "cursor"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_codex_harness() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "codex"]);
+    fn parser_accepts_ai_install_with_codex_harness() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--harness", "codex"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_antigravity_harness() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--harness", "antigravity"]);
+    fn parser_accepts_ai_install_with_antigravity_harness() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--harness", "antigravity"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_no_interactive() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--no-interactive"]);
+    fn parser_accepts_ai_install_with_no_interactive() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--no-interactive"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_manual_update_policy() {
-        let parse_result =
-            Cli::try_parse_from(["codemod", "agent", "install", "--update-policy", "manual"]);
+    fn parser_accepts_ai_install_with_manual_update_policy() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--update-policy", "manual"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_runtime_update_policy_flags() {
+    fn parser_accepts_ai_install_with_runtime_update_policy_flags() {
         let parse_result = Cli::try_parse_from([
             "codemod",
-            "agent",
-            "install",
+            "ai",
             "--update-policy",
             "notify",
             "--update-source",
@@ -523,20 +517,20 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_agent_install_with_logs_format() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--format", "logs"]);
+    fn parser_accepts_ai_install_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--format", "logs"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_update_with_logs_format() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "update", "--format", "logs"]);
+    fn parser_accepts_ai_update_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "update", "--format", "logs"]);
         assert!(parse_result.is_ok());
     }
 
     #[test]
-    fn parser_accepts_agent_list_with_logs_format() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "list", "--format", "logs"]);
+    fn parser_accepts_ai_list_with_logs_format() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "list", "--format", "logs"]);
         assert!(parse_result.is_ok());
     }
 
@@ -585,8 +579,8 @@ mod tests {
     }
 
     #[test]
-    fn agent_help_lists_install_update_and_list_only() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "--help"]);
+    fn ai_help_lists_update_and_list_only() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--help"]);
         let error = match parse_result {
             Err(error) => error,
             Ok(_) => panic!("expected --help to return clap display help"),
@@ -594,14 +588,14 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::DisplayHelp);
 
         let help_text = error.to_string();
-        assert!(help_text.contains("install"));
+        assert!(help_text.contains("--harness"));
         assert!(help_text.contains("update"));
         assert!(help_text.contains("list"));
     }
 
     #[test]
     fn install_help_lists_opencode_and_cursor_harnesses() {
-        let parse_result = Cli::try_parse_from(["codemod", "agent", "install", "--help"]);
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--help"]);
         let error = match parse_result {
             Err(error) => error,
             Ok(_) => panic!("expected --help to return clap display help"),

@@ -16,20 +16,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(in crate::commands::agent) const DEFAULT_UPDATE_SOURCE: &str = "registry";
+pub(in crate::commands::ai) const DEFAULT_UPDATE_SOURCE: &str = "registry";
 // Temporary placeholder keyring until registry-backed signing key management is finalized.
 const DEFAULT_MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS: &[(&str, &str)] =
     &[("default", "Q0GtKwJnXEDBFbEYje6g9XbmC7hqLYPFMAljjrIOc7g=")];
 const MAX_REMOTE_MANIFEST_ERROR_BODY_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
-pub(in crate::commands::agent) struct UpdatePolicyResolveOptions {
-    pub(in crate::commands::agent) mode: UpdatePolicyMode,
-    pub(in crate::commands::agent) remote_source: String,
-    pub(in crate::commands::agent) require_signed_manifest: Option<bool>,
+pub(in crate::commands::ai) struct UpdatePolicyResolveOptions {
+    pub(in crate::commands::ai) mode: UpdatePolicyMode,
+    pub(in crate::commands::ai) remote_source: String,
+    pub(in crate::commands::ai) require_signed_manifest: Option<bool>,
 }
 
-pub(in crate::commands::agent) async fn resolve_update_policy_context(
+pub(in crate::commands::ai) async fn resolve_update_policy_context(
     options: &UpdatePolicyResolveOptions,
 ) -> std::result::Result<UpdatePolicyContext, String> {
     let remote_source = parse_update_remote_source_value(&options.remote_source)?;
@@ -761,7 +761,7 @@ async fn fetch_remote_update_manifest(
     })
 }
 
-pub(in crate::commands::agent) fn remote_manifest_endpoint(
+pub(in crate::commands::ai) fn remote_manifest_endpoint(
     remote_source: &str,
 ) -> std::result::Result<String, String> {
     if let Some(url) = remote_source.strip_prefix("url:") {
@@ -789,14 +789,14 @@ pub(in crate::commands::agent) fn remote_manifest_endpoint(
     ))
 }
 
-pub(in crate::commands::agent) fn registry_source_base_url(remote_source: &str) -> Option<String> {
+pub(in crate::commands::ai) fn registry_source_base_url(remote_source: &str) -> Option<String> {
     remote_source
         .strip_prefix("registry:")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
-pub(in crate::commands::agent) fn validate_remote_update_manifest(
+pub(in crate::commands::ai) fn validate_remote_update_manifest(
     manifest: &ManagedUpdateManifest,
 ) -> std::result::Result<(), String> {
     if manifest.schema_version.trim().is_empty() {
@@ -872,11 +872,11 @@ pub(in crate::commands::agent) fn validate_remote_update_manifest(
     Ok(())
 }
 
-pub(in crate::commands::agent) fn is_valid_sha256_hex(value: &str) -> bool {
+pub(in crate::commands::ai) fn is_valid_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit())
 }
 
-pub(in crate::commands::agent) fn parse_update_remote_source_value(
+pub(in crate::commands::ai) fn parse_update_remote_source_value(
     raw_value: &str,
 ) -> std::result::Result<String, String> {
     let normalized = raw_value.trim();
@@ -919,7 +919,7 @@ pub(in crate::commands::agent) fn parse_update_remote_source_value(
     }
 }
 
-pub(in crate::commands::agent) fn resolve_default_registry_source(
+pub(in crate::commands::ai) fn resolve_default_registry_source(
 ) -> std::result::Result<String, String> {
     if let Ok(registry_url) = std::env::var("CODEMOD_REGISTRY_URL") {
         let normalized = registry_url.trim();
@@ -945,7 +945,7 @@ pub(in crate::commands::agent) fn resolve_default_registry_source(
     Ok(format!("registry:{parsed}"))
 }
 
-pub(in crate::commands::agent) fn maybe_attach_registry_auth(
+pub(in crate::commands::ai) fn maybe_attach_registry_auth(
     mut request: reqwest::RequestBuilder,
     remote_source: &str,
 ) -> reqwest::RequestBuilder {
@@ -962,13 +962,13 @@ pub(in crate::commands::agent) fn maybe_attach_registry_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::update::types::ManagedUpdateManifestComponent;
+    use crate::commands::ai::update::types::ManagedUpdateManifestComponent;
     use base64::Engine;
     use ed25519_dalek::{Signer, SigningKey};
 
     fn sample_remote_snapshot(version: &str) -> RemoteManifestSnapshot {
         RemoteManifestSnapshot {
-            source: "https://app.codemod.com/api/v1/agent/managed-components/manifest".to_string(),
+            source: "https://app.codemod.com/api/v1/ai/managed-components/manifest".to_string(),
             authenticity_verified: true,
             manifest: ManagedUpdateManifest {
                 schema_version: "1".to_string(),

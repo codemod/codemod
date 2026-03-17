@@ -526,7 +526,7 @@ fn remote_manifest_endpoint_builds_registry_and_url_sources() {
     let registry_endpoint = remote_manifest_endpoint("registry:https://app.codemod.com/").unwrap();
     assert_eq!(
         registry_endpoint,
-        "https://app.codemod.com/api/v1/agent/managed-components/manifest"
+        "https://app.codemod.com/api/v1/ai/managed-components/manifest"
     );
 
     let url_endpoint =
@@ -576,7 +576,7 @@ fn build_update_policy_output_includes_remote_manifest_when_available() {
         remote_source: "registry:https://app.codemod.com/".to_string(),
         fallback_applied: true,
         remote_manifest: Some(RemoteManifestSnapshot {
-            source: "https://app.codemod.com/api/v1/agent/managed-components/manifest".to_string(),
+            source: "https://app.codemod.com/api/v1/ai/managed-components/manifest".to_string(),
             authenticity_verified: true,
             manifest: ManagedUpdateManifest {
                 schema_version: "1".to_string(),
@@ -636,7 +636,7 @@ fn build_update_policy_output_includes_remote_manifest_when_available() {
     let manifest = output.remote_manifest.expect("expected remote manifest");
     assert_eq!(
         manifest.source,
-        "https://app.codemod.com/api/v1/agent/managed-components/manifest"
+        "https://app.codemod.com/api/v1/ai/managed-components/manifest"
     );
     assert_eq!(manifest.schema_version, "1");
     assert_eq!(manifest.component_count, 3);
@@ -651,7 +651,7 @@ fn build_component_reconcile_decisions_classifies_statuses_with_reasons() {
         remote_source: "registry:https://app.codemod.com/".to_string(),
         fallback_applied: true,
         remote_manifest: Some(RemoteManifestSnapshot {
-            source: "https://app.codemod.com/api/v1/agent/managed-components/manifest".to_string(),
+            source: "https://app.codemod.com/api/v1/ai/managed-components/manifest".to_string(),
             authenticity_verified: true,
             manifest: ManagedUpdateManifest {
                 schema_version: "1".to_string(),
@@ -1488,7 +1488,7 @@ fn resolve_update_policy_context_suppresses_expected_registry_404_manifest_warni
     let _env_lock = ENV_GUARD.lock().expect("expected env lock");
     let runtime = Runtime::new().expect("expected runtime");
     runtime.block_on(async {
-        let manifest_path = "/api/v1/agent/managed-components/manifest".to_string();
+        let manifest_path = "/api/v1/ai/managed-components/manifest".to_string();
         let server = TestHttpServer::start_with_builder(|_| {
             HashMap::from([(
                 manifest_path.clone(),

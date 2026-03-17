@@ -33,15 +33,20 @@ use update::policy::{
 use update::reconcile::{build_component_reconcile_decisions, update_policy_runtime_message};
 use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 #[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+#[command(
+    about = "Install Codemod AI integrations, or run update/list subcommands",
+    after_help = "Run `codemod ai` without a subcommand to install Codemod integrations."
+)]
 pub struct Command {
     #[command(subcommand)]
-    action: AgentAction,
+    action: Option<AiAction>,
+    #[command(flatten)]
+    install: InstallCommand,
 }
 
 #[derive(Subcommand, Debug)]
-enum AgentAction {
-    /// Install MCS and baseline codemod skills into harness-specific paths
-    Install(InstallCommand),
+enum AiAction {
     /// Reconcile/apply managed updates; falls back to install when not installed yet
     Update(UpdateCommand),
     /// List installed codemod skills for a harness
@@ -65,7 +70,7 @@ struct InstallCommand {
     /// Overwrite existing skill files
     #[arg(long)]
     force: bool,
-    /// Internal mode switch used by `agent update`
+    /// Internal mode switch used by `ai update`
     #[arg(skip)]
     update: bool,
     /// Managed update policy for this install and periodic harness checks
@@ -149,28 +154,29 @@ struct ListCommand {
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     match &args.action {
-        AgentAction::Install(command) => {
+        None => {
+            let command = &args.install;
             handle_install_like_action(
                 command,
                 &telemetry,
-                "agentMcsInstalled",
-                "codemod.agent.install",
+                "aiMcsInstalled",
+                "codemod.ai.install",
                 command.harness,
             )
             .await
         }
-        AgentAction::Update(command) => {
+        Some(AiAction::Update(command)) => {
             let install_like_command = InstallCommand::from(command);
             handle_install_like_action(
                 &install_like_command,
                 &telemetry,
-                "agentMcsUpdated",
-                "codemod.agent.update",
+                "aiMcsUpdated",
+                "codemod.ai.update",
                 command.harness,
             )
             .await
         }
-        AgentAction::List(command) => {
+        Some(AiAction::List(command)) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
             });
@@ -186,7 +192,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 resolved_adapter.warnings,
             );
             print_list_output(&output, command.format)?;
-            send_agent_list_event(
+            send_ai_list_event(
                 &telemetry,
                 command.harness,
                 resolved_adapter.harness,
@@ -347,7 +353,7 @@ async fn handle_install_like_action(
         restart_hint,
     });
     print_install_output(&output, command.format)?;
-    send_agent_install_event(
+    send_ai_install_event(
         telemetry,
         event_kind,
         command_name,
@@ -360,7 +366,7 @@ async fn handle_install_like_action(
     Ok(())
 }
 
-async fn send_agent_install_event(
+async fn send_ai_install_event(
     telemetry: &TelemetrySenderMutex,
     event_kind: &'static str,
     command_name: &'static str,
@@ -475,7 +481,7 @@ async fn send_agent_install_event(
         .await;
 }
 
-async fn send_agent_list_event(
+async fn send_ai_list_event(
     telemetry: &TelemetrySenderMutex,
     requested_harness: Harness,
     resolved_harness: Harness,
@@ -486,9 +492,9 @@ async fn send_agent_list_event(
     telemetry
         .send_event(
             BaseEvent {
-                kind: "agentSkillsListed".to_string(),
+                kind: "aiSkillsListed".to_string(),
                 properties: HashMap::from([
-                    ("commandName".to_string(), "codemod.agent.list".to_string()),
+                    ("commandName".to_string(), "codemod.ai.list".to_string()),
                     (
                         "requestedHarness".to_string(),
                         requested_harness.as_str().to_string(),

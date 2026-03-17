@@ -56,16 +56,16 @@ npx codemod publish
 
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
-### `codemod agent`
+### `codemod ai`
 
 Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 
-**`agent install`**
+**`ai`**
 
 Install the `codemod` MCS skill package, configure Codemod MCP, and install the universal `/codemod` entrypoint where the harness supports it.
 
 ```bash
-npx codemod agent install [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
 Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
@@ -93,11 +93,11 @@ MCP config paths by harness and scope:
 
 If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force` to overwrite it.
 
-`agent install` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
+`ai` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
 - `claude`: `CLAUDE.md`
 - `goose`, `opencode`, `cursor`: `AGENTS.md` and `CLAUDE.md`
 - `codex`, `antigravity`: `AGENTS.md`
-`agent install` also installs `/codemod` where the harness has a native command or workflow file surface:
+`ai` also installs `/codemod` where the harness has a native command or workflow file surface:
 - `claude`: `./.claude/commands/codemod.md` (project), `~/.claude/commands/codemod.md` (user)
 - `goose`: `~/.config/goose/recipes/codemod.yaml` + `~/.config/goose/config.yaml` registration (user only)
 - `opencode`: `./.opencode/commands/codemod.md` (project), `~/.config/opencode/commands/codemod.md` (user)
@@ -106,7 +106,7 @@ If a conflicting `mcpServers.codemod` entry already exists, re-run with `--force
 The installed `/codemod` command routes by intent:
 - create, scaffold, or refine codemods -> codemod authoring flow
 - search, run, or apply existing codemods -> registry discovery and execution flow
-`agent install` also wires a periodic, cooldown-protected update check trigger:
+`ai` also wires a periodic, cooldown-protected update check trigger:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
 - `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
@@ -121,25 +121,17 @@ Managed update policy is install-flag driven and shared by install-time reconcil
 Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
 After install, restart or reload your harness session so newly installed skills and command entrypoints are picked up.
 
-**`agent update`**
+**`ai update`**
 
 Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
 
 ```bash
-npx codemod agent update [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai update [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
-If managed install state is missing, `agent update` automatically falls back to an install flow and then applies update reconciliation.
+If managed install state is missing, `ai update` automatically falls back to an install flow and then applies update reconciliation.
 
-**`agent list`**
-
-List installed codemod-managed skills (MCS and package skills).
-
-```bash
-npx codemod agent list [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--format <logs|table|json|yaml>]
-```
-
-`agent install` performs internal skill validation checks during install flow.
+`ai` performs internal skill validation checks during install flow.
 
 ### Package skill install (prompted from package run)
 
