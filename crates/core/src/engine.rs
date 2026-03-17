@@ -3595,6 +3595,7 @@ impl Engine {
             script_path: &func_path,
             resolver,
             input,
+            capabilities: self.workflow_run_config.capabilities.clone(),
         };
 
         let result = execute_shard_function_with_quickjs(options)

@@ -123,7 +123,14 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     }
                 }
                 match &shard.method {
-                    ShardMethod::Builtin(_) => {}
+                    ShardMethod::Builtin(_) => {
+                        if shard.target.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                            return Err(Error::WorkflowValidation(format!(
+                                "Step '{}' in node '{}': built-in shard method requires a non-empty 'target' field",
+                                step.name, node.id
+                            )));
+                        }
+                    }
                     ShardMethod::Function(func) => {
                         let func_path = package_path.join(&func.function);
                         if !func_path.exists() {

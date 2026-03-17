@@ -25,6 +25,10 @@ pub struct ShardResult {
     /// CODEOWNERS team (set by `codeowner` method). Part of identity hash.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// Additional custom properties returned by custom shard functions,
+    /// exposed as `matrix.*` values in downstream steps.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Evaluate shards using the built-in method specified in the step config.
@@ -189,6 +193,7 @@ fn evaluate_incremental(
             _meta_files: surviving_files,
             directory: prev.directory,
             team: prev.team,
+            extra: HashMap::new(),
         });
     }
 
@@ -279,6 +284,7 @@ fn create_new_directory_shards(
                 _meta_files: shard_files,
                 directory: Some(group_name.clone()),
                 team: None,
+                extra: HashMap::new(),
             });
         }
     }
@@ -329,6 +335,7 @@ fn create_new_codeowner_shards(
                 _meta_files: shard_files,
                 directory: None,
                 team: Some(team_name.clone()),
+                extra: HashMap::new(),
             });
         }
     }
@@ -448,6 +455,7 @@ fn evaluate_directory_shards(
                 _meta_files: shard_files,
                 directory: Some(group_name.clone()),
                 team: None,
+                extra: HashMap::new(),
             });
         }
     }
@@ -497,6 +505,7 @@ fn evaluate_codeowner_shards(
                 _meta_files: shard_files,
                 directory: None,
                 team: Some(team_name.clone()),
+                extra: HashMap::new(),
             });
         }
     }
@@ -660,8 +669,8 @@ fn glob_simple_match(pattern: &str, path: &str) -> bool {
 
 fn glob_match_segments(pattern: &[&str], path: &[&str]) -> bool {
     if pattern.is_empty() {
-        // Pattern exhausted — match if path is also exhausted or we match a subtree
-        return true;
+        // Pattern exhausted — match only if path is also exhausted
+        return path.is_empty();
     }
 
     if path.is_empty() {

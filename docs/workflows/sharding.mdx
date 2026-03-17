@@ -227,9 +227,6 @@ export default function shard(input: ShardInput): ShardResult[] {
 }
 ```
 
-<Card title="Full example" icon="code" href="https://github.com/codemod/codemod/tree/main/examples/sharded-by-dependency-graph">
-  See the `sharded-by-dependency-graph` example for a complete implementation using union-find connected components.
-</Card>
 
 ---
 
@@ -245,15 +242,4 @@ This means re-running the shard step never disrupts work that's already in fligh
 
 For custom shard functions, the engine passes `previousShards` in the input so the function can implement its own incremental logic.
 
----
 
-## Examples
-
-<CardGroup cols={2}>
-  <Card title="Console-to-Logger (directory)" icon="folder" href="https://github.com/codemod/codemod/tree/main/examples/sharded-console-to-logger">
-    Built-in directory sharding with js-ast-grep pre-filtering.
-  </Card>
-  <Card title="Dependency Graph (custom)" icon="diagram-project" href="https://github.com/codemod/codemod/tree/main/examples/sharded-by-dependency-graph">
-    Custom shard function using import graph analysis with union-find.
-  </Card>
-</CardGroup>

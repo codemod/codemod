@@ -581,6 +581,9 @@ pub struct ShardFunctionOptions<'a, R> {
     pub resolver: Arc<R>,
     /// The shard input data passed to the function
     pub input: serde_json::Value,
+    /// Optional capabilities to gate module access (fetch, fs, child_process).
+    /// When `None`, no extra modules are enabled.
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
 }
 
 /// Execute a shard function with QuickJS and return the result as JSON.
@@ -615,9 +618,22 @@ where
     })?;
 
     let mut module_builder = LlrtModuleBuilder::build();
-    module_builder.enable_fetch();
-    module_builder.enable_fs();
-    module_builder.enable_child_process();
+    if let Some(capabilities) = options.capabilities {
+        for capability in capabilities {
+            match capability {
+                LlrtSupportedModules::Fetch => {
+                    module_builder.enable_fetch();
+                }
+                LlrtSupportedModules::Fs => {
+                    module_builder.enable_fs();
+                }
+                LlrtSupportedModules::ChildProcess => {
+                    module_builder.enable_child_process();
+                }
+                _ => {}
+            }
+        }
+    }
 
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
@@ -683,7 +699,7 @@ where
                     },
                 })?;
 
-            let (evaluated, _) = module
+            let (evaluated, eval_value) = module
                 .eval()
                 .catch(&ctx)
                 .map_err(|e| ExecutionError::Runtime {
@@ -692,7 +708,15 @@ where
                     },
                 })?;
 
-            while ctx.execute_pending_job() {}
+            // Await the module evaluation promise to surface errors from top-level await
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
 
             let namespace = evaluated
                 .namespace()
