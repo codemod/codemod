@@ -43,11 +43,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libssl-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --tests --no-deps -- -D warnings
 
   rust-format:
@@ -64,11 +64,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libssl-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
         with:
           components: rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
 
   js-lint:
@@ -117,9 +117,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libssl-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test
       - name: Check schema generation
