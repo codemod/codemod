@@ -1,5 +1,8 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use inquire::{Select, Text};
+use std::fmt;
+use std::io::{self, IsTerminal};
 use std::sync::Arc;
 mod agent_select;
 mod ascii_art;
@@ -183,6 +186,110 @@ enum ImplicitRoute {
     Run(Vec<String>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NoCommandAction {
+    Init,
+    RunPackage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NoCommandPromptOption {
+    action: NoCommandAction,
+    label: &'static str,
+}
+
+impl fmt::Display for NoCommandPromptOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label)
+    }
+}
+
+fn no_command_prompt_options() -> Vec<NoCommandPromptOption> {
+    vec![
+        NoCommandPromptOption {
+            action: NoCommandAction::Init,
+            label: "Create a new codemod package (npx codemod init)",
+        },
+        NoCommandPromptOption {
+            action: NoCommandAction::RunPackage,
+            label: "Run a published package (npx codemod <package>)",
+        },
+    ]
+}
+
+fn no_command_message() -> String {
+    [
+        "No command provided.",
+        "",
+        "Next steps:",
+        "  1. Create a new codemod package: npx codemod init",
+        "  2. Run a published package: npx codemod <package>",
+        "",
+        "Use --help for more usage information.",
+    ]
+    .join("\n")
+}
+
+fn should_prompt_for_no_command_action() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+async fn dispatch_selected_init_command() -> Result<()> {
+    let cli = Cli::try_parse_from(["codemod", "init"])?;
+    match cli.command {
+        Some(Commands::Init(args)) => commands::init::handler(&args),
+        _ => unreachable!("expected init command"),
+    }
+}
+
+async fn dispatch_selected_run_command(
+    package: &str,
+    telemetry_sender: TelemetrySenderMutex,
+    disable_analytics: bool,
+) -> Result<()> {
+    let cli = Cli::try_parse_from(["codemod", "run", package])?;
+    match cli.command {
+        Some(Commands::Run(args)) => {
+            commands::run::handler(&args, telemetry_sender, disable_analytics).await
+        }
+        _ => unreachable!("expected run command"),
+    }
+}
+
+async fn handle_no_command(
+    telemetry_sender: TelemetrySenderMutex,
+    disable_analytics: bool,
+) -> Result<()> {
+    print_ascii_art();
+
+    if !should_prompt_for_no_command_action() {
+        eprintln!("{}", no_command_message());
+        std::process::exit(1);
+    }
+
+    let selection = Select::new("What would you like to do?", no_command_prompt_options())
+        .with_starting_cursor(0)
+        .prompt();
+
+    let action = match selection {
+        Ok(selection) => selection.action,
+        Err(_) => {
+            eprintln!("{}", no_command_message());
+            std::process::exit(1);
+        }
+    };
+
+    match action {
+        NoCommandAction::Init => dispatch_selected_init_command().await,
+        NoCommandAction::RunPackage => {
+            let package = Text::new("Package name:")
+                .with_help_message("Example: react/19/migration-recipe or @your-org/package")
+                .prompt()?;
+            dispatch_selected_run_command(&package, telemetry_sender, disable_analytics).await
+        }
+    }
+}
+
 fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
     if trailing_args.is_empty() {
         return None;
@@ -364,10 +471,7 @@ async fn main() -> Result<()> {
             if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
                 .await?
             {
-                // No valid subcommand or package name provided, show help
-                print_ascii_art();
-                eprintln!("No command provided. Use --help for usage information.");
-                std::process::exit(1);
+                handle_no_command(telemetry_sender.clone(), cli.disable_analytics).await?;
             }
         }
     }
@@ -385,6 +489,32 @@ mod tests {
         let help_text = Cli::command().render_long_help().to_string();
         assert!(help_text.contains("agent"));
         assert!(help_text.contains("mcp"));
+    }
+
+    #[test]
+    fn no_command_message_lists_onboarding_steps() {
+        let message = no_command_message();
+
+        let init_index = message
+            .find("1. Create a new codemod package: npx codemod init")
+            .expect("expected init step");
+        let package_index = message
+            .find("2. Run a published package: npx codemod <package>")
+            .expect("expected package step");
+
+        assert!(init_index < package_index);
+    }
+
+    #[test]
+    fn no_command_prompt_options_list_init_first() {
+        let options = no_command_prompt_options();
+
+        assert_eq!(options[0].action, NoCommandAction::Init);
+        assert_eq!(
+            options[0].label,
+            "Create a new codemod package (npx codemod init)"
+        );
+        assert_eq!(options[1].action, NoCommandAction::RunPackage);
     }
 
     #[test]
