@@ -15,6 +15,9 @@
   "bin": {
     "codemod": "codemod"
   },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
   "files": [
     "README.md",
     "codemod"

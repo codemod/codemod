@@ -2,10 +2,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use inquire::{Select, Text};
 use std::fmt;
-use std::fs;
 use std::io::{self, IsTerminal};
-use std::path::{Component, Path};
-use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 mod agent_select;
 mod ascii_art;
@@ -30,8 +27,6 @@ use codemod_telemetry::{
 };
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
-const CODEMOD_BOOTSTRAPPED_ENV: &str = "CODEMOD_BOOTSTRAPPED";
-const CODEMOD_BOOTSTRAP_MARKER_ENV: &str = "CODEMOD_BOOTSTRAP_MARKER";
 
 #[derive(Parser)]
 #[command(name = "codemod")]
@@ -239,128 +234,6 @@ fn should_prompt_for_no_command_action() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
-fn should_bootstrap_latest_no_command() -> bool {
-    std::env::var_os(CODEMOD_BOOTSTRAPPED_ENV).is_none()
-}
-
-fn executable_looks_like_local_dev_build(path: &Path) -> bool {
-    let mut components = path.components().peekable();
-
-    while let Some(component) = components.next() {
-        if component != Component::Normal("target".as_ref()) {
-            continue;
-        }
-
-        let Some(next_component) = components.next() else {
-            return false;
-        };
-
-        if matches!(
-            next_component,
-            Component::Normal(name) if name == "debug" || name == "release"
-        ) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn current_executable_looks_like_local_dev_build() -> bool {
-    let Ok(current_exe) = std::env::current_exe() else {
-        return false;
-    };
-
-    executable_looks_like_local_dev_build(&current_exe)
-}
-
-fn should_warn_on_latest_bootstrap_fallback() -> bool {
-    !current_executable_looks_like_local_dev_build()
-}
-
-fn npm_executable() -> &'static str {
-    if cfg!(windows) { "npm.cmd" } else { "npm" }
-}
-
-fn latest_no_command_bootstrap_args() -> [&'static str; 7] {
-    [
-        "exec",
-        "--yes",
-        "--prefer-online",
-        "--package",
-        "codemod@latest",
-        "--",
-        "codemod",
-    ]
-}
-
-fn bootstrap_marker_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "codemod-bootstrap-{}-{}.marker",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ))
-}
-
-fn mark_bootstrapped_process_started() {
-    let Some(marker_path) = std::env::var_os(CODEMOD_BOOTSTRAP_MARKER_ENV) else {
-        return;
-    };
-
-    let _ = fs::write(marker_path, CLI_VERSION);
-}
-
-fn skip_ascii_art_after_failed_bootstrap() -> bool {
-    std::env::var_os(CODEMOD_BOOTSTRAP_MARKER_ENV).is_some()
-        && std::env::var_os(CODEMOD_BOOTSTRAPPED_ENV).is_none()
-}
-
-fn exit_with_status(status: std::process::ExitStatus) -> ! {
-    std::process::exit(status.code().unwrap_or(1));
-}
-
-fn cleanup_bootstrap_marker(path: &std::path::Path) {
-    let _ = fs::remove_file(path);
-}
-
-fn bootstrap_no_command_to_latest() -> Result<bool> {
-    if !should_bootstrap_latest_no_command() {
-        return Ok(false);
-    }
-
-    let marker_path = bootstrap_marker_path();
-    let status = ProcessCommand::new(npm_executable())
-        .args(latest_no_command_bootstrap_args())
-        .env(CODEMOD_BOOTSTRAPPED_ENV, "1")
-        .env(CODEMOD_BOOTSTRAP_MARKER_ENV, &marker_path)
-        .status();
-
-    match status {
-        Ok(status) => {
-            if marker_path.exists() {
-                cleanup_bootstrap_marker(&marker_path);
-                exit_with_status(status);
-            }
-
-            cleanup_bootstrap_marker(&marker_path);
-
-            if should_warn_on_latest_bootstrap_fallback() {
-                eprintln!(
-                    "Failed to refresh to the latest Codemod CLI. Falling back to the local CLI."
-                );
-            }
-            Ok(false)
-        }
-        Err(error) => {
-            cleanup_bootstrap_marker(&marker_path);
-            eprintln!(
-                "Failed to start npm to refresh the latest Codemod CLI: {error}. Falling back to the local CLI."
-            );
-            Ok(false)
-        }
-    }
-}
-
 async fn dispatch_selected_init_command() -> Result<()> {
     let command = commands::init::Command::default();
     commands::init::handler(&command)
@@ -379,11 +252,7 @@ async fn handle_no_command(
     telemetry_sender: TelemetrySenderMutex,
     disable_analytics: bool,
 ) -> Result<()> {
-    bootstrap_no_command_to_latest()?;
-
-    if !skip_ascii_art_after_failed_bootstrap() {
-        print_ascii_art();
-    }
+    print_ascii_art();
 
     if !should_prompt_for_no_command_action() {
         eprintln!("{}", no_command_message());
@@ -467,7 +336,6 @@ async fn handle_implicit_run_command(
 async fn main() -> Result<()> {
     // Initialize logger
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("error"));
-    mark_bootstrapped_process_started();
 
     // Parse command line arguments
     let cli = Cli::parse();
@@ -607,12 +475,6 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use clap::{error::ErrorKind, CommandFactory};
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     #[test]
     fn top_level_help_lists_agent_and_mcp() {
@@ -645,91 +507,6 @@ mod tests {
             "Create a new codemod package (npx codemod init)"
         );
         assert_eq!(options[1].action, NoCommandAction::RunPackage);
-    }
-
-    #[test]
-    fn latest_no_command_bootstrap_args_use_latest_with_prefer_online() {
-        assert_eq!(
-            latest_no_command_bootstrap_args(),
-            [
-                "exec",
-                "--yes",
-                "--prefer-online",
-                "--package",
-                "codemod@latest",
-                "--",
-                "codemod",
-            ]
-        );
-    }
-
-    #[test]
-    fn should_bootstrap_latest_no_command_is_disabled_when_env_is_set() {
-        let _guard = env_test_lock().lock().expect("env test lock poisoned");
-        let previous = std::env::var_os(CODEMOD_BOOTSTRAPPED_ENV);
-        std::env::set_var(CODEMOD_BOOTSTRAPPED_ENV, "1");
-
-        assert!(!should_bootstrap_latest_no_command());
-
-        match previous {
-            Some(value) => std::env::set_var(CODEMOD_BOOTSTRAPPED_ENV, value),
-            None => std::env::remove_var(CODEMOD_BOOTSTRAPPED_ENV),
-        }
-    }
-
-    #[test]
-    fn local_dev_builds_do_not_warn_on_latest_bootstrap_fallback() {
-        if current_executable_looks_like_local_dev_build() {
-            assert!(!should_warn_on_latest_bootstrap_fallback());
-        }
-    }
-
-    #[test]
-    fn executable_looks_like_local_dev_build_detects_target_debug_and_release() {
-        assert!(executable_looks_like_local_dev_build(Path::new(
-            "/workspace/target/debug/codemod"
-        )));
-        assert!(executable_looks_like_local_dev_build(Path::new(
-            "/workspace/target/release/codemod"
-        )));
-        assert!(!executable_looks_like_local_dev_build(Path::new(
-            "/workspace/bin/codemod"
-        )));
-    }
-
-    #[test]
-    fn skip_ascii_art_after_failed_bootstrap_only_for_parent_fallback() {
-        let _guard = env_test_lock().lock().expect("env test lock poisoned");
-        let previous_bootstrapped = std::env::var_os(CODEMOD_BOOTSTRAPPED_ENV);
-        let previous_marker = std::env::var_os(CODEMOD_BOOTSTRAP_MARKER_ENV);
-
-        std::env::remove_var(CODEMOD_BOOTSTRAPPED_ENV);
-        std::env::set_var(CODEMOD_BOOTSTRAP_MARKER_ENV, "/tmp/codemod-bootstrap.marker");
-        assert!(skip_ascii_art_after_failed_bootstrap());
-
-        std::env::set_var(CODEMOD_BOOTSTRAPPED_ENV, "1");
-        assert!(!skip_ascii_art_after_failed_bootstrap());
-
-        match previous_bootstrapped {
-            Some(value) => std::env::set_var(CODEMOD_BOOTSTRAPPED_ENV, value),
-            None => std::env::remove_var(CODEMOD_BOOTSTRAPPED_ENV),
-        }
-
-        match previous_marker {
-            Some(value) => std::env::set_var(CODEMOD_BOOTSTRAP_MARKER_ENV, value),
-            None => std::env::remove_var(CODEMOD_BOOTSTRAP_MARKER_ENV),
-        }
-    }
-
-    #[test]
-    fn cleanup_bootstrap_marker_removes_existing_file() {
-        let marker = tempfile::NamedTempFile::new().expect("temp marker file");
-        let path = marker.into_temp_path().keep().expect("persist marker path");
-        let path = std::path::PathBuf::from(path);
-
-        cleanup_bootstrap_marker(&path);
-
-        assert!(!path.exists());
     }
 
     #[test]
