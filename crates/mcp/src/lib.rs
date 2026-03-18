@@ -42,7 +42,7 @@ impl CodemodMcpServer {
             return;
         };
         let event = event.to_string();
-        std::mem::drop(tokio::task::spawn_blocking(move || {
+        let _handle = tokio::task::spawn_blocking(move || {
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs())
@@ -59,7 +59,7 @@ impl CodemodMcpServer {
                 return;
             };
             let _ = writeln!(file, "{timestamp}\t{event}");
-        }));
+        });
     }
 }
 

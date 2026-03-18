@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub type CapabilitiesSecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+    Arc<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>;
 pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
 
 /// Callback for selecting an agent from available options.
