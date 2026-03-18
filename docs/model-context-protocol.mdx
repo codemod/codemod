@@ -13,13 +13,15 @@ Codemod MCP (Model Context Protocol) provides AI assistants with tools for code 
 
 ## Quick setup
 
-Run the bootstrap command from the repository root:
+Run the bootstrap command from anywhere:
 
 ```bash
-npx codemod ai --harness auto --project
+npx codemod agent install --harness auto --user
 ```
 
-This is the default setup path for the AI-native CLI experience. After it finishes, restart your IDE or harness session so the Codemod MCP server and discovery guidance are picked up.
+This is the default setup path for the AI-native CLI experience. It installs Codemod Master Skill and Codemod MCP for your coding agent so it can use Codemod CLI with built-in best practices for building, running, testing, and publishing codemods.
+
+If you want that setup scoped to a single repo or workspace instead, use `--project`.
 
 <Accordion title="Manual MCP setup">
   If you prefer to configure MCP yourself:

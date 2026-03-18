@@ -42,6 +42,7 @@
                 "pages": [
                   "workflows/introduction",
                   "workflows/reference",
+                  "workflows/sharding",
                   "workflows/ai-harness-rig"
                 ]
               },
@@ -284,6 +285,10 @@
   "integrations": {
     "ga4": {
       "measurementId": "G-RW6RM5EL6S"
+    },
+    "posthog": {
+      "apiKey": "phc_bepzsxPAHp9btvX6zdIBccNAc46YJKZ68B3d0wUORkC",
+      "sessionRecording": true
     }
   }
 }

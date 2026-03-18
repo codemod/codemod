@@ -450,6 +450,55 @@ steps:
   Step-level environment variables applied to the process environment.
 </ParamField>
 
+### Shard Step
+
+Evaluates file shards and writes results to workflow state for use with [matrix strategies](#matrix-strategy). Supports built-in grouping algorithms (directory, codeowner) and custom shard functions.
+
+```yaml
+steps:
+  - name: Build shards
+    shard:
+      method:
+        type: directory
+        max_files_per_shard: 20
+      target: "./src"
+      output_state: shards
+      js-ast-grep:
+        js_file: scripts/codemod.ts
+        language: tsx
+        include: ["**/*.{ts,tsx}"]
+```
+
+**Shard Step Parameters**:
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="shard.method" type="object" required>
+  Sharding method. Either `{ type: "directory" | "codeowner", max_files_per_shard: N }` for built-in methods, or `{ function: "path/to/shard.ts" }` for custom logic.
+</ParamField>
+
+<ParamField path="shard.target" type="string" default=".">
+  Root directory to scan for files. Defaults to the workflow run target.
+</ParamField>
+
+<ParamField path="shard.output_state" type="string" required>
+  State key to write shard results to.
+</ParamField>
+
+<ParamField path="shard.js-ast-grep" type="object">
+  JSSG codemod configuration for pre-filtering. Dry-runs the codemod and only shards files where the transform produces changes.
+</ParamField>
+
+<ParamField path="shard.file_pattern" type="string">
+  Glob pattern for eligible files (used when `js-ast-grep` is not set).
+</ParamField>
+
+<Card title="Sharding Guide" icon="layer-group" href="/workflows/sharding">
+  Full guide covering built-in methods, custom functions, re-evaluation, and examples.
+</Card>
+
 ---
 
 ## Matrix Strategy

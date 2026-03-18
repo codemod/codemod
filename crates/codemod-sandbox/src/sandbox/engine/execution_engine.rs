@@ -575,6 +575,205 @@ where
     .await
 }
 
+/// Options for executing a shard function in QuickJS
+pub struct ShardFunctionOptions<'a, R> {
+    pub script_path: &'a Path,
+    pub resolver: Arc<R>,
+    /// The shard input data passed to the function
+    pub input: serde_json::Value,
+    /// Optional capabilities to gate module access (fetch, fs, child_process).
+    /// When `None`, no extra modules are enabled.
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+}
+
+/// Execute a shard function with QuickJS and return the result as JSON.
+///
+/// The user's script must export a default function that receives a `ShardInput`
+/// object and returns a `ShardResult[]` array. The engine handles all file I/O
+/// and serialization — the function only needs to handle grouping logic.
+pub async fn execute_shard_function_with_quickjs<'a, R>(
+    options: ShardFunctionOptions<'a, R>,
+) -> Result<serde_json::Value, ExecutionError>
+where
+    R: ModuleResolver + 'static,
+{
+    use crate::ast_grep::serde::JsValue;
+    use rquickjs::{FromJs, IntoJs};
+
+    let script_name = options
+        .script_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("shard.js");
+
+    let js_code = format!(
+        include_str!("scripts/shard_script.js.txt"),
+        script_name = script_name
+    );
+
+    let runtime = AsyncRuntime::new().map_err(|e| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+            message: format!("Failed to create AsyncRuntime: {e}"),
+        },
+    })?;
+
+    let mut module_builder = LlrtModuleBuilder::build();
+    if let Some(capabilities) = options.capabilities {
+        for capability in capabilities {
+            match capability {
+                LlrtSupportedModules::Fetch => {
+                    module_builder.enable_fetch();
+                }
+                LlrtSupportedModules::Fs => {
+                    module_builder.enable_fs();
+                }
+                LlrtSupportedModules::ChildProcess => {
+                    module_builder.enable_child_process();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+        module_builder.builder.build();
+
+    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
+    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+
+    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
+    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+
+    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
+    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
+    let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
+    let fs_loader = QuickJSLoader;
+
+    runtime
+        .set_loader(
+            (built_in_resolver, fs_resolver),
+            (built_in_loader, fs_loader),
+        )
+        .await;
+
+    let context = AsyncContext::full(&runtime)
+        .await
+        .map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ContextCreationFailed {
+                message: format!("Failed to create AsyncContext: {e}"),
+            },
+        })?;
+
+    let input_value = options.input;
+
+    async_with!(context => |ctx| {
+        // Store a default SharedStateContext so codemod:workflow functions work
+        ctx.store_userdata(SharedStateContext::default()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
+
+        global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to attach global modules: {e}"),
+            },
+        })?;
+
+        let execution = async {
+            let entry_module_path = options
+                .script_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("__codemod_shard_entry.js");
+            let entry_module_name = entry_module_path
+                .to_str()
+                .unwrap_or("__codemod_shard_entry.js");
+
+            let module = Module::declare(ctx.clone(), entry_module_name, js_code)
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to declare module: {e}"),
+                    },
+                })?;
+
+            let (evaluated, eval_value) = module
+                .eval()
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            // Await the module evaluation promise to surface errors from top-level await
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            let namespace = evaluated
+                .namespace()
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            // Convert serde_json::Value input to QuickJS value
+            let input_js = JsValue(input_value).into_js(&ctx).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to convert shard input to JS: {e}"),
+                },
+            })?;
+
+            let func = namespace
+                .get::<_, Function>("executeShard")
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            let result_promise = func.call((input_js,)).catch(&ctx).map_err(|e| {
+                ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                }
+            })?;
+
+            let result_value = maybe_promise(result_promise)
+                .await
+                .catch(&ctx)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                        message: e.to_string(),
+                    },
+                })?;
+
+            // Convert QuickJS result back to serde_json::Value
+            let result_json: JsValue = JsValue::from_js(&ctx, result_value).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                    message: format!("Failed to convert shard result from JS: {e}"),
+                },
+            })?;
+
+            Ok(result_json.0)
+        };
+        execution.await
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

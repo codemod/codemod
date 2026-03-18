@@ -2478,6 +2478,7 @@ function helper() {
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2569,6 +2570,7 @@ interface ApiResponse {
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2638,6 +2640,7 @@ var count = 0;
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2687,6 +2690,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2764,6 +2768,7 @@ build/
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2799,6 +2804,7 @@ build/
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
@@ -2864,6 +2870,7 @@ export default function transform(ast) {
             None,
             None,
             &StructuredLogger::default(),
+            None,
         )
         .await;
 
