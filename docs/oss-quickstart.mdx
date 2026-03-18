@@ -3,40 +3,31 @@ title: "Quickstart"
 sidebarTitle: "Quickstart"
 ---
 
-This guide walks you through creating, testing, and publishing a codemod from scratch. You'll scaffold a package, bootstrap Codemod's AI-native CLI setup, build a workflow with Codemod MCP in your IDE, then test and publish it to the registry.
+This guide walks you through creating, testing, and publishing a codemod from scratch. You'll first set up Codemod in your coding agent, then scaffold and build a JSSG codemod, then test and publish it to the registry.
 
-## 1. Scaffold your project
+## 1. Set up Codemod in your coding agent
 
-Run the interactive scaffolder to create a new codemod package:
-
-```bash
-npx codemod@latest init my-codemod
-```
-
-You'll be prompted for a codemod type:
-- `jssg codemod` for AST-based transformations
-- `multi-step workflow` for orchestrated migrations that combine shell, YAML, and JSSG steps
-- `agent skill codemod` for authored skill packages used in coding-agent workflows
-
-For this guide, choose `jssg codemod`.
-
-The scaffolder may also ask whether to add an <Tooltip tip="Instructions that can be installed into tools like Codex, Claude Code, or Cursor, so the assistant can use this package during a session.">agent skill</Tooltip>. This quickstart builds a workflow package, so leave that option disabled.
-
-## 2. Bootstrap Codemod's AI-native CLI
-
-Set up Codemod MCP in your IDE with Codemod's AI-native CLI:
+Start by installing Codemod Master Skill and Codemod MCP for your preferred coding agent:
 
 ```bash
-npx codemod agent install --harness auto --project
+npx codemod agent install --harness auto --user
 ```
 
-This installs Codemod's assistant-side skill bundle, adds the Codemod MCP server to the detected coding assistant, and updates local discovery guidance files.
+This is the default setup path for Codemod's AI-native CLI. It installs Codemod Master Skill and Codemod MCP so your agent can use Codemod CLI with built-in best practices for building, running, testing, and publishing codemods. If you'd rather scope the setup to the current repo or workspace, use `--project`.
 
-If you prefer to configure MCP yourself, see the manual setup in [Codemod MCP](/model-context-protocol#manual-mcp-setup).
+## 2. Scaffold and build your codemod
 
-## 3. Build your codemod
+Create a dedicated folder or repo for your codemod work, then scaffold a starter package:
 
-With Codemod's MCP + skill bootstrap installed, ask your AI assistant to create a codemod. After restarting your IDE or harness session, it can discover Codemod guidance and MCP tools automatically. Be specific about the transformation you need:
+```bash
+npx codemod init
+```
+
+The starter package gives your agent a concrete structure to refine or replace while keeping the workflow, tests, and publishing flow in place.
+
+Once the package is scaffolded, you can ask your AI agent to help you build codemods for things like framework upgrades, design system migrations, i18n work, code-mining tasks, and more.
+
+For example:
 
 <Prompt
   description="Extract React components from inside other components to module scope to prevent re-creation on render."
@@ -48,11 +39,11 @@ Build a codemod to move React components defined inside other components
 to module scope to fix re-creation on every render.
 </Prompt>
 
-<Card title="Prompting tips" icon="lightbulb" href="/model-context-protocol#best-practices">
-  Tips for writing effective prompts and getting the most out of MCP.
+<Card title="Prompting best practices" icon="lightbulb" href="/model-context-protocol#best-practices">
+  Tips for writing effective prompts and getting the most out of building codemods with AI.
 </Card>
 
-The AI will use MCP tools to analyze your code, generate the transform script, and set up the package. You'll get a complete [Codemod package](/package-structure):
+You will end up with a [Codemod package](/package-structure):
 
 <Tree>
   <Tree.Folder name="my-codemod" defaultOpen>
@@ -260,12 +251,14 @@ export default transform;
 
 </CodeGroup>
 
-## 4. Validate and test
+## 3. Validate and test
+
+From your scaffolded codemod package directory, validate the workflow and run the generated tests.
 
 Validate the workflow schema:
 
 ```bash
-npx codemod@latest workflow validate -w workflow.yaml
+npx codemod workflow validate -w workflow.yaml
 ```
 
 Run tests against your input/expected fixtures:
@@ -278,9 +271,9 @@ Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expe
 
 For test structure, CI integration, and debugging strategies, see [Testing](/jssg/testing).
 
-## 5. Run your codemod
+## 4. Run your codemod
 
-Run your codemod on a target codebase:
+From the same package directory, run your codemod on a target codebase:
 
 ```bash
 npx codemod workflow run -w . -t /path/to/your/project
@@ -298,7 +291,9 @@ npx codemod workflow run -w . -t /path/to/your/project
 
 For all CLI options, see [CLI reference](/cli#codemod-workflow).
 
-## 6. Publish
+## 5. Publish
+
+When you're happy with the result, publish from the package directory:
 
 Share your codemod with your team or the community:
 
