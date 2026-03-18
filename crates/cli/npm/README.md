@@ -30,32 +30,37 @@ Whether you're an individual developer tackling tech debt, an OSS maintainer shi
 ## Installation
 
 ```bash
-npm install -g codemod@latest
+npm install -g codemod
 ```
 
 Or use via `npx` without installation:
 
 ```bash
-npx codemod@latest <command>
+npx codemod
 ```
+
+Bare `npx codemod` opens an interactive launcher and refreshes to the latest published CLI before showing the prompt.
 
 ## Quick Start
 
 ```bash
-# 1. Create a codemod package
+# 1. Start with the launcher or scaffold directly
+npx codemod
+
+# 2. Create a codemod package
 npx codemod init my-codemod
 cd my-codemod
 
 # You can create codemod packages with the help of AI using Codemod MCP or Studio
 
-# 2. Run it locally
+# 3. Run it locally
 npx codemod workflow run -w ./example-codemod -t /abs/path/to/repo
 
-# 3. Publish to registry
+# 4. Publish to registry
 npx codemod login
 npx codemod publish
 
-# 4. Run from registry
+# 5. Run from registry
 npx codemod @your-org/example-codemod
 ```
 

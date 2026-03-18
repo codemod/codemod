@@ -10,7 +10,7 @@ This guide walks you through creating, testing, and publishing a codemod from sc
 Run the interactive scaffolder to create a new codemod package:
 
 ```bash
-npx codemod@latest init my-codemod
+npx codemod init my-codemod
 ```
 
 You'll be prompted for a codemod type:
@@ -265,7 +265,7 @@ export default transform;
 Validate the workflow schema:
 
 ```bash
-npx codemod@latest workflow validate -w workflow.yaml
+npx codemod workflow validate -w workflow.yaml
 ```
 
 Run tests against your input/expected fixtures:

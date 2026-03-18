@@ -36,18 +36,23 @@ This repo houses the **Codemod CLI** and its underlying **workflow engine** – 
 ## Getting Started
 
 ```bash
-# 1) Scaffold a new codemod project
+# 1) Open the interactive launcher
+npx codemod
+
+# 2) Scaffold a new codemod project
 npx codemod init my-codemod
 
-# 2) Test it locally
+# 3) Test it locally
 npx codemod workflow run -w my-codemod/workflow.yaml
 
-# 3) Publish it when you're ready
+# 4) Publish it when you're ready
 npx codemod publish my-codemod
 
-# 4) Run it from the Registry
+# 5) Run it from the Registry
 npx codemod @codemod/my-codemod
 ```
+
+Bare `npx codemod` opens an interactive launcher for creating a package or running one from the registry.
 
 See the full [CLI reference](https://docs.codemod.com/cli) for every command and option.
 

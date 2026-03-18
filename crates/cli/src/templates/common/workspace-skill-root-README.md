@@ -12,7 +12,7 @@ Community contributions are welcome. Use this repository to create, validate, an
 4. Configure a [trusted publisher](https://docs.codemod.com) in Codemod so GitHub Actions can publish with OIDC.
 5. {scope_guidance}
 
-Use [Codemod MCP](https://docs.codemod.com/model-context-protocol) and `npx codemod@latest init` to create new codemods from this monorepo.
+Use [Codemod MCP](https://docs.codemod.com/model-context-protocol) and `npx codemod init` to create new codemods from this monorepo.
 
 ## Repository layout
 
@@ -30,9 +30,9 @@ Keep each codemod self-contained so maintainers can validate and publish package
 
 ## Creating codemods
 
-- Scaffold new codemods with `npx codemod@latest init`.
+- Scaffold new codemods with `npx codemod init`.
 - Use Codemod MCP when creating or refining codemods, especially when symbol definitions or cross-file references matter.
-- Validate package workflows with `npx codemod@latest workflow validate codemods/<slug>/workflow.yaml`.
+- Validate package workflows with `npx codemod workflow validate codemods/<slug>/workflow.yaml`.
 - Run package tests from the codemod directory before publishing.
 
 ## Running codemods
@@ -43,13 +43,13 @@ Keep each codemod self-contained so maintainers can validate and publish package
 ### From the registry
 
 ```bash
-npx codemod@latest <codemod-name>
+npx codemod <codemod-name>
 ```
 
 ### From source
 
 ```bash
-npx codemod@latest workflow run -w codemods/<slug>/workflow.yaml
+npx codemod workflow run -w codemods/<slug>/workflow.yaml
 ```
 
 By default, codemods run in the current folder. Add `--target /path/to/repo` to run elsewhere.
