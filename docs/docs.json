@@ -42,6 +42,7 @@
                 "pages": [
                   "workflows/introduction",
                   "workflows/reference",
+                  "workflows/sharding",
                   "workflows/ai-harness-rig"
                 ]
               },

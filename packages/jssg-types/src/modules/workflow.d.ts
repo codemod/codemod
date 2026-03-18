@@ -195,4 +195,41 @@ declare module "codemod:workflow" {
    * ```
    */
   export function acquireLock(name: string): () => void;
+
+  // ── Shard function types ────────────────────────────────────────────────
+
+  /**
+   * Input passed to a custom shard function by the engine.
+   *
+   * The engine handles all file discovery (globbing + optional codemod dry-run)
+   * before calling the shard function. The function only needs to handle grouping.
+   */
+  export interface ShardInput {
+    /** Relative paths of eligible files (pre-filtered by the engine) */
+    files: string[];
+    /** Absolute path to the target directory */
+    targetDir: string;
+    /** Previous shard assignments for incremental re-evaluation */
+    previousShards: ShardResult[];
+  }
+
+  /**
+   * A single shard result returned by a custom shard function.
+   *
+   * The `name` and `_meta_files` fields are required. Any additional
+   * properties are exposed as `matrix.*` variables in downstream steps.
+   *
+   * Fields prefixed with `_meta_` are excluded from the matrix hash,
+   * so re-indexing shards won't invalidate existing task identity.
+   */
+  export interface ShardResult {
+    /** Shard identifier (used in PR titles, branch names) */
+    name: string;
+    /** Shard index — excluded from matrix hash for stability */
+    _meta_shard: number;
+    /** Files in this shard */
+    _meta_files: string[];
+    /** Arbitrary metadata exposed as matrix variables */
+    [key: string]: unknown;
+  }
 }

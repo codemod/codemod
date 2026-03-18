@@ -1,5 +1,5 @@
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, schemars, service::RequestContext, tool,
+    handler::server::router::tool::ToolRouter, model::*, service::RequestContext, tool,
     tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::json;
@@ -78,45 +78,6 @@ impl CodemodMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.jssg_test_handler.run_jssg_tests(params).await
     }
-
-    #[tool(
-        description = "Get jssg (JavaScript ast-grep) instructions for creating codemods (includes ast-grep fundamentals)"
-    )]
-    async fn get_jssg_instructions(
-        &self,
-        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let instructions_content = include_str!("data/prompts/jssg-instructions.md");
-        Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
-        )]))
-    }
-
-    #[tool(
-        description = "Get jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"
-    )]
-    async fn get_jssg_utils_instructions(
-        &self,
-        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
-        Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
-        )]))
-    }
-
-    #[tool(
-        description = "Get Codemod CLI instructions for project setup and workflow configuration"
-    )]
-    async fn get_codemod_cli_instructions(
-        &self,
-        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
-        Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
-        )]))
-    }
 }
 
 #[tool_handler]
@@ -129,7 +90,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_jssg_instructions (get jssg and ast-grep instructions), get_jssg_utils_instructions (get import manipulation helpers), get_codemod_cli_instructions (get CLI and workflow instructions). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use get_jssg_utils_instructions when you need to find, add, or remove imports.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action.".to_string()),
         }
     }
 
@@ -166,6 +127,11 @@ impl ServerHandler for CodemodMcpServer {
                     "codemod-cli-instructions",
                     Some("Codemod CLI instructions for project setup and workflow configuration"),
                 ),
+                self._create_resource_text(
+                    "sharding://instructions",
+                    "sharding-instructions",
+                    Some("Sharding instructions for splitting large migrations into multiple PRs"),
+                ),
             ],
             next_cursor: None,
         })
@@ -195,6 +161,12 @@ impl ServerHandler for CodemodMcpServer {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
             }
+            "sharding://instructions" => {
+                let instructions_content = include_str!("data/prompts/sharding-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({
@@ -215,9 +187,6 @@ impl ServerHandler for CodemodMcpServer {
         })
     }
 }
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct GetInstructionsRequest {}
 
 #[cfg(test)]
 mod tests {

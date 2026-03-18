@@ -8,6 +8,7 @@ pub mod file_ops;
 pub mod git_ops;
 pub mod registry;
 pub mod report;
+pub mod shard;
 pub mod structured_log;
 pub mod utils;
 
