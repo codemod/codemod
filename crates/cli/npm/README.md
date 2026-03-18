@@ -39,7 +39,7 @@ Or use via `npx` without installation:
 npx codemod
 ```
 
-Bare `npx codemod` opens an interactive launcher and refreshes to the latest published CLI before showing the prompt.
+In an interactive terminal, bare `npx codemod` opens a launcher and refreshes to the latest published CLI before showing the prompt. In non-interactive contexts, it prints next steps and exits with status `1`.
 
 ## Quick Start
 

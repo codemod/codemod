@@ -52,7 +52,7 @@ npx codemod publish my-codemod
 npx codemod @codemod/my-codemod
 ```
 
-Bare `npx codemod` opens an interactive launcher for creating a package or running one from the registry.
+In an interactive terminal, bare `npx codemod` opens a launcher for creating a package or running one from the registry. In non-interactive contexts, it prints next steps and exits with status `1`.
 
 See the full [CLI reference](https://docs.codemod.com/cli) for every command and option.
 

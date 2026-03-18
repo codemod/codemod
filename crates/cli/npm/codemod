@@ -144,12 +144,7 @@ function shouldBootstrapLatestNoCommand(argv, env = process.env) {
   return argv.length === 0 && !env[CODEMOD_BOOTSTRAPPED_ENV];
 }
 
-function spawnLatestCli({
-  argv,
-  env = process.env,
-  platform = process.platform,
-  spawnImpl = spawn,
-}) {
+function spawnLatestCli({ env = process.env, platform = process.platform, spawnImpl = spawn }) {
   return spawnImpl(npmExecutable(platform), latestBootstrapArgs(), {
     stdio: "inherit",
     env: {
@@ -178,7 +173,7 @@ function run({
   resolveBinaryPathImpl = resolveBinaryPath,
 } = {}) {
   if (shouldBootstrapLatestNoCommand(argv, env)) {
-    return spawnLatestCli({ argv, env, platform, spawnImpl });
+    return spawnLatestCli({ env, platform, spawnImpl });
   }
 
   return spawnResolvedBinary({ argv, spawnImpl, resolveBinaryPathImpl });

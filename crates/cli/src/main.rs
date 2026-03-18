@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use inquire::validator::Validation;
 use inquire::{Select, Text};
 use std::fmt;
 use std::io::{self, IsTerminal};
@@ -234,6 +235,20 @@ fn should_prompt_for_no_command_action() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
+fn validate_no_command_package_input(
+    input: &str,
+) -> std::result::Result<Validation, inquire::CustomUserError> {
+    if input.trim().is_empty() {
+        Ok(Validation::Invalid("Please enter a package name.".into()))
+    } else {
+        Ok(Validation::Valid)
+    }
+}
+
+fn normalize_no_command_package_input(input: String) -> String {
+    input.trim().to_string()
+}
+
 async fn dispatch_selected_init_command() -> Result<()> {
     let command = commands::init::Command::default();
     commands::init::handler(&command)
@@ -276,7 +291,9 @@ async fn handle_no_command(
         NoCommandAction::RunPackage => {
             let package = Text::new("Package name:")
                 .with_help_message("Example: react/19/migration-recipe or @your-org/package")
+                .with_validator(validate_no_command_package_input)
                 .prompt()?;
+            let package = normalize_no_command_package_input(package);
             dispatch_selected_run_command(&package, telemetry_sender, disable_analytics).await
         }
     }
@@ -507,6 +524,30 @@ mod tests {
             "Create a new codemod package (npx codemod init)"
         );
         assert_eq!(options[1].action, NoCommandAction::RunPackage);
+    }
+
+    #[test]
+    fn validate_no_command_package_input_rejects_blank_values() {
+        assert!(matches!(
+            validate_no_command_package_input("").expect("blank validation"),
+            Validation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_no_command_package_input("   ").expect("whitespace validation"),
+            Validation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_no_command_package_input("@codemod/sample").expect("package validation"),
+            Validation::Valid
+        ));
+    }
+
+    #[test]
+    fn normalize_no_command_package_input_trims_whitespace() {
+        assert_eq!(
+            normalize_no_command_package_input("  @codemod/sample  ".to_string()),
+            "@codemod/sample"
+        );
     }
 
     #[test]
