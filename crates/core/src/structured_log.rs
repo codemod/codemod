@@ -12,6 +12,15 @@ pub enum OutputFormat {
     Jsonl,
 }
 
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputFormat::Text => formatter.write_str("text"),
+            OutputFormat::Jsonl => formatter.write_str("jsonl"),
+        }
+    }
+}
+
 impl std::str::FromStr for OutputFormat {
     type Err = String;
 

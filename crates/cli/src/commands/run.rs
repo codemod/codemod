@@ -14,6 +14,7 @@ use anyhow::{anyhow, Result};
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use clap::Args;
@@ -47,7 +48,7 @@ struct LegacyFileChange {
     old_data: String,
     new_data: String,
 }
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct Command {
     /// Package name with optional version (e.g., @org/package@1.0.0)
     #[arg(value_name = "PACKAGE")]
@@ -110,8 +111,17 @@ pub struct Command {
     report: bool,
 
     /// Output format: "text" (default) or "jsonl" for structured logging
-    #[arg(long, default_value = "text")]
-    format: String,
+    #[arg(long, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+impl Command {
+    pub fn from_package_for_prompt(package: String) -> Self {
+        Self {
+            package,
+            ..Default::default()
+        }
+    }
 }
 
 async fn send_failure_event(
@@ -263,10 +273,7 @@ pub async fn handler(
 
     let started = std::time::Instant::now();
 
-    let output_format: butterflow_core::structured_log::OutputFormat = args
-        .format
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let output_format = args.format;
 
     // Run workflow using the extracted workflow runner
     let (mut engine, mut config) = create_engine(
