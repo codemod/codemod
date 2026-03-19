@@ -6,7 +6,7 @@
 
 ```bash
 # Run this package and accept the skill-install prompt
-npx codemod@latest {name}
+npx codemod {name}
 ```
 
 ## Usage

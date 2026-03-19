@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct Command {
     /// Project directory name
     #[arg(value_name = "PATH")]

@@ -19,6 +19,9 @@
     "README.md",
     "codemod"
   ],
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
   "dependencies": {
     "detect-libc": "^2.0.3"
   },
