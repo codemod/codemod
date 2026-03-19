@@ -187,6 +187,11 @@ enum ImplicitRoute {
     Run(Vec<String>),
 }
 
+enum NoCommandResult {
+    Completed,
+    ExitWithMessage(String),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NoCommandAction {
     Init,
@@ -249,7 +254,7 @@ fn normalize_no_command_package_input(input: String) -> String {
     input.trim().to_string()
 }
 
-async fn dispatch_selected_init_command() -> Result<()> {
+fn dispatch_selected_init_command() -> Result<()> {
     let command = commands::init::Command::default();
     commands::init::handler(&command)
 }
@@ -266,12 +271,11 @@ async fn dispatch_selected_run_command(
 async fn handle_no_command(
     telemetry_sender: TelemetrySenderMutex,
     disable_analytics: bool,
-) -> Result<()> {
+) -> Result<NoCommandResult> {
     print_ascii_art();
 
     if !should_prompt_for_no_command_action() {
-        eprintln!("{}", no_command_message());
-        std::process::exit(1);
+        return Ok(NoCommandResult::ExitWithMessage(no_command_message()));
     }
 
     let selection = Select::new("What would you like to do?", no_command_prompt_options())
@@ -280,14 +284,11 @@ async fn handle_no_command(
 
     let action = match selection {
         Ok(selection) => selection.action,
-        Err(_) => {
-            eprintln!("{}", no_command_message());
-            std::process::exit(1);
-        }
+        Err(_) => return Ok(NoCommandResult::ExitWithMessage(no_command_message())),
     };
 
-    match action {
-        NoCommandAction::Init => dispatch_selected_init_command().await,
+    let result = match action {
+        NoCommandAction::Init => dispatch_selected_init_command(),
         NoCommandAction::RunPackage => {
             let package = Text::new("Package name:")
                 .with_help_message("Example: react/19/migration-recipe or @your-org/package")
@@ -296,7 +297,9 @@ async fn handle_no_command(
             let package = normalize_no_command_package_input(package);
             dispatch_selected_run_command(&package, telemetry_sender, disable_analytics).await
         }
-    }
+    };
+
+    result.map(|_| NoCommandResult::Completed)
 }
 
 fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
@@ -480,7 +483,13 @@ async fn main() -> Result<()> {
             if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
                 .await?
             {
-                handle_no_command(telemetry_sender.clone(), cli.disable_analytics).await?;
+                match handle_no_command(telemetry_sender.clone(), cli.disable_analytics).await? {
+                    NoCommandResult::Completed => {}
+                    NoCommandResult::ExitWithMessage(message) => {
+                        eprintln!("{message}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
     }
