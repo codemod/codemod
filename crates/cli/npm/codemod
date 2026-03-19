@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 const binaryName = process.platform === "win32" ? "codemod.exe" : "codemod";
+const CODEMOD_BOOTSTRAPPED_ENV = "CODEMOD_BOOTSTRAPPED";
 
 function detectPackageName() {
   const { platform, arch } = process;
@@ -93,8 +94,6 @@ function resolveBinaryPath() {
     }
   }
 
-  console.log("pkgName", pkgName);
-
   const releaseCandidate = path.join(
     __dirname,
     "..",
@@ -125,43 +124,121 @@ function resolveBinaryPath() {
   failToLocateBinary(pkgName, moduleError);
 }
 
-const { binaryPath } = resolveBinaryPath();
+function npmExecutable(platform = process.platform) {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
 
-const child = spawn(binaryPath, process.argv.slice(2), {
-  stdio: "inherit",
-});
+function latestBootstrapArgs() {
+  return [
+    "exec",
+    "--yes",
+    "--prefer-online",
+    "--package",
+    "codemod@latest",
+    "--",
+    "codemod",
+  ];
+}
 
-child.on("error", (error) => {
-  console.error("Failed to execute codemod binary.");
-  console.error(error);
-  process.exit(1);
-});
+function shouldBootstrapLatestNoCommand(argv, env = process.env) {
+  return argv.length === 0 && !env[CODEMOD_BOOTSTRAPPED_ENV];
+}
 
-const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+function spawnLatestCli({ env = process.env, platform = process.platform, spawnImpl = spawn }) {
+  return spawnImpl(npmExecutable(platform), latestBootstrapArgs(), {
+    stdio: "inherit",
+    env: {
+      ...env,
+      [CODEMOD_BOOTSTRAPPED_ENV]: "1",
+    },
+  });
+}
 
-const forwarders = signals.map((signal) => {
-  const handler = () => {
-    if (child.killed) {
-      return;
-    }
-    try {
-      child.kill(signal);
-    } catch (_) {
-      // Ignore
-    }
-  };
-  process.on(signal, handler);
-  return { signal, handler };
-});
+function spawnResolvedBinary({
+  argv,
+  spawnImpl = spawn,
+  resolveBinaryPathImpl = resolveBinaryPath,
+}) {
+  const { binaryPath } = resolveBinaryPathImpl();
+  return spawnImpl(binaryPath, argv, {
+    stdio: "inherit",
+  });
+}
 
-child.on("exit", (code, signal) => {
-  forwarders.forEach(({ signal, handler }) => {
-    process.removeListener(signal, handler);
+function run({
+  argv = process.argv.slice(2),
+  env = process.env,
+  platform = process.platform,
+  spawnImpl = spawn,
+  resolveBinaryPathImpl = resolveBinaryPath,
+} = {}) {
+  if (shouldBootstrapLatestNoCommand(argv, env)) {
+    return spawnLatestCli({ env, platform, spawnImpl });
+  }
+
+  return spawnResolvedBinary({ argv, spawnImpl, resolveBinaryPathImpl });
+}
+
+function attachChildLifecycle(
+  child,
+  {
+    signalSource = process,
+    processObject = process,
+    logger = console.error,
+  } = {},
+) {
+  child.on("error", (error) => {
+    logger("Failed to execute codemod binary.");
+    logger(error);
+    processObject.exit(1);
   });
 
-  if (signal) {
-    process.kill(process.pid, signal);
-  } else {
-    process.exit(code == null ? 1 : code);
-  }
-});
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+  const forwarders = signals.map((signal) => {
+    const handler = () => {
+      if (child.killed) {
+        return;
+      }
+      try {
+        child.kill(signal);
+      } catch (_) {
+        // Ignore
+      }
+    };
+    signalSource.on(signal, handler);
+    return { signal, handler };
+  });
+
+  child.on("exit", (code, signal) => {
+    forwarders.forEach(({ signal, handler }) => {
+      signalSource.removeListener(signal, handler);
+    });
+
+    if (signal) {
+      processObject.kill(processObject.pid, signal);
+    } else {
+      processObject.exit(code == null ? 1 : code);
+    }
+  });
+}
+
+function main() {
+  const child = run();
+  attachChildLifecycle(child);
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  CODEMOD_BOOTSTRAPPED_ENV,
+  latestBootstrapArgs,
+  npmExecutable,
+  shouldBootstrapLatestNoCommand,
+  spawnLatestCli,
+  spawnResolvedBinary,
+  run,
+  attachChildLifecycle,
+};

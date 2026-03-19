@@ -1,5 +1,9 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use inquire::validator::Validation;
+use inquire::{Select, Text};
+use std::fmt;
+use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_select;
 mod ascii_art;
@@ -183,6 +187,127 @@ enum ImplicitRoute {
     Run(Vec<String>),
 }
 
+enum NoCommandResult {
+    Completed,
+    ExitWithMessage(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NoCommandAction {
+    Init,
+    RunPackage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NoCommandPromptOption {
+    action: NoCommandAction,
+    label: &'static str,
+}
+
+impl fmt::Display for NoCommandPromptOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label)
+    }
+}
+
+fn no_command_prompt_options() -> Vec<NoCommandPromptOption> {
+    vec![
+        NoCommandPromptOption {
+            action: NoCommandAction::Init,
+            label: "Create a new codemod package (npx codemod init)",
+        },
+        NoCommandPromptOption {
+            action: NoCommandAction::RunPackage,
+            label: "Run a published package (npx codemod <package>)",
+        },
+    ]
+}
+
+fn no_command_message() -> String {
+    [
+        "No command provided.",
+        "",
+        "Next steps:",
+        "  1. Create a new codemod package: npx codemod init",
+        "  2. Run a published package: npx codemod <package>",
+        "",
+        "Use --help for more usage information.",
+    ]
+    .join("\n")
+}
+
+fn should_prompt_for_no_command_action() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+fn exit_with_code(code: i32) -> ! {
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    std::process::exit(code);
+}
+
+fn validate_no_command_package_input(
+    input: &str,
+) -> std::result::Result<Validation, inquire::CustomUserError> {
+    if input.trim().is_empty() {
+        Ok(Validation::Invalid("Please enter a package name.".into()))
+    } else {
+        Ok(Validation::Valid)
+    }
+}
+
+fn normalize_no_command_package_input(input: String) -> String {
+    input.trim().to_string()
+}
+
+fn dispatch_selected_init_command() -> Result<()> {
+    let command = commands::init::Command::default();
+    commands::init::handler(&command)
+}
+
+async fn dispatch_selected_run_command(
+    package: &str,
+    telemetry_sender: TelemetrySenderMutex,
+    disable_analytics: bool,
+) -> Result<()> {
+    let command = commands::run::Command::from_package_for_prompt(package.to_string());
+    commands::run::handler(&command, telemetry_sender, disable_analytics).await
+}
+
+async fn handle_no_command(
+    telemetry_sender: TelemetrySenderMutex,
+    disable_analytics: bool,
+) -> Result<NoCommandResult> {
+    print_ascii_art();
+
+    if !should_prompt_for_no_command_action() {
+        return Ok(NoCommandResult::ExitWithMessage(no_command_message()));
+    }
+
+    let selection = Select::new("What would you like to do?", no_command_prompt_options())
+        .with_starting_cursor(0)
+        .prompt();
+
+    let action = match selection {
+        Ok(selection) => selection.action,
+        Err(_) => return Ok(NoCommandResult::ExitWithMessage(no_command_message())),
+    };
+
+    let result = match action {
+        NoCommandAction::Init => dispatch_selected_init_command(),
+        NoCommandAction::RunPackage => {
+            let package = Text::new("Package name:")
+                .with_help_message("Example: react/19/migration-recipe or @your-org/package")
+                .with_validator(validate_no_command_package_input)
+                .prompt()?;
+            let package = normalize_no_command_package_input(package);
+            dispatch_selected_run_command(&package, telemetry_sender, disable_analytics).await
+        }
+    };
+
+    result.map(|_| NoCommandResult::Completed)
+}
+
 fn classify_implicit_route(trailing_args: &[String]) -> Option<ImplicitRoute> {
     if trailing_args.is_empty() {
         return None;
@@ -364,10 +489,13 @@ async fn main() -> Result<()> {
             if !handle_implicit_run_command(cli.trailing_args.clone(), telemetry_sender.clone())
                 .await?
             {
-                // No valid subcommand or package name provided, show help
-                print_ascii_art();
-                eprintln!("No command provided. Use --help for usage information.");
-                std::process::exit(1);
+                match handle_no_command(telemetry_sender.clone(), cli.disable_analytics).await? {
+                    NoCommandResult::Completed => {}
+                    NoCommandResult::ExitWithMessage(message) => {
+                        eprintln!("{message}");
+                        exit_with_code(1);
+                    }
+                }
             }
         }
     }
@@ -385,6 +513,56 @@ mod tests {
         let help_text = Cli::command().render_long_help().to_string();
         assert!(help_text.contains("agent"));
         assert!(help_text.contains("mcp"));
+    }
+
+    #[test]
+    fn no_command_message_lists_onboarding_steps() {
+        let message = no_command_message();
+
+        let init_index = message
+            .find("1. Create a new codemod package: npx codemod init")
+            .expect("expected init step");
+        let package_index = message
+            .find("2. Run a published package: npx codemod <package>")
+            .expect("expected package step");
+
+        assert!(init_index < package_index);
+    }
+
+    #[test]
+    fn no_command_prompt_options_list_init_first() {
+        let options = no_command_prompt_options();
+
+        assert_eq!(options[0].action, NoCommandAction::Init);
+        assert_eq!(
+            options[0].label,
+            "Create a new codemod package (npx codemod init)"
+        );
+        assert_eq!(options[1].action, NoCommandAction::RunPackage);
+    }
+
+    #[test]
+    fn validate_no_command_package_input_rejects_blank_values() {
+        assert!(matches!(
+            validate_no_command_package_input("").expect("blank validation"),
+            Validation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_no_command_package_input("   ").expect("whitespace validation"),
+            Validation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_no_command_package_input("@codemod/sample").expect("package validation"),
+            Validation::Valid
+        ));
+    }
+
+    #[test]
+    fn normalize_no_command_package_input_trims_whitespace() {
+        assert_eq!(
+            normalize_no_command_package_input("  @codemod/sample  ".to_string()),
+            "@codemod/sample"
+        );
     }
 
     #[test]
