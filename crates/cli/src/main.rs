@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use inquire::validator::Validation;
 use inquire::{Select, Text};
 use std::fmt;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_select;
 mod ascii_art;
@@ -238,6 +238,12 @@ fn no_command_message() -> String {
 
 fn should_prompt_for_no_command_action() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+fn exit_with_code(code: i32) -> ! {
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    std::process::exit(code);
 }
 
 fn validate_no_command_package_input(
@@ -487,7 +493,7 @@ async fn main() -> Result<()> {
                     NoCommandResult::Completed => {}
                     NoCommandResult::ExitWithMessage(message) => {
                         eprintln!("{message}");
-                        std::process::exit(1);
+                        exit_with_code(1);
                     }
                 }
             }
