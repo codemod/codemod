@@ -194,6 +194,7 @@ enum NoCommandResult {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NoCommandAction {
+    Ai,
     Init,
     RunPackage,
 }
@@ -213,6 +214,10 @@ impl fmt::Display for NoCommandPromptOption {
 fn no_command_prompt_options() -> Vec<NoCommandPromptOption> {
     vec![
         NoCommandPromptOption {
+            action: NoCommandAction::Ai,
+            label: "Install Master Codemod Skills (npx codemod ai)",
+        },
+        NoCommandPromptOption {
             action: NoCommandAction::Init,
             label: "Create a new codemod package (npx codemod init)",
         },
@@ -228,8 +233,9 @@ fn no_command_message() -> String {
         "No command provided.",
         "",
         "Next steps:",
-        "  1. Create a new codemod package: npx codemod init",
-        "  2. Run a published package: npx codemod <package>",
+        "  1. Install Master Codemod Skills: npx codemod ai",
+        "  2. Create a new codemod package: npx codemod init",
+        "  3. Run a published package: npx codemod <package>",
         "",
         "Use --help for more usage information.",
     ]
@@ -265,6 +271,14 @@ fn dispatch_selected_init_command() -> Result<()> {
     commands::init::handler(&command)
 }
 
+async fn dispatch_selected_ai_command(telemetry_sender: TelemetrySenderMutex) -> Result<()> {
+    let cli = Cli::try_parse_from(["codemod", "ai"])?;
+    match cli.command {
+        Some(Commands::Ai(args)) => commands::ai::handler(&args, telemetry_sender).await,
+        _ => Ok(()),
+    }
+}
+
 async fn dispatch_selected_run_command(
     package: &str,
     telemetry_sender: TelemetrySenderMutex,
@@ -294,6 +308,7 @@ async fn handle_no_command(
     };
 
     let result = match action {
+        NoCommandAction::Ai => dispatch_selected_ai_command(telemetry_sender).await,
         NoCommandAction::Init => dispatch_selected_init_command(),
         NoCommandAction::RunPackage => {
             let package = Text::new("Package name:")
@@ -515,29 +530,39 @@ mod tests {
         assert!(help_text.contains("mcp"));
     }
 
+    #[test]
     fn no_command_message_lists_onboarding_steps() {
         let message = no_command_message();
 
+        let ai_index = message
+            .find("1. Install Master Codemod Skills: npx codemod ai")
+            .expect("expected ai step");
         let init_index = message
-            .find("1. Create a new codemod package: npx codemod init")
+            .find("2. Create a new codemod package: npx codemod init")
             .expect("expected init step");
         let package_index = message
-            .find("2. Run a published package: npx codemod <package>")
+            .find("3. Run a published package: npx codemod <package>")
             .expect("expected package step");
 
+        assert!(ai_index < init_index);
         assert!(init_index < package_index);
     }
 
     #[test]
-    fn no_command_prompt_options_list_init_first() {
+    fn no_command_prompt_options_list_ai_first() {
         let options = no_command_prompt_options();
 
-        assert_eq!(options[0].action, NoCommandAction::Init);
+        assert_eq!(options[0].action, NoCommandAction::Ai);
         assert_eq!(
             options[0].label,
+            "Install Master Codemod Skills (npx codemod ai)"
+        );
+        assert_eq!(options[1].action, NoCommandAction::Init);
+        assert_eq!(
+            options[1].label,
             "Create a new codemod package (npx codemod init)"
         );
-        assert_eq!(options[1].action, NoCommandAction::RunPackage);
+        assert_eq!(options[2].action, NoCommandAction::RunPackage);
     }
 
     #[test]
