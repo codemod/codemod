@@ -123,7 +123,7 @@ pub fn build_agent_command(
     working_dir: &Path,
 ) -> Option<std::process::Command> {
     let mut cmd = std::process::Command::new(executable);
-    cmd.current_dir(working_dir);
+    cmd.current_dir(resolve_agent_working_dir(working_dir));
 
     let full_prompt = if let Some(sys) = system_prompt {
         format!("{}\n\n{}", sys, prompt)
@@ -165,6 +165,17 @@ pub fn build_agent_command(
     }
 
     Some(cmd)
+}
+
+fn resolve_agent_working_dir(working_dir: &Path) -> PathBuf {
+    if working_dir.is_file() {
+        return working_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+
+    working_dir.to_path_buf()
 }
 
 const KNOWN_AGENTS: &[KnownAgent] = &[
@@ -667,6 +678,7 @@ fn inspect_parent_process_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn weak(agent: &'static str, reason: &str) -> Signal {
         Signal {
@@ -740,6 +752,30 @@ mod tests {
         );
         assert_eq!(detect_agent_in_text("open-claw"), Some("openclaw"));
         assert_eq!(detect_agent_in_text("openclaw-cli"), Some("openclaw"));
+    }
+
+    #[test]
+    fn build_agent_command_uses_target_directory_when_path_is_directory() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd = build_agent_command("claude-code", executable, "prompt", None, temp_dir.path())
+            .unwrap();
+
+        assert_eq!(cmd.get_current_dir(), Some(temp_dir.path()));
+    }
+
+    #[test]
+    fn build_agent_command_uses_parent_directory_when_target_path_is_file() {
+        let temp_dir = tempdir().unwrap();
+        let target_file = temp_dir.path().join("input.tsx");
+        std::fs::write(&target_file, "export const x = 1;\n").unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd =
+            build_agent_command("claude-code", executable, "prompt", None, &target_file).unwrap();
+
+        assert_eq!(cmd.get_current_dir(), Some(temp_dir.path()));
     }
 
     #[test]
