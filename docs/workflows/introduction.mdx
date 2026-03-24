@@ -21,6 +21,8 @@ The engine handles:
 
 Nodes are the primary execution units. They can depend on other nodes, run automatically or require manual approval, and fan out across matrix dimensions.
 
+In Campaign/cloud runs, a node can also drive git automation: you can create a task branch before the node runs, create commits after successful steps, and open a pull request when the node finishes with commits. See [Workflow Reference](/workflows/reference#nodes).
+
 ### Steps
 
 Steps are the atomic actions within a node. Different transformation challenges require different tools: some patterns are best expressed as AST queries, others need shell scripts for setup/teardown, and ambiguous cases may benefit from LLM assistance.
