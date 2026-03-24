@@ -542,6 +542,7 @@ declare module "codemod:ast-grep" {
     matches?: SgNode<T>[];
     language: string;
     matrixValues?: Record<string, any>;
+    dryRun?: boolean;
   };
 
   export type Transform<T extends TypesMap> = (

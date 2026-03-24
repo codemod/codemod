@@ -1356,7 +1356,7 @@ impl Engine {
                     let task = tasks_after_recompilation.iter().find(|t| t.id == *task_id);
                     let node = task
                         .and_then(|t| current_workflow.nodes.iter().find(|n| n.id == t.node_id));
-                    let deps_satisfied = node.map_or(false, |n| {
+                    let deps_satisfied = node.is_some_and(|n| {
                         n.depends_on.iter().all(|dep_id| {
                             tasks_after_recompilation
                                 .iter()
