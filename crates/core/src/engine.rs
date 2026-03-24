@@ -585,12 +585,10 @@ impl Engine {
     async fn create_initial_tasks(&self, workflow_run: &WorkflowRun) -> Result<()> {
         let mut tasks = self.scheduler.calculate_initial_tasks(workflow_run).await?;
 
-        // In flatten mode, replace matrix master+children with a single
-        // non-master task per node so only one instance runs.
         // Flatten matrix nodes: replace all master+children with a single
         // regular task per node so it runs exactly once.
         if self.workflow_run_config.flatten_matrix_tasks {
-            let mut matrix_node_ids = std::collections::HashSet::new();
+            let mut matrix_node_ids = std::collections::BTreeSet::new();
             // Collect all node IDs that have matrix tasks
             for task in &tasks {
                 if task.is_master || task.master_task_id.is_some() {
@@ -1350,8 +1348,26 @@ impl Engine {
 
             if self.workflow_run_config.auto_trigger_manual_steps {
                 // In auto-trigger mode (e.g. pro codemod dry-run), treat manual
-                // steps as immediately runnable instead of blocking.
-                runnable_tasks.extend(tasks_to_await_trigger);
+                // steps as immediately runnable instead of blocking — but only
+                // if their dependencies are satisfied (the scheduler adds manual
+                // tasks to tasks_to_await_trigger before checking deps).
+                let current_workflow = &current_workflow_run.workflow;
+                for task_id in &tasks_to_await_trigger {
+                    let task = tasks_after_recompilation.iter().find(|t| t.id == *task_id);
+                    let node = task
+                        .and_then(|t| current_workflow.nodes.iter().find(|n| n.id == t.node_id));
+                    let deps_satisfied = node.map_or(false, |n| {
+                        n.depends_on.iter().all(|dep_id| {
+                            tasks_after_recompilation
+                                .iter()
+                                .filter(|t| t.node_id == *dep_id)
+                                .all(|t| t.status == TaskStatus::Completed)
+                        })
+                    });
+                    if deps_satisfied {
+                        runnable_tasks.push(*task_id);
+                    }
+                }
             } else {
                 for task_id in tasks_to_await_trigger {
                     // Create a task diff to update the status
