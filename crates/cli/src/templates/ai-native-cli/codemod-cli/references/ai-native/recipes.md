@@ -5,9 +5,9 @@ Use this file for AI-native orchestration patterns. For command syntax and full 
 ## AI-Native Commands
 
 - Install or refresh baseline MCS skills:
-  - `codemod agent install --harness auto --project`
+  - `codemod ai --harness auto --project`
 - List installed MCS skills:
-  - `codemod agent list --harness auto --format table`
+  - `codemod ai list --harness auto --format table`
 - Install a package-provided skill:
   - `npx codemod <package-id>` and accept the install prompt
 

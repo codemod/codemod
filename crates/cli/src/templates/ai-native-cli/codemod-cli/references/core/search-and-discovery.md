@@ -2,6 +2,13 @@
 
 Use these commands to find the best existing codemod before creating a new one.
 
+For migration, upgrade, update, or deprecation-rollout requests, registry discovery is required before proposing a manual migration plan.
+
+Required sequence:
+- run `codemod search` first,
+- summarize the best candidate packages and gaps,
+- only then decide whether to run an existing codemod or create/plan a custom/manual path.
+
 ## Quick Search
 
 - Basic query:

@@ -1,8 +1,12 @@
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, service::RequestContext, tool,
+    handler::server::router::tool::ToolRouter, model::*, schemars, service::RequestContext, tool,
     tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod handlers;
 use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler};
@@ -12,26 +16,55 @@ pub struct CodemodMcpServer {
     ast_dump_handler: AstDumpHandler,
     node_types_handler: NodeTypesHandler,
     jssg_test_handler: JssgTestHandler,
+    usage_log_path: Option<PathBuf>,
     tool_router: ToolRouter<CodemodMcpServer>,
 }
 
 impl Default for CodemodMcpServer {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl CodemodMcpServer {
+    pub fn new(usage_log_path: Option<PathBuf>) -> Self {
         Self {
             ast_dump_handler: AstDumpHandler::new(),
             node_types_handler: NodeTypesHandler::new(),
             jssg_test_handler: JssgTestHandler::new(),
+            usage_log_path,
             tool_router: Self::tool_router(),
         }
+    }
+
+    fn log_usage(&self, event: &str) {
+        let Some(path) = self.usage_log_path.clone() else {
+            return;
+        };
+        let event = event.to_string();
+        let _handle = tokio::task::spawn_blocking(move || {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                if std::fs::create_dir_all(parent).is_err() {
+                    return;
+                }
+            }
+            let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+                return;
+            };
+            let _ = writeln!(file, "{timestamp}\t{event}");
+        });
     }
 }
 
 #[tool_router]
 impl CodemodMcpServer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn _create_resource_text(&self, uri: &str, name: &str, description: Option<&str>) -> Resource {
         RawResource {
             uri: uri.to_string(),
@@ -53,6 +86,7 @@ impl CodemodMcpServer {
         &self,
         params: rmcp::handler::server::wrapper::Parameters<handlers::ast_dump::DumpAstRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:dump_ast");
         self.ast_dump_handler.dump_ast(params).await
     }
 
@@ -66,6 +100,7 @@ impl CodemodMcpServer {
             handlers::node_types::GetNodeTypesRequest,
         >,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_node_types");
         self.node_types_handler.get_node_types(params).await
     }
 
@@ -76,7 +111,50 @@ impl CodemodMcpServer {
         &self,
         params: rmcp::handler::server::wrapper::Parameters<handlers::jssg_test::RunJssgTestRequest>,
     ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:run_jssg_tests");
         self.jssg_test_handler.run_jssg_tests(params).await
+    }
+
+    #[tool(
+        description = "Get jssg (JavaScript ast-grep) instructions for creating codemods (includes ast-grep fundamentals)"
+    )]
+    async fn get_jssg_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_instructions");
+        let instructions_content = include_str!("data/prompts/jssg-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"
+    )]
+    async fn get_jssg_utils_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_utils_instructions");
+        let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get Codemod CLI instructions for project setup and workflow configuration"
+    )]
+    async fn get_codemod_cli_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_cli_instructions");
+        let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
     }
 }
 
@@ -100,6 +178,7 @@ impl ServerHandler for CodemodMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         tracing::info!("MCP server initialized");
+        self.log_usage("server:initialize");
         Ok(self.get_info())
     }
 
@@ -188,17 +267,84 @@ impl ServerHandler for CodemodMcpServer {
     }
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetInstructionsRequest {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    static CURRENT_DIR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let original = std::env::current_dir().expect("expected current dir");
+            std::env::set_current_dir(path).expect("expected to switch current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("expected to restore current dir");
+        }
+    }
+
+    fn wait_for_usage_log(path: &std::path::Path) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(content) = fs::read_to_string(path) {
+                if !content.trim().is_empty() {
+                    return content;
+                }
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for usage log at {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[tokio::test]
     async fn test_mcp_server_creation() {
-        let server = CodemodMcpServer::new();
+        let server = CodemodMcpServer::default();
         let info = server.get_info();
 
         assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_log_usage_supports_relative_paths() {
+        let _guard = CURRENT_DIR_GUARD.lock().unwrap();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("expected monotonic system time")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("codemod-mcp-log-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&temp_dir).expect("expected temp dir");
+        let _cwd_guard = CurrentDirGuard::set(&temp_dir);
+
+        let relative_log_path = PathBuf::from("usage.log");
+        let server = CodemodMcpServer::new(Some(relative_log_path.clone()));
+        server.log_usage("tool:get_jssg_instructions");
+
+        let content = wait_for_usage_log(&temp_dir.join(relative_log_path));
+        assert!(content.contains("tool:get_jssg_instructions"));
+
+        drop(_cwd_guard);
+        fs::remove_dir_all(&temp_dir).expect("expected temp dir cleanup");
     }
 }

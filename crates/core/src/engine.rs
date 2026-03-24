@@ -113,6 +113,13 @@ fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
+fn format_shell_command_log_notice(request: &ShellCommandExecutionRequest) -> String {
+    format!(
+        "About to execute shell command for step '{}' in node '{}'.",
+        request.step_name, request.node_name
+    )
+}
+
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
     let mut message = format!(
         "About to execute shell command for step '{}' in node '{}':",
@@ -3643,7 +3650,7 @@ impl Engine {
             task_id: task.id.to_string(),
         };
         let notice = format_shell_command_notice(&request);
-        logger.log("info", &notice);
+        logger.log("info", &format_shell_command_log_notice(&request));
 
         if self
             .workflow_run_config
@@ -3678,11 +3685,6 @@ impl Engine {
         let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
 
         let output = runner.run_command(&resolved_command, &prepared.env).await?;
-        let output = if output.trim().is_empty() {
-            notice
-        } else {
-            format!("{notice}\n\n{output}")
-        };
         self.finalize_step_execution(task, output, prepared).await
     }
 

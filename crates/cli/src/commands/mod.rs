@@ -1,4 +1,4 @@
-pub mod agent;
+pub mod ai;
 pub mod cache;
 pub mod harness_adapter;
 pub mod init;

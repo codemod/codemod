@@ -2,10 +2,15 @@ use anyhow::Result;
 use clap::Args;
 use codemod_mcp::CodemodMcpServer;
 use rmcp::{transport, ServiceExt};
+use std::path::PathBuf;
 use tracing_subscriber::{self, EnvFilter};
 
 #[derive(Args, Debug)]
-pub struct Command {}
+pub struct Command {
+    /// Write MCP usage events to a file for debugging
+    #[arg(long)]
+    usage_log: Option<PathBuf>,
+}
 
 impl Command {
     pub async fn run(&self) -> Result<()> {
@@ -17,7 +22,7 @@ impl Command {
 
         tracing::info!("Starting MCP server");
 
-        let service = CodemodMcpServer::new()
+        let service = CodemodMcpServer::new(self.usage_log.clone())
             .serve(transport::stdio())
             .await
             .inspect_err(|e| {

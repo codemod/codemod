@@ -35,7 +35,8 @@ fn no_command_in_non_interactive_mode_prints_next_steps() {
 
     assert_eq!(stdout.matches("      __                  __").count(), 1);
     assert!(stderr.contains("No command provided."));
-    assert!(stderr.contains("1. Create a new codemod package: npx codemod init"));
-    assert!(stderr.contains("2. Run a published package: npx codemod <package>"));
+    assert!(stderr.contains("1. Install Master Codemod Skills: npx codemod ai"));
+    assert!(stderr.contains("2. Create a new codemod package: npx codemod init"));
+    assert!(stderr.contains("3. Run a published package: npx codemod <package>"));
     assert!(!stdout.contains("What would you like to do?"));
 }

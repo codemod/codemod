@@ -1,10 +1,11 @@
 use crate::commands::harness_adapter::{
     install_restart_hint, mcs_install_requires_force, persist_managed_install_state,
     read_managed_install_state, resolve_adapter, resolve_install_scope,
-    skill_discovery_guide_paths, upsert_periodic_update_trigger, upsert_skill_discovery_guides,
-    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill,
-    ManagedComponentKind, ManagedComponentSnapshot, OutputFormat, PeriodicUpdatePolicy,
-    ResolvedAdapter, VerificationStatus,
+    runtime_paths_for_execution, skill_discovery_guide_paths,
+    upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
+    upsert_skill_discovery_guides_with_command_status, Harness, HarnessAdapterError,
+    InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
+    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
 };
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
@@ -32,15 +33,20 @@ use update::policy::{
 use update::reconcile::{build_component_reconcile_decisions, update_policy_runtime_message};
 use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 #[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+#[command(
+    about = "Install Codemod AI integrations, or run update/list subcommands",
+    after_help = "Run `codemod ai` without a subcommand to install Codemod integrations."
+)]
 pub struct Command {
     #[command(subcommand)]
-    action: AgentAction,
+    action: Option<AiAction>,
+    #[command(flatten)]
+    install: InstallCommand,
 }
 
 #[derive(Subcommand, Debug)]
-enum AgentAction {
-    /// Install MCS and baseline codemod skills into harness-specific paths
-    Install(InstallCommand),
+enum AiAction {
     /// Reconcile/apply managed updates; falls back to install when not installed yet
     Update(UpdateCommand),
     /// List installed codemod skills for a harness
@@ -64,7 +70,7 @@ struct InstallCommand {
     /// Overwrite existing skill files
     #[arg(long)]
     force: bool,
-    /// Internal mode switch used by `agent update`
+    /// Internal mode switch used by `ai update`
     #[arg(skip)]
     update: bool,
     /// Managed update policy for this install and periodic harness checks
@@ -148,28 +154,29 @@ struct ListCommand {
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     match &args.action {
-        AgentAction::Install(command) => {
+        None => {
+            let command = &args.install;
             handle_install_like_action(
                 command,
                 &telemetry,
-                "agentMcsInstalled",
-                "codemod.agent.install",
+                "aiMcsInstalled",
+                "codemod.ai.install",
                 command.harness,
             )
             .await
         }
-        AgentAction::Update(command) => {
+        Some(AiAction::Update(command)) => {
             let install_like_command = InstallCommand::from(command);
             handle_install_like_action(
                 &install_like_command,
                 &telemetry,
-                "agentMcsUpdated",
-                "codemod.agent.update",
+                "aiMcsUpdated",
+                "codemod.ai.update",
                 command.harness,
             )
             .await
         }
-        AgentAction::List(command) => {
+        Some(AiAction::List(command)) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
             });
@@ -185,7 +192,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 resolved_adapter.warnings,
             );
             print_list_output(&output, command.format)?;
-            send_agent_list_event(
+            send_ai_list_event(
                 &telemetry,
                 command.harness,
                 resolved_adapter.harness,
@@ -236,6 +243,11 @@ async fn handle_install_like_action(
     let mut warnings = resolved_adapter.warnings.clone();
     let mut messages = Vec::new();
     warnings.extend(update_policy.warnings.iter().cloned());
+    if let Some(warning) =
+        goose_project_scope_command_warning(resolved_adapter.harness, install_inputs.scope)
+    {
+        warnings.push(warning);
+    }
     let (installed, managed_components) = if command.update {
         let mut managed_state =
             read_managed_install_state(resolved_adapter.harness, install_inputs.scope)
@@ -341,7 +353,7 @@ async fn handle_install_like_action(
         restart_hint,
     });
     print_install_output(&output, command.format)?;
-    send_agent_install_event(
+    send_ai_install_event(
         telemetry,
         event_kind,
         command_name,
@@ -354,7 +366,7 @@ async fn handle_install_like_action(
     Ok(())
 }
 
-async fn send_agent_install_event(
+async fn send_ai_install_event(
     telemetry: &TelemetrySenderMutex,
     event_kind: &'static str,
     command_name: &'static str,
@@ -469,7 +481,7 @@ async fn send_agent_install_event(
         .await;
 }
 
-async fn send_agent_list_event(
+async fn send_ai_list_event(
     telemetry: &TelemetrySenderMutex,
     requested_harness: Harness,
     resolved_harness: Harness,
@@ -480,9 +492,9 @@ async fn send_agent_list_event(
     telemetry
         .send_event(
             BaseEvent {
-                kind: "agentSkillsListed".to_string(),
+                kind: "aiSkillsListed".to_string(),
                 properties: HashMap::from([
-                    ("commandName".to_string(), "codemod.agent.list".to_string()),
+                    ("commandName".to_string(), "codemod.ai.list".to_string()),
                     (
                         "requestedHarness".to_string(),
                         requested_harness.as_str().to_string(),
@@ -506,6 +518,7 @@ async fn send_agent_list_event(
 
 fn managed_components_from_install(
     installed: &[InstalledSkill],
+    command_paths: &[PathBuf],
     discovery_paths: &[PathBuf],
     periodic_trigger_paths: &[PathBuf],
 ) -> Vec<ManagedComponentSnapshot> {
@@ -518,6 +531,21 @@ fn managed_components_from_install(
             version: entry.version.clone(),
         })
         .collect::<Vec<_>>();
+
+    for command_path in command_paths {
+        let component_id = command_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(|name| format!("command:{name}"))
+            .unwrap_or_else(|| format!("command:{}", command_path.to_string_lossy()));
+
+        components.push(ManagedComponentSnapshot {
+            id: component_id,
+            kind: ManagedComponentKind::Command,
+            path: command_path.clone(),
+            version: Some(CLI_VERSION.to_string()),
+        });
+    }
 
     for discovery_path in discovery_paths {
         let component_id = discovery_path
@@ -594,7 +622,46 @@ fn run_install_flow(
         );
     }
 
-    match upsert_skill_discovery_guides(resolved_adapter.harness, install_inputs.scope) {
+    let command_paths = match runtime_paths_for_execution(None, None) {
+        Ok(runtime_paths) => match upsert_mcs_command_entrypoints_with_runtime(
+            resolved_adapter.harness,
+            install_inputs.scope,
+            install_inputs.force,
+            &runtime_paths,
+        ) {
+            Ok(paths) => {
+                if !paths.is_empty() {
+                    messages.push(format!(
+                        "Installed codemod creation command in: {}",
+                        paths
+                            .iter()
+                            .map(|path| format_output_path(path))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                paths
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "Installed skills, but failed to install codemod creation command: {error}"
+                ));
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            warnings.push(format!(
+                "Installed skills, but failed to resolve runtime paths for command entrypoints: {error}"
+            ));
+            Vec::new()
+        }
+    };
+
+    match upsert_skill_discovery_guides_with_command_status(
+        resolved_adapter.harness,
+        install_inputs.scope,
+        !command_paths.is_empty(),
+    ) {
         Ok(updated_files) if !updated_files.is_empty() => messages.push(format!(
             "Updated discovery hints in: {}",
             updated_files
@@ -640,8 +707,12 @@ fn run_install_flow(
         .as_ref()
         .map(|result| result.tracked_paths.clone())
         .unwrap_or_default();
-    let managed_components =
-        managed_components_from_install(&installed, &discovery_paths, &periodic_trigger_paths);
+    let managed_components = managed_components_from_install(
+        &installed,
+        &command_paths,
+        &discovery_paths,
+        &periodic_trigger_paths,
+    );
     (installed, managed_components)
 }
 
@@ -765,20 +836,10 @@ fn resolve_install_inputs(
     let scope = if command.project || command.user {
         resolve_install_scope(command.project, command.user)?
     } else {
-        let user_scope_label = interactive_user_scope_label(harness);
-        let options = vec![
-            ScopePromptOption {
-                scope: InstallScope::Project,
-                label: "project (current workspace)".to_string(),
-            },
-            ScopePromptOption {
-                scope: InstallScope::User,
-                label: user_scope_label,
-            },
-        ];
+        let (options, starting_cursor) = scope_prompt_options(harness);
 
         Select::new("Choose install scope:", options)
-            .with_starting_cursor(0)
+            .with_starting_cursor(starting_cursor)
             .prompt()
             .map_err(|error| {
                 HarnessAdapterError::InstallFailed(format!(
@@ -839,11 +900,59 @@ fn user_skills_root_hint_for_harness(harness: Harness) -> &'static str {
 
 fn interactive_user_scope_label(harness: Harness) -> String {
     let label_harness = scope_label_harness(harness);
-    format!(
-        "user ({}: {})",
-        label_harness.as_str(),
-        user_skills_root_hint_for_harness(label_harness)
+    match label_harness {
+        Harness::Goose => "user (goose: ~/.goose/skills + ~/.config/goose/config.yaml)".to_string(),
+        _ => format!(
+            "user ({}: {})",
+            label_harness.as_str(),
+            user_skills_root_hint_for_harness(label_harness)
+        ),
+    }
+}
+
+fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
+    if scope_label_harness(harness) == Harness::Goose {
+        return (
+            vec![
+                ScopePromptOption {
+                    scope: InstallScope::User,
+                    label:
+                        "user (recommended; enables Goose /codemod via ~/.config/goose/config.yaml)"
+                            .to_string(),
+                },
+                ScopePromptOption {
+                    scope: InstallScope::Project,
+                    label: "project (current workspace; skills only, /codemod stays unavailable)"
+                        .to_string(),
+                },
+            ],
+            0,
+        );
+    }
+
+    (
+        vec![
+            ScopePromptOption {
+                scope: InstallScope::Project,
+                label: "project (current workspace)".to_string(),
+            },
+            ScopePromptOption {
+                scope: InstallScope::User,
+                label: interactive_user_scope_label(harness),
+            },
+        ],
+        0,
     )
+}
+
+fn goose_project_scope_command_warning(harness: Harness, scope: InstallScope) -> Option<String> {
+    if harness == Harness::Goose && scope == InstallScope::Project {
+        return Some(
+            "Goose /codemod is only documented via user config (`~/.config/goose/config.yaml`); project scope installed skills only. Re-run with `--user` to enable the slash command.".to_string(),
+        );
+    }
+
+    None
 }
 
 fn resolve_signed_manifest_override(require_signed: bool, allow_unsigned: bool) -> Option<bool> {

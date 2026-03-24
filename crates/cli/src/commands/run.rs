@@ -97,7 +97,6 @@ pub struct Command {
     /// Coding agent to use for AI steps (e.g. claude, codex, aider)
     #[arg(long)]
     agent: Option<String>,
-
     /// Execute install-skill steps when running in non-interactive mode
     #[arg(long)]
     install_skill: bool,

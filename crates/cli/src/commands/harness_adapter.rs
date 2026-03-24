@@ -19,6 +19,7 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
 const MCS_SKILL_VERSION: &str = "1.0.0";
+const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
@@ -55,6 +56,8 @@ const MCS_DRY_RUN_VERIFY_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/dry-run-and-verify.md");
 const MCS_TROUBLESHOOTING_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/references/core/troubleshooting.md");
+const MCS_COMMAND_MD: &str =
+    include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod.md");
 const MCS_REFERENCE_FILES: [(&str, &str); 8] = [
     (MCS_REFERENCE_INDEX_RELATIVE_PATH, MCS_REFERENCE_INDEX_MD),
     (
@@ -96,6 +99,8 @@ const CODEMOD_PERIODIC_UPDATE_DEFAULT_INTERVAL_SECS: u64 = 21_600;
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME: &str = ".goosehints";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN: &str = "<!-- codemod-periodic-update:begin -->";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
+const GOOSE_CONFIG_RELATIVE_PATH: &str = ".config/goose/config.yaml";
+const GOOSE_GLOBAL_RECIPES_RELATIVE_DIR: &str = ".config/goose/recipes";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME: &str = "hooks.json";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME: &str = "afterAgentResponse";
 const CODEMOD_PERIODIC_TRIGGER_OPENCODE_PLUGIN_DIR_NAME: &str = "plugins";
@@ -217,6 +222,7 @@ pub enum ManagedComponentKind {
     Skill,
     McpConfig,
     DiscoveryGuide,
+    Command,
 }
 
 impl ManagedComponentKind {
@@ -225,6 +231,7 @@ impl ManagedComponentKind {
             Self::Skill => "skill",
             Self::McpConfig => "mcp_config",
             Self::DiscoveryGuide => "discovery_guide",
+            Self::Command => "command",
         }
     }
 }
@@ -425,7 +432,7 @@ impl HarnessAdapterError {
                 "Use --harness claude, --harness goose, --harness opencode, --harness cursor, --harness codex, or --harness antigravity."
             }
             Self::InvalidSkillPackage(_) => {
-                "Retry with `codemod agent install --force` and inspect installed entries via `codemod agent list --format json`."
+                "Retry with `codemod ai --force` and inspect installed entries via `codemod ai list --format json`."
             }
             Self::InstallFailed(_) => "Retry with --force or check filesystem permissions.",
             Self::SkillPackageNotFound(_) => {
@@ -695,17 +702,23 @@ pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<Install
 
 pub fn install_restart_hint(harness: Harness) -> String {
     format!(
-        "Restart or reload your {} session so newly installed skills are picked up.",
+        "Restart or reload your {} session so newly installed Codemod integrations are picked up.",
         harness.as_str()
     )
 }
 
-pub fn upsert_skill_discovery_guides(
+pub(crate) fn upsert_skill_discovery_guides_with_command_status(
     harness: Harness,
     scope: InstallScope,
+    command_available: bool,
 ) -> AdapterResult<Vec<PathBuf>> {
     let runtime_paths = RuntimePaths::current()?;
-    upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths)
+    upsert_skill_discovery_guides_with_runtime_and_command_status(
+        harness,
+        scope,
+        command_available,
+        &runtime_paths,
+    )
 }
 
 pub fn skill_discovery_guide_paths(
@@ -1017,8 +1030,7 @@ fn build_periodic_update_runner_script(
 ) -> String {
     let quoted_state_path = shell_single_quote(&state_path.to_string_lossy());
     let install_args = vec![
-        "agent".to_string(),
-        "install".to_string(),
+        "ai".to_string(),
         "--harness".to_string(),
         harness.as_str().to_string(),
         scope_flag.to_string(),
@@ -1544,8 +1556,23 @@ pub(crate) fn upsert_skill_discovery_guides_with_runtime(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
+    upsert_skill_discovery_guides_with_runtime_and_command_status(
+        harness,
+        scope,
+        mcs_command_is_available(harness, scope),
+        runtime_paths,
+    )
+}
+
+fn upsert_skill_discovery_guides_with_runtime_and_command_status(
+    harness: Harness,
+    scope: InstallScope,
+    command_available: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
     let skill_root_hint = skill_root_hint_for_scope(harness, scope)?;
-    let discovery_block = render_skill_discovery_block(harness, &skill_root_hint);
+    let discovery_block =
+        render_skill_discovery_block(harness, &skill_root_hint, command_available);
     let discovery_paths = discovery_guide_paths_with_runtime(harness, scope, runtime_paths)?;
     let mut updated_files = Vec::new();
 
@@ -1574,9 +1601,8 @@ fn discovery_guide_paths_with_runtime(
 
     let file_names = match harness {
         Harness::Claude => vec![CLAUDE_GUIDE_FILE_NAME],
-        Harness::Goose | Harness::Opencode | Harness::Cursor => {
-            vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME]
-        }
+        Harness::Opencode => vec![AGENTS_GUIDE_FILE_NAME],
+        Harness::Goose | Harness::Cursor => vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME],
         Harness::Codex | Harness::Antigravity => vec![AGENTS_GUIDE_FILE_NAME],
         Harness::Auto => {
             return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
@@ -1616,7 +1642,21 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
     })
 }
 
-fn render_skill_discovery_block(harness: Harness, skill_root_hint: &str) -> String {
+fn render_skill_discovery_block(
+    harness: Harness,
+    skill_root_hint: &str,
+    command_available: bool,
+) -> String {
+    let mcp_line = if harness_supports_mcp(harness) {
+        "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work.\n".to_string()
+    } else {
+        String::new()
+    };
+    let command_line = if command_available {
+        format!("- Codemod creation command: `/{MCS_COMMAND_NAME}`\n")
+    } else {
+        String::new()
+    };
     format!(
         "{SKILL_DISCOVERY_SECTION_BEGIN}
 ## Codemod Skill Discovery
@@ -1624,10 +1664,12 @@ This section is managed by `codemod` CLI.
 
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
-- List installed Codemod skills: `npx codemod agent list --harness {} --format json`
+{mcp_line}{command_line}- List installed Codemod skills: `npx codemod ai list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
-        harness.as_str()
+        harness.as_str(),
+        mcp_line = mcp_line,
+        command_line = command_line
     )
 }
 
@@ -2153,6 +2195,7 @@ fn managed_component_kind_from_state(kind: &str) -> AdapterResult<ManagedCompone
         "skill" => Ok(ManagedComponentKind::Skill),
         "mcp_config" => Ok(ManagedComponentKind::McpConfig),
         "discovery_guide" => Ok(ManagedComponentKind::DiscoveryGuide),
+        "command" => Ok(ManagedComponentKind::Command),
         unknown => Err(HarnessAdapterError::InstallFailed(format!(
             "Managed install state contains unsupported component kind `{unknown}`"
         ))),
@@ -2202,6 +2245,27 @@ fn install_mcs_skill_bundle_with_runtime(
     Ok(installed)
 }
 
+pub(crate) fn upsert_mcs_command_entrypoints_with_runtime(
+    harness: Harness,
+    scope: InstallScope,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    match harness {
+        Harness::Goose => upsert_goose_mcs_command_with_runtime(scope, force, runtime_paths),
+        _ => {
+            let Some(command_path) =
+                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
+            else {
+                return Ok(Vec::new());
+            };
+
+            write_skill_file(&command_path, MCS_COMMAND_MD, force)?;
+            Ok(vec![command_path])
+        }
+    }
+}
+
 fn mcs_install_requires_force_with_runtime(
     harness: Harness,
     scope: InstallScope,
@@ -2218,6 +2282,23 @@ fn mcs_install_requires_force_with_runtime(
     for (relative_path, content) in MCS_REFERENCE_FILES {
         if managed_text_file_requires_force(&skill_root.join(relative_path), content)? {
             return Ok(true);
+        }
+    }
+
+    match harness {
+        Harness::Goose => {
+            if goose_mcs_command_requires_force(scope, runtime_paths)? {
+                return Ok(true);
+            }
+        }
+        _ => {
+            if let Some(command_path) =
+                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
+            {
+                if managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
+                    return Ok(true);
+                }
+            }
         }
     }
 
@@ -2366,6 +2447,7 @@ fn install_mcp_server_config(
 ) -> AdapterResult<PathBuf> {
     let mcp_config_path = mcp_config_path_for_harness(harness, request.scope, runtime_paths)?;
     upsert_codemod_mcp_server(harness, &mcp_config_path, request.force, runtime_paths)?;
+    cleanup_legacy_mcp_config(harness, request.scope, runtime_paths)?;
     Ok(mcp_config_path)
 }
 
@@ -2382,6 +2464,39 @@ fn maybe_install_mcp_server_config(
 
 fn harness_supports_mcp(harness: Harness) -> bool {
     !matches!(harness, Harness::Antigravity)
+}
+
+fn cleanup_legacy_mcp_config(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    let _ = legacy_mcp_config_path_for_harness(harness, scope, runtime_paths)?;
+    // Intentionally leave legacy MCP config files in place. The shared legacy
+    // Opencode mcp.json format can contain unrelated user-managed MCP servers.
+    Ok(())
+}
+
+fn legacy_mcp_config_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<PathBuf>> {
+    match (harness, scope) {
+        (Harness::Opencode, InstallScope::Project) => {
+            Ok(Some(runtime_paths.cwd.join(".opencode/mcp.json")))
+        }
+        (Harness::Opencode, InstallScope::User) => runtime_paths
+            .home_dir
+            .as_ref()
+            .map(|home_dir| Some(home_dir.join(".opencode/mcp.json")))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            }),
+        _ => Ok(None),
+    }
 }
 
 fn mcp_config_path_for_harness(
@@ -2410,13 +2525,11 @@ fn mcp_config_path_for_harness(
                     "Could not determine home directory for --user install".to_string(),
                 )
             }),
-        (Harness::Opencode, InstallScope::Project) => {
-            Ok(runtime_paths.cwd.join(".opencode/mcp.json"))
-        }
+        (Harness::Opencode, InstallScope::Project) => Ok(runtime_paths.cwd.join("opencode.json")),
         (Harness::Opencode, InstallScope::User) => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home_dir| home_dir.join(".opencode/mcp.json"))
+            .map(|home_dir| home_dir.join(".config/opencode/opencode.json"))
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -2449,7 +2562,7 @@ fn mcp_config_path_for_harness(
     }
 }
 
-fn expected_codemod_mcp_server_entry(runtime_paths: &RuntimePaths) -> Value {
+fn expected_codemod_mcp_server_entry_json(runtime_paths: &RuntimePaths) -> Value {
     let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
     let mut args = invocation.args_prefix;
     args.push(MCP_SERVER_ARG_COMMAND.to_string());
@@ -2459,6 +2572,24 @@ fn expected_codemod_mcp_server_entry(runtime_paths: &RuntimePaths) -> Value {
     })
 }
 
+fn expected_codemod_mcp_server_command(runtime_paths: &RuntimePaths) -> Vec<String> {
+    let invocation = codemod_cli_invocation_for_mcp(runtime_paths);
+    let mut command = vec![invocation.command];
+    command.extend(invocation.args_prefix);
+    command.push(MCP_SERVER_ARG_COMMAND.to_string());
+    command
+}
+
+fn expected_codemod_mcp_server_entry_opencode(runtime_paths: &RuntimePaths) -> Value {
+    json!({
+        "type": "local",
+        "enabled": true,
+        "command": expected_codemod_mcp_server_command(runtime_paths)
+    })
+}
+
+const OPENCODE_CONFIG_SCHEMA_URL: &str = "https://opencode.ai/config.json";
+
 fn upsert_codemod_mcp_server(
     harness: Harness,
     config_path: &Path,
@@ -2467,7 +2598,10 @@ fn upsert_codemod_mcp_server(
 ) -> AdapterResult<()> {
     match harness {
         Harness::Codex => upsert_codemod_mcp_server_toml(config_path, force, runtime_paths),
-        Harness::Claude | Harness::Goose | Harness::Opencode | Harness::Cursor => {
+        Harness::Opencode => {
+            upsert_codemod_mcp_server_opencode_json(config_path, force, runtime_paths)
+        }
+        Harness::Claude | Harness::Goose | Harness::Cursor => {
             upsert_codemod_mcp_server_json(config_path, force, runtime_paths)
         }
         Harness::Antigravity => Err(HarnessAdapterError::UnsupportedHarness(
@@ -2491,7 +2625,7 @@ fn upsert_codemod_mcp_server_json(
         })?;
     }
 
-    let expected_entry = expected_codemod_mcp_server_entry(runtime_paths);
+    let expected_entry = expected_codemod_mcp_server_entry_json(runtime_paths);
     let mut config_root = if config_path.exists() {
         let existing_content = fs::read_to_string(config_path).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
@@ -2542,6 +2676,113 @@ fn upsert_codemod_mcp_server_json(
     }
 
     mcp_servers.insert(MCP_SERVER_NAME.to_string(), expected_entry);
+
+    let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to write MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn upsert_codemod_mcp_server_opencode_json(
+    config_path: &Path,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    if let Some(parent_dir) = config_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to create directory {}: {error}",
+                parent_dir.display()
+            ))
+        })?;
+    }
+
+    let expected_entry = expected_codemod_mcp_server_entry_opencode(runtime_paths);
+    let mut config_root = if config_path.exists() {
+        let existing_content = fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read MCP config {}: {error}",
+                config_path.display()
+            ))
+        })?;
+
+        serde_json::from_str::<Value>(&existing_content).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "MCP config {} is not valid JSON: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let Some(root_object) = config_root.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} must contain a top-level JSON object",
+            config_path.display()
+        )));
+    };
+
+    let mut config_changed = false;
+    if !root_object.contains_key("$schema") {
+        root_object.insert("$schema".to_string(), json!(OPENCODE_CONFIG_SCHEMA_URL));
+        config_changed = true;
+    }
+
+    let mcp_value = root_object
+        .entry("mcp".to_string())
+        .or_insert_with(|| json!({}));
+
+    let Some(mcp_object) = mcp_value.as_object_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} has non-object `mcp`; update manually or re-run with --force after fixing JSON",
+            config_path.display()
+        )));
+    };
+
+    if let Some(existing_entry) = mcp_object.get(MCP_SERVER_NAME) {
+        if existing_entry == &expected_entry {
+            if !config_changed {
+                return Ok(());
+            }
+
+            let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to serialize MCP config {}: {error}",
+                    config_path.display()
+                ))
+            })?;
+
+            fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to write MCP config {}: {error}",
+                    config_path.display()
+                ))
+            })?;
+
+            return Ok(());
+        }
+
+        if !force {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "MCP server `{MCP_SERVER_NAME}` already exists in {} with different settings. Re-run with --force to overwrite.",
+                config_path.display()
+            )));
+        }
+    }
+
+    mcp_object.insert(MCP_SERVER_NAME.to_string(), expected_entry);
 
     let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
         HarnessAdapterError::InstallFailed(format!(
@@ -3039,6 +3280,12 @@ fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
         }
     }
 
+    if MCS_COMMAND_MD.trim().is_empty() {
+        return Err(HarnessAdapterError::InvalidSkillPackage(
+            "commands/codemod.md is empty".to_string(),
+        ));
+    }
+
     for reference_path in MCS_INDEX_LINKED_REFERENCE_PATHS {
         if !MCS_REFERENCE_INDEX_MD.contains(reference_path) {
             return Err(HarnessAdapterError::InvalidSkillPackage(format!(
@@ -3092,6 +3339,298 @@ fn skills_root_for_harness(
                 }
             }),
     }
+}
+
+fn mcs_command_is_available(harness: Harness, scope: InstallScope) -> bool {
+    match harness {
+        Harness::Claude | Harness::Opencode | Harness::Cursor | Harness::Antigravity => true,
+        Harness::Goose => scope == InstallScope::User,
+        Harness::Codex | Harness::Auto => false,
+    }
+}
+
+fn mcs_command_entrypoint_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<PathBuf>> {
+    let file_name = format!("{MCS_COMMAND_NAME}.md");
+    match harness {
+        Harness::Claude => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".claude/commands").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".claude/commands")
+                .join(&file_name),
+        })),
+        Harness::Opencode => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths
+                .cwd
+                .join(".opencode/commands")
+                .join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".config/opencode/commands")
+                .join(&file_name),
+        })),
+        Harness::Cursor => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".cursor/commands").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".cursor/commands")
+                .join(&file_name),
+        })),
+        Harness::Antigravity => Ok(Some(match scope {
+            InstallScope::Project => runtime_paths.cwd.join(".agents/workflows").join(&file_name),
+            InstallScope::User => runtime_paths
+                .home_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    HarnessAdapterError::InstallFailed(
+                        "Could not determine home directory for --user install".to_string(),
+                    )
+                })?
+                .join(".gemini/antigravity/global_workflows")
+                .join(&file_name),
+        })),
+        Harness::Goose | Harness::Codex => Ok(None),
+        Harness::Auto => Err(HarnessAdapterError::UnsupportedHarness("auto".to_string())),
+    }
+}
+
+fn goose_mcs_command_requires_force(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<bool> {
+    let Some((recipe_path, config_path)) = goose_mcs_command_paths(scope, runtime_paths)? else {
+        return Ok(false);
+    };
+
+    let recipe_content = goose_mcs_recipe_content();
+    if managed_text_file_requires_force(&recipe_path, &recipe_content)? {
+        return Ok(true);
+    }
+
+    goose_config_requires_force(&config_path, &recipe_path)
+}
+
+fn upsert_goose_mcs_command_with_runtime(
+    scope: InstallScope,
+    force: bool,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Vec<PathBuf>> {
+    let Some((recipe_path, config_path)) = goose_mcs_command_paths(scope, runtime_paths)? else {
+        return Ok(Vec::new());
+    };
+
+    let recipe_content = goose_mcs_recipe_content();
+    write_skill_file(&recipe_path, &recipe_content, force)?;
+    upsert_goose_slash_command_config(&config_path, &recipe_path, force)?;
+
+    Ok(vec![recipe_path, config_path])
+}
+
+fn goose_mcs_command_paths(
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<Option<(PathBuf, PathBuf)>> {
+    if scope == InstallScope::Project {
+        return Ok(None);
+    }
+
+    let home_dir = runtime_paths.home_dir.as_ref().ok_or_else(|| {
+        HarnessAdapterError::InstallFailed(
+            "Could not determine home directory for --user install".to_string(),
+        )
+    })?;
+
+    let recipe_path = home_dir
+        .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
+        .join(format!("{MCS_COMMAND_NAME}.yaml"));
+    let config_path = home_dir.join(GOOSE_CONFIG_RELATIVE_PATH);
+    Ok(Some((recipe_path, config_path)))
+}
+
+fn goose_mcs_recipe_content() -> String {
+    let indented_instructions = MCS_COMMAND_MD
+        .trim()
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "version: 1.0.0\ntitle: codemod\ndescription: Search, run, or create codemods with the installed Codemod master skill.\ninstructions: |\n{indented_instructions}\n"
+    )
+}
+
+fn goose_config_requires_force(config_path: &Path, recipe_path: &Path) -> AdapterResult<bool> {
+    let existing = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Goose config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        return Ok(false);
+    };
+
+    let document = serde_yaml::from_str::<serde_yaml::Value>(&existing).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} is not valid YAML: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let Some(entry) = goose_slash_command_entry(document, MCS_COMMAND_NAME) else {
+        return Ok(false);
+    };
+
+    let existing_recipe_path = entry
+        .get(serde_yaml::Value::String("recipe_path".to_string()))
+        .and_then(serde_yaml::Value::as_str)
+        .unwrap_or_default();
+
+    Ok(existing_recipe_path != recipe_path.to_string_lossy())
+}
+
+fn upsert_goose_slash_command_config(
+    config_path: &Path,
+    recipe_path: &Path,
+    force: bool,
+) -> AdapterResult<()> {
+    let existing = if config_path.exists() {
+        fs::read_to_string(config_path).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Failed to read Goose config {}: {error}",
+                config_path.display()
+            ))
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut document = if existing.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        serde_yaml::from_str::<serde_yaml::Value>(&existing).map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "Goose config {} is not valid YAML: {error}",
+                config_path.display()
+            ))
+        })?
+    };
+
+    let Some(root) = document.as_mapping_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} must contain a top-level YAML mapping",
+            config_path.display()
+        )));
+    };
+
+    let slash_commands_key = serde_yaml::Value::String("slash_commands".to_string());
+    let commands_value = root
+        .entry(slash_commands_key)
+        .or_insert_with(|| serde_yaml::Value::Sequence(Vec::new()));
+    let Some(commands) = commands_value.as_sequence_mut() else {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "Goose config {} has non-sequence `slash_commands` entry",
+            config_path.display()
+        )));
+    };
+
+    let recipe_path_str = recipe_path.to_string_lossy().to_string();
+    let mut found = false;
+
+    for command in commands.iter_mut() {
+        let Some(mapping) = command.as_mapping_mut() else {
+            continue;
+        };
+
+        let command_name = mapping
+            .get(serde_yaml::Value::String("command".to_string()))
+            .and_then(serde_yaml::Value::as_str);
+        if command_name != Some(MCS_COMMAND_NAME) {
+            continue;
+        }
+
+        let recipe_key = serde_yaml::Value::String("recipe_path".to_string());
+        let current_recipe = mapping
+            .get(&recipe_key)
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or_default();
+        if current_recipe != recipe_path_str && !force {
+            return Err(HarnessAdapterError::InstallFailed(format!(
+                "Goose config already registers /{MCS_COMMAND_NAME}. Re-run with --force to overwrite."
+            )));
+        }
+
+        mapping.insert(
+            recipe_key,
+            serde_yaml::Value::String(recipe_path_str.clone()),
+        );
+        found = true;
+        break;
+    }
+
+    if !found {
+        let mut mapping = serde_yaml::Mapping::new();
+        mapping.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(MCS_COMMAND_NAME.to_string()),
+        );
+        mapping.insert(
+            serde_yaml::Value::String("recipe_path".to_string()),
+            serde_yaml::Value::String(recipe_path_str),
+        );
+        commands.push(serde_yaml::Value::Mapping(mapping));
+    }
+
+    let serialized = serde_yaml::to_string(&document).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to serialize Goose config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    write_file_if_changed(config_path, serialized.as_bytes())?;
+    Ok(())
+}
+
+fn goose_slash_command_entry(
+    document: serde_yaml::Value,
+    command_name: &str,
+) -> Option<serde_yaml::Mapping> {
+    document
+        .as_mapping()?
+        .get(serde_yaml::Value::String("slash_commands".to_string()))?
+        .as_sequence()?
+        .iter()
+        .filter_map(serde_yaml::Value::as_mapping)
+        .find(|mapping| {
+            mapping
+                .get(serde_yaml::Value::String("command".to_string()))
+                .and_then(serde_yaml::Value::as_str)
+                == Some(command_name)
+        })
+        .cloned()
 }
 
 fn write_skill_file(path: &Path, content: &str, force: bool) -> AdapterResult<()> {
@@ -3363,12 +3902,78 @@ mod tests {
         match harness {
             Harness::Claude => runtime_paths.cwd.join(".mcp.json"),
             Harness::Goose => runtime_paths.cwd.join(".goose/mcp.json"),
-            Harness::Opencode => runtime_paths.cwd.join(".opencode/mcp.json"),
+            Harness::Opencode => runtime_paths.cwd.join("opencode.json"),
             Harness::Cursor => runtime_paths.cwd.join(".cursor/mcp.json"),
             Harness::Codex => runtime_paths.cwd.join(".codex/config.toml"),
             Harness::Antigravity => panic!("antigravity does not have MCP config support"),
             Harness::Auto => panic!("auto is not valid for harness-specific tests"),
         }
+    }
+
+    fn expected_mcs_command_path(
+        runtime_paths: &RuntimePaths,
+        harness: Harness,
+        scope: InstallScope,
+    ) -> Option<PathBuf> {
+        let file_name = format!("{MCS_COMMAND_NAME}.md");
+        match harness {
+            Harness::Claude => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".claude/commands").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".claude/commands")
+                    .join(&file_name),
+            }),
+            Harness::Opencode => Some(match scope {
+                InstallScope::Project => runtime_paths
+                    .cwd
+                    .join(".opencode/commands")
+                    .join(&file_name),
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".config/opencode/commands")
+                    .join(&file_name),
+            }),
+            Harness::Cursor => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".cursor/commands").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".cursor/commands")
+                    .join(&file_name),
+            }),
+            Harness::Antigravity => Some(match scope {
+                InstallScope::Project => {
+                    runtime_paths.cwd.join(".agents/workflows").join(&file_name)
+                }
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(".gemini/antigravity/global_workflows")
+                    .join(&file_name),
+            }),
+            Harness::Goose | Harness::Codex | Harness::Auto => None,
+        }
+    }
+
+    fn expected_goose_mcs_command_paths(runtime_paths: &RuntimePaths) -> Vec<PathBuf> {
+        let home_dir = runtime_paths.home_dir.as_ref().unwrap();
+        vec![
+            home_dir
+                .join(GOOSE_GLOBAL_RECIPES_RELATIVE_DIR)
+                .join(format!("{MCS_COMMAND_NAME}.yaml")),
+            home_dir.join(GOOSE_CONFIG_RELATIVE_PATH),
+        ]
     }
 
     fn expected_managed_state_path(
@@ -3457,6 +4062,7 @@ codemod-skill-version: 0.1.0
 
     fn managed_snapshots_from_install(
         installed: &[InstalledSkill],
+        command_paths: &[PathBuf],
         discovery_paths: &[PathBuf],
     ) -> Vec<ManagedComponentSnapshot> {
         let mut snapshots = installed
@@ -3472,6 +4078,20 @@ codemod-skill-version: 0.1.0
                 version: entry.version.clone(),
             })
             .collect::<Vec<_>>();
+
+        for path in command_paths {
+            let id = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(|name| format!("command:{name}"))
+                .unwrap_or_else(|| format!("command:{}", path.to_string_lossy()));
+            snapshots.push(ManagedComponentSnapshot {
+                id,
+                kind: ManagedComponentKind::Command,
+                path: path.clone(),
+                version: Some(MCS_SKILL_VERSION.to_string()),
+            });
+        }
 
         for path in discovery_paths {
             let id = path
@@ -3606,6 +4226,7 @@ codemod-skill-version: 0.1.0
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
         assert!(claude_content.contains(SKILL_DISCOVERY_SECTION_END));
         assert!(claude_content.contains("Core skill: `.claude/skills/codemod/SKILL.md`"));
+        assert!(claude_content.contains("/codemod"));
         assert!(claude_content.contains(".claude/skills/codemod/SKILL.md"));
         assert!(!claude_content.contains("Installed Codemod skills root"));
         assert!(!claude_content.contains("Restart or reload your claude session"));
@@ -3657,7 +4278,122 @@ codemod-skill-version: 0.1.0
         let agents_path = runtime_paths.home_dir.as_ref().unwrap().join("AGENTS.md");
         let content = fs::read_to_string(&agents_path).unwrap();
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
-        assert!(content.contains("npx codemod agent list --harness cursor --format json"));
+        assert!(content.contains("npx codemod ai list --harness cursor --format json"));
+        assert!(content.contains("/codemod"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_for_opencode_only_writes_agents_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Opencode,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 1);
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        assert!(agents_path.exists());
+        assert!(!claude_path.exists());
+
+        let agents_content = fs::read_to_string(&agents_path).unwrap();
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
+        assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
+        assert!(agents_content.contains("Core skill: `.opencode/skills/codemod/SKILL.md`"));
+        assert!(agents_content.contains(
+            "Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work."
+        ));
+        assert!(agents_content.contains("/codemod"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_can_omit_command_line_when_command_install_fails() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime_and_command_status(
+            Harness::Claude,
+            InstallScope::Project,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 1);
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        let claude_content = fs::read_to_string(&claude_path).unwrap();
+        assert!(!claude_content.contains("Codemod creation command: `/codemod`"));
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_writes_supported_harness_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in [
+            Harness::Claude,
+            Harness::Opencode,
+            Harness::Cursor,
+            Harness::Antigravity,
+        ] {
+            let paths = upsert_mcs_command_entrypoints_with_runtime(
+                harness,
+                InstallScope::Project,
+                false,
+                &runtime_paths,
+            )
+            .unwrap();
+
+            let expected =
+                expected_mcs_command_path(&runtime_paths, harness, InstallScope::Project)
+                    .expect("expected command path");
+            assert_eq!(paths, vec![expected.clone()]);
+            let content = fs::read_to_string(expected).unwrap();
+            assert!(content.contains("/codemod"));
+            assert!(content.contains("Use the installed `codemod` skill"));
+        }
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_skips_unsupported_harnesses() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        for harness in [Harness::Goose, Harness::Codex] {
+            let paths = upsert_mcs_command_entrypoints_with_runtime(
+                harness,
+                InstallScope::Project,
+                false,
+                &runtime_paths,
+            )
+            .unwrap();
+            assert!(paths.is_empty());
+        }
+    }
+
+    #[test]
+    fn upsert_mcs_command_entrypoints_writes_goose_user_recipe_and_config() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let paths = upsert_mcs_command_entrypoints_with_runtime(
+            Harness::Goose,
+            InstallScope::User,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let expected = expected_goose_mcs_command_paths(&runtime_paths);
+        assert_eq!(paths, expected);
+
+        let recipe_content = fs::read_to_string(&paths[0]).unwrap();
+        assert!(recipe_content.contains("title: codemod"));
+        assert!(recipe_content.contains("Use the installed `codemod` skill"));
+
+        let config_content = fs::read_to_string(&paths[1]).unwrap();
+        assert!(config_content.contains("slash_commands"));
+        assert!(config_content.contains("command: codemod"));
+        assert!(config_content.contains(&paths[0].to_string_lossy().to_string()));
     }
 
     #[test]
@@ -4106,7 +4842,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
         let first = persist_managed_install_state_with_runtime(
             Harness::Claude,
@@ -4156,7 +4892,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
         let first = persist_managed_install_state_with_runtime(
             Harness::Claude,
@@ -4207,7 +4943,7 @@ codemod-skill-version: 0.1.0
                 upsert_skill_discovery_guides_with_runtime(harness, scope, &runtime_paths).unwrap();
                 let discovery_paths =
                     discovery_guide_paths_with_runtime(harness, scope, &runtime_paths).unwrap();
-                let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+                let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
 
                 let state_write = persist_managed_install_state_with_runtime(
                     harness,
@@ -4257,7 +4993,7 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let snapshots = managed_snapshots_from_install(&installed, &discovery_paths);
+        let snapshots = managed_snapshots_from_install(&installed, &[], &discovery_paths);
         persist_managed_install_state_with_runtime(
             Harness::Claude,
             InstallScope::Project,
@@ -5147,6 +5883,97 @@ codemod-skill-version: 0.1.0
                 .unwrap()
         );
         assert_eq!(server.args.last().map(String::as_str), Some("mcp"));
+    }
+
+    #[test]
+    fn upsert_mcp_server_writes_opencode_json_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join("opencode.json");
+
+        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.get("$schema").and_then(|value| value.as_str()),
+            Some(OPENCODE_CONFIG_SCHEMA_URL)
+        );
+        let server = parsed
+            .get("mcp")
+            .and_then(|servers| servers.get("codemod"))
+            .expect("expected opencode MCP server entry");
+
+        assert_eq!(
+            server.get("type").and_then(|value| value.as_str()),
+            Some("local")
+        );
+        assert_eq!(
+            server.get("enabled").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        let command = server
+            .get("command")
+            .and_then(|value| value.as_array())
+            .expect("expected command array");
+        assert_eq!(
+            command.first().and_then(|value| value.as_str()),
+            runtime_paths
+                .current_executable
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .as_deref()
+        );
+        assert_eq!(command.last().and_then(|value| value.as_str()), Some("mcp"));
+    }
+
+    #[test]
+    fn upsert_mcp_server_backfills_opencode_schema_on_existing_matching_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join("opencode.json");
+        let command = expected_codemod_mcp_server_command(&runtime_paths);
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&json!({
+                "mcp": {
+                    "codemod": {
+                        "type": "local",
+                        "enabled": true,
+                        "command": command,
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        upsert_codemod_mcp_server(Harness::Opencode, &config_path, false, &runtime_paths).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.get("$schema").and_then(|value| value.as_str()),
+            Some(OPENCODE_CONFIG_SCHEMA_URL)
+        );
+    }
+
+    #[test]
+    fn install_mcp_server_config_preserves_legacy_opencode_mcp_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let legacy_path = runtime_paths.cwd.join(".opencode/mcp.json");
+        fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        fs::write(&legacy_path, "{\"mcpServers\":{}}").unwrap();
+
+        let request = InstallRequest {
+            scope: InstallScope::Project,
+            force: true,
+        };
+
+        let config_path =
+            install_mcp_server_config(Harness::Opencode, &request, &runtime_paths).unwrap();
+
+        assert_eq!(config_path, runtime_paths.cwd.join("opencode.json"));
+        assert!(config_path.exists());
+        assert!(legacy_path.exists());
     }
 
     #[test]

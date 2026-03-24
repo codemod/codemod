@@ -8,7 +8,7 @@ use crate::commands::harness_adapter::{
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-pub(in crate::commands::agent) fn build_component_reconcile_decisions(
+pub(in crate::commands::ai) fn build_component_reconcile_decisions(
     context: &UpdatePolicyContext,
     harness: Harness,
     managed_components: &[ManagedComponentSnapshot],
@@ -325,7 +325,7 @@ fn parse_semver_like(value: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-pub(in crate::commands::agent) fn update_policy_behavior(
+pub(in crate::commands::ai) fn update_policy_behavior(
     context: &UpdatePolicyContext,
 ) -> &'static str {
     match context.mode {
@@ -339,7 +339,7 @@ pub(in crate::commands::agent) fn update_policy_behavior(
     }
 }
 
-pub(in crate::commands::agent) fn update_policy_runtime_message(
+pub(in crate::commands::ai) fn update_policy_runtime_message(
     context: &UpdatePolicyContext,
     managed_state: Option<&ManagedStateWriteResult>,
     auto_safe_apply: Option<&AutoSafeApplyResult>,

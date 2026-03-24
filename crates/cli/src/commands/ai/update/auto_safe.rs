@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
-const AUTO_SAFE_UPDATE_LOCK_RELATIVE_PATH: &str = "agent/managed-component-update.lock";
+const AUTO_SAFE_UPDATE_LOCK_RELATIVE_PATH: &str = "ai/managed-component-update.lock";
 const AUTO_SAFE_LOCK_TIMEOUT_SECS: u64 = 3;
 const AUTO_SAFE_LOCK_RETRY_MILLIS: u64 = 200;
 const AUTO_SAFE_LOCK_STALE_SECS: u64 = 600;
@@ -94,7 +94,7 @@ struct AutoSafeLockAcquireResult {
     warnings: Vec<String>,
 }
 
-pub(in crate::commands::agent) async fn maybe_apply_auto_safe_updates(
+pub(in crate::commands::ai) async fn maybe_apply_auto_safe_updates(
     update_policy: &UpdatePolicyContext,
     component_decisions: &[ComponentReconcileDecision],
     managed_components: &[ManagedComponentSnapshot],
@@ -499,7 +499,7 @@ fn parse_u64_env_or_default(env_var: &str, default_value: u64) -> u64 {
     }
 }
 
-pub(in crate::commands::agent) fn apply_staged_component_updates(
+pub(in crate::commands::ai) fn apply_staged_component_updates(
     staged: Vec<StagedComponentUpdate>,
 ) -> AutoSafeApplyResult {
     let attempted = staged.len();
@@ -574,7 +574,7 @@ pub(in crate::commands::agent) fn apply_staged_component_updates(
     )
 }
 
-pub(in crate::commands::agent) fn rollback_component_writes(
+pub(in crate::commands::ai) fn rollback_component_writes(
     results: &mut [AutoSafeComponentResult],
     backups: &[ComponentBackup],
     failure_reason: &str,
@@ -614,7 +614,7 @@ pub(in crate::commands::agent) fn rollback_component_writes(
     }
 }
 
-pub(in crate::commands::agent) fn summarize_auto_safe_apply_result(
+pub(in crate::commands::ai) fn summarize_auto_safe_apply_result(
     attempted: usize,
     rolled_back: bool,
     rollback_reason: Option<String>,
@@ -642,7 +642,7 @@ pub(in crate::commands::agent) fn summarize_auto_safe_apply_result(
     }
 }
 
-pub(in crate::commands::agent) fn staged_component_update_from_payload(
+pub(in crate::commands::ai) fn staged_component_update_from_payload(
     local_component: &ManagedComponentSnapshot,
     remote_component: &ManagedUpdateManifestComponent,
     bytes: Vec<u8>,
@@ -669,7 +669,9 @@ pub(in crate::commands::agent) fn staged_component_update_from_payload(
                 writes,
             })
         }
-        ManagedComponentKind::McpConfig | ManagedComponentKind::DiscoveryGuide => {
+        ManagedComponentKind::McpConfig
+        | ManagedComponentKind::DiscoveryGuide
+        | ManagedComponentKind::Command => {
             if is_archive_source_url(&remote_component.source_url) {
                 return Err("archive_payload_not_supported_for_file_component".to_string());
             }
@@ -685,7 +687,7 @@ pub(in crate::commands::agent) fn staged_component_update_from_payload(
     }
 }
 
-pub(in crate::commands::agent) fn skill_root_from_snapshot(
+pub(in crate::commands::ai) fn skill_root_from_snapshot(
     component: &ManagedComponentSnapshot,
 ) -> PathBuf {
     if component
@@ -704,7 +706,7 @@ pub(in crate::commands::agent) fn skill_root_from_snapshot(
     }
 }
 
-pub(in crate::commands::agent) fn extract_skill_archive_writes(
+pub(in crate::commands::ai) fn extract_skill_archive_writes(
     skill_root: &Path,
     archive_bytes: &[u8],
     source_url: &str,
@@ -748,7 +750,7 @@ pub(in crate::commands::agent) fn extract_skill_archive_writes(
     Ok(writes)
 }
 
-pub(in crate::commands::agent) fn extract_tar_file_entries<R: Read>(
+pub(in crate::commands::ai) fn extract_tar_file_entries<R: Read>(
     reader: R,
 ) -> std::result::Result<Vec<(PathBuf, Vec<u8>)>, String> {
     let mut archive = tar::Archive::new(reader);
@@ -783,7 +785,7 @@ pub(in crate::commands::agent) fn extract_tar_file_entries<R: Read>(
     Ok(files)
 }
 
-pub(in crate::commands::agent) fn sanitize_archive_relative_path(
+pub(in crate::commands::ai) fn sanitize_archive_relative_path(
     path: &Path,
 ) -> std::result::Result<PathBuf, String> {
     let mut sanitized = PathBuf::new();
@@ -804,7 +806,7 @@ pub(in crate::commands::agent) fn sanitize_archive_relative_path(
     Ok(sanitized)
 }
 
-pub(in crate::commands::agent) fn normalize_skill_archive_entries(
+pub(in crate::commands::ai) fn normalize_skill_archive_entries(
     mut entries: Vec<(PathBuf, Vec<u8>)>,
 ) -> std::result::Result<Vec<(PathBuf, Vec<u8>)>, String> {
     if entries.is_empty() {
@@ -847,7 +849,7 @@ pub(in crate::commands::agent) fn normalize_skill_archive_entries(
     Ok(entries)
 }
 
-pub(in crate::commands::agent) fn write_component_bytes(
+pub(in crate::commands::ai) fn write_component_bytes(
     path: &Path,
     bytes: &[u8],
 ) -> std::io::Result<()> {
@@ -857,7 +859,7 @@ pub(in crate::commands::agent) fn write_component_bytes(
     fs::write(path, bytes)
 }
 
-pub(in crate::commands::agent) fn is_auto_safe_apply_supported_kind(
+pub(in crate::commands::ai) fn is_auto_safe_apply_supported_kind(
     kind: ManagedComponentKind,
 ) -> bool {
     matches!(
@@ -865,10 +867,11 @@ pub(in crate::commands::agent) fn is_auto_safe_apply_supported_kind(
         ManagedComponentKind::Skill
             | ManagedComponentKind::McpConfig
             | ManagedComponentKind::DiscoveryGuide
+            | ManagedComponentKind::Command
     )
 }
 
-pub(in crate::commands::agent) fn is_archive_source_url(source_url: &str) -> bool {
+pub(in crate::commands::ai) fn is_archive_source_url(source_url: &str) -> bool {
     let normalized = source_url.trim().to_ascii_lowercase();
     normalized.ends_with(".tar.gz")
         || normalized.ends_with(".tgz")
@@ -876,7 +879,7 @@ pub(in crate::commands::agent) fn is_archive_source_url(source_url: &str) -> boo
         || normalized.ends_with(".zip")
 }
 
-pub(in crate::commands::agent) async fn fetch_remote_component_bytes(
+pub(in crate::commands::ai) async fn fetch_remote_component_bytes(
     client: &reqwest::Client,
     remote_source: &str,
     component: &ManagedUpdateManifestComponent,
@@ -909,7 +912,7 @@ pub(in crate::commands::agent) async fn fetch_remote_component_bytes(
     Ok(bytes.to_vec())
 }
 
-pub(in crate::commands::agent) fn sha256_hex(bytes: &[u8]) -> String {
+pub(in crate::commands::ai) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
