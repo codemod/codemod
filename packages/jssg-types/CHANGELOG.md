@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.5.1
+
+### Patch Changes
+
+- 85fce65: Add dry run to TransformOptions
+
 ## 1.5.0
 
 ### Minor Changes
