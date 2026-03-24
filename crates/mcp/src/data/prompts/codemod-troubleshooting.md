@@ -2,6 +2,8 @@
 
 Use these checks when commands fail or produce unexpected output.
 
+Use the public Codemod docs and CLI help for canonical command usage. This file is only a compact troubleshooting fallback.
+
 ## Agent-Safe Defaults
 
 For agents/automation, prefer non-interactive execution:

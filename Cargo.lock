@@ -1173,6 +1173,7 @@ dependencies = [
  "ast-grep-language",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
+ "reqwest 0.12.23",
  "rmcp 0.8.3",
  "serde",
  "serde_json",
