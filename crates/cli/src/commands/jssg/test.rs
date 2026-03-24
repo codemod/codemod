@@ -282,6 +282,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     metrics_context: Some(metrics_context.clone()),
                     shared_state_context: None,
                     test_mode: true,
+                    dry_run: false,
                     target_directory: None,
                 };
                 let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;

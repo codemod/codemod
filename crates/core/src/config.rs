@@ -89,6 +89,14 @@ pub struct WorkflowRunConfig {
     pub dry_run_callback: Option<DryRunCallback>,
     /// Skip executing install-skill steps at runtime (used by package run UX)
     pub skip_install_skill_steps: bool,
+    /// Auto-trigger manual steps instead of waiting for user input (used by pro codemod dry-run)
+    pub auto_trigger_manual_steps: bool,
+    /// Skip shard steps entirely (used by pro codemod dry-run)
+    pub skip_shard_steps: bool,
+    /// Skip writing to workflow state (used by pro codemod dry-run)
+    pub skip_state_writes: bool,
+    /// Flatten matrix tasks to a single task per node (used by pro codemod dry-run)
+    pub flatten_matrix_tasks: bool,
     /// Output format for structured logging (Text or Jsonl)
     pub output_format: OutputFormat,
     /// Human-readable name for this workflow run
@@ -120,6 +128,10 @@ impl Default for WorkflowRunConfig {
             agent_selection_callback: None,
             dry_run_callback: None,
             skip_install_skill_steps: false,
+            auto_trigger_manual_steps: false,
+            skip_shard_steps: false,
+            skip_state_writes: false,
+            flatten_matrix_tasks: false,
             output_format: OutputFormat::Text,
             name: None,
             quiet: false,
