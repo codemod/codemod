@@ -316,6 +316,12 @@ npx codemod workflow run -w /path/to/workflow.yaml -t /path/to/target
 
 # Validate workflow syntax
 npx codemod@latest workflow validate workflow.yaml
+
+# Validate a specific codemod's workflow
+codemod workflow validate -w codemods/<slug>/workflow.yaml
+
+# Pass workflow parameters
+codemod workflow run -w my-codemod --target <repo-path> --param strict=true
 ```
 
 ### JSSG Commands
@@ -345,6 +351,9 @@ npx codemod jssg test -l typescript ./codemods/transform.ts --strictness loose
 
 # Run a codemod directly
 npx codemod jssg run -l typescript ./codemods/transform.ts ./target
+
+# Show files where selector applies
+codemod jssg list-applicable ./codemod.ts --target <repo-path> --language typescript
 ```
 
 ### Running Codemods
@@ -439,6 +448,90 @@ File: /path/to/src/App.test.js
 Files that would be modified: 8
 Total: +10 additions, -2 deletions
 No changes were made to the filesystem.
+```
+
+### Search and Discovery
+
+Use `codemod search` to find existing codemods before creating new ones. For migration, upgrade, update, or deprecation-rollout requests, registry discovery is required before proposing a manual migration plan.
+
+```bash
+# Basic query
+codemod search react
+
+# Scope filter (@scope/codemod-name)
+codemod search "scope:nodejs rmdir"
+
+# Output formats
+codemod search next --format table   # Human-readable (default)
+codemod search next --format json    # JSON for automation
+codemod search next --format yaml    # YAML for config pipelines
+
+# Pagination and coverage
+codemod search react --size 50
+codemod search react --size 20 --from 20
+
+# Custom registry
+codemod search react --registry https://registry.example.com
+```
+
+**Selection checklist** — before applying a package, verify:
+- package name and scope match target migration
+- latest version is acceptable
+- category/language/framework align with your codebase
+- output format is `json` if another tool will parse results
+
+**Handoff to execution:**
+
+```bash
+# Run from registry with dry-run
+codemod run <package-name> --target <repo-path> --dry-run
+
+# Or use implicit package invocation
+codemod <package-name> --target <repo-path> --dry-run
+```
+
+### Recommended Safe Sequence (Dry Run and Verify)
+
+Use this sequence to minimize risk before applying edits:
+
+1. Read the selected package's README/docs and capture prerequisites, config knobs, and known limitations.
+2. Validate workflow or package assumptions.
+3. Apply documented prerequisites and repository setup before execution.
+4. Execute dry run.
+5. Inspect summary/diff output.
+6. Apply for real only after review.
+
+**Package prerequisites** — before running a registry package:
+- read its README and any linked migration/setup guide
+- create the recommended branch or backup state if the docs call for it
+- install/remove/update dependencies or baseline framework config if the docs require that first
+- create any package-specific config file that keeps runs deterministic
+- note which areas the package explicitly leaves for manual follow-up
+
+**Dry run commands:**
+
+```bash
+# Local workflow dry run
+codemod workflow run -w my-codemod --target <repo-path> --dry-run
+
+# Registry package dry run
+codemod run <package-name> --target <repo-path> --dry-run
+
+# jssg dry run
+codemod jssg run ./codemod.ts --target <repo-path> --language typescript --dry-run
+
+# Disable color in dry-run diffs for log parsing
+codemod workflow run -w my-codemod --target <repo-path> --dry-run --no-color
+```
+
+**Apply after approval:**
+
+```bash
+# Local workflow apply
+codemod workflow run -w my-codemod --target <repo-path>
+
+# Registry package apply
+codemod run <package-name> --target <repo-path>
 ```
 
 ### Publishing

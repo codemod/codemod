@@ -1,4 +1,4 @@
-# Codemod CLI Core: Create Codemods
+# Codemod Creation Workflow
 
 Use this guide when the task is to create or improve codemods, not just run them.
 
@@ -15,10 +15,11 @@ Use this guide when the task is to create or improve codemods, not just run them
 
 ## Hard rules
 
-- Use AST-based edits for JS/TS code transforms. Do not implement JS/TS codemods as raw source-string replacement or regex replacement over the full file text.
+- Use AST-based edits for code transforms. Do not implement codemods as raw source-string replacement or regex replacement over the full file text.
 - Do not use broad identifier sweeps that rename every matching token by text alone. Match the intended API context explicitly, for example import specifiers, namespaced/member expressions, relevant object properties, or specific constructor/call-expression sites.
-- Default to ast-grep-based codemod packages when creating codemods. Use `js-ast-grep` for JS/TS-family source changes and `ast-grep` workflow steps for other deterministic structured edits when possible.
-- Use multi-step workflows when the migration spans multiple safe transformation surfaces, for example JS/TS source plus JSON manifests plus Gradle or Podfile edits.
+- Default to `js-ast-grep`-based codemod packages when creating codemods.
+- Use multi-step workflows when the migration spans multiple safe sequential or independent transformation surfaces, for example JS/TS source plus JSON manifests plus Gradle or Podfile edits.
+  - If the files are related, use `jssgTransform`. For example a codemod that changes React components along with imported CSS modules, should use `jssgTransform(...)` function to modify the adjacent CSS module.
 - Do not switch to shell/native scripts as the primary transformation engine unless the user explicitly asked for that implementation style or no ast-grep-based path is viable.
 - Treat dependency/version manifest upgrades as part of the core migration surface when the researched upgrade path requires them. If official docs call for package, SDK, plugin, or toolchain version bumps and the edits are deterministic, automate them in the workflow.
 - If the researched migration includes native/build/config work, automate the safe deterministic edits with `ast-grep` workflow steps when possible, including manifest/version bumps, and leave only the unsafe or environment-specific remainder as manual follow-up.
@@ -27,7 +28,6 @@ Use this guide when the task is to create or improve codemods, not just run them
 - If a code change cannot be encoded safely with AST tooling, document it as a manual step instead of shipping a brittle transform.
 - A manual-only hop is acceptable only when the research shows there is no safe, meaningful automatable source change for that hop.
 - Tests must be comprehensive relative to the user's request, not just the easiest documented example.
-- README command examples must be checked against the current Codemod CLI help before you present them.
 
 ## Use sub-agents when the task is large
 
@@ -175,5 +175,4 @@ Example: if official docs expose separate guides such as `before-v5`, `v5-to-v6`
 - Keep codemods on the current branch unless the user explicitly wants branch automation.
 - Do not push automatically.
 - Use trusted publisher/OIDC based publishing when wiring GitHub Actions.
-- If the repository is a maintainer monorepo, load `references/core/maintainer-monorepo.md`.
 - For multi-hop workspaces, validate every hop independently before proposing publish automation for the full series.

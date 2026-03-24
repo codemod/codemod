@@ -156,6 +156,48 @@ impl CodemodMcpServer {
             instructions_content,
         )]))
     }
+
+    #[tool(
+        description = "Get troubleshooting guidance for common Codemod CLI failures and unexpected behavior"
+    )]
+    async fn get_codemod_troubleshooting(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_troubleshooting");
+        let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get the codemod creation workflow guide for authoring, testing, and publishing codemods"
+    )]
+    async fn get_codemod_creation_workflow(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_creation_workflow");
+        let instructions_content = include_str!("data/prompts/codemod-creation-workflow.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get maintainer monorepo guide for setting up and managing codemod monorepos"
+    )]
+    async fn get_codemod_maintainer_monorepo(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_maintainer_monorepo");
+        let instructions_content = include_str!("data/prompts/codemod-maintainer-monorepo.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
 }
 
 #[tool_handler]
@@ -168,7 +210,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
         }
     }
 
@@ -211,6 +253,21 @@ impl ServerHandler for CodemodMcpServer {
                     "sharding-instructions",
                     Some("Sharding instructions for splitting large migrations into multiple PRs"),
                 ),
+                self._create_resource_text(
+                    "codemod-troubleshooting://instructions",
+                    "codemod-troubleshooting",
+                    Some("Troubleshooting guidance for common Codemod CLI failures"),
+                ),
+                self._create_resource_text(
+                    "codemod-creation-workflow://instructions",
+                    "codemod-creation-workflow",
+                    Some("Codemod creation workflow guide for authoring, testing, and publishing"),
+                ),
+                self._create_resource_text(
+                    "codemod-maintainer-monorepo://instructions",
+                    "codemod-maintainer-monorepo",
+                    Some("Maintainer monorepo guide for codemod repositories"),
+                ),
             ],
             next_cursor: None,
         })
@@ -242,6 +299,26 @@ impl ServerHandler for CodemodMcpServer {
             }
             "sharding://instructions" => {
                 let instructions_content = include_str!("data/prompts/sharding-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-troubleshooting://instructions" => {
+                let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-creation-workflow://instructions" => {
+                let instructions_content =
+                    include_str!("data/prompts/codemod-creation-workflow.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-maintainer-monorepo://instructions" => {
+                let instructions_content =
+                    include_str!("data/prompts/codemod-maintainer-monorepo.md");
                 Ok(ReadResourceResult {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
