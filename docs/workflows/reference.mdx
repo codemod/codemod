@@ -208,6 +208,12 @@ nodes:
   Base branch to merge into. If omitted, Codemod auto-detects the remote default branch.
 </ParamField>
 
+<Info>
+**Default Campaign/cloud behavior:** 
+
+If the node ends with commits and `pull_request` is omitted, Codemod attempts to open a pull request using the node name as the default title. If no explicit commit checkpoint was created and changes remain at the end of the node, Codemod attempts a fallback commit using the node name before pushing and opening the pull request.
+</Info>
+
 ---
 
 ## Steps
