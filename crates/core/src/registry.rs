@@ -121,6 +121,8 @@ struct PackageInfo {
     is_legacy: bool,
     latest_version: Option<String>,
     versions: HashMap<String, PackageVersion>,
+    #[serde(default)]
+    access: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -137,6 +139,8 @@ struct PackageVersion {
 struct DownloadResponse {
     download_url: String,
     expires_at: String,
+    #[serde(default)]
+    dry_run_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,7 @@ pub struct ResolvedPackage {
     pub spec: PackageSpec,
     pub version: String,
     pub package_dir: PathBuf,
+    pub dry_run_only: bool,
 }
 
 #[derive(Clone)]
@@ -210,20 +215,33 @@ impl RegistryClient {
         // Get or create cache directory
         let package_cache_dir = self.get_package_cache_dir(&package_spec, &version)?;
 
-        // Check if package is cached and valid
-        let package_dir = if force_download || !is_package_cached(&package_cache_dir)? {
+        // Check if package is cached and valid.
+        let is_pro_package = package_info.access.as_deref() == Some("pro");
+        let should_download = force_download
+            || !is_package_cached(&package_cache_dir)?
+            || is_pro_package
+            || package_cache_dir.join(".dry_run_only").exists();
+
+        let (package_dir, dry_run_only) = if should_download {
             info!("Downloading package: {source}@{version}");
-            self.download_and_extract_package(
-                registry,
-                &package_spec,
-                &version,
-                &package_cache_dir,
-                progress_bar,
-            )
-            .await?
+            let (dir, dry_run_only) = self
+                .download_and_extract_package(
+                    registry,
+                    &package_spec,
+                    &version,
+                    &package_cache_dir,
+                    progress_bar,
+                )
+                .await?;
+
+            if dry_run_only {
+                let _ = std::fs::write(dir.join(".dry_run_only"), "");
+            }
+
+            (dir, dry_run_only)
         } else {
             debug!("Using cached package: {}", package_cache_dir.display());
-            package_cache_dir
+            (package_cache_dir, false)
         };
 
         // Validate package structure
@@ -233,6 +251,7 @@ impl RegistryClient {
             spec: package_spec,
             version,
             package_dir,
+            dry_run_only,
         })
     }
 
@@ -269,6 +288,7 @@ impl RegistryClient {
             },
             version: "local".to_string(),
             package_dir: path,
+            dry_run_only: false,
         })
     }
 
@@ -286,7 +306,10 @@ impl RegistryClient {
         let url = format!("{registry_url}/api/v1/registry/packages/{package_path}");
         debug!("Fetching package info from: {url}");
 
-        let mut request = self.client.get(&url);
+        let mut request = self
+            .client
+            .get(&url)
+            .header("x-supports-dry-run-only", "true");
 
         // Add authentication header if available
         if let Some(auth_provider) = &self.auth_provider {
@@ -349,7 +372,7 @@ impl RegistryClient {
         version: &str,
         cache_dir: &Path,
         progress_bar: Option<ProgressBarCallback>,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, bool)> {
         let package_path = if let Some(scope) = &spec.scope {
             format!("{}/{}", scope, spec.name)
         } else {
@@ -372,9 +395,17 @@ impl RegistryClient {
             None
         };
 
+        // Signal to the server that this CLI version can enforce dry-run-only mode
+        let dry_run_headers: &[(&str, &str)] = &[("x-supports-dry-run-only", "true")];
+
         // Download the initial response (might be gzip data or JSON redirect)
         let package_data = self
-            .download_from_url(&download_url, auth_token.as_deref(), progress_bar.clone())
+            .download_from_url(
+                &download_url,
+                auth_token.as_deref(),
+                Some(dry_run_headers),
+                progress_bar.clone(),
+            )
             .await?;
 
         // Check if this is a JSON redirect response
@@ -389,15 +420,22 @@ impl RegistryClient {
                             serde_json::from_str::<DownloadResponse>(text)
                         {
                             debug!(
+                                "Server returned dry_run_only: {}",
+                                download_response.dry_run_only
+                            );
+                            debug!(
                                 "Server returned download URL: {}",
                                 download_response.download_url
                             );
+
+                            let dry_run_only = download_response.dry_run_only;
 
                             // Download from the actual CDN URL
                             let actual_package_data = self
                                 .download_from_url(
                                     &download_response.download_url,
                                     auth_token.as_deref(),
+                                    None,
                                     progress_bar,
                                 )
                                 .await?;
@@ -426,7 +464,7 @@ impl RegistryClient {
                                 });
                             }
                             info!("Package cached to: {}", cache_dir.display());
-                            return Ok(cache_dir.to_path_buf());
+                            return Ok((cache_dir.to_path_buf(), dry_run_only));
                         }
                     }
                 }
@@ -438,22 +476,28 @@ impl RegistryClient {
             }
         }
 
-        // If we get here, it's a direct gzip file
+        // If we get here, it's a direct gzip file (public package)
         self.extract_package(&package_data, cache_dir).await?;
         info!("Package cached to: {}", cache_dir.display());
-        Ok(cache_dir.to_path_buf())
+        Ok((cache_dir.to_path_buf(), false))
     }
 
     async fn download_from_url(
         &self,
         url: &str,
         auth_token: Option<&str>,
+        extra_headers: Option<&[(&str, &str)]>,
         progress_bar: Option<ProgressBarCallback>,
     ) -> Result<BytesMut> {
         // Get content length for progress tracking
         let mut head_request = self.client.head(url);
         if let Some(token) = auth_token {
             head_request = head_request.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(headers) = extra_headers {
+            for (key, value) in headers {
+                head_request = head_request.header(*key, *value);
+            }
         }
 
         let head_response =
@@ -478,6 +522,11 @@ impl RegistryClient {
         let mut get_request = self.client.get(url);
         if let Some(token) = auth_token {
             get_request = get_request.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(headers) = extra_headers {
+            for (key, value) in headers {
+                get_request = get_request.header(*key, *value);
+            }
         }
 
         let response = get_request

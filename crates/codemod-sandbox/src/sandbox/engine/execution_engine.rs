@@ -157,6 +157,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub shared_state_context: Option<SharedStateContext>,
     /// Whether this is a test execution (jssgTransform becomes a no-op)
     pub test_mode: bool,
+    /// Whether this is a dry-run execution (passed to codemod via options.dryRun)
+    pub dry_run: bool,
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: Option<&'a Path>,
@@ -386,6 +388,7 @@ where
                 &language_str,
                 options.matrix_values,
                 matches,
+                options.dry_run,
             )?;
 
             let func = namespace
@@ -854,6 +857,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -903,6 +907,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -952,6 +957,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -1001,6 +1007,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -1042,6 +1049,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -1088,6 +1096,7 @@ function example() {
             metrics_context: None,
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 
@@ -1195,6 +1204,7 @@ function example() {
             metrics_context: Some(metrics_ctx.clone()),
             shared_state_context: None,
             test_mode: false,
+            dry_run: false,
             target_directory: None,
         };
 

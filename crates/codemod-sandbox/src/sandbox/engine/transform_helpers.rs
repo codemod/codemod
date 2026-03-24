@@ -25,6 +25,7 @@ pub fn build_transform_options<'js>(
     language: &str,
     matrix_values: Option<HashMap<String, serde_json::Value>>,
     matches: Option<Vec<SgNodeRjs<'js>>>,
+    dry_run: bool,
 ) -> Result<Value<'js>, ExecutionError> {
     let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
         source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -69,6 +70,14 @@ pub fn build_transform_options<'js>(
 
     run_options
         .set("matrixValues", matrix_values_js)
+        .map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: e.to_string(),
+            },
+        })?;
+
+    run_options
+        .set("dryRun", dry_run)
         .map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: e.to_string(),

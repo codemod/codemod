@@ -21,7 +21,7 @@ use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use console::{strip_ansi_codes, style};
 use inquire::Confirm;
-use log::info;
+use log::{debug, info};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -194,6 +194,66 @@ pub async fn handler(
         }
     };
 
+    // Auto-force dry-run for non-pro users accessing pro codemods.
+    // Offer login first — if user logs in with a pro account, re-resolve
+    // the package so they get full access.
+    let (resolved_package, dry_run) = if resolved_package.dry_run_only {
+        let mut resolved = resolved_package;
+        let mut logged_in = false;
+
+        if !args.dry_run && !args.no_interactive {
+            println!(
+                "{}",
+                style("This is a pro codemod. You can preview changes, but applying them requires a Pro plan.").yellow()
+            );
+            let should_login = Confirm::new("Would you like to login now?")
+                .with_default(true)
+                .prompt()
+                .unwrap_or(false);
+
+            if should_login {
+                let login_args = crate::commands::login::Command::new();
+                if let Err(e) = crate::commands::login::handler(&login_args).await {
+                    eprintln!("{}", style(format!("Login failed: {e}")).red());
+                } else {
+                    // Re-resolve to check if user now has pro access
+                    let new_client = create_registry_client(args.registry.clone())?;
+                    match new_client
+                        .resolve_package(&args.package, Some(&registry_url), true, None)
+                        .await
+                    {
+                        Ok(new_resolved) => {
+                            resolved = new_resolved;
+                            logged_in = true;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "{}",
+                                style(format!("Failed to re-resolve package: {e}")).red()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if resolved.dry_run_only && !logged_in && !args.dry_run {
+            println!(
+                "{}",
+                style("Running in dry-run mode (preview only).").yellow()
+            );
+        }
+
+        let dry_run = if resolved.dry_run_only {
+            true
+        } else {
+            args.dry_run
+        };
+        (resolved, dry_run)
+    } else {
+        (resolved_package, args.dry_run)
+    };
+
     info!(
         "Resolved codemod package: {} -> {}",
         args.package,
@@ -279,8 +339,8 @@ pub async fn handler(
     let (mut engine, mut config) = create_engine(
         workflow_path,
         target_path.clone(),
-        args.dry_run,
-        args.allow_dirty,
+        dry_run,
+        args.allow_dirty || resolved_package.dry_run_only,
         params,
         args.registry.clone(),
         Some(capabilities.clone()),
@@ -301,9 +361,23 @@ pub async fn handler(
     // Set the package name so it's stored on the WorkflowRun for TUI display
     engine.set_name(Some(args.package.clone()));
 
+    // For pro codemod dry-run: streamline execution — auto-trigger manual
+    // steps, skip shards, skip state writes, flatten matrix to one task per node.
+    // Set on both engine (used at runtime) and config (passed to run_workflow).
+    if resolved_package.dry_run_only {
+        let engine_config = engine.workflow_run_config_mut();
+        engine_config.auto_trigger_manual_steps = true;
+        engine_config.skip_shard_steps = true;
+        engine_config.skip_state_writes = true;
+        engine_config.flatten_matrix_tasks = true;
+    }
+
     // Check if workflow has manual nodes and should launch TUI (Unix only)
+    // Skip TUI for pro dry-run since manual steps are auto-triggered.
     #[cfg(unix)]
-    let use_tui = {
+    let use_tui = if resolved_package.dry_run_only {
+        false
+    } else {
         let workflow =
             butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
         !args.no_interactive && workflow_has_manual_nodes(&workflow)
@@ -329,6 +403,10 @@ pub async fn handler(
     let run_result = run_workflow(&engine, config).await;
 
     if let Err(e) = run_result {
+        // Clean up cached pro codemod on failure too
+        if resolved_package.dry_run_only {
+            let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
+        }
         let error_msg = format!("Workflow execution failed: {}", e);
         send_failure_event(&telemetry, &args.package, &error_msg).await;
         return Err(e);
@@ -344,7 +422,7 @@ pub async fn handler(
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
     if !use_tui {
-        if args.dry_run {
+        if dry_run {
             println!("\n=== DRY RUN SUMMARY ===");
             println!("Files that would be modified: {files_modified}");
             println!("Files that would be unmodified: {files_unmodified}");
@@ -374,7 +452,7 @@ pub async fn handler(
                 args.package.clone(),
                 None,
                 duration_ms,
-                args.dry_run,
+                dry_run,
                 target_path.display().to_string(),
                 CLI_VERSION.to_string(),
                 files_modified,
@@ -416,6 +494,12 @@ pub async fn handler(
             &telemetry,
         )
         .await?;
+    }
+
+    if resolved_package.dry_run_only {
+        if let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
+            debug!("Failed to remove cached pro codemod: {}", e);
+        }
     }
 
     Ok(())

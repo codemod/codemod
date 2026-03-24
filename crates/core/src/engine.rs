@@ -390,6 +390,11 @@ impl Engine {
         }
     }
 
+    /// Get a mutable reference to the workflow run config
+    pub fn workflow_run_config_mut(&mut self) -> &mut WorkflowRunConfig {
+        &mut self.workflow_run_config
+    }
+
     /// Create a new engine with a custom state adapter
     pub fn with_state_adapter(
         state_adapter: Box<dyn StateAdapter>,
@@ -578,7 +583,28 @@ impl Engine {
 
     /// Create initial tasks for all nodes
     async fn create_initial_tasks(&self, workflow_run: &WorkflowRun) -> Result<()> {
-        let tasks = self.scheduler.calculate_initial_tasks(workflow_run).await?;
+        let mut tasks = self.scheduler.calculate_initial_tasks(workflow_run).await?;
+
+        // In flatten mode, replace matrix master+children with a single
+        // non-master task per node so only one instance runs.
+        // Flatten matrix nodes: replace all master+children with a single
+        // regular task per node so it runs exactly once.
+        if self.workflow_run_config.flatten_matrix_tasks {
+            let mut matrix_node_ids = std::collections::HashSet::new();
+            // Collect all node IDs that have matrix tasks
+            for task in &tasks {
+                if task.is_master || task.master_task_id.is_some() {
+                    matrix_node_ids.insert(task.node_id.clone());
+                }
+            }
+            // Drop all matrix-related tasks
+            tasks.retain(|task| !task.is_master && task.master_task_id.is_none());
+            // Create a single regular task for each matrix node
+            let wf_run_id = workflow_run.id;
+            for node_id in matrix_node_ids {
+                tasks.push(Task::new(wf_run_id, node_id, false));
+            }
+        }
 
         for task in tasks {
             self.state_adapter.lock().await.save_task(&task).await?;
@@ -1196,7 +1222,10 @@ impl Engine {
             });
 
             // Check if state has changed for matrix recompilation
-            let should_recompile = if has_matrix_strategies {
+            // Skip recompilation when matrix tasks are flattened (no dynamic expansion)
+            let should_recompile = if has_matrix_strategies
+                && !self.workflow_run_config.flatten_matrix_tasks
+            {
                 let current_state = self
                     .state_adapter
                     .lock()
@@ -1317,27 +1346,33 @@ impl Engine {
                 .await?;
 
             let tasks_to_await_trigger = runnable_tasks_result.tasks_to_await_trigger;
-            for task_id in tasks_to_await_trigger {
-                // Create a task diff to update the status
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
-                    },
-                );
-                let task_diff = TaskDiff { task_id, fields };
+            let mut runnable_tasks = runnable_tasks_result.runnable_tasks;
 
-                // Apply the diff
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_task_diff(&task_diff)
-                    .await?;
+            if self.workflow_run_config.auto_trigger_manual_steps {
+                // In auto-trigger mode (e.g. pro codemod dry-run), treat manual
+                // steps as immediately runnable instead of blocking.
+                runnable_tasks.extend(tasks_to_await_trigger);
+            } else {
+                for task_id in tasks_to_await_trigger {
+                    // Create a task diff to update the status
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "status".to_string(),
+                        FieldDiff {
+                            operation: DiffOperation::Update,
+                            value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
+                        },
+                    );
+                    let task_diff = TaskDiff { task_id, fields };
+
+                    // Apply the diff
+                    self.state_adapter
+                        .lock()
+                        .await
+                        .apply_task_diff(&task_diff)
+                        .await?;
+                }
             }
-
-            let runnable_tasks = runnable_tasks_result.runnable_tasks;
 
             // Check if any tasks are awaiting trigger
             let awaiting_trigger = tasks_after_recompilation
@@ -2186,10 +2221,18 @@ impl Engine {
                 .await
             }
             StepAction::AI(ai_config) => {
+                if self.workflow_run_config.dry_run {
+                    info!("Skipping AI step in dry-run mode");
+                    return Ok(());
+                }
                 self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
                     .await
             }
             StepAction::Shard(shard_config) => {
+                if self.workflow_run_config.skip_shard_steps {
+                    info!("Skipping shard step in dry-run preview mode");
+                    return Ok(());
+                }
                 self.execute_shard_step(shard_config, task, logger).await
             }
             StepAction::InstallSkill(install_skill) => {
@@ -2593,6 +2636,7 @@ impl Engine {
                         metrics_context: Some(metrics_context_clone.clone()),
                         shared_state_context: Some(shared_state_context_clone.clone()),
                         test_mode: false,
+                        dry_run: config.dry_run,
                         target_directory: Some(&target_path),
                     })
                     .await
@@ -2765,38 +2809,40 @@ impl Engine {
 
         // Persist shared state to the workflow state adapter
         if let Some(wf_run_id) = workflow_run_id {
-            let persistable = shared_state_context.get_persistable();
-            let removals = shared_state_context.get_removals();
+            if !self.workflow_run_config.skip_state_writes {
+                let persistable = shared_state_context.get_persistable();
+                let removals = shared_state_context.get_removals();
 
-            if !persistable.is_empty() || !removals.is_empty() {
-                let mut fields = HashMap::new();
-                for (key, value) in persistable {
-                    fields.insert(
-                        key,
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(value),
-                        },
-                    );
-                }
-                for key in removals {
-                    fields.insert(
-                        key,
-                        FieldDiff {
-                            operation: DiffOperation::Remove,
-                            value: None,
-                        },
-                    );
-                }
+                if !persistable.is_empty() || !removals.is_empty() {
+                    let mut fields = HashMap::new();
+                    for (key, value) in persistable {
+                        fields.insert(
+                            key,
+                            FieldDiff {
+                                operation: DiffOperation::Update,
+                                value: Some(value),
+                            },
+                        );
+                    }
+                    for key in removals {
+                        fields.insert(
+                            key,
+                            FieldDiff {
+                                operation: DiffOperation::Remove,
+                                value: None,
+                            },
+                        );
+                    }
 
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_state_diff(&StateDiff {
-                        workflow_run_id: wf_run_id,
-                        fields,
-                    })
-                    .await?;
+                    self.state_adapter
+                        .lock()
+                        .await
+                        .apply_state_diff(&StateDiff {
+                            workflow_run_id: wf_run_id,
+                            fields,
+                        })
+                        .await?;
+                }
             }
         }
 
@@ -3850,14 +3896,16 @@ impl Engine {
             );
         }
 
-        self.state_adapter
-            .lock()
-            .await
-            .apply_state_diff(&StateDiff {
-                workflow_run_id: task.workflow_run_id,
-                fields: state_diff,
-            })
-            .await?;
+        if !self.workflow_run_config.skip_state_writes {
+            self.state_adapter
+                .lock()
+                .await
+                .apply_state_diff(&StateDiff {
+                    workflow_run_id: task.workflow_run_id,
+                    fields: state_diff,
+                })
+                .await?;
+        }
         Ok(())
     }
 

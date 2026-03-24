@@ -258,6 +258,7 @@ impl JssgTestHandler {
                         metrics_context: Some(metrics_context),
                         shared_state_context: None,
                         test_mode: true,
+                        dry_run: false,
                         target_directory: None,
                     };
                     let CodemodOutput { primary, .. } =

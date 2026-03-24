@@ -277,6 +277,7 @@ where
                 &language_str,
                 options.matrix_values,
                 matches,
+                true,
             )?;
 
             let func = namespace
