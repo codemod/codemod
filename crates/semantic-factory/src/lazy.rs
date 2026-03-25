@@ -106,7 +106,13 @@ impl LazySemanticProvider {
     }
 
     /// Get or create the underlying provider for the given language.
+    /// Skips initialization for unsupported languages to avoid poisoning the
+    /// OnceLock — if the first file processed is unsupported (e.g. json),
+    /// the lock would store None permanently, breaking subsequent supported files.
     fn get_or_init(&self, language: &str) -> Option<&Arc<dyn SemanticProvider>> {
+        if !SemanticFactory::supports_language(language) {
+            return self.inner.get().and_then(|opt| opt.as_ref());
+        }
         self.inner
             .get_or_init(|| SemanticFactory::create(language, self.config.clone()))
             .as_ref()
