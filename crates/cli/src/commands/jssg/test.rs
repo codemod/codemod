@@ -270,9 +270,8 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 // and pre-index all files (matching jssg run behavior).
                 let semantic_provider = if use_semantic_workspace {
                     if let Some(ref ws_root) = workspace_root {
-                        let provider: Arc<dyn SemanticProvider> = Arc::new(
-                            LazySemanticProvider::workspace_scope(ws_root.clone()),
-                        );
+                        let provider: Arc<dyn SemanticProvider> =
+                            Arc::new(LazySemanticProvider::workspace_scope(ws_root.clone()));
                         for entry in walkdir::WalkDir::new(ws_root)
                             .into_iter()
                             .filter_map(|e| e.ok())

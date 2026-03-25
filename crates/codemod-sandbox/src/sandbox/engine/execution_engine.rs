@@ -340,7 +340,12 @@ where
                     },
                 })?;
 
-            let file_path_str = options.file_path.to_string_lossy().to_string();
+            let file_path_str = options
+                .file_path
+                .canonicalize()
+                .unwrap_or_else(|_| options.file_path.to_path_buf())
+                .to_string_lossy()
+                .to_string();
             let parsed_content =
                 SgRootRjs::try_new_with_semantic(
                     ast_grep,
