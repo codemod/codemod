@@ -2619,6 +2619,12 @@ impl Engine {
         let logger = logger.clone();
         let modified_files_collector_clone = modified_files_collector.clone();
 
+        // Collect deferred file deletions from renames — applied after all transforms complete
+        let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let logger_for_deferred = logger.clone();
+        let deferred_deletions_clone = Arc::clone(&deferred_deletions);
+
         // Execute the codemod on each file using the config's multi-threading
         config
             .execute(move |file_path, config| {
@@ -2740,27 +2746,22 @@ impl Engine {
                                                 .files_with_errors
                                                 .fetch_add(1, Ordering::Relaxed);
                                         } else {
-                                            // If renamed, delete the original file
+                                            // If renamed, defer deletion of the original file
                                             if modified.rename_to.is_some()
                                                 && write_path != change_path
                                             {
-                                                if let Err(e) = std::fs::remove_file(change_path) {
-                                                    slog!(
-                                                        logger,
-                                                        error,
-                                                        "Failed to remove original file {}: {}",
-                                                        change_path.display(),
-                                                        e
-                                                    );
-                                                } else {
-                                                    slog!(
-                                                        logger,
-                                                        debug,
-                                                        "Renamed file: {} -> {}",
-                                                        change_path.display(),
-                                                        write_path.display()
-                                                    );
+                                                if let Ok(mut deletions) =
+                                                    deferred_deletions_clone.lock()
+                                                {
+                                                    deletions.push(change_path.to_path_buf());
                                                 }
+                                                slog!(
+                                                    logger,
+                                                    debug,
+                                                    "Renamed file: {} -> {} (deferred deletion)",
+                                                    change_path.display(),
+                                                    write_path.display()
+                                                );
                                             } else {
                                                 slog!(
                                                     logger,
@@ -2829,6 +2830,21 @@ impl Engine {
                 }
             })
             .map_err(|e| Error::StepExecution(e.to_string()))?;
+
+        // Apply deferred file deletions from renames now that all transforms are complete
+        if let Ok(deletions) = deferred_deletions.lock() {
+            for path in deletions.iter() {
+                if let Err(e) = std::fs::remove_file(path) {
+                    slog!(
+                        logger_for_deferred,
+                        error,
+                        "Failed to remove original file {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
 
         // Persist shared state to the workflow state adapter
         if let Some(wf_run_id) = workflow_run_id {

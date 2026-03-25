@@ -7,7 +7,9 @@ use language_core::{
     filesystem, ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
     ReferencesResult, SemanticResult, SymbolLocation,
 };
-use oxc_resolver::{ResolveOptions, Resolver};
+use oxc_resolver::{
+    ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,6 +52,16 @@ impl AccurateAnalyzer {
     /// * `workspace_root` - The workspace root path for module resolution
     /// * `fs_root` - The virtual filesystem root to use for file operations
     pub fn new_with_fs(workspace_root: PathBuf, fs_root: VfsPath) -> Self {
+        let tsconfig_path = workspace_root.join("tsconfig.json");
+        let tsconfig = if tsconfig_path.exists() {
+            Some(TsconfigDiscovery::Manual(TsconfigOptions {
+                config_file: tsconfig_path,
+                references: TsconfigReferences::Auto,
+            }))
+        } else {
+            Some(TsconfigDiscovery::Auto)
+        };
+
         let resolve_options = ResolveOptions {
             extensions: vec![
                 ".ts".to_string(),
@@ -66,6 +78,7 @@ impl AccurateAnalyzer {
                 "node".to_string(),
                 "default".to_string(),
             ],
+            tsconfig,
             ..Default::default()
         };
 
@@ -731,5 +744,86 @@ console.log(x);
         // Type inference not yet implemented, should return None
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_tsconfig_paths_scoped_package() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Create tsconfig with scoped package path mapping
+        let tsconfig = r#"{
+            "compilerOptions": {
+                "baseUrl": ".",
+                "paths": {
+                    "@acme/package-b/*": ["./packages/package-b/src/*"]
+                }
+            }
+        }"#;
+        fs::write(root.join("tsconfig.json"), tsconfig).unwrap();
+
+        // Create the package files
+        fs::create_dir_all(root.join("packages/package-b/src/components")).unwrap();
+        fs::write(
+            root.join("packages/package-b/src/components/index.ts"),
+            "export { Button } from './Button';",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/package-b/src/components/Button.ts"),
+            "export function Button() { return 'button'; }",
+        )
+        .unwrap();
+
+        // Create consumer
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/App.ts"),
+            "import { Button } from '@acme/package-b/components';",
+        )
+        .unwrap();
+
+        let analyzer = AccurateAnalyzer::new(root.to_path_buf());
+
+        // Test resolution
+        let app_path = root.join("src/App.ts");
+        let result = analyzer.resolve_module("@acme/package-b/components", &app_path);
+        assert!(
+            result.is_ok(),
+            "Should resolve @acme/package-b/components, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_tsconfig_paths_tilde_alias() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let tsconfig = r#"{
+            "compilerOptions": {
+                "baseUrl": ".",
+                "paths": {
+                    "~/*": ["./src/*"]
+                }
+            }
+        }"#;
+        fs::write(root.join("tsconfig.json"), tsconfig).unwrap();
+
+        fs::create_dir_all(root.join("src/components")).unwrap();
+        fs::write(
+            root.join("src/components/index.ts"),
+            "export { Button } from './Button';",
+        )
+        .unwrap();
+
+        let analyzer = AccurateAnalyzer::new(root.to_path_buf());
+        let app_path = root.join("src/App.ts");
+        let result = analyzer.resolve_module("~/components", &app_path);
+        assert!(
+            result.is_ok(),
+            "Should resolve ~/components, got: {:?}",
+            result
+        );
     }
 }
