@@ -55,6 +55,7 @@ pub struct ExecutionRequest {
     pub input_code: String,
     pub input_path: PathBuf,
     pub logical_input_path: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
 }
 
 /// Execution function type - takes input code and file path, returns transformation result
@@ -286,6 +287,7 @@ impl TestRunner {
                     .logical_input_path
                     .clone()
                     .or_else(|| test_case.input_path.clone()),
+                workspace_root: None,
             },
             capabilities.clone(),
         )
@@ -591,6 +593,7 @@ impl TestRunner {
                     input_code,
                     input_path: actual_path.clone(),
                     logical_input_path: Some(input_dir.join(relative_path)),
+                    workspace_root: Some(workspace_root.to_path_buf()),
                 },
                 capabilities,
             ),
