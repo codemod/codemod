@@ -701,10 +701,19 @@ pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<Install
 }
 
 pub fn install_restart_hint(harness: Harness) -> String {
-    format!(
+    let mut message = format!(
         "Restart or reload your {} session so newly installed Codemod integrations are picked up.",
         harness.as_str()
-    )
+    );
+
+    if harness_supports_mcp(harness) {
+        message.push_str(&format!(
+            " Also make sure Codemod MCP is enabled in {}.",
+            harness.as_str()
+        ));
+    }
+
+    message
 }
 
 pub(crate) fn upsert_skill_discovery_guides_with_command_status(

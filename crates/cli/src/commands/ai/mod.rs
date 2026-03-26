@@ -790,10 +790,6 @@ fn resolve_install_inputs(
     } else {
         let options = vec![
             HarnessPromptOption {
-                harness: Harness::Auto,
-                label: "auto (recommended)",
-            },
-            HarnessPromptOption {
                 harness: Harness::Claude,
                 label: "claude",
             },
