@@ -5,69 +5,180 @@ icon: 'chart-simple'
 
 import { CodemodInsightsDemo } from "/snippets/codemod-insights-demo.mdx";
 
-In large codebases, tracking migrations, old/new APIs, security anti-patterns, and trends can be incredibly useful. Engineers and engineering leaders in progressive software teams can stay on top of these changes using **Codemod Insights**.
+In large, evolving codebases, migrations, API transitions, and security anti-patterns often go unnoticed.
 
-With Codemod Insights, you can generate customized dashboards and widgets that provide helpful insights about your code's posture. This way, you can make informed decisions and track code changes that scale over time.
+Codemod Insights surfaces this signal by providing clear visibility into your codebase’s posture, empowering engineering leaders to make informed decisions and manage change at scale.
 
 <Frame>
     <CodemodInsightsDemo />
 </Frame>
 
-## Using Codemod Insights
+## How Insights Work
 
-<Steps>
-    <Step title="Create a dashboard">
-        Dashboards help you keep your insights' widgets organized.
-        
-        For example, you can create a dashboard called `i18n migration` to organize all widgets related to your i18n migration.
+When running large-scale migrations across dozens of repositories and teams, you need visibility into what's changed, what's left, and who owns it. Codemod Insights gives you that visibility through three layers:
 
-        To create a new dashboard, go to `Insights -> Create Dashboard`.
-        
-        <Frame>
-            ![Creating a new dashboard](/images/insights/create-dashboard.png)
-        </Frame>
-    </Step>
-    <Step title="Create a widget">
-        Once you're in your new dashboard, you can create a new widget.
+- **[Dashboards](#dashboards)** group related insights around a migration, initiative, or team.
+- **[Widgets](#widgets)** visualize query results as timeseries charts, single numbers, or tables — so you can track migration progress, API adoption rates, or security posture over time.
+- **[Queries](#queries)** run against your repositories using one of two engines — **ast-grep** or **js-ast-grep** — and return the data your widgets display.
 
-        Widgets help you get useful insights about a variety of patterns in your codebase.
+## Dashboards
 
-        Currently, you can create `Timeseries chart`, `Single number`, or `Table` widgets.
+Dashboards are the top-level container for your insights. Use them to organize widgets by initiative — for example, an `i18n migration` dashboard that tracks old API usage, new API adoption, and files remaining across all affected repositories.
 
-        <Frame>
-            ![Creating a new widget](/images/insights/create-widget.png)
-        </Frame>
-    </Step>
-    <Step title="Setting up your widget">
-        Widgets allow you to track and visualize insights by running queries over your codebase. Each query represents an [`ast-grep` YAML rule](https://ast-grep.github.io/reference/yaml.html) that is applied to your repository.
+To create a new dashboard, go to `Insights → Create Dashboard`.
 
-        Start by specifying a code pattern you would like to track and visualize. You can generate ast-grep rules with the help of AI [using Codemod Studio](/platform/codemod-studio#using-codemod-ai).
+<Frame>
+    ![Creating a new dashboard](/images/insights/create-dashboard.png)
+</Frame>
 
-        For each query, you can specify:
-        - `ast-grep` rule ([generate rules easily with codemod studio](/platform/codemod-studio#using-codemod-ai))
-        - match type, can be occurrence counts or file counts
-        - target repository
-        - query label
-        - group options
-        - date/commit hash (for Single number and Table widgets)
-        
-        <Frame>
-            <video
-            autoPlay
-            muted
-            loop
-            playsInline
-            className="w-full"
-            src="/images/insights/setting-up-widget.mp4"
-            ></video>
-        </Frame>
+## Widgets
 
-        <Tip>
-            When configuring widgets, you can add multiple queries to extend the information a widget provides. Additionally, you can aggregate the results of multiple queries by specifying a formula. To refer to a query's value in a formula, use the query's name (alphabetical order index).
+Widgets are the building blocks of a dashboard. Each widget runs one or more queries against your repositories and renders the results in one of three formats:
 
-            <Frame>
-                ![Writing formulas](/images/insights/query-formula.png)
-            </Frame>
-        </Tip>
-    </Step>
-</Steps>
+- **Timeseries chart** — track how a metric changes over time (e.g., deprecated API calls trending down week over week).
+- **Single number** — display a point-in-time value (e.g., total files still using the old pattern).
+- **Table view** — show tabular data with sorting and row limits (e.g., remaining migration work broken down by codeowner).
+
+<Frame>
+    ![Creating a new widget](/images/insights/create-widget.png)
+</Frame>
+
+Each widget can contain up to 10 queries, and each query uses one of two supported query engines:
+
+- **ast-grep** — uses an ast-grep YAML rule to match code patterns across your repositories.
+- **js-ast-grep** — uses JSSG for deeper static analysis, custom metrics, and dimensions like codeowners.
+
+You can select the query engine from the dropdown at the start of each query.
+
+<Frame>
+![Setting up a widget](/images/insights/setting-up-widget.png)
+</Frame>
+
+### Formulas
+
+You can aggregate the results of multiple queries by specifying a formula. Queries are assigned alphabetical variable names (`a`, `b`, `c`, ...) that you can reference in the formula expression.
+
+You can also give the formula result a name using the formula alias field (e.g. `Formula Result`).
+
+<Frame>
+    ![Writing formulas](/images/insights/query-formula.png)
+</Frame>
+
+### Visualization Settings
+
+Each widget type has its own visualization options accessible from the **Visualization** tab in the widget editor:
+
+- **Timeseries chart** — choose between `Line`, `Bar`, or `Area` chart types. Configure X and Y axis labels.
+- **Single number** — set a prefix (e.g. `$`), suffix (e.g. `%`), and number format (e.g. `0.0` for one decimal place).
+- **Table view** — configure sort column, sort direction (ascending/descending), and row limit.
+
+### Time Range
+
+Timeseries widgets include a time range selector that controls the analysis window. You can choose from:
+
+- **Relative presets** — Past week, Past 30 days, Past 4 weeks, Past 2 months, or Past 3 months
+- **Fixed range** — Select a custom start and end date using a calendar picker
+
+## Queries
+
+### ast-grep Queries
+
+ast-grep queries use inline [YAML rules](https://ast-grep.github.io/reference/yaml.html) to match code patterns. You can generate ast-grep rules with the help of AI [using Codemod Studio](/platform/codemod-studio#using-codemod-ai).
+
+| Configuration | Description |
+|---|---|
+| **Rule** | An ast-grep YAML rule defining the pattern to search for |
+| **Select** | `Match count` (number of pattern occurrences) or `File count` (number of files containing the pattern) |
+| **Repository** | One or more target repositories to analyze |
+| **Group by** | Group results by `repository` or `codeowner` |
+| **File path filter** | Include or exclude files using glob patterns |
+| **Query alias** | A label for the query result (available for Timeseries and Table widgets) |
+| **Snapshot base** | A specific date or commit hash to analyze at a point in time (available for Single number and Table widgets) |
+
+### js-ast-grep Queries
+
+js-ast-grep queries use [JSSG](/jssg) for deeper static analysis. They can extract custom metrics and dimensions from your codebase, making them ideal for tracking migration progress, API usage patterns, or any metric that requires programmatic logic. You can build JSSG rules with AI assistance using [Codemod MCP](/model-context-protocol).
+
+The source code for a js-ast-grep query can come from:
+- **Inline code**: write analysis code directly in the built-in editor
+- **A codemod package**: select an existing JSSG codemod from [Codemod Registry](/platform/registry) published by you, a team member, or a community member.
+- **A template variable**: reference a reusable JSSG source defined at the dashboard level
+
+| Configuration | Description |
+|---|---|
+| **Source** | The analysis code (package, inline, or template variable) |
+| **Select** | `File count` or `Metric` (extract a named custom metric with autocomplete suggestions) |
+| **Repository** | One or more target repositories to analyze |
+| **Group by** | Group results by `repository`, `codeowner`, or `cardinality` (custom dimension keys from your metric) |
+| **Dimension filters** | Filter metric results by dimension key-value pairs using `=` (equals), `≠` (not equals), or `~` (regex) operators |
+| **File path filter** | Include or exclude files using glob patterns |
+| **Query alias** | A label for the query result (available for Timeseries and Table widgets) |
+| **Snapshot base** | A specific date or commit hash to analyze at a point in time (available for Single number and Table widgets) |
+
+## Template Variables
+
+Template variables allow you to parameterize your dashboard so that the same widgets can be reused with different inputs. For example, you can define a repository variable and use it across all widgets — then switch the target repository from a single place without editing each widget individually.
+
+To add a template variable, click the **Add Variable** button at the top of your dashboard.
+
+<Frame>
+![Adding a template variable](/images/insights/create-template-variable.png)
+</Frame>
+
+### Variable Types
+
+| Type | Description |
+|------|-------------|
+| **Repository** | Select one or more (up to 10) repositories. Widgets referencing this variable will query the selected repos. |
+| **Rule** | Define an ast-grep YAML rule that can be reused across multiple widgets. |
+| **JSSG Source** | Define a js-ast-grep code source that can be reused across multiple widgets. |
+| **String** | A text value. Optionally define a set of allowed values to display as a dropdown selector. Useful for dimension filter values or group-by keys. |
+
+### Using Template Variables
+
+Once created, template variables appear as selectable options in query configuration fields. When configuring a query's repository, rule, or JSSG source, you can choose between specifying a value directly or referencing a template variable.
+
+<Frame>
+![Referencing template variables](/images/insights/using-template-variable-in-jssg.png)
+</Frame>
+
+String variables can be referenced in group-by and dimension filter fields using the `$variableName` syntax.
+
+Variables marked as **Dynamic** can be changed at any time from the dashboard view, and all widgets that reference them will automatically refresh with the updated values.
+
+<Tip>
+    Template variables are especially useful for creating reusable dashboards that can be applied to different repositories or analysis patterns without duplicating widgets.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="JSSG Quickstart"
+    href="/jssg/quickstart"
+    icon="code"
+  >
+    Build your first JavaScript ast-grep codemod.
+  </Card>
+  <Card
+    title="Codemod Studio"
+    href="/platform/codemod-studio"
+    icon="wand-magic-sparkles"
+  >
+    Generate ast-grep rules with the help of AI.
+  </Card>
+  <Card
+    title="Campaigns"
+    href="/platform/campaigns"
+    icon="rocket"
+  >
+    Run codemods at scale across your repositories.
+  </Card>
+  <Card
+    title="Codemod Registry"
+    href="/platform/registry"
+    icon="box"
+  >
+    Discover and publish reusable codemods.
+  </Card>
+</CardGroup>

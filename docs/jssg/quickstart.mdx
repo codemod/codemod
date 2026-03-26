@@ -8,9 +8,7 @@ Build a working JavaScript ast-grep (JSSG) codemod in minutes.
 
 JavaScript ast-grep (JSSG) is a **secure JavaScript runtime** for codemods. This runtime is compatible with Node.js and comes with ast-grep as a built-in module.
 
-<Info>
 JSSG is built on top of QuickJS, a lightweight JavaScript engine, and uses LLRT for Node.js module compatibility.
-</Info>
 
 <Warning>
 JSSG follows a **deny-by-default security model**. Unsafe operations like file system access (`fs`), network requests (`fetch`), and process spawning (`child_process`) are disabled by default. See [Security & Capabilities](/jssg/security) to learn how to enable them.
@@ -31,9 +29,7 @@ For engine details and built-ins, see <a href="/jssg/reference#runtime-and-built
 - **Edits**: Build replacements with `node.replace(text)` and apply them with `commitEdits(edits)`.
 - **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
 
-<Tip>
 You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [JSSG API reference](/jssg/reference#rule-configuration).
-</Tip>
 
 ## Build your first codemod
 
