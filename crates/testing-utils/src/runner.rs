@@ -55,6 +55,7 @@ pub struct ExecutionRequest {
     pub input_code: String,
     pub input_path: PathBuf,
     pub logical_input_path: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
 }
 
 /// Execution function type - takes input code and file path, returns transformation result
@@ -286,6 +287,7 @@ impl TestRunner {
                     .logical_input_path
                     .clone()
                     .or_else(|| test_case.input_path.clone()),
+                workspace_root: None,
             },
             capabilities.clone(),
         )
@@ -531,6 +533,8 @@ impl TestRunner {
             stopped_early: false,
         };
 
+        let mut deferred_deletions: Vec<PathBuf> = Vec::new();
+
         for relative_path in &test_case.entrypoint_files {
             let Some(result) = Self::execute_directory_entrypoint(
                 test_case,
@@ -540,6 +544,7 @@ impl TestRunner {
                 execution_fn,
                 options,
                 capabilities.clone(),
+                &mut deferred_deletions,
             )
             .await?
             else {
@@ -554,13 +559,20 @@ impl TestRunner {
                 options,
             ) {
                 execution.stopped_early = true;
-                return Ok(execution);
+                break;
             }
+        }
+
+        // Apply deferred file deletions from renames now that all transforms are complete.
+        // This ensures the resolver can still find barrel/index files during import resolution.
+        for path in &deferred_deletions {
+            let _ = fs::remove_file(path);
         }
 
         Ok(execution)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_directory_entrypoint<'a>(
         test_case: &FileSystemTestCase,
         input_dir: &Path,
@@ -569,6 +581,7 @@ impl TestRunner {
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
+        deferred_deletions: &mut Vec<PathBuf>,
     ) -> Result<Option<Result<()>>> {
         let actual_path = workspace_root.join(relative_path);
         if !actual_path.exists() {
@@ -591,6 +604,7 @@ impl TestRunner {
                     input_code,
                     input_path: actual_path.clone(),
                     logical_input_path: Some(input_dir.join(relative_path)),
+                    workspace_root: Some(workspace_root.to_path_buf()),
                 },
                 capabilities,
             ),
@@ -616,7 +630,12 @@ impl TestRunner {
                 assertion_name
             )),
             Ok(TransformationResult::Success(output)) => {
-                Self::apply_transformation_output(&actual_path, output)?;
+                if let Some(path_to_delete) =
+                    Self::apply_transformation_output(&actual_path, output)?
+                {
+                    // Defer deletion — will be applied after all entrypoints are processed
+                    deferred_deletions.push(path_to_delete);
+                }
                 return Ok(None);
             }
         };
@@ -983,7 +1002,12 @@ impl TestRunner {
         relative_path == Path::new("metrics.json")
     }
 
-    fn apply_transformation_output(path: &Path, output: TransformOutput) -> Result<()> {
+    /// Apply a transformation output, writing content to the (possibly renamed) path.
+    /// Returns the original path if a rename occurred, so the caller can defer deletion.
+    fn apply_transformation_output(
+        path: &Path,
+        output: TransformOutput,
+    ) -> Result<Option<PathBuf>> {
         let write_path = output.rename_to.as_deref().unwrap_or(path);
         if let Some(parent) = write_path.parent() {
             fs::create_dir_all(parent)?;
@@ -991,10 +1015,12 @@ impl TestRunner {
         fs::write(write_path, output.content)?;
 
         if output.rename_to.is_some() && write_path != path && path.exists() {
-            fs::remove_file(path)?;
+            // Return the path to delete later (deferred) so the resolver
+            // can still find barrel/index files during import resolution.
+            Ok(Some(path.to_path_buf()))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     fn assert_expected_content(

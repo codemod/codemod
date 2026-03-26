@@ -97,9 +97,10 @@ pub struct Command {
     pub strictness: String,
 
     /// Enable workspace-wide semantic analysis for cross-file references.
-    /// Uses the provided path as workspace root.
+    /// For directory snapshot tests, the workspace root is automatically set
+    /// to the test fixture's temporary directory.
     #[arg(long)]
-    pub semantic_workspace: Option<PathBuf>,
+    pub semantic_workspace: bool,
 
     /// Allow fs access
     #[arg(long)]
@@ -226,14 +227,9 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
+    let use_semantic_workspace = args.semantic_workspace;
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
-        if let Some(workspace_root) = &args.semantic_workspace {
-            Some(Arc::new(LazySemanticProvider::workspace_scope(
-                workspace_root.clone(),
-            )))
-        } else {
-            Some(Arc::new(LazySemanticProvider::file_scope()))
-        };
+        Some(Arc::new(LazySemanticProvider::file_scope()));
     let update_snapshots = args.update_snapshots;
     let execution_fn = Box::new(
         move |request: ExecutionRequest, capabilities: Option<HashSet<LlrtSupportedModules>>| {
@@ -242,6 +238,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let input_code = request.input_code;
             let input_path = request.input_path;
             let logical_input_path = request.logical_input_path;
+            let workspace_root = request.workspace_root;
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
@@ -267,6 +264,30 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
                 let metrics_context = MetricsContext::new();
+
+                // For directory snapshot tests with --semantic-workspace,
+                // create a workspace-scoped provider using the temp dir
+                // and pre-index all files (matching jssg run behavior).
+                let semantic_provider = if use_semantic_workspace {
+                    if let Some(ref ws_root) = workspace_root {
+                        let provider: Arc<dyn SemanticProvider> =
+                            Arc::new(LazySemanticProvider::workspace_scope(ws_root.clone()));
+                        for entry in walkdir::WalkDir::new(ws_root)
+                            .into_iter()
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.file_type().is_file())
+                        {
+                            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                                let _ = provider.notify_file_processed(entry.path(), &content);
+                            }
+                        }
+                        Some(provider)
+                    } else {
+                        semantic_provider
+                    }
+                } else {
+                    semantic_provider
+                };
 
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
