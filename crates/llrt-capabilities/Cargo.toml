@@ -10,13 +10,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-llrt_modules = { git = "https://github.com/mohebifar/llrt.git", package = "llrt_modules", default-features = false, features = [
+llrt_modules = { git = "https://github.com/awslabs/llrt.git", package = "llrt_modules", default-features = false, features = [
   "console",
   "abort",
   "assert",
   "buffer",
   "child-process",
   "crypto",
+  "crypto-ring",
+  "tls-ring",
   "events",
   "exceptions",
   "fetch",
@@ -32,7 +34,7 @@ llrt_modules = { git = "https://github.com/mohebifar/llrt.git", package = "llrt_
   "url",
   "util",
   "zlib",
-], optional = true }
+], tag = "v0.8.0-beta", optional = true }
 serde.workspace = true
 ts-rs = { version = "11.0", features = [
     "chrono-impl",

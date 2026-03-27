@@ -1,7 +1,7 @@
 use llrt_modules::module_builder::ModuleBuilder;
 use llrt_modules::{
-    abort, assert, buffer, child_process, console, crypto, events, exceptions, fetch, fs, os, path,
-    perf_hooks, process, stream_web, string_decoder, timers, tty, url, util, zlib,
+    abort, assert, buffer, child_process, console, crypto, events, exceptions, fetch, fs, module,
+    os, path, perf_hooks, process, stream_web, string_decoder, timers, tty, url, util, zlib,
 };
 use std::collections::HashSet;
 
@@ -116,7 +116,9 @@ pub struct LlrtModuleBuilder {
 impl LlrtModuleBuilder {
     pub fn build() -> Self {
         let default_modules = default_modules_set();
-        let module_builder = ModuleBuilder::new();
+        let module_builder = ModuleBuilder::new()
+            .with_global(module::init)
+            .with_module(module::ModuleModule);
         let module_builder = init_safe_modules(&default_modules, module_builder);
 
         Self {
