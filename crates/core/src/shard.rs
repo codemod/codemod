@@ -51,16 +51,11 @@ pub fn evaluate_builtin_shards(
         }
     };
 
-    let target = shard_config
-        .target
-        .as_deref()
-        .ok_or("target is required for built-in shard methods")?;
-
-    // Resolve target relative to the working directory
-    let search_base = if Path::new(target).is_absolute() {
-        PathBuf::from(target)
-    } else {
-        target_path.join(target)
+    // Resolve target relative to the working directory; defaults to target_path itself
+    let search_base = match shard_config.target.as_deref() {
+        Some(target) if Path::new(target).is_absolute() => PathBuf::from(target),
+        Some(target) => target_path.join(target),
+        None => target_path.to_path_buf(),
     };
 
     if !search_base.exists() {
