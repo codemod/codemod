@@ -21,8 +21,11 @@ pub struct AccurateAnalyzer {
     cache: SymbolCache,
     /// Workspace root directory
     workspace_root: PathBuf,
-    /// Module resolver
+    /// Module resolver (with tsconfig support)
     resolver: Resolver,
+    /// Fallback resolver without tsconfig — used when the primary resolver
+    /// fails (e.g., tsconfig `extends` points to a missing package in node_modules)
+    fallback_resolver: Resolver,
     /// Files that have been fully indexed
     indexed_files: RwLock<HashSet<PathBuf>>,
     /// Files currently being indexed (to prevent cycles)
@@ -82,10 +85,31 @@ impl AccurateAnalyzer {
             ..Default::default()
         };
 
+        let fallback_options = ResolveOptions {
+            extensions: vec![
+                ".ts".to_string(),
+                ".tsx".to_string(),
+                ".js".to_string(),
+                ".jsx".to_string(),
+                ".mjs".to_string(),
+                ".cjs".to_string(),
+            ],
+            main_fields: vec!["module".to_string(), "main".to_string()],
+            condition_names: vec![
+                "import".to_string(),
+                "require".to_string(),
+                "node".to_string(),
+                "default".to_string(),
+            ],
+            // No tsconfig — pure file-system resolution
+            ..Default::default()
+        };
+
         Self {
             cache: SymbolCache::new(),
             workspace_root,
             resolver: Resolver::new(resolve_options),
+            fallback_resolver: Resolver::new(fallback_options),
             indexed_files: RwLock::new(HashSet::new()),
             indexing_in_progress: RwLock::new(HashSet::new()),
             fs_root,
@@ -153,6 +177,16 @@ impl AccurateAnalyzer {
     }
 
     /// Resolve a module specifier to a file path.
+    ///
+    /// Tries the primary resolver (with tsconfig) first. For relative or absolute
+    /// specifiers, falls back to plain file-system resolution when the primary
+    /// resolver fails — this handles cases where tsconfig `extends` references
+    /// missing packages (e.g., when `node_modules` is not installed) which would
+    /// otherwise break resolution of simple local imports like `./utils`.
+    ///
+    /// Bare specifiers (e.g., `lodash`, `@acme/utils`) are NOT retried with the
+    /// fallback because their resolution intentionally depends on tsconfig `paths`
+    /// or `node_modules`.
     pub fn resolve_module(
         &self,
         specifier: &str,
@@ -162,6 +196,15 @@ impl AccurateAnalyzer {
 
         match self.resolver.resolve(from_dir, specifier) {
             Ok(resolution) => Ok(resolution.into_path_buf()),
+            Err(_) if specifier.starts_with('.') || specifier.starts_with('/') => {
+                match self.fallback_resolver.resolve(from_dir, specifier) {
+                    Ok(resolution) => Ok(resolution.into_path_buf()),
+                    Err(_) => Err(JsSemanticError::ModuleResolution {
+                        specifier: specifier.to_string(),
+                        from_path: from_path.to_path_buf(),
+                    }),
+                }
+            }
             Err(_) => Err(JsSemanticError::ModuleResolution {
                 specifier: specifier.to_string(),
                 from_path: from_path.to_path_buf(),
@@ -823,6 +866,52 @@ console.log(x);
         assert!(
             result.is_ok(),
             "Should resolve ~/components, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_resolve_local_import_with_broken_tsconfig_extends() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // tsconfig extends a package that doesn't exist (simulates missing node_modules)
+        fs::create_dir_all(root.join("packages/api/src/utils")).unwrap();
+        fs::write(
+            root.join("packages/api/tsconfig.json"),
+            r#"{
+                "extends": "@acme/tsconfig/internal-package.json",
+                "compilerOptions": {
+                    "rootDir": "."
+                }
+            }"#,
+        )
+        .unwrap();
+
+        fs::write(
+            root.join("packages/api/src/utils/index.ts"),
+            "export { helper } from './helper';",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/api/src/utils/helper.ts"),
+            "export function helper() { return 1; }",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/api/src/main.ts"),
+            "import { helper } from './utils';",
+        )
+        .unwrap();
+
+        let analyzer = AccurateAnalyzer::new(root.to_path_buf());
+        let main_path = root.join("packages/api/src/main.ts");
+
+        // Should resolve even without node_modules thanks to fallback resolver
+        let result = analyzer.resolve_module("./utils", &main_path);
+        assert!(
+            result.is_ok(),
+            "Should resolve ./utils via fallback when tsconfig extends is broken, got: {:?}",
             result
         );
     }
