@@ -178,9 +178,15 @@ impl AccurateAnalyzer {
 
     /// Resolve a module specifier to a file path.
     ///
-    /// Tries the primary resolver (with tsconfig) first, then falls back to
-    /// plain file-system resolution. This handles cases where tsconfig `extends`
-    /// references missing packages (e.g., when `node_modules` is not installed).
+    /// Tries the primary resolver (with tsconfig) first. For relative or absolute
+    /// specifiers, falls back to plain file-system resolution when the primary
+    /// resolver fails — this handles cases where tsconfig `extends` references
+    /// missing packages (e.g., when `node_modules` is not installed) which would
+    /// otherwise break resolution of simple local imports like `./utils`.
+    ///
+    /// Bare specifiers (e.g., `lodash`, `@acme/utils`) are NOT retried with the
+    /// fallback because their resolution intentionally depends on tsconfig `paths`
+    /// or `node_modules`.
     pub fn resolve_module(
         &self,
         specifier: &str,
@@ -190,13 +196,19 @@ impl AccurateAnalyzer {
 
         match self.resolver.resolve(from_dir, specifier) {
             Ok(resolution) => Ok(resolution.into_path_buf()),
-            Err(_) => match self.fallback_resolver.resolve(from_dir, specifier) {
-                Ok(resolution) => Ok(resolution.into_path_buf()),
-                Err(_) => Err(JsSemanticError::ModuleResolution {
-                    specifier: specifier.to_string(),
-                    from_path: from_path.to_path_buf(),
-                }),
-            },
+            Err(_) if specifier.starts_with('.') || specifier.starts_with('/') => {
+                match self.fallback_resolver.resolve(from_dir, specifier) {
+                    Ok(resolution) => Ok(resolution.into_path_buf()),
+                    Err(_) => Err(JsSemanticError::ModuleResolution {
+                        specifier: specifier.to_string(),
+                        from_path: from_path.to_path_buf(),
+                    }),
+                }
+            }
+            Err(_) => Err(JsSemanticError::ModuleResolution {
+                specifier: specifier.to_string(),
+                from_path: from_path.to_path_buf(),
+            }),
         }
     }
 
