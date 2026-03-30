@@ -3,7 +3,7 @@ title: "Sharding"
 sidebarTitle: "Sharding"
 ---
 
-The `shard` step action splits large migrations into multiple PRs by evaluating which files a codemod would modify and grouping them into shards. Each shard becomes a matrix task that creates its own PR.
+The `shard` step action splits large migrations into multiple PRs by evaluating which files a codemod would modify and grouping them into shards. In Campaign/cloud runs, each shard becomes a matrix task that gets its own branch and can produce its own pull request.
 
 ## How it works
 
@@ -55,6 +55,10 @@ nodes:
           js_file: scripts/codemod.ts
           language: tsx
 ```
+
+<Info>
+The `pull_request` and `branch_name` fields in shard workflows are applied during Campaign/cloud runs. `pull_request.title` customizes each shard PR's metadata when the task ends with commits, and shard names are also useful inputs for `branch_name`. See [Workflow Reference](/workflows/reference#nodes) for the full git automation behavior.
+</Info>
 
 
 ## File discovery

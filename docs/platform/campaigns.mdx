@@ -11,7 +11,7 @@ import { CodemodWorkflowsDemo } from "/snippets/codemod-workflows-demo.mdx";
   <CodemodWorkflowsDemo />
 </Frame>
 
-A Campaign allows you to orchestrate large-scale code migrations. When you create a Campaign, Codemod executes the underlying [workflow](/workflows/introduction), creates tasks, and opens pull requests with the resulting changes. You can monitor progress, review PRs, re-run failed tasks, and track status from a centralized dashboard.
+A Campaign allows you to orchestrate large-scale code migrations. When you create a Campaign, Codemod executes the underlying [workflow](/workflows/introduction), creates tasks, and opens pull requests. You can monitor progress, review PRs, re-run failed tasks, and track status from a centralized dashboard.
 
 ## How Campaigns use workflows
 
@@ -24,6 +24,8 @@ A workflow defines what transformations to run and how they're orchestrated:
 - **Nodes** are the primary execution units that represent a stage in your migration. Nodes can depend on other nodes, run automatically or require manual approval, and fan out across matrix dimensions.
 - **Steps** are atomic actions within a node. Each step performs one transformation or command (e.g., run a JSSG codemod, execute a shell script, call an AI agent).
 - **Tasks** are runtime instances of nodes. When a Campaign runs, the engine creates tasks for each node. For [matrix strategies](/workflows/reference#matrix-strategy), a single node can spawn multiple parallel tasks (e.g., one per team or shard).
+
+In Codemod Campaigns, each task executes on its own branch. Nodes can define step-level commit checkpoints and pull request metadata, and a task that ends with commits will push its branch and open a pull request. See [Workflow reference](/workflows/reference#nodes) and [available step fields](/workflows/reference#common-step-fields).
 
 ```
 Workflow Definition          Runtime Execution
@@ -129,8 +131,8 @@ Use the table view when you need to see step-level details across all tasks, or 
 </Tip>
 
 Both views also provide:
-- **Pull request links.** Each completed task shows the PRs it created, with state indicators and direct links to GitHub or GitLab.
-- **Real-time updates.** Status changes, task creation events, and PR additions stream live without page refresh.
+- **Pull request links**: Each task that finishes with commits shows the PRs created from its task branch, with state indicators and direct links to GitHub or GitLab.
+- **Real-time updates**: Status changes, task creation events, and PR additions stream live without page refresh.
 
 ### Build logs
 
