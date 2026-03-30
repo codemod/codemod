@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.7.11] - 2026-03-27
+
+### 🐛 Bug Fixes
+
+- *(ai)* Remove auto harness detection (#2059)
+- Fix semantic oxc issue when node_modules not installed + upgrade rquickjs (#2060)
+
+### 📚 Documentation
+
+- Revamp insights docs (#1978)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.7.11 (#2061)
 ## [codemod-cli@1.7.10] - 2026-03-25
 
 ### 🚀 Features
