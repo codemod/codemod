@@ -47,9 +47,9 @@ use butterflow_models::step::{
     UseJSAstGrep,
 };
 use butterflow_models::{
-    evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
-    Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
-    WorkflowRunDiff, WorkflowStatus,
+    evaluate_condition, resolve_string_list, resolve_string_with_expression, DiffOperation, Error,
+    FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff, TaskExpressionContext,
+    TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -1609,13 +1609,11 @@ impl Engine {
 
         // Cloud mode: checkout a task-specific branch before running steps
         let cloud_mode = crate::git_ops::is_cloud_mode();
-        let task_expr_ctx = if cloud_mode {
-            Some(crate::git_ops::build_task_expression_context(
-                &task.id.to_string(),
-            ))
-        } else {
-            None
-        };
+        // Always build task expression context so CODEMOD_TASK_* env vars are
+        // available as `task.*` template variables regardless of mode.
+        let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
+            &task.id.to_string(),
+        ));
         let cloud_branch_name = if cloud_mode {
             let ctx = task_expr_ctx.as_ref().unwrap();
             let configured_branch = node.branch_name.as_ref().map(|tmpl| {
@@ -1663,7 +1661,7 @@ impl Engine {
                     &state,
                     task.matrix_values.as_ref(),
                     None, // step outputs
-                    None, // task context
+                    task_expr_ctx.as_ref(),
                 )
                 .unwrap_or_default();
 
@@ -1746,6 +1744,7 @@ impl Engine {
                     &workflow_run.bundle_path,
                     &[],
                     &self.workflow_run_config.capabilities,
+                    task_expr_ctx.as_ref(),
                     &step_logger,
                 )
                 .await;
@@ -2116,6 +2115,7 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
+        task_expr_ctx: Option<&TaskExpressionContext>,
         logger: &StructuredLogger,
     ) -> Result<()> {
         match action {
@@ -2168,7 +2168,7 @@ impl Engine {
                             state,
                             task.matrix_values.as_ref(),
                             None, // step outputs
-                            None, // task context
+                            task_expr_ctx,
                         )?;
 
                         if !should_execute {
@@ -2194,6 +2194,7 @@ impl Engine {
                         bundle_path,
                         dependency_chain,
                         capabilities,
+                        task_expr_ctx,
                         logger,
                     ))
                     .await?;
@@ -2201,7 +2202,33 @@ impl Engine {
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep, logger)
+                // Resolve ${{ }} expressions in include/exclude globs
+                let mut resolved_ast_grep = ast_grep.clone();
+                if let Some(inc) = &ast_grep.include {
+                    let resolved = resolve_string_list(
+                        inc,
+                        params,
+                        state,
+                        task.matrix_values.as_ref(),
+                        None,
+                        task_expr_ctx,
+                    )?;
+                    resolved_ast_grep.include =
+                        if resolved.is_empty() { None } else { Some(resolved) };
+                }
+                if let Some(exc) = &ast_grep.exclude {
+                    let resolved = resolve_string_list(
+                        exc,
+                        params,
+                        state,
+                        task.matrix_values.as_ref(),
+                        None,
+                        task_expr_ctx,
+                    )?;
+                    resolved_ast_grep.exclude =
+                        if resolved.is_empty() { None } else { Some(resolved) };
+                }
+                self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
                     .await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
@@ -2504,13 +2531,54 @@ impl Engine {
                 }
             })),
         };
+        // Resolve ${{ }} expressions in include/exclude globs.
+        let empty_params = HashMap::new();
+        let empty_state = HashMap::new();
+        let resolved_params_ref = params.as_ref().unwrap_or(&empty_params);
+        let resolved_state_ref = initial_state.unwrap_or(&empty_state);
+
+        let resolved_include = if let Some(inc) = &js_ast_grep.include {
+            let resolved = resolve_string_list(
+                inc,
+                resolved_params_ref,
+                resolved_state_ref,
+                matrix_input.as_ref(),
+                None,
+                None,
+            )?;
+            if resolved.is_empty() { None } else { Some(resolved) }
+        } else if let Some(meta_files) = matrix_input
+            .as_ref()
+            .and_then(|m| m.get("_meta_files"))
+        {
+            // Auto-apply matrix._meta_files as the include list when no
+            // explicit include is configured.
+            butterflow_models::variable::value_to_string_vec(meta_files)
+        } else {
+            None
+        };
+
+        let resolved_exclude = if let Some(exc) = &js_ast_grep.exclude {
+            let resolved = resolve_string_list(
+                exc,
+                resolved_params_ref,
+                resolved_state_ref,
+                matrix_input.as_ref(),
+                None,
+                None,
+            )?;
+            if resolved.is_empty() { None } else { Some(resolved) }
+        } else {
+            None
+        };
+
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
             progress_callback: self.workflow_run_config.progress_callback.clone(),
             target_path: Some(target_path.clone()),
             base_path: None,
-            include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
-            exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            include_globs: resolved_include,
+            exclude_globs: resolved_exclude,
             dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
             languages: Some(vec![js_ast_grep
                 .language
@@ -3387,6 +3455,10 @@ impl Engine {
         let runner: Box<dyn Runner> =
             Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet));
 
+        // Build task expression context for variable resolution in codemod steps
+        let codemod_task_expr_ctx =
+            crate::git_ops::build_task_expression_context(&task.id.to_string());
+
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
             for step in &node.steps {
@@ -3397,7 +3469,7 @@ impl Engine {
                         state,
                         task.matrix_values.as_ref(),
                         None,
-                        None, // task context
+                        Some(&codemod_task_expr_ctx),
                     )?;
                     if !should_execute {
                         slog!(
@@ -3425,6 +3497,7 @@ impl Engine {
                     &Some(resolved_package.package_dir.clone()),
                     dependency_chain,
                     capabilities,
+                    Some(&codemod_task_expr_ctx),
                     logger,
                 ))
                 .await?;
