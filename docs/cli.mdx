@@ -581,8 +581,8 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--name <NAME>" type="string">
   Project name (defaults to directory name).
-  
-  Required when `[PATH]` is `.` and `--no-interactive` is used.
+
+  Required in `--no-interactive` mode when the project name cannot be derived from `[PATH]` (for example, when `[PATH]` is `.`, `..`, or another path without a final directory component).
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
@@ -617,8 +617,8 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--language <LANGUAGE>" type="string">
   Target language.
-  
-  Required in `--no-interactive` mode for workflow packages.
+
+  Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--description <DESCRIPTION>" type="string">
