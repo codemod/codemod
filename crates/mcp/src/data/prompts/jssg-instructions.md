@@ -25,8 +25,10 @@ When the public docs are available, prefer them over this file.
 
 - JSSG is a QuickJS runtime with LLRT-based Node compatibility.
 - Standard Node-style imports are available in JSSG; some modules are capability-gated.
+- Prefer normal Node-style imports in codemods. Do not invent shell wrappers just to reach APIs that JSSG already exposes.
 - If the codemod uses gated APIs such as `fs`, `fetch`, or `child_process`, update `codemod.yaml` in the same change with the matching `capabilities` entry.
 - For related multi-file JSSG work, prefer `jssgTransform` or other JSSG APIs before falling back to shell steps.
+- For detailed runtime and capability rules, read `jssg-runtime-capabilities-instructions` from Codemod MCP.
 
 ## Patterns are AST shapes, not text
 
@@ -74,8 +76,8 @@ nodes:
 - Use `dump_ast` to inspect AST shapes before finalizing patterns.
 - Use `get_node_types` when you need the tree-sitter node type map for a language.
 - Use `run_jssg_tests` when you want MCP-assisted test execution.
+- Use `get_jssg_runtime_capabilities` before introducing capability-gated APIs or shell steps for related multi-file work.
 - Use `get_jssg_utils_instructions` for import helper usage.
-- If available in the current MCP build, use the runtime/capabilities guidance resource before introducing shell steps or capability-gated APIs.
 
 ## If behavior is uncertain
 

@@ -8,6 +8,7 @@ First classify intent:
 
 Routing:
 - For codemod authoring, call `get_codemod_creation_workflow` and `get_jssg_instructions` from Codemod MCP before proceeding.
+- If the authoring request uses Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work, also call `get_jssg_runtime_capabilities` from Codemod MCP.
 - If the authoring request implies a monorepo, maintainer workflow, or multi-hop version series, also call `get_codemod_maintainer_monorepo` from Codemod MCP.
 - For codemod discovery or execution, call `get_codemod_cli_instructions` from Codemod MCP for command syntax.
 - When commands fail or produce unexpected behavior, call `get_codemod_troubleshooting` from Codemod MCP.
@@ -17,4 +18,5 @@ Non-negotiable constraints:
 - For migration, upgrade, update, or deprecation-rollout requests that do not explicitly ask to create a codemod, search the registry first before proposing a custom codemod plan.
 - If registry discovery does not yield a suitable package and the user still needs automation, switch to the codemod-authoring path.
 - For codemod authoring, follow the creation workflow guidance from Codemod MCP exactly: stay ast-grep-first, define tests before implementation, keep work inside the requested scope, and do not stop until the package default tests are green.
+- For codemod authoring, do not introduce a shell step just to reach another related file when JSSG can keep both hops inside the same codemod.
 - For codemod execution, follow the CLI instructions from Codemod MCP exactly: dry-run before apply, verify prerequisites, and prefer the current Codemod CLI help and package docs over guesswork.

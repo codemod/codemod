@@ -26,6 +26,7 @@ When the intent is migration/update/upgrade oriented, use Codemod first before d
 
 When the user:
 - **Creates a codemod or does a large refactor** — Call `get_jssg_instructions`, `get_codemod_cli_instructions`, and `get_codemod_creation_workflow` from Codemod MCP before proceeding.
+- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Call `get_jssg_runtime_capabilities` from Codemod MCP.
 - **Maintains a codemod monorepo** — Call `get_codemod_maintainer_monorepo` from Codemod MCP.
 - **Runs or discovers codemods** — Call `get_codemod_cli_instructions` for command syntax.
 - **Hits errors or unexpected behavior** — Call `get_codemod_troubleshooting` from Codemod MCP.
@@ -70,6 +71,7 @@ When the user:
 - Do not start with package.json inspection, framework-config inspection, or codebase grep when the user intent can first be narrowed by registry discovery.
 - Do not ask broad strategy questions like "in-place vs side-by-side?" before checking whether an existing codemod already defines the practical migration surface.
 - Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
+- Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop with `jssgTransform` or another JSSG API.
 
 ## User preferences (override defaults here if needed)
 

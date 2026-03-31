@@ -57,12 +57,13 @@ The Codemod MCP server provides these tools and docs-backed guidance entrypoints
 - **`run_jssg_tests`** - Run tests for jssg (TypeScript transformation scripts) codemods with test cases
 - **`get_jssg_instructions`** - Get JSSG guidance for creating and testing TypeScript transformation scripts
 - **`get_jssg_utils_instructions`** - Get import utility guidance for `getImport`, `addImport`, and `removeImport`
+- **`get_jssg_runtime_capabilities`** - Get runtime and capability guidance for LLRT/Node APIs, `codemod.yaml` capabilities, and multi-file JSSG work
 - **`get_codemod_cli_instructions`** - Get Codemod CLI, package, and workflow guidance
 - **`get_codemod_creation_workflow`** - Get codemod authoring workflow guidance for planning, scaffolding, testing, and publishing
 - **`get_codemod_troubleshooting`** - Get troubleshooting guidance for common Codemod CLI failures
 - **`get_codemod_maintainer_monorepo`** - Get maintainer guidance for codemod monorepos and version-hop workspaces
 
-The server also exposes docs-backed resources such as `sharding-instructions` for splitting large migrations into multiple PRs.
+The server also exposes docs-backed resources such as `sharding-instructions` for splitting large migrations into multiple PRs, plus supplemental runtime guidance like `jssg-runtime-capabilities-instructions` for capability-gated APIs.
 
 ## Why use Codemod MCP?
 
