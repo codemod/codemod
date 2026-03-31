@@ -4997,7 +4997,14 @@ codemod-skill-version: 0.1.0
         assert!(MCS_SKILL_MD.contains("get_codemod_maintainer_monorepo"));
         assert!(MCS_SKILL_MD.contains("get_codemod_troubleshooting"));
         assert!(MCS_SKILL_MD.contains("get_jssg_instructions"));
+        assert!(MCS_SKILL_MD.contains("get_jssg_runtime_capabilities"));
         assert!(MCS_SKILL_MD.contains("get_codemod_cli_instructions"));
+    }
+
+    #[test]
+    fn command_md_routes_to_runtime_capabilities_guidance() {
+        assert!(MCS_COMMAND_MD.contains("get_jssg_runtime_capabilities"));
+        assert!(MCS_COMMAND_MD.contains("do not introduce a shell step"));
     }
 
     #[test]
