@@ -39,6 +39,9 @@ When the user:
 - Default to `ast-grep-js` when the requested codemod is mainly JS/TS-family source edits.
 - Choose `hybrid` only when shell/native orchestration or multiple deterministic transformation surfaces are a core part of the package.
 - Do not choose `hybrid` merely because the codemod may need to create a helper file, test fixture, preview route, or README update.
+- If the package already has JSSG fixtures, extend the existing test suite and run `codemod jssg test` instead of inventing ad hoc test files.
+- Treat `metrics.json` as part of the expected test output when a package already snapshots metrics.
+- After changing a codemod, inspect and update the whole package surface: `README`, `codemod.yaml`, `workflow.yaml`, tests, and package metadata.
 - For non-interactive scaffolding, rely on the public CLI docs or `codemod init --help` for the current required flags instead of guessing them.
 - Quote multi-word registry search queries.
 - Prefer `npx codemod@latest ...` or a verified local Codemod binary when the plain `codemod` command behaves unexpectedly.

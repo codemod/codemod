@@ -120,6 +120,7 @@ When the migration has multiple documented hop guides:
 - Base that matrix on both real repo examples and documented migration cases.
 - Include representative repo-derived cases, realistic doc-derived cases, edge cases, preserve/no-op coverage, negative cases where similar code should stay unchanged, and version-hop-specific cases when behavior changes between hops.
 - If the migration scope is broad, the test matrix must be broad as well.
+- If the package already has JSSG fixtures, extend that existing fixture set instead of inventing ad hoc standalone test files.
 - During implementation and debugging, prefer the direct `codemod jssg test` command rather than only `npm test`, so failures stay visible and filterable.
 - During iteration, use `codemod jssg test ... --strictness loose` when formatting noise would otherwise hide semantic progress.
 - Use `--filter <case>` when isolating failures.
@@ -141,6 +142,7 @@ When the migration has multiple documented hop guides:
 
 - After changing the codemod, inspect and update the whole package surface: `README`, `codemod.yaml`, `workflow.yaml`, tests, and package metadata.
 - If you renamed the codemod or changed its described scope, update package names, README examples, and workflow references in the same change.
+- If the package identity or publish surface changed, update the relevant name/version/description metadata instead of leaving stale package metadata behind.
 - If the codemod uses capability-gated runtime APIs such as `fs`, `fetch`, or `child_process`, update `codemod.yaml` in the same change with the matching `capabilities` entry.
 
 ## MCP usage

@@ -18,5 +18,7 @@ Non-negotiable constraints:
 - For migration, upgrade, update, or deprecation-rollout requests that do not explicitly ask to create a codemod, search the registry first before proposing a custom codemod plan.
 - If registry discovery does not yield a suitable package and the user still needs automation, switch to the codemod-authoring path.
 - For codemod authoring, follow the creation workflow guidance from Codemod MCP exactly: stay ast-grep-first, define tests before implementation, keep work inside the requested scope, and do not stop until the package default tests are green.
+- For codemod authoring, when a package already has JSSG fixtures, reuse that test system with `codemod jssg test` and keep `metrics.json` snapshots in sync instead of inventing ad hoc tests.
 - For codemod authoring, do not introduce a shell step just to reach another related file when JSSG can keep both hops inside the same codemod.
+- After codemod changes, inspect and update the package surface (`README`, `codemod.yaml`, `workflow.yaml`, tests, metadata, and capabilities) before calling the work complete.
 - For codemod execution, follow the CLI instructions from Codemod MCP exactly: dry-run before apply, verify prerequisites, and prefer the current Codemod CLI help and package docs over guesswork.
