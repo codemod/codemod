@@ -2,10 +2,23 @@
 
 Use these checks when commands fail or produce unexpected output.
 
+Use the public Codemod docs and CLI help for canonical command usage. This file is only a compact troubleshooting fallback.
+
 ## Agent-Safe Defaults
 
 For agents/automation, prefer non-interactive execution:
 - add `--no-interactive` to `codemod workflow run` and `codemod run`.
+
+## Wrong `codemod` Command on PATH
+
+Symptom:
+- `codemod` resolves to an unexpected global wrapper or non-Codemod binary.
+
+Fix:
+- retry with the published CLI explicitly:
+  - `npx codemod@latest --help`
+  - `npx codemod@latest search "react 19"`
+- or use a verified local Codemod binary directly.
 
 ## Dirty Git Tree Blocking Execution
 

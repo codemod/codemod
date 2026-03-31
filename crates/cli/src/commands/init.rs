@@ -920,23 +920,33 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
     Ok(())
 }
 
+fn codemod_command_for_package_manager(package_manager: Option<&str>) -> &'static str {
+    match package_manager {
+        Some("npm") => "npx codemod@latest",
+        Some("yarn") => "yarn dlx codemod@latest",
+        Some("pnpm") => "pnpm dlx codemod@latest",
+        Some("bun") => "bunx codemod@latest",
+        _ => "npx codemod@latest",
+    }
+}
+
+fn package_manager_test_command(package_manager: Option<&str>) -> &'static str {
+    match package_manager {
+        Some("yarn") => "yarn test",
+        Some("pnpm") => "pnpm test",
+        Some("bun") => "bun test",
+        _ => "npm test",
+    }
+}
+
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let codemod_command = if let Some(package_manager) = &config.package_manager {
-        match package_manager.as_str() {
-            "npm" => "npx codemod@latest",
-            "yarn" => "yarn dlx codemod@latest",
-            "pnpm" => "pnpm dlx codemod@latest",
-            "bun" => "bunx codemod@latest",
-            _ => "npx codemod@latest",
-        }
-    } else {
-        "npx codemod@latest"
-    };
+    let codemod_command = codemod_command_for_package_manager(config.package_manager.as_deref());
     // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
-        .replace("{codemod_command}", codemod_command);
+        .replace("{codemod_command}", codemod_command)
+        .replace("{test_language}", &config.language);
 
     fs::write(project_path.join("package.json"), package_json)?;
 
@@ -1070,60 +1080,17 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
     fs::write(rules_dir.join("config.yml"), config_file)?;
 
     // Create tests directory
-    let tests_dir = project_path.join("tests");
-    fs::create_dir_all(tests_dir.join("fixtures"))?;
-
-    if config.language == "javascript" || config.language == "typescript" {
-        fs::write(tests_dir.join("fixtures").join("input.js"), JS_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.js"),
-            JS_TEST_EXPECTED,
-        )?;
-    }
+    create_js_tests(project_path, config)?;
 
     // Create package.json and tsconfig.json at project root
-    let package_json_content = format!(
-        r#"{{
-  "name": "{}",
-  "version": "1.0.0",
-  "description": "{}",
-  "main": "scripts/codemod.ts",
-  "scripts": {{
-    "test": "node scripts/codemod.ts"
-  }},
-  "dependencies": {{
-    "codemod:ast-grep": "latest"
-  }},
-  "devDependencies": {{
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
-  }}
-}}"#,
-        config.name, config.description
-    );
-
-    let tsconfig_content = r#"{
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "lib": ["ES2020"],
-    "outDir": "./dist",
-    "rootDir": "./",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
-    "allowSyntheticDefaultImports": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
-  },
-  "include": ["scripts/**/*"],
-  "exclude": ["node_modules", "dist"]
-}"#;
-
+    let codemod_command = codemod_command_for_package_manager(config.package_manager.as_deref());
+    let package_json_content = JS_PACKAGE_JSON_TEMPLATE
+        .replace("{name}", &config.name)
+        .replace("{description}", &config.description)
+        .replace("{codemod_command}", codemod_command)
+        .replace("{test_language}", &config.language);
     fs::write(project_path.join("package.json"), package_json_content)?;
-    fs::write(project_path.join("tsconfig.json"), tsconfig_content)?;
+    fs::write(project_path.join("tsconfig.json"), JS_TSCONFIG_TEMPLATE)?;
 
     Ok(())
 }
@@ -1300,9 +1267,13 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     } else {
         match config.project_type {
             ProjectType::Shell => "bash scripts/transform.sh".to_string(),
-            ProjectType::AstGrepJs => "npm test".to_string(),
+            ProjectType::AstGrepJs => {
+                package_manager_test_command(config.package_manager.as_deref()).to_string()
+            }
             ProjectType::AstGrepYaml => "ast-grep test rules/".to_string(),
-            ProjectType::Hybrid => "npm test".to_string(),
+            ProjectType::Hybrid => {
+                package_manager_test_command(config.package_manager.as_deref()).to_string()
+            }
         }
     };
 
@@ -1911,6 +1882,101 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
         assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
+    }
+
+    #[test]
+    fn create_hybrid_project_generates_valid_package_json() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("hybrid-project");
+        fs::create_dir_all(&project_path).unwrap();
+
+        let config = ProjectConfig {
+            name: "hybrid-project".to_string(),
+            description: "Hybrid package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::Hybrid,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_hybrid_project(&project_path, &config).unwrap();
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        let tsconfig = fs::read_to_string(project_path.join("tsconfig.json")).unwrap();
+
+        assert!(package_json.contains("\"@codemod.com/jssg-types\": \"latest\""));
+        assert!(package_json.contains("jssg test -l typescript ./scripts/codemod.ts"));
+        assert!(!package_json.contains("\"codemod:ast-grep\""));
+        assert!(
+            tsconfig.contains("\"module\": \"esnext\"")
+                || tsconfig.contains("\"module\": \"ESNext\"")
+                || tsconfig.contains("\"moduleResolution\": \"bundler\"")
+                || tsconfig.contains("\"module\": \"NodeNext\"")
+                || tsconfig.contains("\"module\": \"nodeNext\"")
+        );
+    }
+
+    #[test]
+    fn create_js_astgrep_project_uses_selected_language_in_test_script() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("go-project");
+        fs::create_dir_all(&project_path).unwrap();
+
+        let config = ProjectConfig {
+            name: "go-project".to_string(),
+            description: "Go package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "go".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_js_astgrep_project(&project_path, &config).unwrap();
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+
+        assert!(
+            package_json.contains("pnpm dlx codemod@latest jssg test -l go ./scripts/codemod.ts")
+        );
+    }
+
+    #[test]
+    fn create_readme_uses_workflow_commands_and_selected_package_manager() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("workflow-project");
+        fs::create_dir_all(&project_path).unwrap();
+
+        let config = ProjectConfig {
+            name: "workflow-project".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_readme(&project_path, &config).unwrap();
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+
+        assert!(readme.contains("codemod workflow run -w workflow.yaml --target <repo-path>"));
+        assert!(readme.contains("codemod workflow validate -w workflow.yaml"));
+        assert!(readme.contains("pnpm test"));
     }
 
     #[test]

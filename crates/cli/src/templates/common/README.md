@@ -9,7 +9,7 @@
 codemod run {name}
 
 # Or run locally
-codemod run -w workflow.yaml
+codemod workflow run -w workflow.yaml --target <repo-path>
 ```
 
 ## Usage
@@ -27,7 +27,7 @@ This codemod transforms {language} code by:
 {test_command}
 
 # Validate the workflow
-codemod validate -w workflow.yaml
+codemod workflow validate -w workflow.yaml
 
 # Publish to registry
 codemod login

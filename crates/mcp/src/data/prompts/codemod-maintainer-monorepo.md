@@ -2,6 +2,8 @@
 
 Use this guide when setting up or maintaining a codemod monorepo for an open-source project, framework, SDK, or organization.
 
+Use the public Codemod docs for general CLI, workflow, package, and JSSG mechanics. This file is only for maintainer-specific guidance that is not modeled directly in those docs.
+
 ## Repository conventions
 
 - Keep each codemod under `codemods/<slug>/`.

@@ -22,3 +22,5 @@ ast-grep-language.workspace = true
 codemod-sandbox.workspace = true
 testing-utils.workspace = true
 codemod-llrt-capabilities.workspace = true
+reqwest.workspace = true
+futures.workspace = true
