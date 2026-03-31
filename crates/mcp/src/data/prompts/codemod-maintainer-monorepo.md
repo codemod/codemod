@@ -1,6 +1,6 @@
-# Codemod CLI Core: Maintainer Monorepo
+# Codemod Maintainer Monorepo
 
-Use this guide when the user is setting up or maintaining a codemod monorepo for an open-source project, framework, SDK, or organization.
+Use this guide when setting up or maintaining a codemod monorepo for an open-source project, framework, SDK, or organization.
 
 ## Repository conventions
 

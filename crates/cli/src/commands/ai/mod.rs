@@ -809,10 +809,6 @@ fn resolve_install_inputs(
                 harness: Harness::Codex,
                 label: "codex",
             },
-            HarnessPromptOption {
-                harness: Harness::Antigravity,
-                label: "antigravity",
-            },
         ];
         let starting_cursor = detected_harness_for_interactive_prompt()
             .and_then(|detected| options.iter().position(|option| option.harness == detected))

@@ -30,59 +30,10 @@ const CODEMOD_CLI_COMMAND: &str = "codemod";
 const NPX_COMMAND: &str = "npx";
 const MCP_SERVER_ARG_PACKAGE: &str = "codemod@latest";
 const MCP_SERVER_ARG_COMMAND: &str = "mcp";
-const MCS_REFERENCE_INDEX_RELATIVE_PATH: &str = "references/index.md";
-const MCS_AI_NATIVE_RECIPES_RELATIVE_PATH: &str = "references/ai-native/recipes.md";
-const MCS_CREATE_CODEMODS_RELATIVE_PATH: &str = "references/core/create-codemods.md";
-const MCS_MAINTAINER_MONOREPO_RELATIVE_PATH: &str = "references/core/maintainer-monorepo.md";
-const MCS_SEARCH_DISCOVERY_RELATIVE_PATH: &str = "references/core/search-and-discovery.md";
-const MCS_SCAFFOLD_RUN_RELATIVE_PATH: &str = "references/core/scaffold-and-run.md";
-const MCS_DRY_RUN_VERIFY_RELATIVE_PATH: &str = "references/core/dry-run-and-verify.md";
-const MCS_TROUBLESHOOTING_RELATIVE_PATH: &str = "references/core/troubleshooting.md";
 const REQUIRED_FRONTMATTER_KEYS: [&str; 3] = ["name:", "description:", "allowed-tools:"];
 const MCS_SKILL_MD: &str = include_str!("../templates/ai-native-cli/codemod-cli/SKILL.md");
-const MCS_REFERENCE_INDEX_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/index.md");
-const MCS_AI_NATIVE_RECIPES_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/ai-native/recipes.md");
-const MCS_CREATE_CODEMODS_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/create-codemods.md");
-const MCS_MAINTAINER_MONOREPO_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/maintainer-monorepo.md");
-const MCS_SEARCH_DISCOVERY_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/search-and-discovery.md");
-const MCS_SCAFFOLD_RUN_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/scaffold-and-run.md");
-const MCS_DRY_RUN_VERIFY_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/dry-run-and-verify.md");
-const MCS_TROUBLESHOOTING_MD: &str =
-    include_str!("../templates/ai-native-cli/codemod-cli/references/core/troubleshooting.md");
 const MCS_COMMAND_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod.md");
-const MCS_REFERENCE_FILES: [(&str, &str); 8] = [
-    (MCS_REFERENCE_INDEX_RELATIVE_PATH, MCS_REFERENCE_INDEX_MD),
-    (
-        MCS_AI_NATIVE_RECIPES_RELATIVE_PATH,
-        MCS_AI_NATIVE_RECIPES_MD,
-    ),
-    (MCS_CREATE_CODEMODS_RELATIVE_PATH, MCS_CREATE_CODEMODS_MD),
-    (
-        MCS_MAINTAINER_MONOREPO_RELATIVE_PATH,
-        MCS_MAINTAINER_MONOREPO_MD,
-    ),
-    (MCS_SEARCH_DISCOVERY_RELATIVE_PATH, MCS_SEARCH_DISCOVERY_MD),
-    (MCS_SCAFFOLD_RUN_RELATIVE_PATH, MCS_SCAFFOLD_RUN_MD),
-    (MCS_DRY_RUN_VERIFY_RELATIVE_PATH, MCS_DRY_RUN_VERIFY_MD),
-    (MCS_TROUBLESHOOTING_RELATIVE_PATH, MCS_TROUBLESHOOTING_MD),
-];
-const MCS_INDEX_LINKED_REFERENCE_PATHS: [&str; 7] = [
-    MCS_AI_NATIVE_RECIPES_RELATIVE_PATH,
-    MCS_CREATE_CODEMODS_RELATIVE_PATH,
-    MCS_MAINTAINER_MONOREPO_RELATIVE_PATH,
-    MCS_SEARCH_DISCOVERY_RELATIVE_PATH,
-    MCS_SCAFFOLD_RUN_RELATIVE_PATH,
-    MCS_DRY_RUN_VERIFY_RELATIVE_PATH,
-    MCS_TROUBLESHOOTING_RELATIVE_PATH,
-];
 const SKILL_DISCOVERY_SECTION_BEGIN: &str = "<!-- codemod-skill-discovery:begin -->";
 const SKILL_DISCOVERY_SECTION_END: &str = "<!-- codemod-skill-discovery:end -->";
 const AGENTS_GUIDE_FILE_NAME: &str = "AGENTS.md";
@@ -136,6 +87,7 @@ pub enum Harness {
     Opencode,
     Cursor,
     Codex,
+    #[value(hide = true)]
     Antigravity,
 }
 
@@ -429,7 +381,7 @@ impl HarnessAdapterError {
     pub fn hint(&self) -> &'static str {
         match self {
             Self::UnsupportedHarness(_) => {
-                "Use --harness claude, --harness goose, --harness opencode, --harness cursor, --harness codex, or --harness antigravity."
+                "Use --harness claude, --harness goose, --harness opencode, --harness cursor, or --harness codex."
             }
             Self::InvalidSkillPackage(_) => {
                 "Retry with `codemod ai --force` and inspect installed entries via `codemod ai list --format json`."
@@ -2230,9 +2182,6 @@ fn install_mcs_skill_bundle_with_runtime(
     let skill_md_path = skill_root.join("SKILL.md");
 
     write_skill_file(&skill_md_path, MCS_SKILL_MD, request.force)?;
-    for (relative_path, content) in MCS_REFERENCE_FILES {
-        write_skill_file(&skill_root.join(relative_path), content, request.force)?;
-    }
 
     let mut installed = vec![InstalledSkill {
         name: MCS_SKILL_COMPONENT_ID.to_string(),
@@ -2286,12 +2235,6 @@ fn mcs_install_requires_force_with_runtime(
         skills_root_for_harness(harness, scope, runtime_paths)?.join(MCS_SKILL_DIR_NAME);
     if managed_text_file_requires_force(&skill_root.join(SKILL_FILE_NAME), MCS_SKILL_MD)? {
         return Ok(true);
-    }
-
-    for (relative_path, content) in MCS_REFERENCE_FILES {
-        if managed_text_file_requires_force(&skill_root.join(relative_path), content)? {
-            return Ok(true);
-        }
     }
 
     match harness {
@@ -3184,7 +3127,7 @@ fn missing_required_frontmatter_key(frontmatter: &str) -> Option<&'static str> {
 }
 
 fn is_safe_allowed_tool(allowed_tool: &str) -> bool {
-    allowed_tool.starts_with("Bash(codemod ")
+    allowed_tool.starts_with("Bash(codemod ") || allowed_tool.starts_with("Bash(npx codemod ")
 }
 
 fn is_codemod_managed_skill(skill_name: &str, skill_md_path: &Path) -> bool {
@@ -3274,33 +3217,10 @@ fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
         ));
     }
 
-    if !MCS_SKILL_MD.contains(MCS_REFERENCE_INDEX_RELATIVE_PATH) {
-        return Err(HarnessAdapterError::InvalidSkillPackage(format!(
-            "SKILL.md is missing reference link: {}",
-            MCS_REFERENCE_INDEX_RELATIVE_PATH
-        )));
-    }
-
-    for (relative_path, content) in MCS_REFERENCE_FILES {
-        if content.trim().is_empty() {
-            return Err(HarnessAdapterError::InvalidSkillPackage(format!(
-                "{relative_path} is empty"
-            )));
-        }
-    }
-
     if MCS_COMMAND_MD.trim().is_empty() {
         return Err(HarnessAdapterError::InvalidSkillPackage(
             "commands/codemod.md is empty".to_string(),
         ));
-    }
-
-    for reference_path in MCS_INDEX_LINKED_REFERENCE_PATHS {
-        if !MCS_REFERENCE_INDEX_MD.contains(reference_path) {
-            return Err(HarnessAdapterError::InvalidSkillPackage(format!(
-                "references/index.md is missing reference link: {reference_path}"
-            )));
-        }
     }
 
     Ok(())
@@ -4749,20 +4669,6 @@ codemod-skill-version: 0.1.0
             .to_string_lossy()
             .contains(".claude/skills/codemod/SKILL.md"));
 
-        let skill_root = runtime_paths
-            .cwd
-            .join(".claude")
-            .join("skills")
-            .join("codemod");
-
-        for (relative_path, _) in MCS_REFERENCE_FILES {
-            assert!(
-                skill_root.join(relative_path).exists(),
-                "expected installed file to exist: {}",
-                relative_path
-            );
-        }
-
         assert!(mcp_entry.path.exists());
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&mcp_entry.path).unwrap()).unwrap();
@@ -5095,20 +5001,19 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn reference_index_links_all_reference_files() {
-        for reference_path in MCS_INDEX_LINKED_REFERENCE_PATHS {
-            assert!(
-                MCS_REFERENCE_INDEX_MD.contains(reference_path),
-                "reference index should link to {}",
-                reference_path
-            );
-        }
+    fn skill_md_routes_to_mcp_tools() {
+        assert!(MCS_SKILL_MD.contains("get_codemod_creation_workflow"));
+        assert!(MCS_SKILL_MD.contains("get_codemod_maintainer_monorepo"));
+        assert!(MCS_SKILL_MD.contains("get_codemod_troubleshooting"));
+        assert!(MCS_SKILL_MD.contains("get_jssg_instructions"));
+        assert!(MCS_SKILL_MD.contains("get_jssg_runtime_capabilities"));
+        assert!(MCS_SKILL_MD.contains("get_codemod_cli_instructions"));
     }
 
     #[test]
-    fn skill_md_routes_creation_tasks_to_creation_references() {
-        assert!(MCS_SKILL_MD.contains(MCS_CREATE_CODEMODS_RELATIVE_PATH));
-        assert!(MCS_SKILL_MD.contains(MCS_MAINTAINER_MONOREPO_RELATIVE_PATH));
+    fn command_md_routes_to_runtime_capabilities_guidance() {
+        assert!(MCS_COMMAND_MD.contains("get_jssg_runtime_capabilities"));
+        assert!(MCS_COMMAND_MD.contains("do not introduce a shell step"));
     }
 
     #[test]

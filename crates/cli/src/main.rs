@@ -808,7 +808,7 @@ mod tests {
         assert!(help_text.contains("opencode"));
         assert!(help_text.contains("cursor"));
         assert!(help_text.contains("codex"));
-        assert!(help_text.contains("antigravity"));
+        assert!(!help_text.contains("antigravity"));
         assert!(help_text.contains("--no-interactive"));
         assert!(help_text.contains("--update-policy"));
         assert!(help_text.contains("--update-source"));
