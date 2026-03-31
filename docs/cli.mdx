@@ -69,7 +69,7 @@ Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 Install the `codemod` MCS skill package, configure Codemod MCP, and install the universal `/codemod` entrypoint where the harness supports it.
 
 ```bash
-npx codemod ai [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
 Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
@@ -95,7 +95,6 @@ MCP config paths by harness and scope:
 - `opencode`: `./opencode.json` (project), `~/.config/opencode/opencode.json` (user)
 - `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
 - `codex` (CLI + macOS app): `./.codex/config.toml` (project), `~/.codex/config.toml` (user) under `[mcp_servers.codemod]`
-- `antigravity`: not configured yet (skill install only)
 
 If a conflicting Codemod MCP entry already exists, re-run with `--force` to overwrite it. For Opencode, Codemod leaves any legacy `./.opencode/mcp.json` or `~/.opencode/mcp.json` file in place to avoid deleting unrelated MCP servers.
 
@@ -103,13 +102,12 @@ If a conflicting Codemod MCP entry already exists, re-run with `--force` to over
 - `claude`: `CLAUDE.md`
 - `goose`, `cursor`: `AGENTS.md` and `CLAUDE.md`
 - `opencode`: `AGENTS.md`
-- `codex`, `antigravity`: `AGENTS.md`
+- `codex`: `AGENTS.md`
 `ai` also installs `/codemod` where the harness has a native command or workflow file surface:
 - `claude`: `./.claude/commands/codemod.md` (project), `~/.claude/commands/codemod.md` (user)
 - `goose`: `~/.config/goose/recipes/codemod.yaml` + `~/.config/goose/config.yaml` registration (user only)
 - `opencode`: `./.opencode/commands/codemod.md` (project), `~/.config/opencode/commands/codemod.md` (user)
 - `cursor`: `./.cursor/commands/codemod.md` (project), `~/.cursor/commands/codemod.md` (user)
-- `antigravity`: `./.agents/workflows/codemod.md` (project), `~/.gemini/antigravity/global_workflows/codemod.md` (user)
 The installed `/codemod` command routes by intent:
 - create, scaffold, or refine codemods -> codemod authoring flow
 - search, run, or apply existing codemods -> registry discovery and execution flow
@@ -119,7 +117,6 @@ The installed `/codemod` command routes by intent:
 - `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
 - `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.goosehints` (user) as fallback guidance
 - `codex`: `notify = ["sh", "<runner>"]` in `./.codex/config.toml` (project) or `~/.codex/config.toml` (user)
-- `antigravity`: managed guidance in `./.agents/CODEMOD_PERIODIC_UPDATE.md` (project) or `~/.gemini/antigravity/CODEMOD_PERIODIC_UPDATE.md` (user)
 Managed update policy is install-flag driven and shared by install-time reconciliation and periodic checks:
 - `--update-policy <manual|notify|auto-safe>` (default: `auto-safe`)
 - `--update-source <local|registry|URL>` (default: `registry`)
@@ -133,7 +130,7 @@ After install, restart or reload your harness session so newly installed skills 
 Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
 
 ```bash
-npx codemod ai update [--harness <claude|goose|opencode|cursor|codex|antigravity|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai update [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
 If managed install state is missing, `ai update` automatically falls back to an install flow and then applies update reconciliation.
@@ -144,7 +141,7 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
-This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/Cursor, `AGENTS.md` for OpenCode/Codex/Antigravity) without duplication, then prompts you to restart/reload the harness session.
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/Cursor, `AGENTS.md` for OpenCode/Codex) without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
 npx codemod <package-id>

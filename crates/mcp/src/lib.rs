@@ -210,7 +210,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_codemod_troubleshooting (debug failing or unexpected codemod commands), get_codemod_creation_workflow (author, test, and publish codemods), get_codemod_maintainer_monorepo (set up and maintain a codemod monorepo). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs), codemod-troubleshooting-instructions (Codemod CLI troubleshooting), codemod-creation-workflow-instructions (codemod creation workflow), codemod-maintainer-monorepo-instructions (maintainer monorepo guidance). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
         }
     }
 
@@ -255,17 +255,17 @@ impl ServerHandler for CodemodMcpServer {
                 ),
                 self._create_resource_text(
                     "codemod-troubleshooting://instructions",
-                    "codemod-troubleshooting",
+                    "codemod-troubleshooting-instructions",
                     Some("Troubleshooting guidance for common Codemod CLI failures"),
                 ),
                 self._create_resource_text(
                     "codemod-creation-workflow://instructions",
-                    "codemod-creation-workflow",
+                    "codemod-creation-workflow-instructions",
                     Some("Codemod creation workflow guide for authoring, testing, and publishing"),
                 ),
                 self._create_resource_text(
                     "codemod-maintainer-monorepo://instructions",
-                    "codemod-maintainer-monorepo",
+                    "codemod-maintainer-monorepo-instructions",
                     Some("Maintainer monorepo guide for codemod repositories"),
                 ),
             ],

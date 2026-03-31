@@ -87,6 +87,7 @@ pub enum Harness {
     Opencode,
     Cursor,
     Codex,
+    #[value(hide = true)]
     Antigravity,
 }
 
@@ -380,7 +381,7 @@ impl HarnessAdapterError {
     pub fn hint(&self) -> &'static str {
         match self {
             Self::UnsupportedHarness(_) => {
-                "Use --harness claude, --harness goose, --harness opencode, --harness cursor, --harness codex, or --harness antigravity."
+                "Use --harness claude, --harness goose, --harness opencode, --harness cursor, or --harness codex."
             }
             Self::InvalidSkillPackage(_) => {
                 "Retry with `codemod ai --force` and inspect installed entries via `codemod ai list --format json`."
@@ -3117,7 +3118,7 @@ fn missing_required_frontmatter_key(frontmatter: &str) -> Option<&'static str> {
 }
 
 fn is_safe_allowed_tool(allowed_tool: &str) -> bool {
-    allowed_tool.starts_with("Bash(codemod ")
+    allowed_tool.starts_with("Bash(codemod ") || allowed_tool.starts_with("Bash(npx codemod ")
 }
 
 fn is_codemod_managed_skill(skill_name: &str, skill_md_path: &Path) -> bool {

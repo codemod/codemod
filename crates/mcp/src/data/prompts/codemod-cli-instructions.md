@@ -315,7 +315,7 @@ npx codemod@latest workflow list
 npx codemod workflow run -w /path/to/workflow.yaml -t /path/to/target
 
 # Validate workflow syntax
-npx codemod@latest workflow validate workflow.yaml
+npx codemod@latest workflow validate -w workflow.yaml
 
 # Validate a specific codemod's workflow
 codemod workflow validate -w codemods/<slug>/workflow.yaml
