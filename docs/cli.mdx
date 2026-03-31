@@ -631,6 +631,14 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
   Use defaults without prompts.
 </ResponseField>
 
+<Tip>
+When using `codemod init` with `--no-interactive`, pass the values that would normally come from prompts:
+- if `PATH` is `.`, also pass `--name <package-name>`
+- for workflow packages, also pass `--project-type <ast-grep-js|hybrid>`, `--description <DESCRIPTION>`, `--author <AUTHOR>`, `--license <LICENSE>`, and `--language <LANGUAGE>`
+- for `ast-grep-js` and `hybrid`, also pass `--package-manager <npm|pnpm|yarn|bun>`
+- when `--workspace` is enabled, also pass `--package-manager <npm|pnpm|yarn|bun>`
+</Tip>
+
 ### `codemod login`
 
 Login to a registry.
