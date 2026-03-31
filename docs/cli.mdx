@@ -581,12 +581,14 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--name <NAME>" type="string">
   Project name (defaults to directory name).
+  
   Required when `[PATH]` is `.` and `--no-interactive` is used.
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
   Workflow project type: `ast-grep-js` or `hybrid`.
   Mutually exclusive with `--skill`.
+  
   Required in `--no-interactive` mode for workflow packages.
 
   <Accordion title="More package types (advanced)">
@@ -597,36 +599,43 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--skill" type="boolean">
   Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+  
   Mutually exclusive with `--with-skill` and `--project-type`.
 </ResponseField>
 
 <ResponseField name="--with-skill" type="boolean">
   Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+  
   Mutually exclusive with `--skill`.
 </ResponseField>
 
 <ResponseField name="--package-manager <PACKAGE_MANAGER>" type="string">
   Package manager.
+  
   Required in `--no-interactive` mode for `ast-grep-js`, `hybrid`, and `--workspace`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">
   Target language.
+  
   Required in `--no-interactive` mode for workflow packages.
 </ResponseField>
 
 <ResponseField name="--description <DESCRIPTION>" type="string">
   Project description.
+  
   Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--author <AUTHOR>" type="string">
   Author name and email.
+  
   Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
   License.
+  
   Required in `--no-interactive` mode.
 </ResponseField>
 
