@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::mpsc::SyncSender;
 
 use anyhow::Result;
+use butterflow_core::ai_handoff::AgentOption;
 use butterflow_core::config::ShellCommandExecutionRequest;
 use butterflow_models::{Task, TaskStatus, WorkflowRun, WorkflowStatus};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
@@ -111,6 +112,77 @@ impl PendingShellApproval {
     }
 }
 
+#[derive(Debug)]
+pub struct PendingCapabilityApproval {
+    pub modules: Vec<LlrtSupportedModules>,
+    response_tx: SyncSender<Result<()>>,
+}
+
+impl PendingCapabilityApproval {
+    pub fn new(modules: Vec<LlrtSupportedModules>, response_tx: SyncSender<Result<()>>) -> Self {
+        Self {
+            modules,
+            response_tx,
+        }
+    }
+
+    pub fn respond(self, approved: bool) {
+        let result = if approved {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Aborting due to capabilities warning"))
+        };
+        let _ = self.response_tx.send(result);
+    }
+
+    pub fn fail(self, error: anyhow::Error) {
+        let _ = self.response_tx.send(Err(error));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSelectionItem {
+    pub canonical: String,
+    pub label: String,
+    pub is_available: bool,
+}
+
+impl AgentSelectionItem {
+    pub fn from_agent_option(agent: &AgentOption) -> Self {
+        Self {
+            canonical: agent.canonical.to_string(),
+            label: agent.label.to_string(),
+            is_available: agent.is_available(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PendingAgentSelection {
+    pub options: Vec<AgentSelectionItem>,
+    response_tx: SyncSender<Result<Option<String>>>,
+}
+
+impl PendingAgentSelection {
+    pub fn new(
+        options: Vec<AgentSelectionItem>,
+        response_tx: SyncSender<Result<Option<String>>>,
+    ) -> Self {
+        Self {
+            options,
+            response_tx,
+        }
+    }
+
+    pub fn respond(self, selection: Option<String>) {
+        let _ = self.response_tx.send(Ok(selection));
+    }
+
+    pub fn fail(self, error: anyhow::Error) {
+        let _ = self.response_tx.send(Err(error));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEffect {
     Refresh,
@@ -174,6 +246,9 @@ pub struct App {
     pub log_scroll: u16,
     pub log_follow: bool,
     shell_approval: Option<PendingShellApproval>,
+    capability_approval: Option<PendingCapabilityApproval>,
+    agent_selection: Option<PendingAgentSelection>,
+    pub agent_selection_cursor: usize,
     pub session_overrides: SessionOverrides,
     base_overrides: SessionOverrides,
     overrides_seeded_from_run: bool,
@@ -206,6 +281,9 @@ impl App {
             log_scroll: 0,
             log_follow: true,
             shell_approval: None,
+            capability_approval: None,
+            agent_selection: None,
+            agent_selection_cursor: 0,
             session_overrides: base_overrides.clone(),
             base_overrides,
             overrides_seeded_from_run: true,
@@ -238,6 +316,9 @@ impl App {
             log_scroll: 0,
             log_follow: true,
             shell_approval: None,
+            capability_approval: None,
+            agent_selection: None,
+            agent_selection_cursor: 0,
             session_overrides: base_overrides.clone(),
             base_overrides,
             overrides_seeded_from_run: false,
@@ -328,6 +409,12 @@ impl App {
         if self.shell_approval.is_some() {
             return self.handle_shell_approval_key(key);
         }
+        if self.capability_approval.is_some() {
+            return self.handle_capability_approval_key(key);
+        }
+        if self.agent_selection.is_some() {
+            return self.handle_agent_selection_key(key);
+        }
 
         if key.code == KeyCode::Char('q')
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -348,7 +435,10 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppEffect> {
-        if self.shell_approval.is_some() {
+        if self.shell_approval.is_some()
+            || self.capability_approval.is_some()
+            || self.agent_selection.is_some()
+        {
             return Vec::new();
         }
 
@@ -400,7 +490,10 @@ impl App {
     }
 
     fn handle_scroll(&mut self, delta: i32) {
-        if self.shell_approval.is_some() {
+        if self.shell_approval.is_some()
+            || self.capability_approval.is_some()
+            || self.agent_selection.is_some()
+        {
             return;
         }
 
@@ -440,12 +533,12 @@ impl App {
                 self.scroll_log_view(-10);
                 Vec::new()
             }
-            KeyCode::Home => {
+            KeyCode::Home | KeyCode::Char('g') => {
                 self.log_scroll = 0;
                 self.log_follow = false;
                 Vec::new()
             }
-            KeyCode::End => {
+            KeyCode::End | KeyCode::Char('G') => {
                 self.log_scroll = 0;
                 self.log_follow = true;
                 Vec::new()
@@ -468,6 +561,75 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.resolve_shell_approval(false, true);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn handle_capability_approval_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.resolve_capability_approval(true, false);
+                Vec::new()
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.resolve_capability_approval(false, false);
+                Vec::new()
+            }
+            KeyCode::Char('q') | KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.resolve_capability_approval(false, true);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn handle_agent_selection_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
+        let option_count = self
+            .agent_selection
+            .as_ref()
+            .map(|selection| selection.options.len())
+            .unwrap_or(0);
+
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if option_count > 0 {
+                    self.agent_selection_cursor =
+                        (self.agent_selection_cursor + 1).min(option_count - 1);
+                }
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.agent_selection_cursor = self.agent_selection_cursor.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                let selected = self
+                    .agent_selection
+                    .as_ref()
+                    .and_then(|selection| selection.options.get(self.agent_selection_cursor))
+                    .map(|item| {
+                        if item.canonical == "__use_built_in__" {
+                            None
+                        } else {
+                            Some(item.canonical.clone())
+                        }
+                    })
+                    .unwrap_or(None);
+                self.resolve_agent_selection(selected, false);
+                Vec::new()
+            }
+            KeyCode::Esc => {
+                self.resolve_agent_selection(None, false);
+                Vec::new()
+            }
+            KeyCode::Char('q') | KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.resolve_agent_selection(None, true);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -658,6 +820,8 @@ impl App {
         self.log_scroll = 0;
         self.log_follow = true;
         self.reject_shell_approval(None);
+        self.reject_capability_approval(None);
+        self.reject_agent_selection(None);
         self.session_overrides = self.base_overrides.clone();
         self.overrides_seeded_from_run = false;
     }
@@ -672,6 +836,8 @@ impl App {
         self.log_scroll = 0;
         self.log_follow = true;
         self.reject_shell_approval(None);
+        self.reject_capability_approval(None);
+        self.reject_agent_selection(None);
         self.session_overrides = self.base_overrides.clone();
         self.overrides_seeded_from_run = true;
     }
@@ -733,6 +899,14 @@ impl App {
         self.shell_approval.is_some()
     }
 
+    pub fn has_capability_approval(&self) -> bool {
+        self.capability_approval.is_some()
+    }
+
+    pub fn has_agent_selection(&self) -> bool {
+        self.agent_selection.is_some()
+    }
+
     pub fn shell_approval_request(&self) -> Option<&ShellCommandExecutionRequest> {
         self.shell_approval
             .as_ref()
@@ -744,6 +918,35 @@ impl App {
         self.log_scroll = 0;
         self.log_follow = true;
         self.shell_approval = Some(approval);
+        true
+    }
+
+    pub fn capability_approval_modules(&self) -> Option<&[LlrtSupportedModules]> {
+        self.capability_approval
+            .as_ref()
+            .map(|approval| approval.modules.as_slice())
+    }
+
+    pub fn agent_selection_options(&self) -> Option<&[AgentSelectionItem]> {
+        self.agent_selection
+            .as_ref()
+            .map(|selection| selection.options.as_slice())
+    }
+
+    pub fn present_capability_approval(&mut self, approval: PendingCapabilityApproval) -> bool {
+        self.log_view = None;
+        self.log_scroll = 0;
+        self.log_follow = true;
+        self.capability_approval = Some(approval);
+        true
+    }
+
+    pub fn present_agent_selection(&mut self, selection: PendingAgentSelection) -> bool {
+        self.log_view = None;
+        self.log_scroll = 0;
+        self.log_follow = true;
+        self.agent_selection_cursor = 0;
+        self.agent_selection = Some(selection);
         true
     }
 
@@ -772,12 +975,60 @@ impl App {
         true
     }
 
+    pub fn reject_capability_approval(&mut self, error: Option<anyhow::Error>) -> bool {
+        let Some(approval) = self.capability_approval.take() else {
+            return false;
+        };
+
+        match error {
+            Some(error) => approval.fail(error),
+            None => approval.respond(false),
+        }
+
+        true
+    }
+
+    pub fn reject_agent_selection(&mut self, error: Option<anyhow::Error>) -> bool {
+        let Some(selection) = self.agent_selection.take() else {
+            return false;
+        };
+
+        match error {
+            Some(error) => selection.fail(error),
+            None => selection.respond(None),
+        }
+
+        self.agent_selection_cursor = 0;
+        true
+    }
+
     fn resolve_shell_approval(&mut self, approved: bool, quit_after: bool) {
         let Some(approval) = self.shell_approval.take() else {
             return;
         };
 
         approval.respond(approved);
+        self.status_line = None;
+        self.should_quit = quit_after;
+    }
+
+    fn resolve_capability_approval(&mut self, approved: bool, quit_after: bool) {
+        let Some(approval) = self.capability_approval.take() else {
+            return;
+        };
+
+        approval.respond(approved);
+        self.status_line = None;
+        self.should_quit = quit_after;
+    }
+
+    fn resolve_agent_selection(&mut self, selection: Option<String>, quit_after: bool) {
+        let Some(agent_selection) = self.agent_selection.take() else {
+            return;
+        };
+
+        agent_selection.respond(selection);
+        self.agent_selection_cursor = 0;
         self.status_line = None;
         self.should_quit = quit_after;
     }

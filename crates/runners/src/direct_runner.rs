@@ -31,6 +31,82 @@ impl DirectRunner {
         mut cmd: Command,
         output_callback: Option<OutputCallback>,
     ) -> Result<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::FromRawFd;
+
+            let mut pipe_fds = [0i32; 2];
+            if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
+                return Err(Error::Runtime("Failed to create output pipe".to_string()));
+            }
+            let read_fd = pipe_fds[0];
+            let write_fd = pipe_fds[1];
+            let stdout_file = unsafe { std::fs::File::from_raw_fd(write_fd) };
+            let stderr_file = stdout_file
+                .try_clone()
+                .map_err(|e| Error::Runtime(format!("Failed to clone output pipe: {e}")))?;
+
+            cmd.stdout(Stdio::from(stdout_file))
+                .stderr(Stdio::from(stderr_file));
+
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
+
+            let quiet = self.quiet;
+            let callback = output_callback;
+            let reader_handle = std::thread::spawn(move || {
+                let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
+                let reader = BufReader::new(read_file);
+                let mut collected_output = String::new();
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(callback) = &callback {
+                                callback(format!("[stdio] {}", line));
+                            }
+                            if !quiet {
+                                println!("{}", line);
+                            }
+                            collected_output.push_str(&line);
+                            collected_output.push('\n');
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("Error reading process output: {}", e);
+                            }
+                            break;
+                        }
+                    }
+                }
+                collected_output
+            });
+
+            let exit_status = tokio::task::spawn_blocking(move || {
+                child
+                    .wait()
+                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
+            })
+            .await
+            .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
+
+            let combined_output = reader_handle
+                .join()
+                .map_err(|_| Error::Runtime("Failed to join output reader".to_string()))?;
+
+            if !exit_status.success() {
+                return Err(Error::Runtime(format!(
+                    "Command failed with exit code {}: {}",
+                    exit_status.code().unwrap_or(-1),
+                    combined_output
+                )));
+            }
+
+            return Ok(combined_output);
+        }
+
+        #[cfg(not(unix))]
+        {
         // Configure the command to pipe stdout and stderr
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -63,7 +139,7 @@ impl DirectRunner {
                 match line {
                     Ok(line) => {
                         if let Some(callback) = &stdout_callback {
-                            callback(line.clone());
+                            callback(format!("[stdout] {}", line));
                         }
                         if !quiet {
                             println!("{}", line);
@@ -90,7 +166,7 @@ impl DirectRunner {
                 match line {
                     Ok(line) => {
                         if let Some(callback) = &stderr_callback {
-                            callback(line.clone());
+                            callback(format!("[stderr] {}", line));
                         }
                         if !quiet {
                             eprintln!("{}", line);
@@ -134,6 +210,7 @@ impl DirectRunner {
         }
 
         Ok(stdout_output)
+        }
     }
 }
 

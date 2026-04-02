@@ -132,9 +132,9 @@ fn build_rows<'a>(tasks: &[&'a Task], matrix_columns: &[String]) -> Vec<Row<'a>>
     tasks
         .iter()
         .map(|task| {
-            let icon = task_status_icon(task.status);
-            let color = task_status_color(task.status);
-            let label = task_status_label(task.status);
+            let icon = task_status_icon(task.status, task.error.as_deref());
+            let color = task_status_color(task.status, task.error.as_deref());
+            let label = task_status_label(task.status, task.error.as_deref());
 
             let started = task
                 .started_at
@@ -343,14 +343,30 @@ fn render_log_modal(
     );
 
     let modal_area = centered_rect(area, 80, 70);
+    let title_status = task_status_label(log_view.status, log_view.error.as_deref());
 
     let block = Block::default()
-        .title(format!("task {} / {:?}", log_view.node_id, log_view.status))
+        .title(format!(" task {} / {} ", log_view.node_id, title_status))
         .borders(Borders::ALL)
         .style(Style::default().bg(HEADER_BG));
 
-    let inner = block.inner(modal_area).inner(Margin::new(1, 1));
+    let inner = block.inner(modal_area);
     f.render_widget(block, modal_area);
+    let inner = Rect::new(
+        inner.x + 1,
+        inner.y + 1,
+        inner.width.saturating_sub(2),
+        inner.height.saturating_sub(1),
+    );
+
+    let content_chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(2),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let content_area = content_chunks[0];
+    let footer_area = content_chunks[2];
 
     let mut lines = Vec::new();
     if log_view.lines.is_empty() {
@@ -363,38 +379,106 @@ fn render_log_modal(
             Style::default().fg(TEXT_MUTED),
         )));
     } else {
-        lines.extend(log_view.lines.iter().map(|line| Line::from(line.clone())));
+        for entry in &log_view.lines {
+            append_log_entry_lines(&mut lines, entry, Style::default().fg(TEXT));
+        }
     }
 
     if let Some(error) = &log_view.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "error: ",
-                Style::default().fg(RED).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(error.clone(), Style::default().fg(TEXT)),
-        ]));
+        append_tagged_log_entry_lines(
+            &mut lines,
+            "error",
+            error,
+            Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            Style::default().fg(TEXT),
+        );
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Use ↑↓ or pgup/pgdn to scroll. Press esc, enter, or l to close",
-        Style::default().fg(TEXT_MUTED),
-    )));
+    let wrapped_lines = wrap_lines_to_width(lines, content_area.width.saturating_sub(1) as usize);
 
-    let viewport_height = inner.height.saturating_sub(1) as usize;
-    let max_scroll = lines.len().saturating_sub(viewport_height) as u16;
+    let viewport_height = content_area.height as usize;
+    let max_scroll = wrapped_lines.len().saturating_sub(viewport_height) as u16;
     let scroll = if log_follow {
         max_scroll
     } else {
         log_scroll.min(max_scroll)
     };
 
-    let paragraph = Paragraph::new(Text::from(lines))
+    let paragraph = Paragraph::new(Text::from(wrapped_lines))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
-    f.render_widget(paragraph, inner);
+    f.render_widget(paragraph, content_area);
+
+    let mut spans = Vec::new();
+    spans.extend(super::key_hint("↑↓/pg", "scroll"));
+    spans.extend(super::key_hint("g", "top"));
+    spans.extend(super::key_hint("G", "bottom"));
+    spans.extend(super::key_hint("esc", "close"));
+    let footer_line_area = Rect::new(
+        footer_area.x,
+        footer_area.y + footer_area.height.saturating_sub(1),
+        footer_area.width,
+        1,
+    );
+    f.render_widget(Line::from(spans), footer_line_area);
+}
+
+fn append_log_entry_lines(lines: &mut Vec<Line<'static>>, entry: &str, style: Style) {
+    let normalized = entry.replace('\r', "");
+    let parts: Vec<&str> = normalized.split('\n').collect();
+
+    for part in parts {
+        lines.push(Line::from(Span::styled(part.to_string(), style)));
+    }
+}
+
+fn append_tagged_log_entry_lines(
+    lines: &mut Vec<Line<'static>>,
+    tag: &str,
+    entry: &str,
+    tag_style: Style,
+    text_style: Style,
+) {
+    let normalized = entry.replace('\r', "");
+    let mut parts = normalized.split('\n');
+
+    if let Some(first) = parts.next() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("[{tag}] "), tag_style),
+            Span::styled(first.to_string(), text_style),
+        ]));
+    }
+
+    for part in parts {
+        lines.push(Line::from(Span::styled(part.to_string(), text_style)));
+    }
+}
+
+fn wrap_lines_to_width(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return lines;
+    }
+
+    let mut wrapped = Vec::new();
+
+    for line in lines {
+        let plain = line.to_string();
+        if plain.is_empty() {
+            wrapped.push(Line::from(String::new()));
+            continue;
+        }
+
+        let chars: Vec<char> = plain.chars().collect();
+        let mut start = 0;
+        while start < chars.len() {
+            let end = (start + width).min(chars.len());
+            let chunk: String = chars[start..end].iter().collect();
+            wrapped.push(Line::from(chunk));
+            start = end;
+        }
+    }
+
+    wrapped
 }
 
 fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {

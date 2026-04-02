@@ -17,7 +17,7 @@ use super::{
 use super::{render_status_line, StatusLine};
 
 /// Setting items displayed in the settings screen
-const SETTINGS_COUNT: usize = 4;
+const SETTINGS_COUNT: usize = 3;
 
 /// Render the settings screen
 pub fn render(
@@ -131,11 +131,6 @@ fn render_settings_list(
             label: "Capability: fetch",
             description: "Allow network requests for tasks triggered from this TUI session",
             enabled: is_capability_on(capabilities, LlrtSupportedModules::Fetch),
-        },
-        SettingItem {
-            label: "Capability: child_process",
-            description: "Allow spawning child processes for tasks triggered from this TUI session",
-            enabled: is_capability_on(capabilities, LlrtSupportedModules::ChildProcess),
         },
     ];
 

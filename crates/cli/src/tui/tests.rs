@@ -22,7 +22,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::app::{
-    App, AppEffect, EffectResult, LogView, PendingShellApproval, Screen, SessionOverrides,
+    App, AppEffect, EffectResult, LogView, PendingCapabilityApproval, PendingShellApproval,
+    Screen, SessionOverrides,
 };
 use super::event::AppEvent;
 use super::screens::{self, StatusLine, StatusTone};
@@ -450,6 +451,39 @@ fn shell_approval_enter_does_not_approve() {
 
     assert!(effects.is_empty());
     assert!(app.has_shell_approval());
+}
+
+#[test]
+fn capability_approval_enter_does_not_approve() {
+    let run_id = Uuid::new_v4();
+    let mut app = App::new_for_run(false, None, run_id);
+    let (tx, _rx) = sync_channel(1);
+    app.present_capability_approval(PendingCapabilityApproval::new(
+        vec![LlrtSupportedModules::Fetch],
+        tx,
+    ));
+
+    let effects = app.reduce(key_event(KeyCode::Enter));
+
+    assert!(effects.is_empty());
+    assert!(app.has_capability_approval());
+}
+
+#[test]
+fn capability_approval_accepts_and_responds() {
+    let run_id = Uuid::new_v4();
+    let mut app = App::new_for_run(false, None, run_id);
+    let (tx, rx) = sync_channel(1);
+    app.present_capability_approval(PendingCapabilityApproval::new(
+        vec![LlrtSupportedModules::Fetch],
+        tx,
+    ));
+
+    let effects = app.reduce(key_event(KeyCode::Char('y')));
+
+    assert!(effects.is_empty());
+    assert!(!app.has_capability_approval());
+    assert!(rx.recv().unwrap().is_ok());
 }
 
 #[test]
@@ -939,6 +973,14 @@ fn log_view_scroll_keys_update_scroll_state() {
     app.reduce(AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
     assert_eq!(app.log_scroll, 10);
     assert!(!app.log_follow);
+
+    app.reduce(AppEvent::Key(KeyEvent::from(KeyCode::Char('g'))));
+    assert_eq!(app.log_scroll, 0);
+    assert!(!app.log_follow);
+
+    app.reduce(AppEvent::Key(KeyEvent::from(KeyCode::Char('G'))));
+    assert_eq!(app.log_scroll, 0);
+    assert!(app.log_follow);
 
     app.reduce(AppEvent::Key(KeyEvent::from(KeyCode::End)));
     assert_eq!(app.log_scroll, 0);

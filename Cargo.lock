@@ -730,6 +730,7 @@ version = "1.7.11"
 dependencies = [
  "async-trait",
  "butterflow-models",
+ "libc",
  "log",
  "serde",
  "serde_json",

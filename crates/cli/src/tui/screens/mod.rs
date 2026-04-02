@@ -4,6 +4,7 @@ pub mod task_list;
 
 use butterflow_core::config::ShellCommandExecutionRequest;
 use butterflow_models::{TaskStatus, WorkflowStatus};
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -12,6 +13,8 @@ use ratatui::{
     Frame,
 };
 use serde::Serialize;
+
+use crate::tui::app::AgentSelectionItem;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum StatusTone {
@@ -41,7 +44,10 @@ pub const KEY_BG: Color = Color::Rgb(55, 55, 70);
 pub const ERROR_BG: Color = Color::Rgb(82, 36, 36);
 
 /// Get a status icon for a task status
-pub fn task_status_icon(status: TaskStatus) -> &'static str {
+pub fn task_status_icon(status: TaskStatus, error: Option<&str>) -> &'static str {
+    if task_is_canceled(status, error) {
+        return "\u{2013}";
+    }
     match status {
         TaskStatus::Completed => "\u{25cf}",       // ●
         TaskStatus::Failed => "\u{25cf}",          // ●
@@ -54,7 +60,10 @@ pub fn task_status_icon(status: TaskStatus) -> &'static str {
 }
 
 /// Get a color for a task status
-pub fn task_status_color(status: TaskStatus) -> Color {
+pub fn task_status_color(status: TaskStatus, error: Option<&str>) -> Color {
+    if task_is_canceled(status, error) {
+        return DIM;
+    }
     match status {
         TaskStatus::Completed => GREEN,
         TaskStatus::Failed => RED,
@@ -67,7 +76,10 @@ pub fn task_status_color(status: TaskStatus) -> Color {
 }
 
 /// Human-readable label for task status
-pub fn task_status_label(status: TaskStatus) -> &'static str {
+pub fn task_status_label(status: TaskStatus, error: Option<&str>) -> &'static str {
+    if task_is_canceled(status, error) {
+        return "canceled";
+    }
     match status {
         TaskStatus::Completed => "done",
         TaskStatus::Failed => "failed",
@@ -77,6 +89,10 @@ pub fn task_status_label(status: TaskStatus) -> &'static str {
         TaskStatus::Blocked => "blocked",
         TaskStatus::WontDo => "skipped",
     }
+}
+
+fn task_is_canceled(status: TaskStatus, error: Option<&str>) -> bool {
+    status == TaskStatus::Failed && error == Some("Canceled by user")
 }
 
 /// Get a status icon for a workflow status
@@ -167,20 +183,27 @@ pub fn render_status_line(f: &mut Frame, area: Rect, status: Option<&StatusLine>
         return;
     };
 
-    let (bg, title) = (ERROR_BG, "error");
+    let content = vec![Line::from(vec![
+        Span::styled(
+            "error: ",
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(status.message.as_str(), Style::default().fg(TEXT)),
+    ])];
 
-    let paragraph = Paragraph::new(status.message.as_str()).block(
-        Block::default()
-            .borders(Borders::TOP)
-            .title(title)
-            .style(Style::default().fg(TEXT).bg(bg)),
-    );
+    let paragraph = Paragraph::new(content)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .style(Style::default().fg(TEXT).bg(ERROR_BG)),
+        );
 
     f.render_widget(paragraph, area);
 }
 
 pub fn status_bar_height(status: Option<&StatusLine>) -> u16 {
-    if should_render_status(status) { 2 } else { 0 }
+    if should_render_status(status) { 3 } else { 0 }
 }
 
 fn should_render_status(status: Option<&StatusLine>) -> bool {
@@ -242,11 +265,23 @@ pub fn render_shell_approval_modal(
     let modal_area = centered_rect(area, 88, 58);
 
     let block = Block::default()
-        .title("shell command approval")
+        .title(" shell command approval ")
         .borders(Borders::ALL)
         .style(Style::default().bg(HEADER_BG).fg(TEXT));
     let inner = block.inner(modal_area);
     f.render_widget(block, modal_area);
+    let inner = Rect::new(
+        inner.x + 1,
+        inner.y + 1,
+        inner.width.saturating_sub(2),
+        inner.height.saturating_sub(1),
+    );
+    let chunks = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(0),
+        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(inner);
 
     let lines = vec![
         Line::from(Span::styled(
@@ -268,15 +303,173 @@ pub fn render_shell_approval_modal(
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::from(request.command.as_str()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press y to approve. Press n or esc to decline.",
-            Style::default().fg(TEXT_MUTED),
-        )),
     ];
 
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    f.render_widget(paragraph, inner.inner(ratatui::layout::Margin::new(1, 1)));
+    f.render_widget(paragraph, chunks[0]);
+    render_modal_footer(
+        f,
+        chunks[2],
+        vec![
+            ("y", "approve"),
+            ("n", "decline"),
+            ("esc", "decline"),
+        ],
+    );
+}
+
+pub fn render_capability_approval_modal(
+    f: &mut Frame,
+    area: Rect,
+    modules: &[LlrtSupportedModules],
+) {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(Color::Black)),
+        area,
+    );
+
+    let modal_area = centered_rect(area, 88, 50);
+
+    let block = Block::default()
+        .title(" capabilities approval ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(HEADER_BG).fg(TEXT));
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+    let inner = Rect::new(
+        inner.x + 1,
+        inner.y + 1,
+        inner.width.saturating_sub(2),
+        inner.height.saturating_sub(1),
+    );
+    let chunks = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(0),
+        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(inner);
+
+    let requested = modules
+        .iter()
+        .map(|module| format!("{module:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "This step wants to use sensitive runtime capabilities.",
+            Style::default().fg(TEXT),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Requested: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(requested, Style::default().fg(TEXT)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    f.render_widget(paragraph, chunks[0]);
+    render_modal_footer(
+        f,
+        chunks[2],
+        vec![
+            ("y", "approve"),
+            ("n", "decline"),
+            ("esc", "decline"),
+        ],
+    );
+}
+
+pub fn render_agent_selection_modal(
+    f: &mut Frame,
+    area: Rect,
+    options: &[AgentSelectionItem],
+    cursor: usize,
+) {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(Color::Black)),
+        area,
+    );
+
+    let modal_area = centered_rect(area, 88, 62);
+
+    let block = Block::default()
+        .title(" ai agent selection ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(HEADER_BG).fg(TEXT));
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+    let inner = Rect::new(
+        inner.x + 1,
+        inner.y + 1,
+        inner.width.saturating_sub(2),
+        inner.height.saturating_sub(1),
+    );
+    let chunks = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(0),
+        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(inner);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Select a coding agent to execute the AI step.",
+            Style::default().fg(TEXT),
+        )),
+        Line::from(""),
+    ];
+
+    if options.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No launchable agents detected. Press esc to use built-in AI.",
+            Style::default().fg(TEXT_MUTED),
+        )));
+    } else {
+        for (index, option) in options.iter().enumerate() {
+            let prefix = if index == cursor { "› " } else { "  " };
+            let style = if index == cursor {
+                Style::default().fg(TEXT).bg(SURFACE).add_modifier(Modifier::BOLD)
+            } else if option.is_available {
+                Style::default().fg(TEXT)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{}", option.label),
+                style,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    f.render_widget(paragraph, chunks[0]);
+    render_modal_footer(
+        f,
+        chunks[2],
+        vec![
+            ("enter", "select"),
+            ("esc", "built-in AI"),
+        ],
+    );
+}
+
+fn render_modal_footer(f: &mut Frame, area: Rect, hints: Vec<(&str, &str)>) {
+    let mut spans = Vec::new();
+    for (key, label) in hints {
+        spans.extend(key_hint(key, label));
+    }
+    let footer_area = Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(1),
+        area.width,
+        1,
+    );
+    f.render_widget(Line::from(spans), footer_area);
 }
 
 fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {

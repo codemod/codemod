@@ -53,9 +53,19 @@ impl Runner for PodmanRunner {
             .output()
             .map_err(|e| Error::Runtime(format!("Failed to execute podman command: {e}")))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if let Some(callback) = output_callback {
+            for line in stdout.lines().filter(|line| !line.is_empty()) {
+                callback(format!("[stdout] {}", line));
+            }
+            for line in stderr.lines().filter(|line| !line.is_empty()) {
+                callback(format!("[stderr] {}", line));
+            }
+        }
+
         // Check if the command succeeded
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Runtime(format!(
                 "Podman command failed with exit code {}: {}",
                 output.status.code().unwrap_or(-1),
@@ -64,12 +74,6 @@ impl Runner for PodmanRunner {
         }
 
         // Return the output
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if let Some(callback) = output_callback {
-            for line in stdout.lines().filter(|line| !line.is_empty()) {
-                callback(line.to_string());
-            }
-        }
         Ok(stdout)
     }
 }

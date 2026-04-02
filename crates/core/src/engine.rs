@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -475,15 +475,16 @@ impl Engine {
 
     /// Spawn a task asynchronously on a dedicated thread with its own runtime.
     ///
-    /// Uses `std::thread::spawn` + `new_current_thread` runtime instead of
-    /// `spawn_blocking` + `Handle::block_on`, which stalls the main tokio
-    /// runtime's timer driver and prevents other async work from progressing.
+    /// Uses a dedicated multi-thread Tokio runtime per task thread so async
+    /// work invoked from worker threads (for example network activity inside
+    /// js-ast-grep codemods) can make progress reliably.
     async fn spawn_task_with_handle(&self, task_id: Uuid) -> Result<()> {
         let engine = self.clone();
         let task_completion_notify = Arc::clone(&self.task_completion_notify);
 
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()
                 .expect("failed to build task runtime");
@@ -501,17 +502,20 @@ impl Engine {
                         cleanup_guard.mark_sent();
                     }
                     Ok(Err(e)) => {
-                        error!("Task {} execution failed: {}", task_id, e);
+                        engine.emit_error(format!("Task {} execution failed: {}", task_id, e));
                     }
                     Err(_) => {
-                        error!(
+                        engine.emit_error(format!(
                             "Task {} timed out after {} seconds",
                             task_id,
                             task_timeout.as_secs()
-                        );
+                        ));
                         if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
                         {
-                            error!("Failed to mark task {} as failed: {}", task_id, e);
+                            engine.emit_error(format!(
+                                "Failed to mark task {} as failed: {}",
+                                task_id, e
+                            ));
                         }
                     }
                 }
@@ -560,13 +564,14 @@ impl Engine {
         let mut workflow_engine = self.clone();
 
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()
                 .expect("failed to build workflow runtime");
             rt.block_on(async move {
                 if let Err(e) = workflow_engine.execute_workflow(workflow_run_id).await {
-                    error!("Workflow execution failed: {e}");
+                    workflow_engine.emit_error(format!("Workflow execution failed: {e}"));
                 }
             });
         });
@@ -578,6 +583,48 @@ impl Engine {
         task.logs.push(message.into());
         adapter.save_task(&task).await?;
         Ok(())
+    }
+
+    async fn is_task_canceled(&self, workflow_run_id: Uuid, task_id: Uuid) -> Result<bool> {
+        let adapter = self.state_adapter.lock().await;
+        let workflow_run = adapter.get_workflow_run(workflow_run_id).await?;
+        if workflow_run.status == WorkflowStatus::Canceled {
+            return Ok(true);
+        }
+
+        let task = adapter.get_task(task_id).await?;
+        Ok(
+            task.status == TaskStatus::Failed
+                && task.error.as_deref() == Some("Canceled by user"),
+        )
+    }
+
+    fn spawn_task_log_persistor(
+        &self,
+        task_id: Uuid,
+    ) -> (
+        tokio::sync::mpsc::UnboundedSender<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let state_adapter = Arc::clone(&self.state_adapter);
+        let log_persist_task = tokio::spawn(async move {
+            while let Some(line) = log_rx.recv().await {
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let mut adapter = state_adapter.lock().await;
+                let Ok(mut current_task) = adapter.get_task(task_id).await else {
+                    continue;
+                };
+                current_task.logs.push(line);
+                let _ = adapter.save_task(&current_task).await;
+            }
+        });
+
+        (log_tx, log_persist_task)
     }
 
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
@@ -1734,6 +1781,10 @@ impl Engine {
 
         // Execute each step in the node
         for (step_index, step) in node.steps.iter().enumerate() {
+            if self.is_task_canceled(workflow_run.id, task_id).await? {
+                return Err(Error::Runtime("Canceled by user".to_string()));
+            }
+
             let state = self
                 .state_adapter
                 .lock()
@@ -1765,14 +1816,15 @@ impl Engine {
                 }
             }
 
-            let step_logger = self.structured_logger.with_context(StepContext {
+            let step_context = StepContext {
                 step_name: step.name.clone(),
                 step_index,
                 node_id: node.id.clone(),
                 node_name: node.name.clone(),
                 task_id: task_id.to_string(),
                 step_id: None,
-            });
+            };
+            let step_logger = self.structured_logger.with_context(step_context);
 
             let runner: Box<dyn Runner> = match runtime_type {
                 RuntimeType::Direct => {
@@ -1803,12 +1855,19 @@ impl Engine {
             let _ = self
                 .append_task_log(task_id, format!("Step started: {}", step.name))
                 .await;
-
             step_logger.step_start();
             if !step_logger.is_jsonl() && !self.workflow_run_config.quiet {
                 println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
             }
             let step_start_time = std::time::Instant::now();
+
+            let quiet_capture = self.workflow_run_config.quiet && !self.structured_logger.is_jsonl();
+            let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
+                let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
+                (Some(log_tx), Some(log_persist_task))
+            } else {
+                (None, None)
+            };
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
             // Any println!, console.log, etc. from child processes, AI agents,
@@ -1816,7 +1875,15 @@ impl Engine {
             // correct step context. The structured logger bypasses the capture
             // by writing directly to the saved real stdout fd.
             let _stdout_capture = if self.structured_logger.is_jsonl() {
-                StdoutCaptureGuard::start(&step_logger)
+                StdoutCaptureGuard::start(Some(&step_logger), None)
+            } else if self.workflow_run_config.quiet {
+                let line_callback = quiet_log_tx.as_ref().map(|log_tx| {
+                    let log_tx = log_tx.clone();
+                    Arc::new(move |line: String| {
+                        let _ = log_tx.send(line);
+                    }) as crate::structured_log::CapturedLineCallback
+                });
+                StdoutCaptureGuard::start(None, line_callback)
             } else {
                 None
             };
@@ -1843,6 +1910,14 @@ impl Engine {
             // Drop the capture guard to restore stdout before emitting step_end.
             // This ensures all captured output is flushed and attributed to this step.
             drop(_stdout_capture);
+            drop(quiet_log_tx);
+            if let Some(log_persist_task) = quiet_log_persist_task {
+                let _ = log_persist_task.await;
+            }
+
+            if self.is_task_canceled(workflow_run.id, task_id).await? {
+                return Err(Error::Runtime("Canceled by user".to_string()));
+            }
 
             match result {
                 Ok(_) => {
@@ -2591,13 +2666,16 @@ impl Engine {
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
-                    callback(config).unwrap_or_else(|e| {
+                    callback(config).map_err(|e| {
                         if !quiet {
                             error!("Failed to check capabilities: {e}");
                         }
-                        std::process::exit(1);
-                    });
+                        Box::<dyn std::error::Error + Send + Sync>::from(
+                            format!("Failed to check capabilities: {e}"),
+                        )
+                    })?;
                 }
+                Ok(())
             })),
         };
         let config = CodemodExecutionConfig {
@@ -2716,16 +2794,51 @@ impl Engine {
         let modified_files_collector_clone = modified_files_collector.clone();
         let state_adapter = Arc::clone(&self.state_adapter);
         let target_path_for_logs = target_path.clone();
+        let canceled_during_execution = Arc::new(AtomicBool::new(false));
 
         // Collect deferred file deletions from renames — applied after all transforms complete
         let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let logger_for_deferred = logger.clone();
         let deferred_deletions_clone = Arc::clone(&deferred_deletions);
+        let workflow_run_id_for_cancel = workflow_run_id;
+        let canceled_flag_for_closure = Arc::clone(&canceled_during_execution);
 
         // Execute the codemod on each file using the config's multi-threading
         config
             .execute(move |file_path, config| {
+                if canceled_flag_for_closure.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id_for_cancel) {
+                    let state_adapter = Arc::clone(&state_adapter);
+                    let was_canceled = runtime_handle.block_on(async move {
+                        let adapter = state_adapter.lock().await;
+                        let workflow_canceled = adapter
+                            .get_workflow_run(run_id)
+                            .await
+                            .ok()
+                            .is_some_and(|run| run.status == WorkflowStatus::Canceled);
+                        if workflow_canceled {
+                            return true;
+                        }
+                        adapter
+                            .get_task(task_id)
+                            .await
+                            .ok()
+                            .is_some_and(|task| {
+                                task.status == TaskStatus::Failed
+                                    && task.error.as_deref() == Some("Canceled by user")
+                            })
+                    });
+
+                    if was_canceled {
+                        canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+
                 // Only process files
                 if !file_path.is_file() {
                     return;
@@ -2786,6 +2899,34 @@ impl Engine {
                     })
                     .await
                 });
+
+                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id_for_cancel) {
+                    let state_adapter = Arc::clone(&state_adapter);
+                    let was_canceled = runtime_handle.block_on(async move {
+                        let adapter = state_adapter.lock().await;
+                        let workflow_canceled = adapter
+                            .get_workflow_run(run_id)
+                            .await
+                            .ok()
+                            .is_some_and(|run| run.status == WorkflowStatus::Canceled);
+                        if workflow_canceled {
+                            return true;
+                        }
+                        adapter
+                            .get_task(task_id)
+                            .await
+                            .ok()
+                            .is_some_and(|task| {
+                                task.status == TaskStatus::Failed
+                                    && task.error.as_deref() == Some("Canceled by user")
+                            })
+                    });
+
+                    if was_canceled {
+                        canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
 
                 match execution_result {
                     Ok(CodemodOutput { primary, secondary }) => {
@@ -2957,6 +3098,10 @@ impl Engine {
                 }
             })
             .map_err(|e| Error::StepExecution(e.to_string()))?;
+
+        if canceled_during_execution.load(Ordering::Relaxed) {
+            return Err(Error::Runtime("Canceled by user".to_string()));
+        }
 
         // Apply deferred file deletions from renames now that all transforms are complete
         if let Ok(deletions) = deferred_deletions.lock() {
