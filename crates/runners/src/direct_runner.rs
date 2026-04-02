@@ -3,12 +3,10 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 use async_trait::async_trait;
-use tokio::task;
-
 use butterflow_models::Error;
 use butterflow_models::Result;
 
-use crate::Runner;
+use crate::{OutputCallback, Runner};
 
 /// Direct runner (runs commands directly on the host)
 pub struct DirectRunner {
@@ -28,7 +26,11 @@ impl DirectRunner {
     }
 
     /// Execute a command with streaming output
-    async fn execute_with_streaming(&self, mut cmd: Command) -> Result<String> {
+    async fn execute_with_streaming(
+        &self,
+        mut cmd: Command,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
         // Configure the command to pipe stdout and stderr
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -52,13 +54,17 @@ impl DirectRunner {
         let stderr_reader = BufReader::new(stderr);
 
         let quiet = self.quiet;
+        let stdout_callback = output_callback.clone();
 
         // Handle stdout in a separate task
-        let stdout_handle = task::spawn_blocking(move || {
+        let stdout_handle = std::thread::spawn(move || {
             let mut collected_output = String::new();
             for line in stdout_reader.lines() {
                 match line {
                     Ok(line) => {
+                        if let Some(callback) = &stdout_callback {
+                            callback(line.clone());
+                        }
                         if !quiet {
                             println!("{}", line);
                         }
@@ -77,11 +83,15 @@ impl DirectRunner {
         });
 
         // Handle stderr in a separate task
-        let stderr_handle = task::spawn_blocking(move || {
+        let stderr_callback = output_callback;
+        let stderr_handle = std::thread::spawn(move || {
             let mut collected_output = String::new();
             for line in stderr_reader.lines() {
                 match line {
                     Ok(line) => {
+                        if let Some(callback) = &stderr_callback {
+                            callback(line.clone());
+                        }
                         if !quiet {
                             eprintln!("{}", line);
                         }
@@ -100,23 +110,20 @@ impl DirectRunner {
         });
 
         // Wait for the process to complete and collect outputs
-        let (exit_status, stdout_output, stderr_output) = tokio::try_join!(
-            async {
-                child
-                    .wait()
-                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
-            },
-            async {
-                stdout_handle
-                    .await
-                    .map_err(|e| Error::Runtime(format!("Failed to read stdout: {e}")))
-            },
-            async {
-                stderr_handle
-                    .await
-                    .map_err(|e| Error::Runtime(format!("Failed to read stderr: {e}")))
-            }
-        )?;
+        let exit_status = tokio::task::spawn_blocking(move || {
+            child
+                .wait()
+                .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
+        })
+        .await
+        .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
+
+        let stdout_output = stdout_handle
+            .join()
+            .map_err(|_| Error::Runtime("Failed to join stdout reader".to_string()))?;
+        let stderr_output = stderr_handle
+            .join()
+            .map_err(|_| Error::Runtime("Failed to join stderr reader".to_string()))?;
 
         if !exit_status.success() {
             return Err(Error::Runtime(format!(
@@ -138,7 +145,12 @@ impl Default for DirectRunner {
 
 #[async_trait]
 impl Runner for DirectRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
         // Check if the command starts with a shebang line
         if command.starts_with("#!/") {
             // Create a temporary file for the script
@@ -172,7 +184,7 @@ impl Runner for DirectRunner {
             }
 
             // Execute the command with streaming
-            let result = self.execute_with_streaming(cmd).await;
+            let result = self.execute_with_streaming(cmd, output_callback).await;
 
             // Clean up the temporary file
             std::fs::remove_file(&script_path).ok();
@@ -203,7 +215,7 @@ impl Runner for DirectRunner {
             }
 
             // Execute the command with streaming
-            self.execute_with_streaming(cmd).await
+            self.execute_with_streaming(cmd, output_callback).await
         }
     }
 }

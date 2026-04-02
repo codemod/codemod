@@ -2,11 +2,27 @@ pub mod run_list;
 pub mod settings;
 pub mod task_list;
 
+use butterflow_core::config::ShellCommandExecutionRequest;
 use butterflow_models::{TaskStatus, WorkflowStatus};
 use ratatui::{
+    layout::Rect,
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    Frame,
 };
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum StatusTone {
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StatusLine {
+    pub tone: StatusTone,
+    pub message: String,
+}
 
 // -- Palette --
 // Muted, modern palette using RGB for consistency across terminals.
@@ -20,7 +36,9 @@ pub const SURFACE: Color = Color::Rgb(40, 40, 50); // row highlight bg
 pub const TEXT: Color = Color::Rgb(210, 210, 220);
 pub const TEXT_MUTED: Color = Color::Rgb(130, 130, 145);
 pub const HEADER_BG: Color = Color::Rgb(30, 30, 40);
+pub const BODY_BG: Color = Color::Rgb(12, 12, 18);
 pub const KEY_BG: Color = Color::Rgb(55, 55, 70);
+pub const ERROR_BG: Color = Color::Rgb(82, 36, 36);
 
 /// Get a status icon for a task status
 pub fn task_status_icon(status: TaskStatus) -> &'static str {
@@ -134,4 +152,145 @@ pub fn key_hint_colored<'a>(key: &'a str, label: &'a str, color: Color) -> Vec<S
         ),
         Span::styled(format!(" {label}  "), Style::default().fg(TEXT_MUTED)),
     ]
+}
+
+pub fn render_status_line(f: &mut Frame, area: Rect, status: Option<&StatusLine>) {
+    if area.height == 0 || !should_render_status(status) {
+        f.render_widget(
+            Block::default().style(Style::default().bg(BODY_BG)),
+            area,
+        );
+        return;
+    }
+
+    let Some(status) = status else {
+        return;
+    };
+
+    let (bg, title) = (ERROR_BG, "error");
+
+    let paragraph = Paragraph::new(status.message.as_str()).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .title(title)
+            .style(Style::default().fg(TEXT).bg(bg)),
+    );
+
+    f.render_widget(paragraph, area);
+}
+
+pub fn status_bar_height(status: Option<&StatusLine>) -> u16 {
+    if should_render_status(status) { 2 } else { 0 }
+}
+
+fn should_render_status(status: Option<&StatusLine>) -> bool {
+    matches!(status, Some(StatusLine { tone: StatusTone::Error, .. }))
+}
+
+pub fn render_screen_background(f: &mut Frame, area: Rect) {
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        area,
+    );
+}
+
+pub fn shorten_home_path(path: &std::path::Path) -> String {
+    let display = path.display().to_string();
+    if let Some(home) = dirs::home_dir() {
+        if let Some(rest) = display.strip_prefix(&home.display().to_string()) {
+            return format!("~{rest}");
+        }
+    }
+    display
+}
+
+pub fn truncate_middle(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        return value.to_string();
+    }
+
+    if max_len <= 3 {
+        return "…".repeat(max_len.max(1));
+    }
+
+    let head_len = (max_len - 1) / 2;
+    let tail_len = max_len - head_len - 1;
+    let head: String = value.chars().take(head_len).collect();
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+
+    format!("{head}…{tail}")
+}
+
+pub fn render_shell_approval_modal(
+    f: &mut Frame,
+    area: Rect,
+    request: &ShellCommandExecutionRequest,
+) {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(Color::Black)),
+        area,
+    );
+
+    let modal_area = centered_rect(area, 88, 58);
+
+    let block = Block::default()
+        .title("shell command approval")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(HEADER_BG).fg(TEXT));
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "This step wants to execute a shell command.",
+            Style::default().fg(TEXT),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Node: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(request.node_name.as_str(), Style::default().fg(TEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("Step: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(request.step_name.as_str(), Style::default().fg(TEXT)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Command",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(request.command.as_str()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press y to approve. Press n or esc to decline.",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    f.render_widget(paragraph, inner.inner(ratatui::layout::Margin::new(1, 1)));
+}
+
+fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    let vertical = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Percentage((100 - height_percent) / 2),
+        ratatui::layout::Constraint::Percentage(height_percent),
+        ratatui::layout::Constraint::Percentage((100 - height_percent) / 2),
+    ])
+    .split(area);
+
+    ratatui::layout::Layout::horizontal([
+        ratatui::layout::Constraint::Percentage((100 - width_percent) / 2),
+        ratatui::layout::Constraint::Percentage(width_percent),
+        ratatui::layout::Constraint::Percentage((100 - width_percent) / 2),
+    ])
+    .split(vertical[1])[1]
 }

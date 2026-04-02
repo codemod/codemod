@@ -10,7 +10,11 @@ use ratatui::{
     Frame,
 };
 
-use super::{key_hint, ACCENT, DIM, GREEN, HEADER_BG, SURFACE, TEXT, TEXT_MUTED};
+use super::{
+    key_hint, shorten_home_path, status_bar_height, truncate_middle, ACCENT, BODY_BG, DIM, GREEN,
+    HEADER_BG, SURFACE, TEXT, TEXT_MUTED,
+};
+use super::{render_status_line, StatusLine};
 
 /// Setting items displayed in the settings screen
 const SETTINGS_COUNT: usize = 4;
@@ -23,12 +27,14 @@ pub fn render(
     cursor: usize,
     dry_run: bool,
     capabilities: &Option<HashSet<LlrtSupportedModules>>,
+    status: Option<&StatusLine>,
 ) {
+    let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(3), // title bar
-        Constraint::Length(1), // spacing
+        Constraint::Length(2), // title bar
         Constraint::Min(0),    // content
         Constraint::Length(1), // help bar
+        Constraint::Length(status_height), // status bar
     ])
     .split(area);
 
@@ -36,11 +42,13 @@ pub fn render(
     render_header(f, chunks[0], workflow_run);
 
     // -- Content --
-    let content = chunks[2].inner(Margin::new(2, 0));
+    let content = chunks[1].inner(Margin::new(2, 0));
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), chunks[1]);
     render_settings_list(f, content, cursor, dry_run, capabilities);
 
     // -- Help bar --
-    render_help_bar(f, chunks[3]);
+    render_help_bar(f, chunks[2]);
+    render_status_line(f, chunks[3], status);
 }
 
 fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) {
@@ -54,6 +62,11 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
     let name = workflow_run
         .and_then(|r| r.name.as_deref())
         .unwrap_or("Workflow");
+    let target = workflow_run
+        .and_then(|r| r.target_path.as_ref())
+        .map(|path| shorten_home_path(path.as_path()))
+        .unwrap_or_default();
+    let available_width = inner.width.saturating_sub(2) as usize;
 
     let title_line = Line::from(vec![
         Span::styled(
@@ -61,13 +74,23 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" / ", Style::default().fg(DIM)),
-        Span::styled(name, Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            truncate_middle(name, available_width.max(1).min(64)),
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" / ", Style::default().fg(DIM)),
-        Span::styled("settings", Style::default().fg(TEXT)),
+        Span::styled("session overrides", Style::default().fg(TEXT)),
     ]);
+    let target_line = Line::from(Span::styled(
+        truncate_middle(&format!("target: {target}"), available_width.max(1)),
+        Style::default().fg(TEXT_MUTED),
+    ));
 
-    let y = inner.y + inner.height.saturating_sub(1) / 2;
-    f.render_widget(title_line, Rect::new(inner.x, y, inner.width, 1));
+    f.render_widget(title_line, Rect::new(inner.x, inner.y, inner.width, 1));
+    f.render_widget(
+        target_line,
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+    );
 }
 
 fn is_capability_on(
@@ -96,22 +119,22 @@ fn render_settings_list(
     let items = [
         SettingItem {
             label: "Dry run",
-            description: "Preview changes without writing to disk",
+            description: "Preview changes without writing to disk for this TUI session",
             enabled: dry_run,
         },
         SettingItem {
             label: "Capability: fs",
-            description: "Allow filesystem access",
+            description: "Allow filesystem access for tasks triggered from this TUI session",
             enabled: is_capability_on(capabilities, LlrtSupportedModules::Fs),
         },
         SettingItem {
             label: "Capability: fetch",
-            description: "Allow network requests",
+            description: "Allow network requests for tasks triggered from this TUI session",
             enabled: is_capability_on(capabilities, LlrtSupportedModules::Fetch),
         },
         SettingItem {
             label: "Capability: child_process",
-            description: "Allow spawning child processes",
+            description: "Allow spawning child processes for tasks triggered from this TUI session",
             enabled: is_capability_on(capabilities, LlrtSupportedModules::ChildProcess),
         },
     ];
@@ -171,6 +194,10 @@ fn render_settings_list(
 }
 
 fn render_help_bar(f: &mut Frame, area: Rect) {
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        area,
+    );
     let padded = area.inner(Margin::new(1, 0));
     let mut spans: Vec<Span> = Vec::new();
     spans.extend(key_hint("\u{2191}\u{2193}", "navigate"));

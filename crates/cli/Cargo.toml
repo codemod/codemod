@@ -46,7 +46,7 @@ dirs = { workspace = true }
 tar = { workspace = true }
 urlencoding = "2.1"
 humantime = "2.1"
-inquire = "0.7"
+inquire = "0.9"
 console = "0.15"
 rolldown = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
 
@@ -77,6 +77,9 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 toml_edit = "0.22"
+
+[dev-dependencies]
+portable-pty = "0.9"
 
 [features]
 default = []

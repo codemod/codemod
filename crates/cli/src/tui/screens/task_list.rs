@@ -3,94 +3,116 @@ use chrono::Utc;
 use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Cell, Padding, Row, Table, TableState},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Cell, Clear, Padding, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
+use crate::tui::app::LogView;
+
 use super::{
-    format_duration, key_hint, key_hint_colored, task_status_color, task_status_icon,
-    task_status_label, workflow_status_color, workflow_status_icon, workflow_status_label, ACCENT,
-    CYAN, DIM, HEADER_BG, RED, SURFACE, TEXT, TEXT_MUTED,
+    format_duration, key_hint, key_hint_colored, render_status_line, shorten_home_path,
+    status_bar_height, task_status_color, task_status_icon, task_status_label, truncate_middle,
+    workflow_status_color, workflow_status_icon, workflow_status_label, StatusLine, ACCENT,
+    BODY_BG, CYAN, DIM, HEADER_BG, RED, SURFACE, TEXT, TEXT_MUTED,
 };
 
-/// Render the task list screen
+/// Render the task list screen.
 pub fn render(
     f: &mut Frame,
     area: Rect,
     workflow_run: Option<&WorkflowRun>,
     tasks: &[Task],
     table_state: &mut TableState,
+    status: Option<&StatusLine>,
+    log_view: Option<&LogView>,
+    log_scroll: u16,
+    log_follow: bool,
 ) {
+    let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(3), // title bar
-        Constraint::Length(1), // spacing
+        Constraint::Length(2), // title bar
         Constraint::Min(0),    // table
         Constraint::Length(1), // help bar
+        Constraint::Length(status_height), // status bar
     ])
     .split(area);
 
-    // -- Title / header bar --
     render_header(f, chunks[0], workflow_run);
 
-    // -- Content --
-    let content = chunks[2].inner(Margin::new(1, 0));
-
-    // Filter out master tasks
-    let visible_tasks: Vec<&Task> = tasks.iter().filter(|t| !t.is_master).collect();
+    let content = chunks[1];
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), chunks[1]);
+    let visible_tasks: Vec<&Task> = tasks.iter().filter(|task| !task.is_master).collect();
 
     if visible_tasks.is_empty() {
         let y = content.y + content.height / 2;
         let line = Line::from(Span::styled(
-            "Waiting for tasks\u{2026}",
+            "Waiting for tasks…",
             Style::default().fg(TEXT_MUTED),
         ));
         f.render_widget(line, Rect::new(content.x, y, content.width, 1));
-        render_help_bar(f, chunks[3], tasks);
+        render_help_bar(f, chunks[2], tasks, log_view.is_some());
+        render_status_line(f, chunks[3], status);
+        if let Some(log_view) = log_view {
+            render_log_modal(f, area, log_view, log_scroll, log_follow);
+        }
         return;
     }
 
-    // -- Discover matrix columns --
-    // Collect unique matrix keys (excluding _-prefixed) where all values are < 32 chars.
-    let matrix_columns = {
-        let mut keys: Vec<String> = Vec::new();
-        for task in &visible_tasks {
-            if let Some(mv) = &task.matrix_values {
-                for k in mv.keys() {
-                    if !k.starts_with('_') && !keys.contains(k) {
-                        keys.push(k.clone());
-                    }
+    let matrix_columns = collect_matrix_columns(&visible_tasks);
+    let header = build_header(&matrix_columns);
+    let rows = build_rows(&visible_tasks, &matrix_columns);
+    let widths = build_widths(&visible_tasks, &matrix_columns);
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .style(Style::default().bg(BODY_BG))
+        .row_highlight_style(Style::default().bg(SURFACE));
+    f.render_stateful_widget(table, content, table_state);
+
+    render_help_bar(f, chunks[2], tasks, log_view.is_some());
+    render_status_line(f, chunks[3], status);
+
+    if let Some(log_view) = log_view {
+        render_log_modal(f, area, log_view, log_scroll, log_follow);
+    }
+}
+
+fn collect_matrix_columns(tasks: &[&Task]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for task in tasks {
+        if let Some(matrix_values) = &task.matrix_values {
+            for key in matrix_values.keys() {
+                if !key.starts_with('_') && !keys.contains(key) {
+                    keys.push(key.clone());
                 }
             }
         }
-        keys.sort();
-        // Keep only keys whose values are all < 32 characters
-        keys.retain(|k| {
-            visible_tasks.iter().all(|task| {
-                task.matrix_values
-                    .as_ref()
-                    .and_then(|mv| mv.get(k))
-                    .map(|v| {
-                        let s = match v {
-                            serde_json::Value::String(s) => s.len(),
-                            other => other.to_string().len(),
-                        };
-                        s < 32
-                    })
-                    .unwrap_or(true)
-            })
-        });
-        keys
-    };
+    }
+    keys.sort();
+    keys.retain(|key| {
+        tasks.iter().all(|task| {
+            task.matrix_values
+                .as_ref()
+                .and_then(|matrix_values| matrix_values.get(key))
+                .map(|value| match value {
+                    serde_json::Value::String(value) => value.len(),
+                    other => other.to_string().len(),
+                } < 32)
+                .unwrap_or(true)
+        })
+    });
+    keys
+}
 
-    // -- Column headers --
+fn build_header(matrix_columns: &[String]) -> Row<'static> {
     let mut header_cells = vec![
         Cell::from(Span::styled("STATUS", Style::default().fg(TEXT_MUTED))),
         Cell::from(Span::styled("NODE", Style::default().fg(TEXT_MUTED))),
     ];
-    for k in &matrix_columns {
+    for key in matrix_columns {
         header_cells.push(Cell::from(Span::styled(
-            k.to_uppercase(),
+            key.to_uppercase(),
             Style::default().fg(TEXT_MUTED),
         )));
     }
@@ -103,10 +125,11 @@ pub fn render(
         Style::default().fg(TEXT_MUTED),
     )));
 
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
+    Row::new(header_cells).height(1).bottom_margin(1)
+}
 
-    // -- Rows --
-    let rows: Vec<Row> = visible_tasks
+fn build_rows<'a>(tasks: &[&'a Task], matrix_columns: &[String]) -> Vec<Row<'a>> {
+    tasks
         .iter()
         .map(|task| {
             let icon = task_status_icon(task.status);
@@ -115,19 +138,15 @@ pub fn render(
 
             let started = task
                 .started_at
-                .map(|t| t.format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "\u{2014}".to_string());
+                .map(|time| time.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "—".to_string());
 
             let duration = match (task.started_at, task.ended_at) {
-                (Some(start), Some(end)) => {
-                    let secs = (end - start).num_seconds();
-                    format_duration(secs)
-                }
+                (Some(start), Some(end)) => format_duration((end - start).num_seconds()),
                 (Some(start), None) if task.status == TaskStatus::Running => {
-                    let secs = (Utc::now() - start).num_seconds();
-                    format!("{}\u{2026}", format_duration(secs))
+                    format!("{}…", format_duration((Utc::now() - start).num_seconds()))
                 }
-                _ => "\u{2014}".to_string(),
+                _ => "—".to_string(),
             };
 
             let mut cells = vec![
@@ -141,18 +160,18 @@ pub fn render(
                 )),
             ];
 
-            for k in &matrix_columns {
-                let val = task
+            for key in matrix_columns {
+                let value = task
                     .matrix_values
                     .as_ref()
-                    .and_then(|mv| mv.get(k))
-                    .map(|v| match v {
-                        serde_json::Value::String(s) => s.clone(),
+                    .and_then(|matrix_values| matrix_values.get(key))
+                    .map(|value| match value {
+                        serde_json::Value::String(value) => value.clone(),
                         other => other.to_string(),
                     })
-                    .unwrap_or_else(|| "\u{2014}".to_string());
+                    .unwrap_or_else(|| "—".to_string());
                 cells.push(Cell::from(Span::styled(
-                    val,
+                    value,
                     Style::default().fg(TEXT_MUTED),
                 )));
             }
@@ -168,42 +187,32 @@ pub fn render(
 
             Row::new(cells)
         })
-        .collect();
+        .collect()
+}
 
-    // -- Column widths --
-    let mut widths: Vec<Constraint> = vec![
-        Constraint::Length(14), // STATUS
-        Constraint::Length(20), // NODE
-    ];
-    for k in &matrix_columns {
-        // Size each matrix column to fit header or max value width, capped at 32
-        let max_val_len = visible_tasks
+fn build_widths(tasks: &[&Task], matrix_columns: &[String]) -> Vec<Constraint> {
+    let mut widths = vec![Constraint::Length(14), Constraint::Fill(1)];
+    for key in matrix_columns {
+        let max_len = tasks
             .iter()
-            .filter_map(|t| {
-                t.matrix_values
+            .filter_map(|task| {
+                task.matrix_values
                     .as_ref()
-                    .and_then(|mv| mv.get(k))
-                    .map(|v| match v {
-                        serde_json::Value::String(s) => s.len(),
+                    .and_then(|matrix_values| matrix_values.get(key))
+                    .map(|value| match value {
+                        serde_json::Value::String(value) => value.len(),
                         other => other.to_string().len(),
                     })
             })
             .max()
             .unwrap_or(0);
-        let col_width = max_val_len.max(k.len()).min(32) as u16 + 2;
-        widths.push(Constraint::Length(col_width));
+        widths.push(Constraint::Length(
+            max_len.max(key.len()).min(32) as u16 + 2,
+        ));
     }
-    widths.push(Constraint::Length(10)); // STARTED
-    widths.push(Constraint::Length(10)); // DURATION
-
-    let table = Table::new(rows, widths)
-        .header(header)
-        .row_highlight_style(Style::default().bg(SURFACE));
-
-    f.render_stateful_widget(table, content, table_state);
-
-    // -- Help bar --
-    render_help_bar(f, chunks[3], tasks);
+    widths.push(Constraint::Length(10));
+    widths.push(Constraint::Length(10));
+    widths
 }
 
 fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) {
@@ -215,33 +224,24 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
     f.render_widget(block, area);
 
     let Some(run) = workflow_run else {
-        let loading = Line::from(Span::styled(
-            "Loading\u{2026}",
-            Style::default().fg(TEXT_MUTED),
-        ));
+        let line = Line::from(Span::styled("Loading…", Style::default().fg(TEXT_MUTED)));
         let y = inner.y + inner.height.saturating_sub(1) / 2;
-        f.render_widget(loading, Rect::new(inner.x, y, inner.width, 1));
+        f.render_widget(line, Rect::new(inner.x, y, inner.width, 1));
         return;
     };
 
     let icon = workflow_status_icon(run.status);
     let color = workflow_status_color(run.status);
     let status_text = workflow_status_label(run.status);
-
-    let name = run.name.as_deref().unwrap_or("Workflow");
+    let workflow_name = run.name.as_deref().unwrap_or("Workflow");
     let target = run
         .target_path
         .as_ref()
-        .map(|p| {
-            let s = p.display().to_string();
-            if let Some(home) = dirs::home_dir() {
-                if let Some(rest) = s.strip_prefix(&home.display().to_string()) {
-                    return format!("~{rest}");
-                }
-            }
-            s
-        })
+        .map(|path| shorten_home_path(path.as_path()))
         .unwrap_or_default();
+    let available_width = inner.width.saturating_sub(2) as usize;
+    let workflow_label = truncate_middle(workflow_name, available_width.max(1).min(72));
+    let target_label = truncate_middle(&format!("target: {target}"), available_width.max(1));
 
     let title_line = Line::from(vec![
         Span::styled(
@@ -249,32 +249,71 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" / ", Style::default().fg(DIM)),
-        Span::styled(name, Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            workflow_label,
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
         Span::styled(format!("{icon} "), Style::default().fg(color)),
         Span::styled(status_text, Style::default().fg(color)),
-        Span::raw("  "),
-        Span::styled(target, Style::default().fg(DIM)),
     ]);
+    let target_line = Line::from(Span::styled(target_label, Style::default().fg(DIM)));
 
-    let y = inner.y + inner.height.saturating_sub(1) / 2;
-    f.render_widget(title_line, Rect::new(inner.x, y, inner.width, 1));
+    f.render_widget(title_line, Rect::new(inner.x, inner.y, inner.width, 1));
+    f.render_widget(
+        target_line,
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+    );
 }
 
-fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task]) {
+fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task], log_view_open: bool) {
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        area,
+    );
     let padded = area.inner(Margin::new(1, 0));
+
+    if log_view_open {
+        let spans = vec![
+            Span::styled(
+                " logs ",
+                Style::default()
+                    .bg(super::KEY_BG)
+                    .fg(TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ↑↓/pg scroll  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                " esc ",
+                Style::default()
+                    .bg(super::KEY_BG)
+                    .fg(TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" close  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                " q ",
+                Style::default()
+                    .bg(super::KEY_BG)
+                    .fg(TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" quit  ", Style::default().fg(TEXT_MUTED)),
+        ];
+        f.render_widget(Line::from(spans), padded);
+        return;
+    }
 
     let has_awaiting = tasks
         .iter()
-        .any(|t| t.status == TaskStatus::AwaitingTrigger && !t.is_master);
+        .any(|task| task.status == TaskStatus::AwaitingTrigger && !task.is_master);
     let has_failed = tasks
         .iter()
-        .any(|t| t.status == TaskStatus::Failed && !t.is_master);
+        .any(|task| task.status == TaskStatus::Failed && !task.is_master);
 
     let mut spans: Vec<Span> = Vec::new();
-    spans.extend(key_hint("\u{2191}\u{2193}", "navigate"));
-    spans.extend(key_hint("\u{23ce}", "logs"));
-
+    spans.extend(key_hint("↑↓", "navigate"));
+    spans.extend(key_hint("⏎", "logs"));
     if has_awaiting {
         spans.extend(key_hint_colored("t", "trigger", CYAN));
         spans.extend(key_hint_colored("T", "trigger all", CYAN));
@@ -282,11 +321,94 @@ fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task]) {
     if has_failed {
         spans.extend(key_hint_colored("R", "retry", RED));
     }
-
     spans.extend(key_hint("s", "settings"));
     spans.extend(key_hint("c", "cancel"));
     spans.extend(key_hint("esc", "back"));
     spans.extend(key_hint("q", "quit"));
 
     f.render_widget(Line::from(spans), padded);
+}
+
+fn render_log_modal(
+    f: &mut Frame,
+    area: Rect,
+    log_view: &LogView,
+    log_scroll: u16,
+    log_follow: bool,
+) {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(HEADER_BG)),
+        area,
+    );
+
+    let modal_area = centered_rect(area, 80, 70);
+
+    let block = Block::default()
+        .title(format!("task {} / {:?}", log_view.node_id, log_view.status))
+        .borders(Borders::ALL)
+        .style(Style::default().bg(HEADER_BG));
+
+    let inner = block.inner(modal_area).inner(Margin::new(1, 1));
+    f.render_widget(block, modal_area);
+
+    let mut lines = Vec::new();
+    if log_view.lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            if log_view.status == TaskStatus::Running {
+                "Task is running. Waiting for log output… some commands only flush when the step exits."
+            } else {
+                "(no logs)"
+            },
+            Style::default().fg(TEXT_MUTED),
+        )));
+    } else {
+        lines.extend(log_view.lines.iter().map(|line| Line::from(line.clone())));
+    }
+
+    if let Some(error) = &log_view.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "error: ",
+                Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(error.clone(), Style::default().fg(TEXT)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Use ↑↓ or pgup/pgdn to scroll. Press esc, enter, or l to close",
+        Style::default().fg(TEXT_MUTED),
+    )));
+
+    let viewport_height = inner.height.saturating_sub(1) as usize;
+    let max_scroll = lines.len().saturating_sub(viewport_height) as u16;
+    let scroll = if log_follow {
+        max_scroll
+    } else {
+        log_scroll.min(max_scroll)
+    };
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    f.render_widget(paragraph, inner);
+}
+
+fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - height_percent) / 2),
+        Constraint::Percentage(height_percent),
+        Constraint::Percentage((100 - height_percent) / 2),
+    ])
+    .split(area);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - width_percent) / 2),
+        Constraint::Percentage(width_percent),
+        Constraint::Percentage((100 - width_percent) / 2),
+    ])
+    .split(vertical[1])[1]
 }

@@ -271,6 +271,15 @@ impl StateAdapter for LocalStateAdapter {
         // Update in-memory cache
         self.tasks.insert(task.id, task.clone());
 
+        // Keep a per-run task index on the workflow run so callers do not need
+        // to scan the entire task store on every refresh.
+        if let Ok(mut workflow_run) = self.get_workflow_run(task.workflow_run_id).await {
+            if !workflow_run.tasks.contains(&task.id) {
+                workflow_run.tasks.push(task.id);
+                self.save_workflow_run(&workflow_run).await?;
+            }
+        }
+
         Ok(())
     }
 
@@ -285,26 +294,34 @@ impl StateAdapter for LocalStateAdapter {
     }
 
     async fn get_tasks(&self, workflow_run_id: Uuid) -> Result<Vec<Task>> {
-        // Create the tasks directory if it doesn't exist
+        if let Ok(workflow_run) = self.get_workflow_run(workflow_run_id).await {
+            if !workflow_run.tasks.is_empty() {
+                let mut tasks = Vec::with_capacity(workflow_run.tasks.len());
+                for task_id in workflow_run.tasks {
+                    if let Ok(task) = self.get_task(task_id).await {
+                        tasks.push(task);
+                    }
+                }
+                return Ok(tasks);
+            }
+        }
+
+        // Backward-compatible fallback for legacy runs that do not have their
+        // task index populated yet.
         let dir = self.base_dir.join("tasks");
         fs::create_dir_all(&dir)?;
 
-        // List all files in the directory
-        let entries = fs::read_dir(dir)?
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .map(|ext| ext == "json")
-                    .unwrap_or(false)
-            })
-            .collect::<Vec<_>>();
-
-        // Load the tasks
         let mut tasks = Vec::new();
-        for entry in entries {
+        for entry in fs::read_dir(dir)?.filter_map(|entry| entry.ok()) {
             let path = entry.path();
+            if !path
+                .extension()
+                .map(|ext| ext == "json")
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
             let file_name = path.file_stem().unwrap().to_string_lossy();
             if let Ok(task_id) = Uuid::parse_str(&file_name) {
                 if let Ok(task) = self.load_task(task_id) {

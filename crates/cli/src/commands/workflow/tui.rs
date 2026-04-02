@@ -21,7 +21,7 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     // Use a minimal engine config for browsing -- no workflow file needed
     // We create a dummy config since we just need the state adapter
-    let (engine, _config) = create_engine(
+    let (mut engine, _config) = create_engine(
         target_path.join("workflow.yaml"), // dummy path
         target_path,
         false,
@@ -38,6 +38,9 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
         None,
     )?;
+
+    engine.set_quiet(true);
+    engine.set_progress_callback(std::sync::Arc::new(None));
 
     if let Some(workflow_run_id) = args.id {
         tui::run_tui_for_run(engine, workflow_run_id).await

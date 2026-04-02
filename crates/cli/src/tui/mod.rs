@@ -1,618 +1,440 @@
-pub mod actions;
 pub mod app;
 pub mod event;
 pub mod screens;
 
-use std::collections::HashSet;
-use std::io::{self, stdout};
-use std::process::Command as ProcessCommand;
+use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
+use std::sync::Arc;
 
 use anyhow::Result;
+use butterflow_core::config::{ShellCommandApprovalCallback, ShellCommandExecutionRequest};
 use butterflow_core::engine::Engine;
-use butterflow_models::WorkflowRun;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use crossterm::{
-    event::{KeyCode, KeyModifiers},
-    style::Stylize,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    ExecutableCommand,
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture,
 };
+use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use app::{App, Screen};
+use app::{App, AppEffect, EffectResult, LogView, PendingShellApproval};
 use event::{AppEvent, EventHandler};
+use screens::{render_screen_background, StatusLine, StatusTone};
 
-use self::actions::Action;
-use crate::utils::path_safety::normalize_target_path;
+type TuiTerminal = Terminal<CrosstermBackend<File>>;
 
-/// Run the TUI starting at the run list
-pub async fn run_tui(engine: Engine, limit: usize) -> Result<()> {
-    let app = App::new(engine, limit);
-    run_tui_loop(app).await
+/// Run the TUI starting at the run list.
+pub async fn run_tui(mut engine: Engine, limit: usize) -> Result<()> {
+    let runtime = configure_engine_for_tui(&mut engine);
+
+    let app = App::new(
+        engine.is_dry_run(),
+        engine.get_capabilities().clone(),
+        limit,
+    );
+    run_tui_loop(app, engine, runtime).await
 }
 
-/// Run the TUI starting at the task list for a specific workflow run
-pub async fn run_tui_for_run(engine: Engine, workflow_run_id: Uuid) -> Result<()> {
-    let app = App::new_for_run(engine, workflow_run_id);
-    run_tui_loop(app).await
+/// Run the TUI starting at the task list for a specific workflow run.
+pub async fn run_tui_for_run(mut engine: Engine, workflow_run_id: Uuid) -> Result<()> {
+    let runtime = configure_engine_for_tui(&mut engine);
+
+    run_tui_for_run_with_runtime(engine, workflow_run_id, runtime).await
 }
 
-/// Restore the terminal to a sane state (idempotent, safe to call multiple times)
-fn restore_terminal() {
-    let _ = disable_raw_mode();
-    let _ = stdout().execute(LeaveAlternateScreen);
+pub(crate) async fn run_tui_for_run_with_runtime(
+    engine: Engine,
+    workflow_run_id: Uuid,
+    runtime: TuiRuntime,
+) -> Result<()> {
+    let app = App::new_for_run(
+        engine.is_dry_run(),
+        engine.get_capabilities().clone(),
+        workflow_run_id,
+    );
+    run_tui_loop(app, engine, runtime).await
 }
 
-/// Returns true if the key event is Ctrl+C
-fn is_ctrl_c(key: &crossterm::event::KeyEvent) -> bool {
-    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+pub(crate) fn configure_engine_for_tui(engine: &mut Engine) -> TuiRuntime {
+    engine.set_quiet(true);
+    engine.set_progress_callback(Arc::new(None));
+    let config = engine.workflow_run_config_mut();
+
+    let (tx, approval_rx) = mpsc::unbounded_channel();
+    let approval_callback: ShellCommandApprovalCallback = Arc::new(move |request| {
+        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ShellApprovalMessage {
+            request: request.clone(),
+            response_tx,
+        })
+        .map_err(|_| anyhow::anyhow!("TUI approval channel closed"))?;
+
+        response_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("TUI approval response channel closed"))?
+    });
+    config.shell_command_approval_callback = Some(approval_callback);
+
+    TuiRuntime { approval_rx }
 }
 
-// Thin syscall wrappers — avoids pulling in the `libc` crate.
-extern "C" {
-    #[link_name = "dup"]
-    fn libc_dup(fd: i32) -> i32;
-    #[link_name = "dup2"]
-    fn libc_dup2(src: i32, dst: i32) -> i32;
-    #[link_name = "open"]
-    fn libc_open(path: *const u8, flags: i32) -> i32;
-    #[link_name = "close"]
-    fn libc_close(fd: i32) -> i32;
-}
-
-const O_WRONLY: i32 = 1;
-
-/// Manages redirection of stdout/stderr to /dev/null while the TUI is active.
-/// Keeps saved copies of the real fds so they can be temporarily restored
-/// (e.g. for the inline log viewer) and permanently restored on TUI exit.
-struct StdioGuard {
-    /// Dup of the original stdout fd
-    saved_stdout_fd: i32,
-    /// Dup of the original stderr fd
-    saved_stderr_fd: i32,
-    /// Fd pointing to /dev/null (kept open for re-redirecting)
-    devnull_fd: i32,
-}
-
-impl StdioGuard {
-    /// Save real stdout/stderr, then redirect fd 1 & 2 to /dev/null.
-    /// Returns the guard and a `File` handle to the real tty for ratatui.
-    fn redirect() -> Result<(std::fs::File, Self)> {
-        use std::os::unix::io::{AsRawFd, FromRawFd};
-
-        unsafe {
-            let real_stdout = io::stdout().as_raw_fd();
-            let real_stderr = io::stderr().as_raw_fd();
-
-            let saved_stdout_fd = libc_dup(real_stdout);
-            let saved_stderr_fd = libc_dup(real_stderr);
-            if saved_stdout_fd < 0 || saved_stderr_fd < 0 {
-                anyhow::bail!("Failed to dup stdout/stderr file descriptors");
-            }
-
-            // Dup for ratatui to write to the real terminal
-            let tty_fd = libc_dup(real_stdout);
-            if tty_fd < 0 {
-                anyhow::bail!("Failed to dup tty file descriptor");
-            }
-            let tty_file = std::fs::File::from_raw_fd(tty_fd);
-
-            let devnull_fd = libc_open(b"/dev/null\0".as_ptr(), O_WRONLY);
-            if devnull_fd < 0 {
-                anyhow::bail!("Failed to open /dev/null");
-            }
-
-            libc_dup2(devnull_fd, 1);
-            libc_dup2(devnull_fd, 2);
-
-            Ok((
-                tty_file,
-                Self {
-                    saved_stdout_fd,
-                    saved_stderr_fd,
-                    devnull_fd,
-                },
-            ))
-        }
-    }
-
-    /// Temporarily restore real stdout/stderr (e.g. for child process).
-    fn pause_redirect(&self) {
-        unsafe {
-            libc_dup2(self.saved_stdout_fd, 1);
-            libc_dup2(self.saved_stderr_fd, 2);
-        }
-    }
-
-    /// Re-redirect stdout/stderr back to /dev/null after a pause.
-    fn resume_redirect(&self) {
-        unsafe {
-            libc_dup2(self.devnull_fd, 1);
-            libc_dup2(self.devnull_fd, 2);
-        }
-    }
-
-    /// Permanently restore real stdout/stderr and clean up.
-    fn restore(self) {
-        unsafe {
-            libc_dup2(self.saved_stdout_fd, 1);
-            libc_dup2(self.saved_stderr_fd, 2);
-            libc_close(self.saved_stdout_fd);
-            libc_close(self.saved_stderr_fd);
-            libc_close(self.devnull_fd);
-        }
-    }
-}
-
-async fn run_tui_loop(mut app: App) -> Result<()> {
-    // Install a panic hook that restores the terminal so a panic doesn't
-    // leave the user stuck in raw mode / alternate screen.
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        // Write terminal-restore escape sequences directly to /dev/tty so they
-        // reach the real terminal even if stdout/stderr are redirected to /dev/null.
-        let _ = disable_raw_mode();
-        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-            use std::io::Write;
-            // LeaveAlternateScreen + show cursor
-            let _ = tty.write_all(b"\x1b[?1049l\x1b[?25h");
-            let _ = tty.flush();
-        }
-        original_hook(info);
-    }));
-
-    // Suppress all log output while TUI is active
-    let prev_log_level = log::max_level();
-    log::set_max_level(log::LevelFilter::Off);
-
-    // Setup terminal — must happen BEFORE we redirect fds so that
-    // EnterAlternateScreen goes to the real terminal.
-    enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
-
-    // Now redirect stdout (fd 1) and stderr (fd 2) to /dev/null so that
-    // *nothing* — println!, eprintln!, log macros, child-process output,
-    // JS runtime errors — can corrupt the ratatui alternate screen.
-    // We get back a File handle to the real tty for ratatui to write to.
-    let (tty_file, stdio_guard) = StdioGuard::redirect()?;
-
-    let backend = CrosstermBackend::new(tty_file);
-    let mut terminal = Terminal::new(backend)?;
+async fn run_tui_loop(mut app: App, mut engine: Engine, mut runtime: TuiRuntime) -> Result<()> {
+    let mut session = TuiSession::enter()?;
+    let mut terminal = session.terminal;
     terminal.clear()?;
 
-    // Initial data fetch
-    app.refresh().await?;
-
-    // Event loop
     let mut events = EventHandler::new(std::time::Duration::from_millis(500));
+    let result = run_event_loop(
+        &mut app,
+        &mut engine,
+        &mut terminal,
+        &mut events,
+        &mut runtime,
+    )
+    .await;
 
-    let result = run_event_loop(&mut app, &mut terminal, &mut events, &stdio_guard).await;
+    session.terminal = terminal;
+    let restore_result = session.restore();
 
-    // Always cleanup: restore stdio FIRST so LeaveAlternateScreen reaches the
-    // real terminal instead of /dev/null.
-    stdio_guard.restore();
-    restore_terminal();
-    log::set_max_level(prev_log_level);
+    result?;
+    restore_result?;
+    Ok(())
+}
 
-    result
+struct ShellApprovalMessage {
+    request: ShellCommandExecutionRequest,
+    response_tx: std::sync::mpsc::SyncSender<Result<bool>>,
+}
+
+pub(crate) struct TuiRuntime {
+    approval_rx: mpsc::UnboundedReceiver<ShellApprovalMessage>,
 }
 
 async fn run_event_loop(
     app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
+    engine: &mut Engine,
+    terminal: &mut TuiTerminal,
     events: &mut EventHandler,
-    stdio_guard: &StdioGuard,
+    runtime: &mut TuiRuntime,
 ) -> Result<()> {
+    let mut pending_effects: VecDeque<AppEffect> = app.initial_effects().into();
+    let mut approval_queue: VecDeque<PendingShellApproval> = VecDeque::new();
     let mut needs_redraw = true;
 
     loop {
-        // Only draw when something changed
+        drain_shell_approvals(runtime, &mut approval_queue);
+        if !app.has_shell_approval() {
+            if let Some(next_approval) = approval_queue.pop_front() {
+                needs_redraw |= app.present_shell_approval(next_approval);
+            }
+        }
+
+        while let Some(effect) = pending_effects.pop_front() {
+            let should_refresh = effect.clone().should_refresh_after();
+            let effect_result = execute_effect(app, engine, effect).await;
+            needs_redraw |= app.apply_effect_result(effect_result);
+
+            if should_refresh {
+                pending_effects.push_back(AppEffect::Refresh);
+            }
+        }
+
+        if app.should_quit {
+            app.reject_shell_approval(Some(anyhow::anyhow!(
+                "TUI closed while shell command approval was pending"
+            )));
+            while let Some(pending) = approval_queue.pop_front() {
+                pending.fail(anyhow::anyhow!(
+                    "TUI closed while shell command approval was pending"
+                ));
+            }
+            break;
+        }
+
         if needs_redraw {
-            terminal.draw(|f| {
-                let area = f.area();
+            terminal.draw(|frame| {
+                let area = frame.area();
+                render_screen_background(frame, area);
+                if let Some(request) = app.shell_approval_request() {
+                    screens::render_shell_approval_modal(frame, area, request);
+                    return;
+                }
+
                 match &app.screen {
-                    Screen::RunList => {
-                        screens::run_list::render(
-                            f,
-                            area,
-                            &app.workflow_runs,
-                            &mut app.run_list_state,
-                        );
-                    }
-                    Screen::TaskList { .. } => {
-                        screens::task_list::render(
-                            f,
-                            area,
-                            app.current_workflow_run.as_ref(),
-                            &app.tasks,
-                            &mut app.task_list_state,
-                        );
-                    }
-                    Screen::Settings { .. } => {
-                        screens::settings::render(
-                            f,
-                            area,
-                            app.current_workflow_run.as_ref(),
-                            app.settings_cursor,
-                            app.engine.is_dry_run(),
-                            app.engine.get_capabilities(),
-                        );
-                    }
+                    app::Screen::RunList => screens::run_list::render(
+                        frame,
+                        area,
+                        &app.workflow_runs,
+                        &mut app.run_list_state,
+                        app.status_line.as_ref(),
+                    ),
+                    app::Screen::TaskList { .. } => screens::task_list::render(
+                        frame,
+                        area,
+                        app.current_workflow_run.as_ref(),
+                        &app.tasks,
+                        &mut app.task_list_state,
+                        app.status_line.as_ref(),
+                        app.log_view.as_ref(),
+                        app.log_scroll,
+                        app.log_follow,
+                    ),
+                    app::Screen::Settings { .. } => screens::settings::render(
+                        frame,
+                        area,
+                        app.current_workflow_run.as_ref(),
+                        app.settings_cursor,
+                        app.session_overrides.dry_run,
+                        &app.session_overrides.capabilities,
+                        app.status_line.as_ref(),
+                    ),
                 }
             })?;
             needs_redraw = false;
         }
 
-        // Handle events
-        let event = events.next().await?;
+        let first_event = events.next().await?;
+        let mut event_batch = vec![first_event];
+        event_batch.extend(events.drain_pending(255));
+
+        for event in coalesce_events(event_batch) {
+            needs_redraw |= matches!(
+                event,
+                AppEvent::Key(_) | AppEvent::Mouse(_) | AppEvent::Scroll(_) | AppEvent::Resize(_, _)
+            ) || matches!(event, AppEvent::Tick) && app.has_live_updates();
+            pending_effects.extend(app.reduce(event));
+        }
+    }
+
+    Ok(())
+}
+
+fn coalesce_events(events: Vec<AppEvent>) -> Vec<AppEvent> {
+    let mut coalesced = Vec::new();
+    let mut pending_scroll = 0i32;
+    let mut pending_tick = false;
+    let mut pending_resize: Option<(u16, u16)> = None;
+
+    for event in events {
         match event {
-            AppEvent::Key(key) => {
-                // Ctrl+C: restore terminal and force-exit the process.
-                // This avoids waiting for background `spawn_blocking` tasks
-                // (workflow execution) to finish during tokio runtime shutdown.
-                if is_ctrl_c(&key) {
-                    stdio_guard.pause_redirect();
-                    restore_terminal();
-                    std::process::exit(0);
+            AppEvent::Mouse(mouse) => match mouse.kind {
+                crossterm::event::MouseEventKind::ScrollDown => {
+                    pending_scroll = pending_scroll.saturating_add(1);
                 }
-
-                // Any keypress triggers a redraw (cursor movement, etc.)
-                needs_redraw = true;
-
-                if let Some(action) = app.handle_key(key) {
-                    match action {
-                        Action::Quit => break,
-                        Action::NavigateToTaskList(id) => {
-                            app.navigate_to_task_list(id);
-                            app.refresh().await?;
-                        }
-                        Action::NavigateToRunList => {
-                            app.navigate_to_run_list();
-                            app.refresh().await?;
-                        }
-                        Action::ViewLogs(wf_id, task_id) => {
-                            events.pause();
-                            stdio_guard.pause_redirect();
-                            let result = view_logs_inline(&app.engine, wf_id, task_id).await;
-                            restore_tui(terminal, stdio_guard, events).await?;
-                            if let Err(e) = result {
-                                app.status_message = Some(format!("Failed to view logs: {e}"));
-                            }
-                            app.refresh().await?;
-                        }
-                        Action::TriggerTask(wf_id, task_id) => {
-                            events.pause();
-                            stdio_guard.pause_redirect();
-                            let result = app
-                                .current_workflow_run
-                                .as_ref()
-                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
-                                .and_then(|workflow_run| {
-                                    run_tasks_via_child_process(
-                                        &app.engine,
-                                        workflow_run,
-                                        wf_id,
-                                        &[task_id],
-                                    )
-                                });
-                            restore_tui(terminal, stdio_guard, events).await?;
-                            if let Err(e) = result {
-                                app.status_message = Some(format!("Failed to trigger task: {e}"));
-                            }
-                            app.refresh().await?;
-                        }
-                        Action::TriggerAll(wf_id) => {
-                            events.pause();
-                            stdio_guard.pause_redirect();
-                            let result = app
-                                .current_workflow_run
-                                .as_ref()
-                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
-                                .and_then(|workflow_run| {
-                                    run_tasks_via_child_process(
-                                        &app.engine,
-                                        workflow_run,
-                                        wf_id,
-                                        &[],
-                                    )
-                                });
-                            restore_tui(terminal, stdio_guard, events).await?;
-                            if let Err(e) = result {
-                                app.status_message = Some(format!("Failed to trigger all: {e}"));
-                            }
-                            app.refresh().await?;
-                        }
-                        Action::RetryFailed(wf_id, task_id) => {
-                            events.pause();
-                            stdio_guard.pause_redirect();
-                            let result = app
-                                .current_workflow_run
-                                .as_ref()
-                                .ok_or_else(|| anyhow::anyhow!("Workflow run not loaded"))
-                                .and_then(|workflow_run| {
-                                    run_tasks_via_child_process(
-                                        &app.engine,
-                                        workflow_run,
-                                        wf_id,
-                                        &[task_id],
-                                    )
-                                });
-                            restore_tui(terminal, stdio_guard, events).await?;
-                            if let Err(e) = result {
-                                app.status_message = Some(format!("Failed to retry task: {e}"));
-                            }
-                            app.refresh().await?;
-                        }
-                        Action::NavigateToSettings(wf_id) => {
-                            app.navigate_to_settings(wf_id);
-                            app.refresh().await?;
-                        }
-                        Action::NavigateBackFromSettings => {
-                            app.navigate_back_from_settings();
-                            app.refresh().await?;
-                        }
-                        Action::CancelWorkflow(wf_id) => {
-                            if let Err(e) = app.engine.cancel_workflow(wf_id).await {
-                                app.status_message =
-                                    Some(format!("Failed to cancel workflow: {e}"));
-                            }
-                            app.refresh().await?;
-                        }
-                    }
+                crossterm::event::MouseEventKind::ScrollUp => {
+                    pending_scroll = pending_scroll.saturating_sub(1);
                 }
-            }
+                _ => {
+                    flush_coalesced_events(
+                        &mut coalesced,
+                        &mut pending_scroll,
+                        &mut pending_tick,
+                        &mut pending_resize,
+                    );
+                    coalesced.push(AppEvent::Mouse(mouse));
+                }
+            },
             AppEvent::Tick => {
-                if app.refresh().await? {
-                    needs_redraw = true;
-                }
+                pending_tick = true;
             }
-            AppEvent::Resize(_, _) => {
-                needs_redraw = true;
+            AppEvent::Resize(width, height) => {
+                pending_resize = Some((width, height));
             }
-        }
-
-        if app.should_quit {
-            break;
-        }
-    }
-
-    Ok(())
-}
-
-/// Restore the TUI after a passthrough view: re-redirect stdio, re-enter
-/// alternate screen, enable raw mode, resume the event handler, and force
-/// a full terminal redraw so the user sees the task list immediately.
-async fn restore_tui(
-    terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
-    stdio_guard: &StdioGuard,
-    events: &mut EventHandler,
-) -> Result<()> {
-    // Ensure clean terminal state — child process may have left raw mode on.
-    let _ = disable_raw_mode();
-
-    // Re-redirect stdout/stderr to /dev/null BEFORE entering the alternate
-    // screen — otherwise EnterAlternateScreen would go to the real terminal
-    // and the ratatui backend (which writes to the tty_file fd) would be
-    // out of sync.
-    stdio_guard.resume_redirect();
-    enable_raw_mode()?;
-
-    // Write EnterAlternateScreen to the tty file via the ratatui backend
-    // (not stdout, which now goes to /dev/null).
-    use std::io::Write;
-    let tty = terminal.backend_mut();
-    crossterm::queue!(tty, EnterAlternateScreen)?;
-    tty.flush()?;
-
-    terminal.clear()?;
-    events.resume();
-    Ok(())
-}
-
-/// Resume workflow tasks via a child `codemod workflow resume` process so the
-/// resumed execution gets a clean interactive terminal.
-fn run_tasks_via_child_process(
-    engine: &Engine,
-    workflow_run: &WorkflowRun,
-    workflow_run_id: Uuid,
-    task_ids: &[Uuid],
-) -> Result<()> {
-    disable_raw_mode()?;
-    stdout().execute(LeaveAlternateScreen)?;
-
-    let workflow_source = resolve_workflow_source(engine, workflow_run)?;
-    let target_path = normalize_target_path(
-        workflow_run
-            .target_path
-            .clone()
-            .unwrap_or_else(|| engine.get_target_path()),
-    )?;
-    let current_executable = std::env::current_exe()?;
-
-    let mut cmd = ProcessCommand::new(current_executable);
-    cmd.arg("workflow")
-        .arg("resume")
-        .arg("--workflow")
-        .arg(&workflow_source)
-        .arg("--id")
-        .arg(workflow_run_id.to_string())
-        .arg("--target")
-        .arg(&target_path)
-        .arg("--allow-dirty")
-        .arg("--exit-when-triggered-tasks-finish")
-        .current_dir(&target_path);
-
-    if engine.is_dry_run() {
-        cmd.arg("--dry-run");
-    }
-
-    append_capability_flags(&mut cmd, workflow_run.capabilities.as_ref());
-
-    if task_ids.is_empty() {
-        cmd.arg("--trigger-all");
-    } else {
-        for task_id in task_ids {
-            cmd.arg("--tasks_ids").arg(task_id.to_string());
-        }
-    }
-
-    let status = cmd.status()?;
-    if !status.success() {
-        anyhow::bail!("resume command exited with status {status}");
-    }
-    wait_for_any_key("\nTask is done.\n\nPress any key to return to the tasks list...")?;
-    Ok(())
-}
-
-fn wait_for_any_key(message: &str) -> Result<()> {
-    use std::io::Write;
-
-    println!("{message}");
-    std::io::stdout().flush()?;
-
-    enable_raw_mode()?;
-    loop {
-        if matches!(crossterm::event::read()?, crossterm::event::Event::Key(_)) {
-            break;
-        }
-    }
-    disable_raw_mode()?;
-
-    Ok(())
-}
-
-/// View task logs inline (standalone, used by the ViewLogs action).
-///
-/// Leaves the alternate screen, prints stored logs, returns.
-async fn view_logs_inline(engine: &Engine, workflow_run_id: Uuid, task_id: Uuid) -> Result<()> {
-    disable_raw_mode()?;
-    stdout().execute(LeaveAlternateScreen)?;
-
-    if let Ok(tasks) = engine.get_tasks(workflow_run_id).await {
-        if let Some(task) = tasks.iter().find(|t| t.id == task_id) {
-            println!(
-                "\n  {} {}",
-                crossterm::style::style("task").bold(),
-                crossterm::style::style(&task.node_id).with(crossterm::style::Color::Rgb {
-                    r: 110,
-                    g: 140,
-                    b: 255,
-                }),
-            );
-            println!(
-                "  {} {:?}\n",
-                crossterm::style::style("\u{25cf}").with(match task.status {
-                    butterflow_models::TaskStatus::Completed => crossterm::style::Color::Rgb {
-                        r: 80,
-                        g: 200,
-                        b: 120,
-                    },
-                    butterflow_models::TaskStatus::Failed => crossterm::style::Color::Rgb {
-                        r: 240,
-                        g: 80,
-                        b: 80,
-                    },
-                    _ => crossterm::style::Color::Rgb {
-                        r: 240,
-                        g: 200,
-                        b: 60,
-                    },
-                }),
-                task.status,
-            );
-
-            if task.logs.is_empty() {
-                println!(
-                    "  {}",
-                    crossterm::style::style("(no logs)").with(crossterm::style::Color::Rgb {
-                        r: 100,
-                        g: 100,
-                        b: 110,
-                    })
+            other => {
+                flush_coalesced_events(
+                    &mut coalesced,
+                    &mut pending_scroll,
+                    &mut pending_tick,
+                    &mut pending_resize,
                 );
-            } else {
-                for line in &task.logs {
-                    println!("  {line}");
-                }
+                coalesced.push(other);
             }
-
-            if let Some(error) = &task.error {
-                println!(
-                    "\n  {} {}",
-                    crossterm::style::style("error:")
-                        .with(crossterm::style::Color::Rgb {
-                            r: 240,
-                            g: 80,
-                            b: 80,
-                        })
-                        .bold(),
-                    error,
-                );
-            }
-        } else {
-            println!("\n  Task {task_id} not found.");
         }
     }
 
-    // Wait for any key before returning to TUI
-    println!(
-        "\n  {}",
-        crossterm::style::style("Press Enter to return\u{2026}").with(
-            crossterm::style::Color::Rgb {
-                r: 130,
-                g: 130,
-                b: 145,
-            }
-        )
+    flush_coalesced_events(
+        &mut coalesced,
+        &mut pending_scroll,
+        &mut pending_tick,
+        &mut pending_resize,
     );
-    tokio::task::spawn_blocking(|| {
-        let mut buf = String::new();
-        let _ = std::io::stdin().read_line(&mut buf);
-    })
-    .await?;
-
-    Ok(())
+    coalesced
 }
 
-fn resolve_workflow_source(
-    engine: &Engine,
-    workflow_run: &WorkflowRun,
-) -> Result<std::path::PathBuf> {
-    if let Some(bundle_path) = workflow_run
-        .bundle_path
-        .as_ref()
-        .filter(|path| path.exists())
-    {
-        return Ok(bundle_path.clone());
-    }
-
-    let workflow_file_path = engine.get_workflow_file_path();
-    if workflow_file_path.exists() {
-        return Ok(workflow_file_path);
-    }
-
-    anyhow::bail!(
-        "Unable to determine workflow source for run {}",
-        workflow_run.id
-    );
-}
-
-fn append_capability_flags(
-    cmd: &mut ProcessCommand,
-    capabilities: Option<&HashSet<LlrtSupportedModules>>,
+fn flush_coalesced_events(
+    coalesced: &mut Vec<AppEvent>,
+    pending_scroll: &mut i32,
+    pending_tick: &mut bool,
+    pending_resize: &mut Option<(u16, u16)>,
 ) {
-    let Some(capabilities) = capabilities else {
-        return;
-    };
-
-    if capabilities.contains(&LlrtSupportedModules::Fs) {
-        cmd.arg("--allow-fs");
+    if let Some((width, height)) = pending_resize.take() {
+        coalesced.push(AppEvent::Resize(width, height));
     }
-    if capabilities.contains(&LlrtSupportedModules::Fetch) {
-        cmd.arg("--allow-fetch");
+    if *pending_scroll != 0 {
+        coalesced.push(AppEvent::Scroll(*pending_scroll));
+        *pending_scroll = 0;
     }
-    if capabilities.contains(&LlrtSupportedModules::ChildProcess) {
-        cmd.arg("--allow-child-process");
+    if *pending_tick {
+        coalesced.push(AppEvent::Tick);
+        *pending_tick = false;
     }
 }
+
+struct TuiSession {
+    terminal: TuiTerminal,
+    control: File,
+}
+
+impl TuiSession {
+    fn enter() -> Result<Self> {
+        let control = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+        let backend_tty = control.try_clone()?;
+        enable_raw_mode()?;
+        let mut control_for_setup = control.try_clone()?;
+        execute!(
+            control_for_setup,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste,
+            EnableFocusChange
+        )?;
+
+        let terminal = Terminal::new(CrosstermBackend::new(backend_tty))?;
+        Ok(Self { terminal, control })
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        disable_raw_mode()?;
+        execute!(
+            self.control,
+            DisableFocusChange,
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+        self.terminal.show_cursor()?;
+        Ok(())
+    }
+}
+
+fn drain_shell_approvals(runtime: &mut TuiRuntime, queue: &mut VecDeque<PendingShellApproval>) {
+    while let Ok(message) = runtime.approval_rx.try_recv() {
+        queue.push_back(PendingShellApproval::new(
+            message.request,
+            message.response_tx,
+        ));
+    }
+}
+
+async fn execute_effect(app: &App, engine: &mut Engine, effect: AppEffect) -> EffectResult {
+    match effect {
+        AppEffect::Refresh => {
+            let (workflow_runs, current_workflow_run, tasks) = match app.current_workflow_run_id() {
+                Some(workflow_run_id) => {
+                    let workflow_run = match engine.get_workflow_run(workflow_run_id).await {
+                        Ok(workflow_run) => Some(workflow_run),
+                        Err(error) => {
+                            return EffectResult::Status(StatusLine {
+                                tone: StatusTone::Error,
+                                message: format!("Failed to load workflow run: {error}"),
+                            });
+                        }
+                    };
+                    let tasks = match engine.get_tasks(workflow_run_id).await {
+                        Ok(tasks) => tasks,
+                        Err(error) => {
+                            return EffectResult::Status(StatusLine {
+                                tone: StatusTone::Error,
+                                message: format!("Failed to load tasks: {error}"),
+                            });
+                        }
+                    };
+                    (Vec::new(), workflow_run, tasks)
+                }
+                None => match engine.list_workflow_runs(app.run_list_limit).await {
+                    Ok(workflow_runs) => (workflow_runs, None, Vec::new()),
+                    Err(error) => {
+                        return EffectResult::Status(StatusLine {
+                            tone: StatusTone::Error,
+                            message: format!("Failed to load workflow runs: {error}"),
+                        });
+                    }
+                },
+            };
+
+            EffectResult::Refreshed {
+                workflow_runs,
+                current_workflow_run,
+                tasks,
+            }
+        }
+        AppEffect::LoadLogs {
+            workflow_run_id,
+            task_id,
+        } => {
+            let task = engine
+                .get_tasks(workflow_run_id)
+                .await
+                .ok()
+                .and_then(|tasks| tasks.into_iter().find(|task| task.id == task_id));
+            EffectResult::LogsLoaded(task.as_ref().map(LogView::from_task))
+        }
+        AppEffect::TriggerTask {
+            workflow_run_id,
+            task_id,
+        } => {
+            apply_session_overrides(engine, &app.session_overrides);
+            match engine.resume_workflow(workflow_run_id, vec![task_id]).await {
+                Ok(()) => EffectResult::Noop,
+                Err(error) => EffectResult::Status(StatusLine {
+                    tone: StatusTone::Error,
+                    message: format!("Failed to trigger task {task_id}: {error}"),
+                }),
+            }
+        }
+        AppEffect::TriggerAll { workflow_run_id } => {
+            apply_session_overrides(engine, &app.session_overrides);
+            match engine.trigger_all(workflow_run_id).await {
+                Ok(true) | Ok(false) => EffectResult::Noop,
+                Err(error) => EffectResult::Status(StatusLine {
+                    tone: StatusTone::Error,
+                    message: format!("Failed to trigger all tasks: {error}"),
+                }),
+            }
+        }
+        AppEffect::RetryTask {
+            workflow_run_id,
+            task_id,
+        } => {
+            apply_session_overrides(engine, &app.session_overrides);
+            match engine.resume_workflow(workflow_run_id, vec![task_id]).await {
+                Ok(()) => EffectResult::Noop,
+                Err(error) => EffectResult::Status(StatusLine {
+                    tone: StatusTone::Error,
+                    message: format!("Failed to retry task {task_id}: {error}"),
+                }),
+            }
+        }
+        AppEffect::CancelWorkflow { workflow_run_id } => {
+            match engine.cancel_workflow(workflow_run_id).await {
+                Ok(()) => EffectResult::Noop,
+                Err(error) => EffectResult::Status(StatusLine {
+                    tone: StatusTone::Error,
+                    message: format!("Failed to cancel workflow: {error}"),
+                }),
+            }
+        }
+    }
+}
+
+fn apply_session_overrides(engine: &mut Engine, overrides: &app::SessionOverrides) {
+    engine.set_quiet(true);
+    engine.set_progress_callback(std::sync::Arc::new(None));
+    engine.set_dry_run(overrides.dry_run);
+    engine.set_capabilities(overrides.capabilities.clone());
+}
+
+#[cfg(test)]
+mod tests;

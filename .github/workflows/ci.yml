@@ -120,6 +120,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
       - uses: Swatinem/rust-cache@v2
+      - name: Check terminal dependency graph
+        run: bash ./scripts/check-single-crossterm.sh
       - name: Run tests
         run: cargo test
       - name: Check schema generation

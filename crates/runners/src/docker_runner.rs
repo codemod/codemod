@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use butterflow_models::Error;
 use butterflow_models::Result;
 
-use crate::Runner;
+use crate::{OutputCallback, Runner};
 
 /// Docker runner (runs commands in Docker containers)
 pub struct DockerRunner;
@@ -26,7 +26,12 @@ impl Default for DockerRunner {
 
 #[async_trait]
 impl Runner for DockerRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
         // Create environment variables array
         let env_args: Vec<String> = env
             .iter()
@@ -65,6 +70,11 @@ impl Runner for DockerRunner {
 
         // Return the output
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if let Some(callback) = output_callback {
+            for line in stdout.lines().filter(|line| !line.is_empty()) {
+                callback(line.to_string());
+            }
+        }
         Ok(stdout)
     }
 }

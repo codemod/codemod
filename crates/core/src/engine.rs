@@ -20,7 +20,7 @@ use crate::config::{
     CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
-use crate::execution::{CodemodExecutionConfig, PreRunCallback};
+use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::slog;
@@ -56,7 +56,7 @@ use butterflow_runners::direct_runner::DirectRunner;
 use butterflow_runners::docker_runner::DockerRunner;
 #[cfg(feature = "podman")]
 use butterflow_runners::podman_runner::PodmanRunner;
-use butterflow_runners::Runner;
+use butterflow_runners::{OutputCallback, Runner};
 use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
@@ -347,7 +347,7 @@ impl Engine {
             }
             logger.log("info", resolved_prompt);
             logger.log("info", "[/AI INSTRUCTIONS]");
-        } else {
+        } else if !self.workflow_run_config.quiet {
             println!();
             println!("[AI INSTRUCTIONS]");
             println!();
@@ -425,6 +425,17 @@ impl Engine {
     /// Enable or disable quiet mode (suppresses stdout/stderr when TUI is active)
     pub fn set_quiet(&mut self, quiet: bool) {
         self.workflow_run_config.quiet = quiet;
+    }
+
+    fn emit_error(&self, message: String) {
+        if !self.workflow_run_config.quiet {
+            error!("{message}");
+        }
+    }
+
+    /// Replace the progress callback used by workflow execution.
+    pub fn set_progress_callback(&mut self, progress_callback: Arc<Option<ProgressCallback>>) {
+        self.workflow_run_config.progress_callback = progress_callback;
     }
 
     /// Set the human-readable name for this workflow run
@@ -545,6 +556,37 @@ impl Engine {
         Ok(())
     }
 
+    fn spawn_workflow_executor(&self, workflow_run_id: Uuid) {
+        let mut workflow_engine = self.clone();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build workflow runtime");
+            rt.block_on(async move {
+                if let Err(e) = workflow_engine.execute_workflow(workflow_run_id).await {
+                    error!("Workflow execution failed: {e}");
+                }
+            });
+        });
+    }
+
+    async fn append_task_log(&self, task_id: Uuid, message: impl Into<String>) -> Result<()> {
+        let mut adapter = self.state_adapter.lock().await;
+        let mut task = adapter.get_task(task_id).await?;
+        task.logs.push(message.into());
+        adapter.save_task(&task).await?;
+        Ok(())
+    }
+
+    async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
+        if let Some(master_task_id) = task.master_task_id {
+            self.update_matrix_master_status(master_task_id).await?;
+        }
+        Ok(())
+    }
+
     /// Wait for all currently running tasks to complete using pure notification-based approach
     async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
         let mut consecutive_empty_checks = 0;
@@ -654,18 +696,7 @@ impl Engine {
             .save_workflow_run(&workflow_run)
             .await?;
 
-        let mut engine = self.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build workflow runtime");
-            rt.block_on(async move {
-                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                    error!("Workflow execution failed: {e}");
-                }
-            });
-        });
+        self.spawn_workflow_executor(workflow_run_id);
 
         Ok(workflow_run_id)
     }
@@ -698,6 +729,27 @@ impl Engine {
                         value: Some(serde_json::to_value(TaskStatus::Pending)?),
                     },
                 );
+                fields.insert(
+                    "started_at".to_string(),
+                    FieldDiff {
+                        operation: DiffOperation::Update,
+                        value: Some(serde_json::Value::Null),
+                    },
+                );
+                fields.insert(
+                    "ended_at".to_string(),
+                    FieldDiff {
+                        operation: DiffOperation::Update,
+                        value: Some(serde_json::Value::Null),
+                    },
+                );
+                fields.insert(
+                    "error".to_string(),
+                    FieldDiff {
+                        operation: DiffOperation::Update,
+                        value: Some(serde_json::Value::Null),
+                    },
+                );
                 let task_diff = TaskDiff { task_id, fields };
 
                 self.state_adapter
@@ -707,8 +759,10 @@ impl Engine {
                     .await?;
 
                 if let Err(e) = self.spawn_task_with_handle(task_id).await {
-                    error!("Failed to spawn task {}: {}", task_id, e);
+                    self.emit_error(format!("Failed to spawn task {}: {}", task_id, e));
                 }
+
+                self.update_parent_matrix_master_for_task(&task).await?;
 
                 triggered = true;
                 info!("Triggered task {} ({})", task_id, task.node_id);
@@ -740,18 +794,7 @@ impl Engine {
             .apply_workflow_run_diff(&workflow_run_diff)
             .await?;
 
-        let mut engine = self.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build workflow runtime");
-            rt.block_on(async move {
-                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                    error!("Workflow execution failed: {e}");
-                }
-            });
-        });
+        self.spawn_workflow_executor(workflow_run_id);
 
         Ok(())
     }
@@ -827,6 +870,27 @@ impl Engine {
                     value: Some(serde_json::to_value(TaskStatus::Pending)?),
                 },
             );
+            fields.insert(
+                "started_at".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::Value::Null),
+                },
+            );
+            fields.insert(
+                "ended_at".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::Value::Null),
+                },
+            );
+            fields.insert(
+                "error".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::Value::Null),
+                },
+            );
             let task_diff = TaskDiff {
                 task_id: task.id,
                 fields,
@@ -840,8 +904,10 @@ impl Engine {
 
             let task_id = task.id;
             if let Err(e) = self.spawn_task_with_handle(task_id).await {
-                error!("Failed to spawn task {}: {}", task_id, e);
+                self.emit_error(format!("Failed to spawn task {}: {}", task_id, e));
             }
+
+            self.update_parent_matrix_master_for_task(task).await?;
 
             triggered = true;
             info!("Triggered task {} ({})", task.id, task.node_id);
@@ -872,18 +938,7 @@ impl Engine {
             .apply_workflow_run_diff(&workflow_run_diff)
             .await?;
 
-        let mut engine = self.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build workflow runtime");
-            rt.block_on(async move {
-                if let Err(e) = engine.execute_workflow(workflow_run_id).await {
-                    error!("Workflow execution failed: {e}");
-                }
-            });
-        });
+        self.spawn_workflow_executor(workflow_run_id);
         Ok(true)
     }
 
@@ -932,6 +987,13 @@ impl Engine {
                     value: Some(serde_json::to_value("Canceled by user")?),
                 },
             );
+            fields.insert(
+                "ended_at".to_string(),
+                FieldDiff {
+                    operation: DiffOperation::Update,
+                    value: Some(serde_json::to_value(Utc::now())?),
+                },
+            );
             let task_diff = TaskDiff {
                 task_id: task.id,
                 fields,
@@ -945,6 +1007,7 @@ impl Engine {
                 .await?;
 
             info!("Canceled task {} ({})", task.id, task.node_id);
+            self.update_parent_matrix_master_for_task(task).await?;
         }
 
         // Create a workflow run diff to update the status
@@ -974,6 +1037,8 @@ impl Engine {
             .await
             .apply_workflow_run_diff(&workflow_run_diff)
             .await?;
+
+        self.task_completion_notify.notify_waiters();
 
         Ok(())
     }
@@ -1269,9 +1334,9 @@ impl Engine {
                     .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
                     .await
                 {
-                    error!(
+                    self.emit_error(format!(
                         "Failed during matrix task recompilation for run {workflow_run_id}: {e}"
-                    );
+                    ));
                     // Decide how to handle recompilation errors, e.g., fail the workflow?
                     // For now, we log and continue, but this might need refinement.
                 }
@@ -1376,7 +1441,15 @@ impl Engine {
                     }
                 }
             } else {
+                let mut parent_master_ids = HashSet::new();
                 for task_id in tasks_to_await_trigger {
+                    if let Some(task) = tasks_after_recompilation.iter().find(|task| task.id == task_id)
+                    {
+                        if let Some(master_task_id) = task.master_task_id {
+                            parent_master_ids.insert(master_task_id);
+                        }
+                    }
+
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
                     fields.insert(
@@ -1395,13 +1468,24 @@ impl Engine {
                         .apply_task_diff(&task_diff)
                         .await?;
                 }
+
+                for master_task_id in parent_master_ids {
+                    self.update_matrix_master_status(master_task_id).await?;
+                }
             }
 
+            let tasks_after_status_updates = self
+                .state_adapter
+                .lock()
+                .await
+                .get_tasks(workflow_run_id)
+                .await?;
+
             // Check if any tasks are awaiting trigger
-            let awaiting_trigger = tasks_after_recompilation
+            let awaiting_trigger = tasks_after_status_updates
                 .iter()
                 .any(|t| t.status == TaskStatus::AwaitingTrigger);
-            let any_running = tasks_after_recompilation
+            let any_running = tasks_after_status_updates
                 .iter()
                 .any(|t| t.status == TaskStatus::Running);
 
@@ -1439,7 +1523,7 @@ impl Engine {
 
             // Execute runnable tasks synchronously to avoid race conditions with matrix recompilation
             for task_id in runnable_tasks {
-                let task = tasks_after_recompilation
+                let task = tasks_after_status_updates
                     .iter()
                     .find(|t| t.id == task_id)
                     .unwrap(); // Should exist as runnable_tasks is derived from this list
@@ -1452,7 +1536,7 @@ impl Engine {
 
                 // Execute task synchronously to ensure state updates are applied before matrix recompilation
                 if let Err(e) = self.execute_task(task_id).await {
-                    error!("Task execution failed: {e}");
+                    self.emit_error(format!("Task execution failed: {e}"));
                 }
             }
 
@@ -1605,6 +1689,8 @@ impl Engine {
             .apply_task_diff(&task_diff)
             .await?;
 
+        self.update_parent_matrix_master_for_task(&task).await?;
+
         info!("Executing task {} ({})", task_id, node.id);
 
         // Cloud mode: checkout a task-specific branch before running steps
@@ -1714,8 +1800,12 @@ impl Engine {
                 }
             };
 
+            let _ = self
+                .append_task_log(task_id, format!("Step started: {}", step.name))
+                .await;
+
             step_logger.step_start();
-            if !step_logger.is_jsonl() {
+            if !step_logger.is_jsonl() && !self.workflow_run_config.quiet {
                 println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
             }
             let step_start_time = std::time::Instant::now();
@@ -1805,10 +1895,10 @@ impl Engine {
                                     );
                                 }
                                 Err(e) => {
-                                    error!(
+                                    self.emit_error(format!(
                                         "Commit checkpoint failed for step '{}': {}",
                                         step.name, e
-                                    );
+                                    ));
                                     return Err(e);
                                 }
                             }
@@ -1853,10 +1943,12 @@ impl Engine {
                         .apply_task_diff(&task_diff)
                         .await?;
 
-                    error!(
+                    self.update_parent_matrix_master_for_task(&task).await?;
+
+                    self.emit_error(format!(
                         "Task {} ({}) step {} failed: {}",
                         task_id, node.id, step.name, e
-                    );
+                    ));
 
                     return Err(e);
                 }
@@ -1878,7 +1970,7 @@ impl Engine {
                 });
 
                 git_step_logger.step_start();
-                if !git_step_logger.is_jsonl() {
+                if !git_step_logger.is_jsonl() && !self.workflow_run_config.quiet {
                     println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
                 }
                 let git_step_start = std::time::Instant::now();
@@ -1899,7 +1991,7 @@ impl Engine {
                             }
                             Ok(false) => {}
                             Err(e) => {
-                                error!("Fallback commit failed: {}", e);
+                                self.emit_error(format!("Fallback commit failed: {}", e));
                                 // Non-fatal: continue to PR creation attempt
                             }
                         }
@@ -2006,10 +2098,10 @@ impl Engine {
                             .apply_task_diff(&task_diff)
                             .await?;
 
-                        error!(
+                        self.emit_error(format!(
                             "Task {} ({}) push/PR creation failed: {}",
                             task_id, node.id, e
-                        );
+                        ));
                         return Err(e);
                     }
 
@@ -2206,7 +2298,7 @@ impl Engine {
             }
             StepAction::JSAstGrep(js_ast_grep) => {
                 self.execute_js_ast_grep_step(
-                    node.id.clone(),
+                    task.id.to_string(),
                     step_id.clone().unwrap_or_default(),
                     js_ast_grep,
                     Some(params.clone()),
@@ -2455,6 +2547,7 @@ impl Engine {
         modified_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
+        let task_log_task_id = Uuid::parse_str(&id).ok();
 
         // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
         let effective_bundle_path = bundle_path
@@ -2494,11 +2587,14 @@ impl Engine {
 
         let capabilities_security_callback_clone =
             capabilities_data.capabilities_security_callback.clone();
+        let quiet = self.workflow_run_config.quiet;
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
                     callback(config).unwrap_or_else(|e| {
-                        error!("Failed to check capabilities: {e}");
+                        if !quiet {
+                            error!("Failed to check capabilities: {e}");
+                        }
                         std::process::exit(1);
                     });
                 }
@@ -2618,6 +2714,8 @@ impl Engine {
         let shared_state_context_clone = shared_state_context.clone();
         let logger = logger.clone();
         let modified_files_collector_clone = modified_files_collector.clone();
+        let state_adapter = Arc::clone(&self.state_adapter);
+        let target_path_for_logs = target_path.clone();
 
         // Collect deferred file deletions from renames — applied after all transforms complete
         let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
@@ -2631,6 +2729,24 @@ impl Engine {
                 // Only process files
                 if !file_path.is_file() {
                     return;
+                }
+
+                let relative_path = file_path
+                    .strip_prefix(&target_path_for_logs)
+                    .unwrap_or(file_path)
+                    .display()
+                    .to_string();
+
+                if let Some(task_id) = task_log_task_id {
+                    let state_adapter = Arc::clone(&state_adapter);
+                    let progress_message = format!("Processing file: {relative_path}");
+                    runtime_handle.block_on(async move {
+                        let mut adapter = state_adapter.lock().await;
+                        if let Ok(mut task) = adapter.get_task(task_id).await {
+                            task.logs.push(progress_message);
+                            let _ = adapter.save_task(&task).await;
+                        }
+                    });
                 }
 
                 // Read file content synchronously
@@ -2809,9 +2925,20 @@ impl Engine {
                             logger,
                             error,
                             "Failed to execute codemod on {}: {:?}",
-                            file_path.display(),
+                            relative_path,
                             e
                         );
+                        if let Some(task_id) = task_log_task_id {
+                            let state_adapter = Arc::clone(&state_adapter);
+                            let message = format!("Failed to process {relative_path}: {e}");
+                            runtime_handle.block_on(async move {
+                                let mut adapter = state_adapter.lock().await;
+                                if let Ok(mut task) = adapter.get_task(task_id).await {
+                                    task.logs.push(message);
+                                    let _ = adapter.save_task(&task).await;
+                                }
+                            });
+                        }
                         self.execution_stats
                             .files_with_errors
                             .fetch_add(1, Ordering::Relaxed);
@@ -3029,7 +3156,9 @@ impl Engine {
                                 ai_config.system_prompt.as_deref(),
                                 &resolved_prompt,
                             );
-                            eprintln!();
+                            if !self.workflow_run_config.quiet {
+                                eprintln!();
+                            }
                             selection_result = callback(&agents);
                             continue;
                         }
@@ -3762,8 +3891,40 @@ impl Engine {
 
         let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
 
-        let output = runner.run_command(&resolved_command, &prepared.env).await?;
-        self.finalize_step_execution(task, output, prepared).await
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let state_adapter = Arc::clone(&self.state_adapter);
+        let task_id = task.id;
+        let log_persist_task = tokio::spawn(async move {
+            while let Some(line) = log_rx.recv().await {
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let mut adapter = state_adapter.lock().await;
+                let Ok(mut current_task) = adapter.get_task(task_id).await else {
+                    continue;
+                };
+                current_task.logs.push(line);
+                let _ = adapter.save_task(&current_task).await;
+            }
+        });
+
+        let output_callback: OutputCallback = Arc::new(move |line: String| {
+            let _ = log_tx.send(line);
+        });
+
+        let output = runner
+            .run_command(
+                &resolved_command,
+                &prepared.env,
+                Some(Arc::clone(&output_callback)),
+            )
+            .await;
+        drop(output_callback);
+        let _ = log_persist_task.await;
+
+        self.finalize_step_execution(task, output?, prepared).await
     }
 
     fn prepare_step_execution(
@@ -3866,22 +4027,9 @@ impl Engine {
     async fn finalize_step_execution(
         &self,
         task: &Task,
-        output: String,
+        _output: String,
         prepared: PreparedStepExecution,
     ) -> Result<()> {
-        // Get the current task
-        let mut current_task = self.state_adapter.lock().await.get_task(task.id).await?;
-
-        // Append to the logs
-        current_task.logs.push(output.clone());
-
-        // Save the updated task
-        self.state_adapter
-            .lock()
-            .await
-            .save_task(&current_task)
-            .await?;
-
         let outputs = read_to_string(&prepared.state_outputs_path).await?;
 
         // Clean up the temporary files
@@ -4096,28 +4244,25 @@ impl Engine {
                 },
             );
 
-            // Clear ended_at if moving away from a terminal state (e.g., Failed -> Running if retried, although retry isn't implemented here)
-            // Or add ended_at if moving *to* Failed from a non-terminal state
-            if new_status == TaskStatus::Failed
-                && !matches!(
-                    master_task.status,
-                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
-                )
-            {
+            if matches!(
+                new_status,
+                TaskStatus::Pending | TaskStatus::Running | TaskStatus::AwaitingTrigger
+            ) {
                 fields.insert(
                     "ended_at".to_string(),
                     FieldDiff {
-                        operation: DiffOperation::Update, // Add or update ended_at
+                        operation: DiffOperation::Update,
+                        value: Some(serde_json::Value::Null),
+                    },
+                );
+            } else if matches!(new_status, TaskStatus::Completed | TaskStatus::Failed) {
+                fields.insert(
+                    "ended_at".to_string(),
+                    FieldDiff {
+                        operation: DiffOperation::Update,
                         value: Some(serde_json::to_value(Utc::now())?),
                     },
                 );
-            } else if matches!(
-                master_task.status,
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
-            ) && new_status != TaskStatus::Failed
-            {
-                // If moving from terminal (except Failed) to non-terminal, clear ended_at? Or is this impossible?
-                // For now, only add ended_at when entering Failed/Completed.
             }
 
             let task_diff = TaskDiff {

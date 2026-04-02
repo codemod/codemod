@@ -231,11 +231,6 @@ pub struct UseAI {
     #[ts(optional, as = "Option<String>")]
     pub working_dir: Option<String>,
 
-    /// Timeout in milliseconds for AI agent execution (optional)
-    #[serde(default)]
-    #[ts(optional, as = "Option<u64>")]
-    pub timeout_ms: Option<u64>,
-
     /// Environment variables to set for the AI agent execution (optional)
     #[serde(default)]
     #[ts(optional, as = "Option<HashMap<String, String>>")]
