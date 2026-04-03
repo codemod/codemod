@@ -17,6 +17,7 @@ JSSG follows a **deny-by-default security model**. Unsafe operations like file s
 **How it works:**
 - A JSSG codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
 - The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
+- The `codemod:runtime` built-in lets codemods report structured progress, warnings, the active unit being processed, and explicit failures back to the engine and TUI.
 - You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
 
 <Info>

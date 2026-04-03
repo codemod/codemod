@@ -31,6 +31,10 @@ use codemod_sandbox::sandbox::engine::{
     extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
     SelectorEngineOptions,
 };
+use codemod_sandbox::sandbox::errors::ExecutionError as SandboxExecutionError;
+use codemod_sandbox::sandbox::runtime_module::{
+    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
+};
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -251,6 +255,34 @@ fn build_js_ast_grep_idle_timeout_message(
             state.global_phase
         )
     }
+}
+
+fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
+    let prefix = match event.kind {
+        RuntimeEventKind::Progress => "[progress]",
+        RuntimeEventKind::Warn => "[warn]",
+        RuntimeEventKind::SetCurrentUnit => return None,
+    };
+
+    let mut message = format!("{prefix} {}", event.message);
+    if let Some(meta) = &event.meta {
+        message.push(' ');
+        message.push_str(meta);
+    }
+    Some(message)
+}
+
+fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
+    let prefix = match failure.kind {
+        RuntimeFailureKind::File => "[error] file failed:",
+        RuntimeFailureKind::Step => "[error] step failed:",
+    };
+    let mut message = format!("{prefix} {}", failure.message);
+    if let Some(meta) = &failure.meta {
+        message.push(' ');
+        message.push_str(meta);
+    }
+    message
 }
 
 async fn await_js_ast_grep_execution_task(
@@ -3091,6 +3123,8 @@ impl Engine {
         // Execute the codemod on each file using the config's multi-threading
         let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
         let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
+        let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+        let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
 
         let execute_result = config
             .execute(move |file_path, config| {
@@ -3189,6 +3223,65 @@ impl Engine {
                 let dry_run = config.dry_run;
                 let relative_path_for_execution = relative_path.clone();
                 let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
+                let cancellation_flag_for_execution = Arc::clone(&canceled_flag_for_closure);
+                let current_runtime_unit = Arc::new(std::sync::Mutex::new(relative_path.clone()));
+                let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
+                let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
+                let state_adapter_for_runtime_events = Arc::clone(&state_adapter);
+                let runtime_handle_for_runtime_events = runtime_handle.clone();
+                let relative_path_for_runtime_events = relative_path.clone();
+                let runtime_event_task_id = task_log_task_id;
+                let runtime_event_callback: RuntimeEventCallback =
+                    Arc::new(move |event| match event.kind {
+                        RuntimeEventKind::SetCurrentUnit => {
+                            let new_runtime_unit =
+                                format!("{relative_path_for_runtime_events} :: {}", event.message);
+                            let previous_runtime_unit = {
+                                let mut current_runtime_unit = current_runtime_unit_for_callback
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                let previous_runtime_unit = current_runtime_unit.clone();
+                                *current_runtime_unit = new_runtime_unit.clone();
+                                previous_runtime_unit
+                            };
+
+                            finish_unit_progress(
+                                &progress_state_for_runtime_events,
+                                &previous_runtime_unit,
+                                StepPhase::ExecutionFinished,
+                            );
+                            record_unit_progress(
+                                &progress_state_for_runtime_events,
+                                &new_runtime_unit,
+                                StepPhase::ExecutionStarted,
+                            );
+                        }
+                        RuntimeEventKind::Progress | RuntimeEventKind::Warn => {
+                            let runtime_unit = current_runtime_unit_for_callback
+                                .lock()
+                                .map(|runtime_unit| runtime_unit.clone())
+                                .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
+                            record_unit_progress(
+                                &progress_state_for_runtime_events,
+                                &runtime_unit,
+                                StepPhase::Output,
+                            );
+                            if let (Some(task_id), Some(message)) =
+                                (runtime_event_task_id, format_runtime_event_log(&event))
+                            {
+                                let state_adapter = Arc::clone(&state_adapter_for_runtime_events);
+                                std::mem::drop(runtime_handle_for_runtime_events.spawn(
+                                    async move {
+                                        let mut adapter = state_adapter.lock().await;
+                                        if let Ok(mut task) = adapter.get_task(task_id).await {
+                                            task.logs.push(message);
+                                            let _ = adapter.save_task(&task).await;
+                                        }
+                                    },
+                                ));
+                            }
+                        }
+                    });
                 let execution_result = runtime_handle.block_on(async {
                     let local = tokio::task::LocalSet::new();
                     let file_path_owned = file_path.to_path_buf();
@@ -3222,6 +3315,8 @@ impl Engine {
                                     semantic_provider: semantic_provider_owned,
                                     metrics_context: Some(metrics_context_owned),
                                     shared_state_context: Some(shared_state_context_owned),
+                                    runtime_event_callback: Some(runtime_event_callback),
+                                    cancellation_flag: Some(cancellation_flag_for_execution),
                                     test_mode: false,
                                     dry_run,
                                     target_directory: Some(&target_path_owned),
@@ -3273,11 +3368,8 @@ impl Engine {
                     }
                 }
 
-                let execution_result = execution_result
-                    .and_then(|result| result.map_err(|e| Error::StepExecution(e.to_string())));
-
                 match execution_result {
-                    Ok(CodemodOutput { primary, secondary }) => {
+                    Ok(Ok(CodemodOutput { primary, secondary })) => {
                         let apply_change = |change_path: &Path, result: &ExecutionResult| {
                             match result {
                                 ExecutionResult::Modified(ref modified) => {
@@ -3411,14 +3503,75 @@ impl Engine {
 
                         finish_unit_progress(
                             &progress_state_for_closure,
-                            &relative_path,
+                            &current_runtime_unit
+                                .lock()
+                                .map(|runtime_unit| runtime_unit.clone())
+                                .unwrap_or_else(|_| relative_path.clone()),
                             StepPhase::ExecutionFinished,
                         );
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
+                        let runtime_unit = current_runtime_unit
+                            .lock()
+                            .map(|runtime_unit| runtime_unit.clone())
+                            .unwrap_or_else(|_| relative_path.clone());
                         finish_unit_progress(
                             &progress_state_for_closure,
-                            &relative_path,
+                            &runtime_unit,
+                            StepPhase::ExecutionErrored,
+                        );
+                        if let SandboxExecutionError::RuntimeHook { source } = &e {
+                            let message = format_runtime_failure_message(source);
+                            if let Some(task_id) = task_log_task_id {
+                                let state_adapter = Arc::clone(&state_adapter);
+                                let message_for_log = message.clone();
+                                runtime_handle.block_on(async move {
+                                    let mut adapter = state_adapter.lock().await;
+                                    if let Ok(mut task) = adapter.get_task(task_id).await {
+                                        task.logs.push(message_for_log);
+                                        let _ = adapter.save_task(&task).await;
+                                    }
+                                });
+                            }
+                            canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                            if let Ok(mut runtime_failure_message) =
+                                runtime_failure_message_for_closure.lock()
+                            {
+                                if runtime_failure_message.is_none() {
+                                    *runtime_failure_message = Some(message);
+                                }
+                            }
+                        }
+                        slog!(
+                            logger,
+                            error,
+                            "Failed to execute codemod on {}: {:?}",
+                            relative_path,
+                            e
+                        );
+                        if let Some(task_id) = task_log_task_id {
+                            let state_adapter = Arc::clone(&state_adapter);
+                            let message = format!("Failed to process {relative_path}: {e}");
+                            runtime_handle.block_on(async move {
+                                let mut adapter = state_adapter.lock().await;
+                                if let Ok(mut task) = adapter.get_task(task_id).await {
+                                    task.logs.push(message);
+                                    let _ = adapter.save_task(&task).await;
+                                }
+                            });
+                        }
+                        self.execution_stats
+                            .files_with_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        let runtime_unit = current_runtime_unit
+                            .lock()
+                            .map(|runtime_unit| runtime_unit.clone())
+                            .unwrap_or_else(|_| relative_path.clone());
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &runtime_unit,
                             StepPhase::ExecutionErrored,
                         );
                         slog!(
@@ -3485,6 +3638,14 @@ impl Engine {
         }
 
         execute_result?;
+
+        if let Some(message) = runtime_failure_message
+            .lock()
+            .ok()
+            .and_then(|message| message.clone())
+        {
+            return Err(Error::StepExecution(message));
+        }
 
         if canceled_during_execution.load(Ordering::Relaxed) {
             return Err(Error::Runtime("Canceled by user".to_string()));

@@ -241,6 +241,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
                 shared_state_context: Some(shared_state_context_clone.clone()),
+                runtime_event_callback: None,
+                cancellation_flag: None,
                 test_mode: false,
                 dry_run: false,
                 target_directory: Some(&target_directory),

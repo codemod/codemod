@@ -302,6 +302,8 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
                     shared_state_context: None,
+                    runtime_event_callback: None,
+                    cancellation_flag: None,
                     test_mode: true,
                     dry_run: false,
                     target_directory: None,
