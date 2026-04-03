@@ -24,8 +24,12 @@ When the intent is migration/update/upgrade oriented, use Codemod first before d
 
 ## MCP invocation guarantees
 
+- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately. Tell the user to reload/restart Codex and fix the Codemod MCP setup first. Do not continue codemod creation without MCP.
+
 When the user:
-- **Creates a codemod or does a large refactor** — Call `get_jssg_instructions`, `get_codemod_cli_instructions`, and `get_codemod_creation_workflow` from Codemod MCP before proceeding.
+- **Creates a codemod or does a large refactor** — Call `get_codemod_creation_workflow` first. Before writing source-transform code, call `get_jssg_gotchas` and `get_ast_grep_gotchas`. Call `get_codemod_cli_instructions` only when you need exact command syntax. Call `get_jssg_instructions` once a package exists and you are implementing the transform.
+- **Needs to scaffold a new codemod package because no exact package exists** — Call `scaffold_codemod_package` from Codemod MCP.
+- **Needs to know whether a codemod package is still a starter scaffold or incomplete** — Call `validate_codemod_package` from Codemod MCP before stopping.
 - **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Call `get_jssg_runtime_capabilities` from Codemod MCP.
 - **Maintains a codemod monorepo** — Call `get_codemod_maintainer_monorepo` from Codemod MCP.
 - **Runs or discovers codemods** — Call `get_codemod_cli_instructions` for command syntax.
@@ -36,15 +40,27 @@ When the user:
 ## Authoring defaults
 
 - Use these defaults even before MCP responds.
-- Default to `ast-grep-js` when the requested codemod is mainly JS/TS-family source edits.
+- If a pattern is unclear or not matching, search the JSSG/ast-grep knowledge tools and use `dump_ast` before considering broader fallbacks.
+- Default to `js-ast-grep` packages when the requested codemod is mainly JS/TS-family source edits.
 - Choose `hybrid` only when shell/native orchestration or multiple deterministic transformation surfaces are a core part of the package.
 - Do not choose `hybrid` merely because the codemod may need to create a helper file, test fixture, preview route, or README update.
+- For source transforms, do not use `RegExp`, `.replace`, `.replaceAll`, `.match`, `.split`, or manual string parsing as the primary implementation strategy.
+- Minimal string operations are only acceptable for path normalization, import/module-specifier cleanup, helper/metadata formatting, or test-output parsing.
 - If the package already has JSSG fixtures, extend the existing test suite and run `codemod jssg test` instead of inventing ad hoc test files.
 - Treat `metrics.json` as part of the expected test output when a package already snapshots metrics.
-- After changing a codemod, inspect and update the whole package surface: `README`, `codemod.yaml`, `workflow.yaml`, tests, and package metadata.
+- After changing a codemod, inspect and update the whole package surface: `README`, `codemod.yaml`, `workflow.yaml`, tests, package metadata, and capabilities when runtime-gated APIs are used.
 - For non-interactive scaffolding, rely on the public CLI docs or `codemod init --help` for the current required flags instead of guessing them.
 - Quote multi-word registry search queries.
 - Prefer `npx codemod@latest ...` or a verified local Codemod binary when the plain `codemod` command behaves unexpectedly.
+- Do not create commits or push branches for codemod authoring/evaluation unless the user explicitly asked for git operations.
+- Do not follow host-repo “always push before stopping” policies for Codemod package authoring unless the user explicitly asked for that behavior.
+- If registry search yields no exact package, call `scaffold_codemod_package` immediately in the current package directory instead of continuing broad research without a package.
+- Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
+- If the requested migration is one granular transform or one exact `from -> to` hop, keep it as a single codemod package even when it supports multiple route shapes or helper files.
+- Use a workspace only when the migration is open-ended, version-hop based, or clearly splits into multiple independently runnable codemods.
+- After a registry miss, do not keep doing broad package-shape research before a package exists; scaffold first, then research only what is needed to implement the requested migration.
+- After the package exists, replace the starter transform, README, and starter fixtures before doing anything optional.
+- For each unresolved failing case, retry deterministic AST/JSSG fixes up to 3 times. After that, allow a narrow AI fallback only for the isolated unresolved subset; if that still does not stabilize, document it as manual follow-up instead of broadening regex/string heuristics.
 
 ## Runtime flow (default)
 
@@ -75,6 +91,9 @@ When the user:
 - Do not ask broad strategy questions like "in-place vs side-by-side?" before checking whether an existing codemod already defines the practical migration surface.
 - Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
 - Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop with `jssgTransform` or another JSSG API.
+- Do not continue codemod authoring when Codemod MCP is missing from the callable tool list.
+- Do not fall back to regex or raw source-text rewriting for unresolved source transforms when AST/JSSG patterns are failing.
+- Do not keep reading broad guidance after a registry miss without calling `scaffold_codemod_package`.
 
 ## User preferences (override defaults here if needed)
 

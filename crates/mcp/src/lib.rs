@@ -10,7 +10,10 @@ use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod handlers;
-use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler};
+use handlers::{
+    AstDumpHandler, JssgTestHandler, KnowledgeHandler, NodeTypesHandler, PackageScaffoldHandler,
+    PackageValidationHandler,
+};
 
 const PUBLIC_DOCS_TIMEOUT_SECS: u64 = 10;
 const PUBLIC_DOCS_BUNDLE_TIMEOUT_SECS: u64 = 12;
@@ -167,7 +170,7 @@ fn build_public_docs_bundle_with_supplement_from_sections(
     }
 
     format!(
-        "# {title}\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over older bundled examples when they differ.\n\n{}\n\n---\n\n# {supplement_title}\n\n{supplement}\n",
+        "# {title}\n\n# {supplement_title}\n\n{supplement}\n\n---\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over older bundled examples when they differ.\n\n{}\n",
         sections.join("\n\n---\n\n")
     )
 }
@@ -194,6 +197,9 @@ pub struct CodemodMcpServer {
     ast_dump_handler: AstDumpHandler,
     node_types_handler: NodeTypesHandler,
     jssg_test_handler: JssgTestHandler,
+    knowledge_handler: KnowledgeHandler,
+    package_scaffold_handler: PackageScaffoldHandler,
+    package_validation_handler: PackageValidationHandler,
     usage_log_path: Option<PathBuf>,
     tool_router: ToolRouter<CodemodMcpServer>,
 }
@@ -210,6 +216,9 @@ impl CodemodMcpServer {
             ast_dump_handler: AstDumpHandler::new(),
             node_types_handler: NodeTypesHandler::new(),
             jssg_test_handler: JssgTestHandler::new(),
+            knowledge_handler: KnowledgeHandler::new(),
+            package_scaffold_handler: PackageScaffoldHandler::new(),
+            package_validation_handler: PackageValidationHandler::new(),
             usage_log_path,
             tool_router: Self::tool_router(),
         }
@@ -291,6 +300,84 @@ impl CodemodMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:run_jssg_tests");
         self.jssg_test_handler.run_jssg_tests(params).await
+    }
+
+    #[tool(
+        description = "Get the highest-priority verified JSSG gotchas before implementing a codemod transform."
+    )]
+    async fn get_jssg_gotchas(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<handlers::knowledge::KnowledgeListRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_gotchas");
+        self.knowledge_handler.get_jssg_gotchas(params).await
+    }
+
+    #[tool(
+        description = "Search the verified JSSG knowledge base for gotchas and recipes. Use this when implementing or repairing a codemod and you are unsure about a pattern or transform approach."
+    )]
+    async fn search_jssg_knowledge(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::knowledge::SearchKnowledgeRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:search_jssg_knowledge");
+        self.knowledge_handler.search_jssg_knowledge(params).await
+    }
+
+    #[tool(
+        description = "Get the highest-priority verified ast-grep gotchas before implementing a codemod transform."
+    )]
+    async fn get_ast_grep_gotchas(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<handlers::knowledge::KnowledgeListRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_ast_grep_gotchas");
+        self.knowledge_handler.get_ast_grep_gotchas(params).await
+    }
+
+    #[tool(
+        description = "Search the verified ast-grep knowledge base for gotchas and recipes. Use this when a pattern is unclear or before considering regex or manual parsing fallbacks."
+    )]
+    async fn search_ast_grep_knowledge(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::knowledge::SearchKnowledgeRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:search_ast_grep_knowledge");
+        self.knowledge_handler.search_ast_grep_knowledge(params).await
+    }
+
+    #[tool(
+        description = "Validate whether a codemod package in the current directory is real and complete. Use this before stopping work on a codemod package. It checks package surface completeness, workflow validity, test-case coverage, starter scaffold leftovers, and can run the package default tests and type-check script."
+    )]
+    async fn validate_codemod_package(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::package_validation::ValidateCodemodPackageRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:validate_codemod_package");
+        self.package_validation_handler
+            .validate_codemod_package(params)
+            .await
+    }
+
+    #[tool(
+        description = "Scaffold a codemod package by delegating to the real `codemod init` CLI. Use this immediately after registry search shows there is no exact existing package for the requested migration."
+    )]
+    async fn scaffold_codemod_package(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::package_scaffold::ScaffoldCodemodPackageRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:scaffold_codemod_package");
+        self.package_scaffold_handler
+            .scaffold_codemod_package(params)
+            .await
     }
 
     #[tool(
@@ -443,7 +530,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_codemod_troubleshooting (debug failing or unexpected codemod commands), get_codemod_creation_workflow (author, test, and publish codemods), get_codemod_maintainer_monorepo (set up and maintain a codemod monorepo), get_jssg_runtime_capabilities (runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work). Available resources: jssg-instructions (public docs-backed JSSG guidance), jssg-utils-instructions (public docs-backed import utility guidance), jssg-runtime-capabilities-instructions (runtime and capability guidance), codemod-cli-instructions (public docs-backed CLI, package, and workflow guidance), sharding-instructions (public docs-backed sharding guidance), codemod-troubleshooting-instructions (Codemod CLI troubleshooting), codemod-creation-workflow-instructions (codemod creation workflow), codemod-maintainer-monorepo-instructions (maintainer monorepo guidance). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup and workflow semantics). Use get_jssg_runtime_capabilities when the codemod needs Node/LLRT APIs, gated modules like fs/fetch/child_process, or non-trivial multi-file JSSG work. Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, verified JSSG and ast-grep knowledge-base search, codemod package scaffolding and validation, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_jssg_gotchas and search_jssg_knowledge (verified JSSG gotchas and recipes), get_ast_grep_gotchas and search_ast_grep_knowledge (verified ast-grep gotchas and recipes), scaffold_codemod_package (scaffold a codemod package via the real CLI), validate_codemod_package (validate a codemod package and detect starter/incomplete scaffolds plus risky transform strategies), get_codemod_troubleshooting (debug failing or unexpected codemod commands), get_codemod_creation_workflow (author, test, and publish codemods), get_codemod_maintainer_monorepo (set up and maintain a codemod monorepo), get_jssg_runtime_capabilities (runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work). Available resources: jssg-instructions (public docs-backed JSSG guidance), jssg-utils-instructions (public docs-backed import utility guidance), jssg-runtime-capabilities-instructions (runtime and capability guidance), codemod-cli-instructions (public docs-backed CLI, package, and workflow guidance), sharding-instructions (public docs-backed sharding guidance), codemod-troubleshooting-instructions (Codemod CLI troubleshooting), codemod-creation-workflow-instructions (codemod creation workflow), codemod-maintainer-monorepo-instructions (maintainer monorepo guidance). When you are asked to create a codemod or do a large refactor, call get_jssg_gotchas and get_ast_grep_gotchas before writing source-transform code. If patterns are unclear, search the knowledge tools and use dump_ast before considering regex or manual parsing. If registry search finds no exact existing package, call scaffold_codemod_package immediately instead of stopping at analysis. Call validate_codemod_package before you stop work on a codemod package, and treat starter-scaffold findings or risky transform findings as blocking. Use get_jssg_runtime_capabilities when the codemod needs Node/LLRT APIs, gated modules like fs/fetch/child_process, or non-trivial multi-file JSSG work. Use get_jssg_utils_instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
         }
     }
 
@@ -691,8 +778,10 @@ mod tests {
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
         let instructions = info.instructions.as_deref().unwrap_or_default();
+        assert!(instructions.contains("scaffold_codemod_package"));
         assert!(instructions.contains("get_jssg_runtime_capabilities"));
         assert!(instructions.contains("jssg-runtime-capabilities-instructions"));
+        assert!(instructions.contains("validate_codemod_package"));
     }
 
     #[tokio::test]

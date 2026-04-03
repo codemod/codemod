@@ -1,0 +1,99 @@
+{
+  "version": "1",
+  "extractedAt": "2026-04-03",
+  "sources": [
+    {
+      "id": "docs-jssg-quickstart",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/quickstart"
+    },
+    {
+      "id": "docs-jssg-reference",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/reference"
+    },
+    {
+      "id": "docs-jssg-advanced",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/advanced"
+    },
+    {
+      "id": "docs-jssg-testing",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/testing"
+    },
+    {
+      "id": "repo-runtime-capabilities",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/jssg-runtime-capabilities.md"
+    }
+  ],
+  "gotchas": [
+    {
+      "id": "jssg-return-null-when-no-change",
+      "title": "Return null when no file change is needed",
+      "summary": "A JSSG transform should return null for non-applicable files instead of returning unchanged source text by default.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/quickstart",
+      "verified": true,
+      "tags": ["no-op", "transform", "control-flow"],
+      "content": "Use an early null return when no matches or edits are needed. This is the normal way to indicate a skipped file.",
+      "good_example": "if (consoleCalls.length === 0) { return null; }"
+    },
+    {
+      "id": "jssg-commit-edits-on-root",
+      "title": "Commit collected edits from the root node",
+      "summary": "Apply deterministic edits with root.root().commitEdits(edits) or rootNode.commitEdits(edits) after collecting them.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/reference",
+      "verified": true,
+      "tags": ["edits", "commit", "transform"],
+      "content": "Collect edits first, then commit them from the root AST node instead of mutating source text directly.",
+      "good_example": "return root.root().commitEdits(edits);"
+    },
+    {
+      "id": "jssg-update-capabilities-with-runtime-apis",
+      "title": "Update codemod.yaml when using gated runtime APIs",
+      "summary": "If a codemod uses gated APIs such as fs, fetch, or child_process, update codemod.yaml capabilities in the same change.",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/jssg-runtime-capabilities.md",
+      "verified": true,
+      "tags": ["capabilities", "runtime", "fs", "fetch", "child_process"],
+      "content": "Runtime-gated APIs must be paired with the matching capabilities entry in codemod.yaml; otherwise the package is incomplete."
+    },
+    {
+      "id": "jssg-keep-metrics-snapshots-in-sync",
+      "title": "Treat metrics.json as part of expected test output",
+      "summary": "Metrics snapshots are handled separately from directory tree comparisons and must be kept in sync when used.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/testing",
+      "verified": true,
+      "tags": ["tests", "metrics", "snapshots"],
+      "content": "If a package uses metrics snapshots, refresh or fix metrics.json along with the rest of the expected outputs."
+    }
+  ],
+  "recipes": [
+    {
+      "id": "jssg-use-directory-fixtures-for-multi-file-codemods",
+      "title": "Use directory fixtures when the codemod creates or deletes files",
+      "summary": "For codemods that create preview routes, helpers, or multiple related file changes, use input/ and expected/ directory fixtures.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/testing",
+      "verified": true,
+      "tags": ["tests", "fixtures", "multi-file"],
+      "content": "Single-file fixtures are not enough for file-creation or multi-file codemods. Use directory snapshots so the whole tree is asserted.",
+      "good_example": "tests/my-case/input/... and tests/my-case/expected/..."
+    },
+    {
+      "id": "jssg-use-jssgtransform-for-related-secondary-files",
+      "title": "Use jssgTransform for related deterministic secondary files",
+      "summary": "When a codemod needs to update a related file from the primary transform, prefer jssgTransform instead of a shell hop.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/advanced",
+      "verified": true,
+      "tags": ["multi-file", "secondary-files", "jssgTransform"],
+      "content": "jssgTransform applies a transform to another file and collects those changes atomically with the primary file. This is preferred over shell-based coordination for deterministic related files.",
+      "good_example": "await jssgTransform(migrateStyles, lessPath, \"css\");"
+    }
+  ]
+}

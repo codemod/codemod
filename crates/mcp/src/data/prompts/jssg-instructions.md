@@ -15,11 +15,14 @@ When the public docs are available, prefer them over this file.
 
 ## Core rules
 
-- Use JSSG for Codemod JS/TS codemods.
+- Use JSSG for Codemod transformation scripts. For JS/TS-family source edits, prefer `js-ast-grep` packages.
 - Prefer TypeScript.
 - Return `null` when a file should not change.
 - Apply collected edits with `root.root().commitEdits(edits)`.
 - Use workflow `include`/`exclude` globs instead of filtering files inside the transform when possible.
+- Before reaching for regex or manual parsing, use the verified KB tools and `dump_ast` to understand the AST shape you are actually matching.
+- For source transforms, do not use `RegExp`, `.replace`, `.replaceAll`, `.match`, `.split`, or manual string parsing as the primary implementation strategy.
+- Minimal string operations are acceptable only for path normalization, import/module-specifier cleanup, helper metadata formatting, or test-output parsing.
 
 ## Runtime and capabilities
 

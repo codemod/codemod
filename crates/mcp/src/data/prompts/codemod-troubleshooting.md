@@ -20,6 +20,19 @@ Fix:
   - `npx codemod@latest search "react 19"`
 - or use a verified local Codemod binary directly.
 
+## Codemod MCP Tools Missing In Codex
+
+Symptom:
+- the installed `codemod` skill references Codemod MCP tools, but the callable tool list does not include them
+- only unrelated/global MCPs appear
+
+Fix:
+- stop codemod authoring immediately
+- reload or restart the Codex session/workspace after `codemod ai` install
+- confirm the workspace `.codex/config.toml` points at the intended Codemod binary
+- confirm Codemod MCP is enabled in Codex
+- only resume codemod authoring after the Codemod MCP tools are actually visible
+
 ## Dirty Git Tree Blocking Execution
 
 Symptom:

@@ -1103,6 +1103,7 @@ dependencies = [
  "anyhow",
  "ast-grep-core",
  "ast-grep-language",
+ "butterflow-core",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
  "futures",
@@ -1110,10 +1111,12 @@ dependencies = [
  "rmcp 0.8.3",
  "serde",
  "serde_json",
+ "serde_yaml",
  "testing-utils",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

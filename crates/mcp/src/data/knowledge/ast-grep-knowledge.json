@@ -1,0 +1,90 @@
+{
+  "version": "1",
+  "extractedAt": "2026-04-03",
+  "sources": [
+    {
+      "id": "docs-jssg-reference",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/reference"
+    },
+    {
+      "id": "repo-jssg-fallback-guidance",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/jssg-instructions.md"
+    },
+    {
+      "id": "repo-codemod-creation-workflow",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/codemod-creation-workflow.md"
+    },
+    {
+      "id": "repo-mcp-tools",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/lib.rs"
+    }
+  ],
+  "gotchas": [
+    {
+      "id": "ast-grep-patterns-match-ast-shape",
+      "title": "Patterns match AST shape, not raw text",
+      "summary": "Pattern matching should be treated as syntax-structure matching; regex is a last resort, not the primary matching strategy.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/reference",
+      "verified": true,
+      "tags": ["patterns", "ast-shape", "regex"],
+      "content": "Prefer pattern rules for clarity, add kind for stricter scopes, use relations for context, and reserve regex as a last resort."
+    },
+    {
+      "id": "ast-grep-meta-variables-capture-whole-nodes",
+      "title": "Meta-variables capture whole AST nodes",
+      "summary": "Meta-variables do not support partial identifier substring matching; capture the full node and constrain it instead.",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/jssg-instructions.md",
+      "verified": true,
+      "tags": ["meta-variables", "matching", "identifiers"],
+      "content": "Do not write partial meta-variable patterns like foo$BAR. Capture the whole node and add constraints if needed."
+    },
+    {
+      "id": "ast-grep-avoid-broad-identifier-sweeps",
+      "title": "Do not rename or match identifiers by broad text sweeps alone",
+      "summary": "Match the intended API context explicitly instead of sweeping every token that happens to share a name.",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/data/prompts/codemod-creation-workflow.md",
+      "verified": true,
+      "tags": ["identifiers", "safety", "context"],
+      "content": "Do not use broad identifier sweeps that rename every matching token by text alone. Match the intended API context explicitly."
+    },
+    {
+      "id": "ast-grep-use-dump-ast-before-regex-fallback",
+      "title": "Use dump_ast when patterns do not match expected AST shapes",
+      "summary": "If an ast-grep pattern is failing, inspect the actual AST shape before attempting broader fallbacks.",
+      "source_type": "repo_code",
+      "source_ref": "crates/mcp/src/lib.rs",
+      "verified": true,
+      "tags": ["dump_ast", "debugging", "patterns"],
+      "content": "When the pattern is unclear or not matching, inspect the AST node kinds and structure with dump_ast instead of jumping to manual parsing or regex."
+    }
+  ],
+  "recipes": [
+    {
+      "id": "ast-grep-prefer-js-ast-grep-for-js-ts-source-edits",
+      "title": "Prefer js-ast-grep for JS/TS-family source edits",
+      "summary": "The default package shape for JS/TS-family source transforms should be js-ast-grep.",
+      "source_type": "repo_code",
+      "source_ref": "crates/cli/src/templates/ai-native-cli/codemod-cli/SKILL.md",
+      "verified": true,
+      "tags": ["package-shape", "js-ast-grep", "javascript", "typescript"],
+      "content": "When the requested codemod is mainly JS/TS-family source edits, use a js-ast-grep package rather than broader workflow or shell-first shapes."
+    },
+    {
+      "id": "ast-grep-use-semantic-workspace-when-symbol-origin-matters",
+      "title": "Use semantic_analysis: workspace when symbol origin matters",
+      "summary": "Cross-file symbol resolution belongs in workflow semantic analysis instead of manual import/name inference.",
+      "source_type": "public_docs",
+      "source_ref": "https://docs.codemod.com/jssg/semantic-analysis",
+      "verified": true,
+      "tags": ["semantic-analysis", "workspace", "cross-file"],
+      "content": "Use semantic_analysis: workspace in js-ast-grep steps when cross-file definitions or references are required for safe matching."
+    }
+  ]
+}

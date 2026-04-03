@@ -660,7 +660,7 @@ pub fn install_restart_hint(harness: Harness) -> String {
 
     if harness_supports_mcp(harness) {
         message.push_str(&format!(
-            " Also make sure Codemod MCP is enabled in {}.",
+            " Also make sure Codemod MCP is enabled in {}. If Codemod MCP tools are still missing after reload, stop codemod authoring and fix MCP visibility before continuing.",
             harness.as_str()
         ));
     }
@@ -1609,7 +1609,7 @@ fn render_skill_discovery_block(
     command_available: bool,
 ) -> String {
     let mcp_line = if harness_supports_mcp(harness) {
-        "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work.\n".to_string()
+        "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, semantic-analysis-aware codemod work, and verified KB search.\n- If Codemod MCP tools are not visible in the agent after reload, stop codemod authoring and fix MCP setup before continuing.\n".to_string()
     } else {
         String::new()
     };

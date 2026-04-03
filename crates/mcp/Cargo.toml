@@ -9,6 +9,9 @@ repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 rmcp = { workspace = true, features = ["transport-io"] }
 anyhow.workspace = true
@@ -17,6 +20,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 ast-grep-core.workspace = true
 ast-grep-language.workspace = true
 codemod-sandbox.workspace = true
@@ -24,3 +28,5 @@ testing-utils.workspace = true
 codemod-llrt-capabilities.workspace = true
 reqwest.workspace = true
 futures.workspace = true
+butterflow-core.workspace = true
+walkdir.workspace = true

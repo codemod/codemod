@@ -55,6 +55,12 @@ The Codemod MCP server provides these tools and docs-backed guidance entrypoints
 - **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
 - **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
 - **`run_jssg_tests`** - Run tests for jssg (TypeScript transformation scripts) codemods with test cases
+- **`get_jssg_gotchas`** - Get the highest-priority verified JSSG gotchas before implementing transforms
+- **`search_jssg_knowledge`** - Search the verified JSSG knowledge base for gotchas and recipes
+- **`get_ast_grep_gotchas`** - Get the highest-priority verified ast-grep gotchas before implementing transforms
+- **`search_ast_grep_knowledge`** - Search the verified ast-grep knowledge base for gotchas and recipes
+- **`scaffold_codemod_package`** - Scaffold a codemod package via the real `codemod init` CLI when no exact registry package exists
+- **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold, uses risky transform strategies, or is complete enough to stop on
 - **`get_jssg_instructions`** - Get JSSG guidance for creating and testing TypeScript transformation scripts
 - **`get_jssg_utils_instructions`** - Get import utility guidance for `getImport`, `addImport`, and `removeImport`
 - **`get_jssg_runtime_capabilities`** - Get runtime and capability guidance for LLRT/Node APIs, `codemod.yaml` capabilities, and multi-file JSSG work
