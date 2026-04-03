@@ -24,10 +24,10 @@ pub fn render(
 ) {
     let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(3), // title bar
-        Constraint::Length(1), // spacing
-        Constraint::Min(0),    // table
-        Constraint::Length(1), // help bar
+        Constraint::Length(3),             // title bar
+        Constraint::Length(1),             // spacing
+        Constraint::Min(0),                // table
+        Constraint::Length(1),             // help bar
         Constraint::Length(status_height), // status bar
     ])
     .split(area);
@@ -171,10 +171,7 @@ fn render_empty_state(f: &mut Frame, area: Rect) {
 }
 
 fn render_help_bar(f: &mut Frame, area: Rect) {
-    f.render_widget(
-        Block::default().style(Style::default().bg(BODY_BG)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
     let padded = area.inner(Margin::new(1, 0));
     let mut spans: Vec<Span> = Vec::new();
     spans.extend(key_hint("\u{2191}\u{2193}", "navigate"));

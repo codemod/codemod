@@ -172,10 +172,7 @@ pub fn key_hint_colored<'a>(key: &'a str, label: &'a str, color: Color) -> Vec<S
 
 pub fn render_status_line(f: &mut Frame, area: Rect, status: Option<&StatusLine>) {
     if area.height == 0 || !should_render_status(status) {
-        f.render_widget(
-            Block::default().style(Style::default().bg(BODY_BG)),
-            area,
-        );
+        f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
         return;
     }
 
@@ -191,30 +188,35 @@ pub fn render_status_line(f: &mut Frame, area: Rect, status: Option<&StatusLine>
         Span::styled(status.message.as_str(), Style::default().fg(TEXT)),
     ])];
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .style(Style::default().fg(TEXT).bg(ERROR_BG)),
-        );
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: true }).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .style(Style::default().fg(TEXT).bg(ERROR_BG)),
+    );
 
     f.render_widget(paragraph, area);
 }
 
 pub fn status_bar_height(status: Option<&StatusLine>) -> u16 {
-    if should_render_status(status) { 3 } else { 0 }
+    if should_render_status(status) {
+        3
+    } else {
+        0
+    }
 }
 
 fn should_render_status(status: Option<&StatusLine>) -> bool {
-    matches!(status, Some(StatusLine { tone: StatusTone::Error, .. }))
+    matches!(
+        status,
+        Some(StatusLine {
+            tone: StatusTone::Error,
+            ..
+        })
+    )
 }
 
 pub fn render_screen_background(f: &mut Frame, area: Rect) {
-    f.render_widget(
-        Block::default().style(Style::default().bg(BODY_BG)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
 }
 
 pub fn shorten_home_path(path: &std::path::Path) -> String {
@@ -310,11 +312,7 @@ pub fn render_shell_approval_modal(
     render_modal_footer(
         f,
         chunks[2],
-        vec![
-            ("y", "approve"),
-            ("n", "decline"),
-            ("esc", "decline"),
-        ],
+        vec![("y", "approve"), ("n", "decline"), ("esc", "decline")],
     );
 }
 
@@ -373,11 +371,7 @@ pub fn render_capability_approval_modal(
     render_modal_footer(
         f,
         chunks[2],
-        vec![
-            ("y", "approve"),
-            ("n", "decline"),
-            ("esc", "decline"),
-        ],
+        vec![("y", "approve"), ("n", "decline"), ("esc", "decline")],
     );
 }
 
@@ -431,7 +425,10 @@ pub fn render_agent_selection_modal(
         for (index, option) in options.iter().enumerate() {
             let prefix = if index == cursor { "› " } else { "  " };
             let style = if index == cursor {
-                Style::default().fg(TEXT).bg(SURFACE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(TEXT)
+                    .bg(SURFACE)
+                    .add_modifier(Modifier::BOLD)
             } else if option.is_available {
                 Style::default().fg(TEXT)
             } else {
@@ -451,10 +448,7 @@ pub fn render_agent_selection_modal(
     render_modal_footer(
         f,
         chunks[2],
-        vec![
-            ("enter", "select"),
-            ("esc", "built-in AI"),
-        ],
+        vec![("enter", "select"), ("esc", "built-in AI")],
     );
 }
 

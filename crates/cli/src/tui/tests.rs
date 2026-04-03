@@ -22,8 +22,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::app::{
-    App, AppEffect, EffectResult, LogView, PendingCapabilityApproval, PendingShellApproval,
-    Screen, SessionOverrides,
+    App, AppEffect, EffectResult, LogView, PendingCapabilityApproval, PendingShellApproval, Screen,
+    SessionOverrides,
 };
 use super::event::AppEvent;
 use super::screens::{self, StatusLine, StatusTone};
@@ -927,7 +927,6 @@ async fn trigger_effect_preserves_stored_workflow_params() {
         .any(|line| line.contains("hello butterflow")));
 }
 
-
 #[test]
 fn sync_log_view_tracks_refreshed_task_logs() {
     let run_id = Uuid::new_v4();
@@ -958,7 +957,12 @@ fn sync_log_view_tracks_refreshed_task_logs() {
 #[test]
 fn log_view_scroll_keys_update_scroll_state() {
     let run_id = Uuid::new_v4();
-    let selected_task = task(run_id, "node", TaskStatus::Running, vec!["line 1", "line 2"]);
+    let selected_task = task(
+        run_id,
+        "node",
+        TaskStatus::Running,
+        vec!["line 1", "line 2"],
+    );
     let mut app = App::new_for_run(false, None, run_id);
     app.log_view = Some(LogView::from_task(&selected_task));
 
@@ -1008,7 +1012,12 @@ fn coalesce_events_batches_scroll_bursts_and_ticks() {
 #[test]
 fn coalesced_scroll_event_moves_log_view_without_mouse_backlog() {
     let run_id = Uuid::new_v4();
-    let selected_task = task(run_id, "node", TaskStatus::Running, vec!["line 1", "line 2"]);
+    let selected_task = task(
+        run_id,
+        "node",
+        TaskStatus::Running,
+        vec!["line 1", "line 2"],
+    );
     let mut app = App::new_for_run(false, None, run_id);
     app.log_view = Some(LogView::from_task(&selected_task));
 

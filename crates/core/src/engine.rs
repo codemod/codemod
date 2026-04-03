@@ -262,8 +262,7 @@ async fn await_js_ast_grep_execution_task(
     progress_state: Arc<std::sync::Mutex<StepProgressState>>,
     idle_timeout: Duration,
     relative_path: &str,
-) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>>
-{
+) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>> {
     let mut execution_task = std::pin::pin!(execution_task);
     loop {
         if idle_timed_out.load(Ordering::Relaxed) {
@@ -290,9 +289,9 @@ async fn await_js_ast_grep_execution_task(
         }
 
         if execution_task.as_ref().is_finished() {
-            return execution_task.await.map_err(|e| {
-                Error::StepExecution(format!("Codemod execution join failed: {e}"))
-            });
+            return execution_task
+                .await
+                .map_err(|e| Error::StepExecution(format!("Codemod execution join failed: {e}")));
         }
 
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -352,8 +351,7 @@ pub struct Engine {
     pub structured_logger: StructuredLogger,
 
     /// Optional per-task heartbeat callbacks invoked when captured output arrives.
-    output_heartbeat_callbacks:
-        Arc<std::sync::Mutex<HashMap<Uuid, ProgressHeartbeatCallback>>>,
+    output_heartbeat_callbacks: Arc<std::sync::Mutex<HashMap<Uuid, ProgressHeartbeatCallback>>>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -796,10 +794,7 @@ impl Engine {
         }
 
         let task = adapter.get_task(task_id).await?;
-        Ok(
-            task.status == TaskStatus::Failed
-                && task.error.as_deref() == Some("Canceled by user"),
-        )
+        Ok(task.status == TaskStatus::Failed && task.error.as_deref() == Some("Canceled by user"))
     }
 
     fn spawn_task_log_persistor(
@@ -830,11 +825,7 @@ impl Engine {
         (log_tx, log_persist_task)
     }
 
-    fn register_output_heartbeat(
-        &self,
-        task_id: Uuid,
-        callback: ProgressHeartbeatCallback,
-    ) {
+    fn register_output_heartbeat(&self, task_id: Uuid, callback: ProgressHeartbeatCallback) {
         if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
             callbacks.insert(task_id, callback);
         }
@@ -1709,7 +1700,9 @@ impl Engine {
             } else {
                 let mut parent_master_ids = HashSet::new();
                 for task_id in tasks_to_await_trigger {
-                    if let Some(task) = tasks_after_recompilation.iter().find(|task| task.id == task_id)
+                    if let Some(task) = tasks_after_recompilation
+                        .iter()
+                        .find(|task| task.id == task_id)
                     {
                         if let Some(master_task_id) = task.master_task_id {
                             parent_master_ids.insert(master_task_id);
@@ -2080,7 +2073,8 @@ impl Engine {
             }
             let step_start_time = std::time::Instant::now();
 
-            let quiet_capture = self.workflow_run_config.quiet && !self.structured_logger.is_jsonl();
+            let quiet_capture =
+                self.workflow_run_config.quiet && !self.structured_logger.is_jsonl();
             let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
                 let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
                 (Some(log_tx), Some(log_persist_task))
@@ -2897,9 +2891,9 @@ impl Engine {
                         if !quiet {
                             error!("Failed to check capabilities: {e}");
                         }
-                        Box::<dyn std::error::Error + Send + Sync>::from(
-                            format!("Failed to check capabilities: {e}"),
-                        )
+                        Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                            "Failed to check capabilities: {e}"
+                        ))
                     })?;
                 }
                 Ok(())
@@ -3069,10 +3063,7 @@ impl Engine {
                     let timed_out_message = {
                         let state = progress_state_for_watchdog.lock().unwrap();
                         if state.global_last_progress_at.elapsed() > idle_timeout {
-                            Some(build_js_ast_grep_idle_timeout_message(
-                                &state,
-                                idle_timeout,
-                            ))
+                            Some(build_js_ast_grep_idle_timeout_message(&state, idle_timeout))
                         } else {
                             None
                         }
@@ -3109,7 +3100,9 @@ impl Engine {
                     return;
                 }
 
-                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id_for_cancel) {
+                if let (Some(task_id), Some(run_id)) =
+                    (task_log_task_id, workflow_run_id_for_cancel)
+                {
                     let state_adapter = Arc::clone(&state_adapter);
                     let was_canceled = runtime_handle.block_on(async move {
                         let adapter = state_adapter.lock().await;
@@ -3121,14 +3114,10 @@ impl Engine {
                         if workflow_canceled {
                             return true;
                         }
-                        adapter
-                            .get_task(task_id)
-                            .await
-                            .ok()
-                            .is_some_and(|task| {
-                                task.status == TaskStatus::Failed
-                                    && task.error.as_deref() == Some("Canceled by user")
-                            })
+                        adapter.get_task(task_id).await.ok().is_some_and(|task| {
+                            task.status == TaskStatus::Failed
+                                && task.error.as_deref() == Some("Canceled by user")
+                        })
                     });
 
                     if was_canceled {
@@ -3253,7 +3242,9 @@ impl Engine {
                         .await
                 });
 
-                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id_for_cancel) {
+                if let (Some(task_id), Some(run_id)) =
+                    (task_log_task_id, workflow_run_id_for_cancel)
+                {
                     let state_adapter = Arc::clone(&state_adapter);
                     let was_canceled = runtime_handle.block_on(async move {
                         let adapter = state_adapter.lock().await;
@@ -3265,14 +3256,10 @@ impl Engine {
                         if workflow_canceled {
                             return true;
                         }
-                        adapter
-                            .get_task(task_id)
-                            .await
-                            .ok()
-                            .is_some_and(|task| {
-                                task.status == TaskStatus::Failed
-                                    && task.error.as_deref() == Some("Canceled by user")
-                            })
+                        adapter.get_task(task_id).await.ok().is_some_and(|task| {
+                            task.status == TaskStatus::Failed
+                                && task.error.as_deref() == Some("Canceled by user")
+                        })
                     });
 
                     if was_canceled {
@@ -3286,9 +3273,8 @@ impl Engine {
                     }
                 }
 
-                let execution_result = execution_result.and_then(|result| {
-                    result.map_err(|e| Error::StepExecution(e.to_string()))
-                });
+                let execution_result = execution_result
+                    .and_then(|result| result.map_err(|e| Error::StepExecution(e.to_string())));
 
                 match execution_result {
                     Ok(CodemodOutput { primary, secondary }) => {

@@ -31,9 +31,9 @@ pub fn render(
 ) {
     let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(2), // title bar
-        Constraint::Min(0),    // content
-        Constraint::Length(1), // help bar
+        Constraint::Length(2),             // title bar
+        Constraint::Min(0),                // content
+        Constraint::Length(1),             // help bar
         Constraint::Length(status_height), // status bar
     ])
     .split(area);
@@ -43,7 +43,10 @@ pub fn render(
 
     // -- Content --
     let content = chunks[1].inner(Margin::new(2, 0));
-    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), chunks[1]);
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        chunks[1],
+    );
     render_settings_list(f, content, cursor, dry_run, capabilities);
 
     // -- Help bar --
@@ -87,10 +90,7 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
     ));
 
     f.render_widget(title_line, Rect::new(inner.x, inner.y, inner.width, 1));
-    f.render_widget(
-        target_line,
-        Rect::new(inner.x, inner.y + 1, inner.width, 1),
-    );
+    f.render_widget(target_line, Rect::new(inner.x, inner.y + 1, inner.width, 1));
 }
 
 fn is_capability_on(
@@ -189,10 +189,7 @@ fn render_settings_list(
 }
 
 fn render_help_bar(f: &mut Frame, area: Rect) {
-    f.render_widget(
-        Block::default().style(Style::default().bg(BODY_BG)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
     let padded = area.inner(Margin::new(1, 0));
     let mut spans: Vec<Span> = Vec::new();
     spans.extend(key_hint("\u{2191}\u{2193}", "navigate"));

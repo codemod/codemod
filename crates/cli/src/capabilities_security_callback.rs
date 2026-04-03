@@ -14,7 +14,8 @@ pub fn capabilities_security_callback(
     pre_approved: Option<HashSet<LlrtSupportedModules>>,
 ) -> CapabilitiesSecurityCallback {
     let checked_capabilities = Arc::new(Mutex::new(pre_approved.unwrap_or_default()));
-    let unsafe_capabilities: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
+    let unsafe_capabilities: HashSet<LlrtSupportedModules> =
+        UNSAFE_MODULES.iter().copied().collect();
 
     Arc::new(move |config: &CodemodExecutionConfig| {
         if no_interaction {

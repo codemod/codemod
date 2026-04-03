@@ -15,8 +15,9 @@ use std::{
 };
 
 type PreRunCallbackError = Box<dyn Error + Send + Sync>;
-type PreRunCallbackFn =
-    Box<dyn Fn(&Path, bool, &CodemodExecutionConfig) -> Result<(), PreRunCallbackError> + Send + Sync>;
+type PreRunCallbackFn = Box<
+    dyn Fn(&Path, bool, &CodemodExecutionConfig) -> Result<(), PreRunCallbackError> + Send + Sync,
+>;
 
 #[derive(Clone)]
 pub struct PreRunCallback {

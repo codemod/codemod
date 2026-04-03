@@ -169,7 +169,11 @@ fn reset_terminal_for_prompt() {
         use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 
         let _ = disable_raw_mode();
-        if let Ok(mut tty) = fs::OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        if let Ok(mut tty) = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+        {
             let _ = execute!(
                 tty,
                 DisableFocusChange,

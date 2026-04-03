@@ -4,8 +4,8 @@ pub mod screens;
 
 use std::collections::{HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
-use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use butterflow_core::ai_handoff::AgentOption;
@@ -13,8 +13,8 @@ use butterflow_core::config::{
     AgentSelectionCallback, CapabilitiesSecurityCallback, ShellCommandApprovalCallback,
     ShellCommandExecutionRequest,
 };
-use butterflow_core::execution::CodemodExecutionConfig;
 use butterflow_core::engine::Engine;
+use butterflow_core::execution::CodemodExecutionConfig;
 use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crossterm::event::{
@@ -22,7 +22,9 @@ use crossterm::event::{
     EnableFocusChange, EnableMouseCapture,
 };
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -79,8 +81,8 @@ pub(crate) fn configure_engine_for_tui(engine: &mut Engine) -> TuiRuntime {
         let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
         shell_tx
             .send(ShellApprovalMessage {
-            request: request.clone(),
-            response_tx,
+                request: request.clone(),
+                response_tx,
             })
             .map_err(|_| anyhow::anyhow!("TUI approval channel closed"))?;
 
@@ -92,71 +94,76 @@ pub(crate) fn configure_engine_for_tui(engine: &mut Engine) -> TuiRuntime {
 
     let (capability_tx, capability_approval_rx) = mpsc::unbounded_channel();
     let checked_capabilities = Arc::new(Mutex::new(pre_approved_capabilities));
-    let unsafe_capabilities: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
-    let capability_callback: CapabilitiesSecurityCallback = Arc::new(move |request: &CodemodExecutionConfig| {
-        let requested = request
-            .capabilities
-            .as_ref()
-            .map(|set| {
-                let checked = checked_capabilities.lock().unwrap();
-                set.iter()
-                    .filter(|module| unsafe_capabilities.contains(module) && !checked.contains(module))
-                    .copied()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+    let unsafe_capabilities: HashSet<LlrtSupportedModules> =
+        UNSAFE_MODULES.iter().copied().collect();
+    let capability_callback: CapabilitiesSecurityCallback =
+        Arc::new(move |request: &CodemodExecutionConfig| {
+            let requested = request
+                .capabilities
+                .as_ref()
+                .map(|set| {
+                    let checked = checked_capabilities.lock().unwrap();
+                    set.iter()
+                        .filter(|module| {
+                            unsafe_capabilities.contains(module) && !checked.contains(module)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
-        if requested.is_empty() {
-            return Ok(());
-        }
+            if requested.is_empty() {
+                return Ok(());
+            }
 
-        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-        capability_tx
-            .send(CapabilityApprovalMessage {
-                modules: requested.clone(),
-                response_tx,
-            })
-            .map_err(|_| anyhow::anyhow!("TUI capability approval channel closed"))?;
+            let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+            capability_tx
+                .send(CapabilityApprovalMessage {
+                    modules: requested.clone(),
+                    response_tx,
+                })
+                .map_err(|_| anyhow::anyhow!("TUI capability approval channel closed"))?;
 
-        response_rx
-            .recv()
-            .map_err(|_| anyhow::anyhow!("TUI capability approval response channel closed"))??;
+            response_rx.recv().map_err(|_| {
+                anyhow::anyhow!("TUI capability approval response channel closed")
+            })??;
 
-        let mut checked = checked_capabilities.lock().unwrap();
-        checked.extend(requested);
-        Ok(())
-    });
+            let mut checked = checked_capabilities.lock().unwrap();
+            checked.extend(requested);
+            Ok(())
+        });
     config.capabilities_security_callback = Some(capability_callback);
 
     let (agent_selection_tx, agent_selection_rx) = mpsc::unbounded_channel();
-    let agent_selection_callback: AgentSelectionCallback = Arc::new(move |agents: &[AgentOption]| {
-        let mut options: Vec<AgentSelectionItem> = agents
-            .iter()
-            .filter(|agent| agent.is_available())
-            .map(AgentSelectionItem::from_agent_option)
-            .collect();
-        options.push(AgentSelectionItem {
-            canonical: "__use_built_in__".to_string(),
-            label: "Use built-in AI".to_string(),
-            is_available: true,
+    let agent_selection_callback: AgentSelectionCallback =
+        Arc::new(move |agents: &[AgentOption]| {
+            let mut options: Vec<AgentSelectionItem> = agents
+                .iter()
+                .filter(|agent| agent.is_available())
+                .map(AgentSelectionItem::from_agent_option)
+                .collect();
+            options.push(AgentSelectionItem {
+                canonical: "__use_built_in__".to_string(),
+                label: "Use built-in AI".to_string(),
+                is_available: true,
+            });
+
+            let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+            if agent_selection_tx
+                .send(AgentSelectionMessage {
+                    options,
+                    response_tx,
+                })
+                .is_err()
+            {
+                return None;
+            }
+
+            match response_rx.recv() {
+                Ok(Ok(selection)) => selection,
+                Ok(Err(_)) | Err(_) => None,
+            }
         });
-
-        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-        if agent_selection_tx
-            .send(AgentSelectionMessage {
-                options,
-                response_tx,
-            })
-            .is_err()
-        {
-            return None;
-        }
-
-        match response_rx.recv() {
-            Ok(Ok(selection)) => selection,
-            Ok(Err(_)) | Err(_) => None,
-        }
-    });
     config.agent_selection_callback = Some(agent_selection_callback);
 
     TuiRuntime {
@@ -341,7 +348,10 @@ async fn run_event_loop(
         for event in coalesce_events(event_batch) {
             needs_redraw |= matches!(
                 event,
-                AppEvent::Key(_) | AppEvent::Mouse(_) | AppEvent::Scroll(_) | AppEvent::Resize(_, _)
+                AppEvent::Key(_)
+                    | AppEvent::Mouse(_)
+                    | AppEvent::Scroll(_)
+                    | AppEvent::Resize(_, _)
             ) || matches!(event, AppEvent::Tick) && app.has_live_updates();
             pending_effects.extend(app.reduce(event));
         }

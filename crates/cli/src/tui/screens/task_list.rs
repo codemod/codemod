@@ -31,9 +31,9 @@ pub fn render(
 ) {
     let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(2), // title bar
-        Constraint::Min(0),    // table
-        Constraint::Length(1), // help bar
+        Constraint::Length(2),             // title bar
+        Constraint::Min(0),                // table
+        Constraint::Length(1),             // help bar
         Constraint::Length(status_height), // status bar
     ])
     .split(area);
@@ -41,7 +41,10 @@ pub fn render(
     render_header(f, chunks[0], workflow_run);
 
     let content = chunks[1];
-    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), chunks[1]);
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        chunks[1],
+    );
     let visible_tasks: Vec<&Task> = tasks.iter().filter(|task| !task.is_master).collect();
 
     if visible_tasks.is_empty() {
@@ -260,17 +263,11 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
     let target_line = Line::from(Span::styled(target_label, Style::default().fg(DIM)));
 
     f.render_widget(title_line, Rect::new(inner.x, inner.y, inner.width, 1));
-    f.render_widget(
-        target_line,
-        Rect::new(inner.x, inner.y + 1, inner.width, 1),
-    );
+    f.render_widget(target_line, Rect::new(inner.x, inner.y + 1, inner.width, 1));
 }
 
 fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task], log_view_open: bool) {
-    f.render_widget(
-        Block::default().style(Style::default().bg(BODY_BG)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
     let padded = area.inner(Margin::new(1, 0));
 
     if log_view_open {
@@ -337,16 +334,28 @@ fn render_log_modal(
     log_follow: bool,
 ) {
     f.render_widget(Clear, area);
-    f.render_widget(
-        Block::default().style(Style::default().bg(HEADER_BG)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(HEADER_BG)), area);
 
     let modal_area = centered_rect(area, 80, 70);
     let title_status = task_status_label(log_view.status, log_view.error.as_deref());
+    let title_status_color = task_status_color(log_view.status, log_view.error.as_deref());
 
     let block = Block::default()
-        .title(format!(" task {} / {} ", log_view.node_id, title_status))
+        .title(Line::from(vec![
+            Span::raw(" task "),
+            Span::styled(
+                log_view.node_id.clone(),
+                Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / "),
+            Span::styled(
+                title_status,
+                Style::default()
+                    .fg(title_status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ]))
         .borders(Borders::ALL)
         .style(Style::default().bg(HEADER_BG));
 

@@ -1041,7 +1041,10 @@ impl App {
                 .workflow_runs
                 .iter()
                 .any(|run| run.status == WorkflowStatus::Running)
-            || self.tasks.iter().any(|task| task.status == TaskStatus::Running)
+            || self
+                .tasks
+                .iter()
+                .any(|task| task.status == TaskStatus::Running)
             || self
                 .log_view
                 .as_ref()
@@ -1074,7 +1077,9 @@ fn hash_workflow_run(hasher: &mut DefaultHasher, run: &WorkflowRun) {
     run.bundle_path.hash(hasher);
     hash_workflow_status(hasher, run.status);
     run.started_at.timestamp_millis().hash(hasher);
-    run.ended_at.map(|time| time.timestamp_millis()).hash(hasher);
+    run.ended_at
+        .map(|time| time.timestamp_millis())
+        .hash(hasher);
 }
 
 fn hash_tasks(hasher: &mut DefaultHasher, tasks: &[Task]) {
@@ -1085,8 +1090,12 @@ fn hash_tasks(hasher: &mut DefaultHasher, tasks: &[Task]) {
         task.is_master.hash(hasher);
         task.master_task_id.hash(hasher);
         hash_task_status(hasher, task.status);
-        task.started_at.map(|time| time.timestamp_millis()).hash(hasher);
-        task.ended_at.map(|time| time.timestamp_millis()).hash(hasher);
+        task.started_at
+            .map(|time| time.timestamp_millis())
+            .hash(hasher);
+        task.ended_at
+            .map(|time| time.timestamp_millis())
+            .hash(hasher);
         task.error.hash(hasher);
         matrix_sort_key(task).hash(hasher);
         task.logs.len().hash(hasher);

@@ -1226,11 +1226,9 @@ async fn test_manual_matrix_master_tracks_child_trigger_state() {
         .filter(|task| task.master_task_id == Some(master_task.id))
         .collect();
     assert_eq!(awaiting_children.len(), 2);
-    assert!(
-        awaiting_children
-            .iter()
-            .all(|task| task.status == TaskStatus::AwaitingTrigger)
-    );
+    assert!(awaiting_children
+        .iter()
+        .all(|task| task.status == TaskStatus::AwaitingTrigger));
 }
 
 #[tokio::test]

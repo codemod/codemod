@@ -108,109 +108,109 @@ impl DirectRunner {
 
         #[cfg(not(unix))]
         {
-        // Configure the command to pipe stdout and stderr
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+            // Configure the command to pipe stdout and stderr
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        // Spawn the command
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
+            // Spawn the command
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
 
-        // Get handles to stdout and stderr
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::Runtime("Failed to capture stdout".to_string()))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| Error::Runtime("Failed to capture stderr".to_string()))?;
+            // Get handles to stdout and stderr
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| Error::Runtime("Failed to capture stdout".to_string()))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| Error::Runtime("Failed to capture stderr".to_string()))?;
 
-        // Create readers
-        let stdout_reader = BufReader::new(stdout);
-        let stderr_reader = BufReader::new(stderr);
+            // Create readers
+            let stdout_reader = BufReader::new(stdout);
+            let stderr_reader = BufReader::new(stderr);
 
-        let quiet = self.quiet;
-        let stdout_callback = output_callback.clone();
+            let quiet = self.quiet;
+            let stdout_callback = output_callback.clone();
 
-        // Handle stdout in a separate task
-        let stdout_handle = std::thread::spawn(move || {
-            let mut collected_output = String::new();
-            for line in stdout_reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if let Some(callback) = &stdout_callback {
-                            callback(format!("[stdout] {}", line));
+            // Handle stdout in a separate task
+            let stdout_handle = std::thread::spawn(move || {
+                let mut collected_output = String::new();
+                for line in stdout_reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(callback) = &stdout_callback {
+                                callback(format!("[stdout] {}", line));
+                            }
+                            if !quiet {
+                                println!("{}", line);
+                            }
+                            collected_output.push_str(&line);
+                            collected_output.push('\n');
                         }
-                        if !quiet {
-                            println!("{}", line);
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("Error reading stdout: {}", e);
+                            }
+                            break;
                         }
-                        collected_output.push_str(&line);
-                        collected_output.push('\n');
-                    }
-                    Err(e) => {
-                        if !quiet {
-                            eprintln!("Error reading stdout: {}", e);
-                        }
-                        break;
-                    }
-                }
-            }
-            collected_output
-        });
-
-        // Handle stderr in a separate task
-        let stderr_callback = output_callback;
-        let stderr_handle = std::thread::spawn(move || {
-            let mut collected_output = String::new();
-            for line in stderr_reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if let Some(callback) = &stderr_callback {
-                            callback(format!("[stderr] {}", line));
-                        }
-                        if !quiet {
-                            eprintln!("{}", line);
-                        }
-                        collected_output.push_str(&line);
-                        collected_output.push('\n');
-                    }
-                    Err(e) => {
-                        if !quiet {
-                            eprintln!("Error reading stderr: {}", e);
-                        }
-                        break;
                     }
                 }
+                collected_output
+            });
+
+            // Handle stderr in a separate task
+            let stderr_callback = output_callback;
+            let stderr_handle = std::thread::spawn(move || {
+                let mut collected_output = String::new();
+                for line in stderr_reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(callback) = &stderr_callback {
+                                callback(format!("[stderr] {}", line));
+                            }
+                            if !quiet {
+                                eprintln!("{}", line);
+                            }
+                            collected_output.push_str(&line);
+                            collected_output.push('\n');
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("Error reading stderr: {}", e);
+                            }
+                            break;
+                        }
+                    }
+                }
+                collected_output
+            });
+
+            // Wait for the process to complete and collect outputs
+            let exit_status = tokio::task::spawn_blocking(move || {
+                child
+                    .wait()
+                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
+            })
+            .await
+            .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
+
+            let stdout_output = stdout_handle
+                .join()
+                .map_err(|_| Error::Runtime("Failed to join stdout reader".to_string()))?;
+            let stderr_output = stderr_handle
+                .join()
+                .map_err(|_| Error::Runtime("Failed to join stderr reader".to_string()))?;
+
+            if !exit_status.success() {
+                return Err(Error::Runtime(format!(
+                    "Command failed with exit code {}: {}",
+                    exit_status.code().unwrap_or(-1),
+                    stderr_output
+                )));
             }
-            collected_output
-        });
 
-        // Wait for the process to complete and collect outputs
-        let exit_status = tokio::task::spawn_blocking(move || {
-            child
-                .wait()
-                .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
-        })
-        .await
-        .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
-
-        let stdout_output = stdout_handle
-            .join()
-            .map_err(|_| Error::Runtime("Failed to join stdout reader".to_string()))?;
-        let stderr_output = stderr_handle
-            .join()
-            .map_err(|_| Error::Runtime("Failed to join stderr reader".to_string()))?;
-
-        if !exit_status.success() {
-            return Err(Error::Runtime(format!(
-                "Command failed with exit code {}: {}",
-                exit_status.code().unwrap_or(-1),
-                stderr_output
-            )));
-        }
-
-        Ok(stdout_output)
+            Ok(stdout_output)
         }
     }
 }

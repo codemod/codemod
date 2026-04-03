@@ -314,11 +314,7 @@ impl StateAdapter for LocalStateAdapter {
         let mut tasks = Vec::new();
         for entry in fs::read_dir(dir)?.filter_map(|entry| entry.ok()) {
             let path = entry.path();
-            if !path
-                .extension()
-                .map(|ext| ext == "json")
-                .unwrap_or(false)
-            {
+            if !path.extension().map(|ext| ext == "json").unwrap_or(false) {
                 continue;
             }
 
