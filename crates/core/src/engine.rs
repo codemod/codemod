@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 use crate::ai_handoff::{
@@ -103,6 +103,202 @@ struct PreparedStepExecution {
     state_input_path: PathBuf,
 }
 
+const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+
+type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepPhase {
+    Starting,
+    FileQueued,
+    FileLoaded,
+    ExecutionStarted,
+    Output,
+    ExecutionFinished,
+    ExecutionErrored,
+}
+
+impl std::fmt::Display for StepPhase {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            StepPhase::Starting => "starting",
+            StepPhase::FileQueued => "file queued",
+            StepPhase::FileLoaded => "file loaded",
+            StepPhase::ExecutionStarted => "execution started",
+            StepPhase::Output => "output",
+            StepPhase::ExecutionFinished => "execution finished",
+            StepPhase::ExecutionErrored => "execution errored",
+        };
+        formatter.write_str(value)
+    }
+}
+
+#[derive(Debug)]
+struct UnitProgressState {
+    last_progress_at: Instant,
+    phase: StepPhase,
+}
+
+impl UnitProgressState {
+    fn new(phase: StepPhase) -> Self {
+        let now = Instant::now();
+        Self {
+            last_progress_at: now,
+            phase,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StepProgressState {
+    global_last_progress_at: Instant,
+    global_phase: StepPhase,
+    active_units: HashMap<String, UnitProgressState>,
+    output_active_units: HashSet<String>,
+}
+
+impl StepProgressState {
+    fn new() -> Self {
+        Self {
+            global_last_progress_at: Instant::now(),
+            global_phase: StepPhase::Starting,
+            active_units: HashMap::new(),
+            output_active_units: HashSet::new(),
+        }
+    }
+}
+
+fn js_ast_grep_idle_timeout() -> Duration {
+    let override_ms = std::env::var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0);
+    Duration::from_millis(override_ms.unwrap_or(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT))
+}
+
+fn record_unit_progress(
+    state: &Arc<std::sync::Mutex<StepProgressState>>,
+    unit_key: &str,
+    phase: StepPhase,
+) {
+    if let Ok(mut state) = state.lock() {
+        let now = Instant::now();
+        state.global_last_progress_at = now;
+        state.global_phase = phase;
+        let entry = state
+            .active_units
+            .entry(unit_key.to_string())
+            .or_insert_with(|| UnitProgressState::new(phase));
+        entry.last_progress_at = now;
+        entry.phase = phase;
+        if phase == StepPhase::ExecutionStarted {
+            state.output_active_units.insert(unit_key.to_string());
+        }
+    }
+}
+
+fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
+    if let Ok(mut state) = state.lock() {
+        let now = Instant::now();
+        state.global_last_progress_at = now;
+        state.global_phase = StepPhase::Output;
+
+        let output_units: Vec<String> = state.output_active_units.iter().cloned().collect();
+        for unit_key in output_units {
+            if let Some(unit) = state.active_units.get_mut(&unit_key) {
+                unit.last_progress_at = now;
+                unit.phase = StepPhase::Output;
+            }
+        }
+    }
+}
+
+fn finish_unit_progress(
+    state: &Arc<std::sync::Mutex<StepProgressState>>,
+    unit_key: &str,
+    phase: StepPhase,
+) {
+    if let Ok(mut state) = state.lock() {
+        state.global_last_progress_at = Instant::now();
+        state.global_phase = phase;
+        state.active_units.remove(unit_key);
+        state.output_active_units.remove(unit_key);
+    }
+}
+
+fn build_js_ast_grep_idle_timeout_message(
+    state: &StepProgressState,
+    idle_timeout: Duration,
+) -> String {
+    let active_unit_count = state.active_units.len();
+    if let Some((unit_key, unit_state)) = state.active_units.iter().max_by(|left, right| {
+        left.1
+            .last_progress_at
+            .elapsed()
+            .cmp(&right.1.last_progress_at.elapsed())
+    }) {
+        format!(
+            "No progress observed for {}s while processing {} ({}, active units: {})",
+            idle_timeout.as_secs(),
+            unit_key,
+            unit_state.phase,
+            active_unit_count
+        )
+    } else {
+        format!(
+            "No progress observed for {}s during js-ast-grep execution ({}, active units: 0)",
+            idle_timeout.as_secs(),
+            state.global_phase
+        )
+    }
+}
+
+async fn await_js_ast_grep_execution_task(
+    execution_task: tokio::task::JoinHandle<
+        std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>,
+    >,
+    idle_timed_out: Arc<AtomicBool>,
+    idle_failure_message: Arc<std::sync::Mutex<Option<String>>>,
+    progress_state: Arc<std::sync::Mutex<StepProgressState>>,
+    idle_timeout: Duration,
+    relative_path: &str,
+) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>>
+{
+    let mut execution_task = std::pin::pin!(execution_task);
+    loop {
+        if idle_timed_out.load(Ordering::Relaxed) {
+            execution_task.as_mut().abort();
+            let _ = execution_task.await;
+            let message = idle_failure_message
+                .lock()
+                .ok()
+                .and_then(|message| message.clone())
+                .unwrap_or_else(|| {
+                    let snapshot = progress_state.lock().ok();
+                    snapshot
+                        .as_deref()
+                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "No progress observed for {}s while processing {}",
+                                idle_timeout.as_secs(),
+                                relative_path
+                            )
+                        })
+                });
+            return Err(Error::Runtime(message));
+        }
+
+        if execution_task.as_ref().is_finished() {
+            return execution_task.await.map_err(|e| {
+                Error::StepExecution(format!("Codemod execution join failed: {e}"))
+            });
+        }
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 fn log_step_output(logger: &StructuredLogger, output: &str) {
     if !logger.is_jsonl() {
         return;
@@ -154,6 +350,10 @@ pub struct Engine {
 
     /// Structured logger for JSONL output
     pub structured_logger: StructuredLogger,
+
+    /// Optional per-task heartbeat callbacks invoked when captured output arrives.
+    output_heartbeat_callbacks:
+        Arc<std::sync::Mutex<HashMap<Uuid, ProgressHeartbeatCallback>>>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -376,6 +576,7 @@ impl Engine {
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger: StructuredLogger::default(),
+            output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -394,6 +595,7 @@ impl Engine {
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger,
+            output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -419,6 +621,7 @@ impl Engine {
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger,
+            output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -625,6 +828,22 @@ impl Engine {
         });
 
         (log_tx, log_persist_task)
+    }
+
+    fn register_output_heartbeat(
+        &self,
+        task_id: Uuid,
+        callback: ProgressHeartbeatCallback,
+    ) {
+        if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
+            callbacks.insert(task_id, callback);
+        }
+    }
+
+    fn unregister_output_heartbeat(&self, task_id: Uuid) {
+        if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
+            callbacks.remove(&task_id);
+        }
     }
 
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
@@ -1877,9 +2096,17 @@ impl Engine {
             let _stdout_capture = if self.structured_logger.is_jsonl() {
                 StdoutCaptureGuard::start(Some(&step_logger), None)
             } else if self.workflow_run_config.quiet {
+                let output_heartbeat_callbacks = Arc::clone(&self.output_heartbeat_callbacks);
                 let line_callback = quiet_log_tx.as_ref().map(|log_tx| {
                     let log_tx = log_tx.clone();
                     Arc::new(move |line: String| {
+                        let heartbeat = output_heartbeat_callbacks
+                            .lock()
+                            .ok()
+                            .and_then(|callbacks| callbacks.get(&task_id).cloned());
+                        if let Some(heartbeat) = heartbeat {
+                            heartbeat();
+                        }
                         let _ = log_tx.send(line);
                     }) as crate::structured_log::CapturedLineCallback
                 });
@@ -2795,6 +3022,11 @@ impl Engine {
         let state_adapter = Arc::clone(&self.state_adapter);
         let target_path_for_logs = target_path.clone();
         let canceled_during_execution = Arc::new(AtomicBool::new(false));
+        let idle_timeout = js_ast_grep_idle_timeout();
+        let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+        let idle_timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog_done = Arc::new(AtomicBool::new(false));
+        let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
 
         // Collect deferred file deletions from renames — applied after all transforms complete
         let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
@@ -2803,11 +3035,77 @@ impl Engine {
         let deferred_deletions_clone = Arc::clone(&deferred_deletions);
         let workflow_run_id_for_cancel = workflow_run_id;
         let canceled_flag_for_closure = Arc::clone(&canceled_during_execution);
+        let progress_state_for_closure = Arc::clone(&progress_state);
+        let progress_state_for_watchdog = Arc::clone(&progress_state);
+        let idle_timed_out_for_watchdog = Arc::clone(&idle_timed_out);
+        let watchdog_done_for_watchdog = Arc::clone(&watchdog_done);
+        let idle_failure_message_for_watchdog = Arc::clone(&idle_failure_message);
+        let state_adapter_for_watchdog = Arc::clone(&self.state_adapter);
+
+        if let Some(task_id) = task_log_task_id {
+            let progress_state_for_output = Arc::clone(&progress_state);
+            self.register_output_heartbeat(
+                task_id,
+                Arc::new(move || {
+                    record_output_progress(&progress_state_for_output);
+                }),
+            );
+        }
+
+        let watchdog_task = {
+            let task_log_task_id = task_log_task_id;
+            tokio::spawn(async move {
+                loop {
+                    if watchdog_done_for_watchdog.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+
+                    if watchdog_done_for_watchdog.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let timed_out_message = {
+                        let state = progress_state_for_watchdog.lock().unwrap();
+                        if state.global_last_progress_at.elapsed() > idle_timeout {
+                            Some(build_js_ast_grep_idle_timeout_message(
+                                &state,
+                                idle_timeout,
+                            ))
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(message) = timed_out_message {
+                        idle_timed_out_for_watchdog.store(true, Ordering::Relaxed);
+                        if let Ok(mut slot) = idle_failure_message_for_watchdog.lock() {
+                            *slot = Some(message.clone());
+                        }
+
+                        if let Some(task_id) = task_log_task_id {
+                            let mut adapter = state_adapter_for_watchdog.lock().await;
+                            if let Ok(mut task) = adapter.get_task(task_id).await {
+                                task.logs.push(message);
+                                let _ = adapter.save_task(&task).await;
+                            }
+                        }
+                        break;
+                    }
+                }
+            })
+        };
 
         // Execute the codemod on each file using the config's multi-threading
-        config
+        let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
+        let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
+
+        let execute_result = config
             .execute(move |file_path, config| {
-                if canceled_flag_for_closure.load(Ordering::Relaxed) {
+                if canceled_flag_for_closure.load(Ordering::Relaxed)
+                    || idle_timed_out_for_closure.load(Ordering::Relaxed)
+                {
                     return;
                 }
 
@@ -2849,6 +3147,11 @@ impl Engine {
                     .unwrap_or(file_path)
                     .display()
                     .to_string();
+                record_unit_progress(
+                    &progress_state_for_closure,
+                    &relative_path,
+                    StepPhase::FileQueued,
+                );
 
                 if let Some(task_id) = task_log_task_id {
                     let state_adapter = Arc::clone(&state_adapter);
@@ -2873,31 +3176,81 @@ impl Engine {
                             file_path.display(),
                             e
                         );
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &relative_path,
+                            StepPhase::ExecutionErrored,
+                        );
                         return;
                     }
                 };
+                record_unit_progress(
+                    &progress_state_for_closure,
+                    &relative_path,
+                    StepPhase::FileLoaded,
+                );
 
                 // Execute the async codemod using the captured runtime handle
                 std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                record_unit_progress(
+                    &progress_state_for_closure,
+                    &relative_path,
+                    StepPhase::ExecutionStarted,
+                );
+                let dry_run = config.dry_run;
+                let relative_path_for_execution = relative_path.clone();
+                let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
                 let execution_result = runtime_handle.block_on(async {
-                    execute_codemod_with_quickjs(JssgExecutionOptions {
-                        script_path: &js_file_path_clone,
-                        resolver: resolver_clone.clone(),
-                        language,
-                        file_path,
-                        content: &content,
-                        selector_config: selector_config.clone(),
-                        params: params.clone(),
-                        matrix_values: matrix_input.clone(),
-                        capabilities: config.capabilities.clone(),
-                        semantic_provider: semantic_provider.clone(),
-                        metrics_context: Some(metrics_context_clone.clone()),
-                        shared_state_context: Some(shared_state_context_clone.clone()),
-                        test_mode: false,
-                        dry_run: config.dry_run,
-                        target_directory: Some(&target_path),
-                    })
-                    .await
+                    let local = tokio::task::LocalSet::new();
+                    let file_path_owned = file_path.to_path_buf();
+                    let content_owned = content.clone();
+                    let js_file_path_owned = js_file_path_clone.clone();
+                    let resolver_owned = resolver_clone.clone();
+                    let selector_config_owned = selector_config.clone();
+                    let params_owned = params.clone();
+                    let matrix_input_owned = matrix_input.clone();
+                    let capabilities_owned = config.capabilities.clone();
+                    let semantic_provider_owned = semantic_provider.clone();
+                    let metrics_context_owned = metrics_context_clone.clone();
+                    let shared_state_context_owned = shared_state_context_clone.clone();
+                    let target_path_owned = target_path.clone();
+                    let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
+                    let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
+
+                    local
+                        .run_until(async move {
+                            let execution_task = tokio::task::spawn_local(async move {
+                                execute_codemod_with_quickjs(JssgExecutionOptions {
+                                    script_path: &js_file_path_owned,
+                                    resolver: resolver_owned,
+                                    language,
+                                    file_path: &file_path_owned,
+                                    content: &content_owned,
+                                    selector_config: selector_config_owned,
+                                    params: params_owned,
+                                    matrix_values: matrix_input_owned,
+                                    capabilities: capabilities_owned,
+                                    semantic_provider: semantic_provider_owned,
+                                    metrics_context: Some(metrics_context_owned),
+                                    shared_state_context: Some(shared_state_context_owned),
+                                    test_mode: false,
+                                    dry_run,
+                                    target_directory: Some(&target_path_owned),
+                                })
+                                .await
+                            });
+
+                            await_js_ast_grep_execution_task(
+                                execution_task,
+                                idle_timed_out,
+                                idle_failure_message,
+                                progress_state_for_execution,
+                                idle_timeout,
+                                &relative_path_for_execution,
+                            )
+                            .await
+                        })
+                        .await
                 });
 
                 if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id_for_cancel) {
@@ -2924,9 +3277,18 @@ impl Engine {
 
                     if was_canceled {
                         canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &relative_path,
+                            StepPhase::ExecutionErrored,
+                        );
                         return;
                     }
                 }
+
+                let execution_result = execution_result.and_then(|result| {
+                    result.map_err(|e| Error::StepExecution(e.to_string()))
+                });
 
                 match execution_result {
                     Ok(CodemodOutput { primary, secondary }) => {
@@ -3060,8 +3422,19 @@ impl Engine {
                         for change in &secondary {
                             apply_change(&change.path, &change.result);
                         }
+
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &relative_path,
+                            StepPhase::ExecutionFinished,
+                        );
                     }
                     Err(e) => {
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &relative_path,
+                            StepPhase::ExecutionErrored,
+                        );
                         slog!(
                             logger,
                             error,
@@ -3097,7 +3470,35 @@ impl Engine {
                     );
                 }
             })
-            .map_err(|e| Error::StepExecution(e.to_string()))?;
+            .map_err(|e| Error::StepExecution(e.to_string()));
+
+        watchdog_done.store(true, Ordering::Relaxed);
+        let _ = watchdog_task.await;
+        if let Some(task_id) = task_log_task_id {
+            self.unregister_output_heartbeat(task_id);
+        }
+
+        if idle_timed_out.load(Ordering::Relaxed) {
+            let message = idle_failure_message
+                .lock()
+                .ok()
+                .and_then(|message| message.clone())
+                .unwrap_or_else(|| {
+                    let snapshot = progress_state.lock().ok();
+                    snapshot
+                        .as_deref()
+                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "No progress observed for {}s during js-ast-grep execution",
+                                idle_timeout.as_secs()
+                            )
+                        })
+                });
+            return Err(Error::Runtime(message));
+        }
+
+        execute_result?;
 
         if canceled_during_execution.load(Ordering::Relaxed) {
             return Err(Error::Runtime("Canceled by user".to_string()));
@@ -4440,6 +4841,187 @@ impl Clone for Engine {
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
             structured_logger: self.structured_logger.clone(),
+            output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
+        let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+        assert_eq!(
+            js_ast_grep_idle_timeout(),
+            Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+        );
+
+        std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+        assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn record_unit_progress_updates_global_and_active_units() {
+        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+        let before = state.lock().unwrap().global_last_progress_at;
+
+        std::thread::sleep(Duration::from_millis(5));
+        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+
+        let snapshot = state.lock().unwrap();
+        assert_eq!(snapshot.global_phase, StepPhase::ExecutionStarted);
+        assert!(snapshot.global_last_progress_at > before);
+        let unit = snapshot.active_units.get("src/example.ts").unwrap();
+        assert_eq!(unit.phase, StepPhase::ExecutionStarted);
+        assert!(unit.last_progress_at > before);
+        assert!(snapshot.output_active_units.contains("src/example.ts"));
+    }
+
+    #[test]
+    fn record_output_progress_refreshes_executing_units() {
+        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+        let before = state
+            .lock()
+            .unwrap()
+            .active_units
+            .get("src/example.ts")
+            .unwrap()
+            .last_progress_at;
+
+        std::thread::sleep(Duration::from_millis(5));
+        record_output_progress(&state);
+
+        let snapshot = state.lock().unwrap();
+        assert_eq!(snapshot.global_phase, StepPhase::Output);
+        let unit = snapshot.active_units.get("src/example.ts").unwrap();
+        assert_eq!(unit.phase, StepPhase::Output);
+        assert!(unit.last_progress_at > before);
+    }
+
+    #[test]
+    fn finish_unit_progress_removes_active_unit() {
+        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+        finish_unit_progress(&state, "src/example.ts", StepPhase::ExecutionFinished);
+
+        let snapshot = state.lock().unwrap();
+        assert_eq!(snapshot.global_phase, StepPhase::ExecutionFinished);
+        assert!(!snapshot.active_units.contains_key("src/example.ts"));
+        assert!(!snapshot.output_active_units.contains("src/example.ts"));
+    }
+
+    #[test]
+    fn build_idle_timeout_message_uses_stalest_active_unit() {
+        let now = Instant::now();
+        let mut state = StepProgressState::new();
+        state.global_last_progress_at = now - Duration::from_secs(90);
+        state.global_phase = StepPhase::Output;
+        state.active_units.insert(
+            "src/fresh.ts".to_string(),
+            UnitProgressState {
+                last_progress_at: now - Duration::from_secs(10),
+                phase: StepPhase::Output,
+            },
+        );
+        state.active_units.insert(
+            "src/stale.ts".to_string(),
+            UnitProgressState {
+                last_progress_at: now - Duration::from_secs(75),
+                phase: StepPhase::ExecutionStarted,
+            },
+        );
+
+        let message = build_js_ast_grep_idle_timeout_message(&state, Duration::from_secs(60));
+        assert!(message.contains("src/stale.ts"));
+        assert!(message.contains("execution started"));
+        assert!(message.contains("active units: 2"));
+    }
+
+    #[tokio::test]
+    async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
+        let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+        record_unit_progress(
+            &progress_state,
+            "src/stalled.ts",
+            StepPhase::ExecutionStarted,
+        );
+        let idle_timed_out = Arc::new(AtomicBool::new(false));
+        let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+        let local = tokio::task::LocalSet::new();
+        let idle_timed_out_for_task = Arc::clone(&idle_timed_out);
+        let idle_failure_message_for_task = Arc::clone(&idle_failure_message);
+        let progress_state_for_task = Arc::clone(&progress_state);
+        let result = local
+            .run_until(async move {
+                let trigger = tokio::spawn({
+                    let idle_timed_out = Arc::clone(&idle_timed_out_for_task);
+                    let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        idle_timed_out.store(true, Ordering::Relaxed);
+                        if let Ok(mut message) = idle_failure_message.lock() {
+                            *message = Some(
+                                "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                });
+
+                let execution_task = tokio::task::spawn_local(async move {
+                    futures_util::future::pending::<
+                        std::result::Result<
+                            CodemodOutput,
+                            codemod_sandbox::sandbox::errors::ExecutionError,
+                        >,
+                    >()
+                    .await
+                });
+
+                let result = await_js_ast_grep_execution_task(
+                    execution_task,
+                    idle_timed_out_for_task,
+                    idle_failure_message_for_task,
+                    progress_state_for_task,
+                    Duration::from_secs(1),
+                    "src/stalled.ts",
+                )
+                .await;
+                trigger.await.unwrap();
+                result
+            })
+            .await;
+
+        let error = result.expect_err("pending execution should time out");
+        let message = error.to_string();
+        assert!(message.contains("No progress observed"));
+        assert!(message.contains("src/stalled.ts"));
     }
 }

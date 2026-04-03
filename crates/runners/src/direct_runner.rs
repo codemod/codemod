@@ -52,6 +52,7 @@ impl DirectRunner {
             let mut child = cmd
                 .spawn()
                 .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
+            drop(cmd);
 
             let quiet = self.quiet;
             let callback = output_callback;

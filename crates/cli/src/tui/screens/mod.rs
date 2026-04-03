@@ -84,7 +84,7 @@ pub fn task_status_label(status: TaskStatus, error: Option<&str>) -> &'static st
         TaskStatus::Completed => "done",
         TaskStatus::Failed => "failed",
         TaskStatus::Running => "running",
-        TaskStatus::AwaitingTrigger => "awaiting",
+        TaskStatus::AwaitingTrigger => "ready",
         TaskStatus::Pending => "pending",
         TaskStatus::Blocked => "blocked",
         TaskStatus::WontDo => "skipped",
@@ -125,7 +125,7 @@ pub fn workflow_status_label(status: WorkflowStatus) -> &'static str {
         WorkflowStatus::Completed => "completed",
         WorkflowStatus::Failed => "failed",
         WorkflowStatus::Running => "running",
-        WorkflowStatus::AwaitingTrigger => "awaiting trigger",
+        WorkflowStatus::AwaitingTrigger => "ready",
         WorkflowStatus::Pending => "pending",
         WorkflowStatus::Canceled => "canceled",
     }
