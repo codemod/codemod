@@ -1,0 +1,17 @@
+id: brownie-import-migrate
+language: python
+rule:
+  pattern: "from brownie import $$$PKGS"
+fix: "from ape import accounts, project"
+---
+id: brownie-deploy-migrate
+language: python
+rule:
+  pattern: "$CONTRACT.deploy($$$ARGS, {'from': $ACCT})"
+fix: "$ACCT.deploy(project.$CONTRACT, $$$ARGS)"
+---
+id: brownie-account-index-migrate
+language: python
+rule:
+  pattern: "accounts[$INDEX]"
+fix: "accounts[$INDEX]" # Kept for parity, but now strictly matched

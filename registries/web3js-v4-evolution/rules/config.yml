@@ -1,0 +1,7 @@
+id: web3-legacy-detect
+language: javascript
+rule:
+  any:
+    - pattern: "new $W.eth.Contract($ABI, $ADDR)"
+    - pattern: "$C.methods.$M($$$ARGS).send($$$OPTS)"
+    - pattern: "$C.methods.$M($$$ARGS).call($$$OPTS)"

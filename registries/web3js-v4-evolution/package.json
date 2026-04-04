@@ -1,0 +1,9 @@
+{
+  "name": "web3js-v4-evolution",
+  "version": "0.1.0",
+  "description": "Migrate Web3.js v1 legacy patterns to v4 modular syntax",
+  "main": "scripts/codemod.ts",
+  "scripts": {
+    "test": "npx codemod test"
+  }
+}

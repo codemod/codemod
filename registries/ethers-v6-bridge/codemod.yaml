@@ -1,0 +1,10 @@
+schema_version: "1.0"
+name: "ethers-v6-bridge"
+version: "0.1.0"
+description: "Migrate Ethers.js v5 to v6 with Rigorous Math Sentinel"
+author: "Skywalkingzulu1"
+license: "Apache-2.0"
+workflow: "workflow.yaml"
+targets:
+  languages: ["typescript", "javascript"]
+keywords: ["ethers", "web3", "blockchain", "ethereum"]

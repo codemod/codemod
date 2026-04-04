@@ -1,0 +1,9 @@
+{
+  "name": "brownie-to-ape-python",
+  "version": "0.1.0",
+  "description": "Migrate legacy Brownie smart contract projects to Ape Framework",
+  "main": "scripts/codemod.ts",
+  "scripts": {
+    "test": "npx codemod test"
+  }
+}

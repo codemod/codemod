@@ -1,0 +1,10 @@
+schema_version: "1.0"
+name: "brownie-to-ape-python"
+version: "0.1.0"
+description: "Migrate legacy Brownie smart contract projects to Ape Framework"
+author: "Skywalkingzulu1"
+license: "Apache-2.0"
+workflow: "workflow.yaml"
+targets:
+  languages: ["python"]
+keywords: ["blockchain", "ethereum", "brownie", "ape"]

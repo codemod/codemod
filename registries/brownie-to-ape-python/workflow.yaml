@@ -1,0 +1,11 @@
+version: "1"
+name: "Brownie to Ape Framework Architect"
+nodes:
+  - id: brownie-to-ape-migration
+    name: Brownie to Ape Migration
+    type: automatic
+    steps:
+      - name: "Deterministic Python Migration"
+        js-ast-grep:
+          js_file: "scripts/codemod.ts"
+          language: "python"

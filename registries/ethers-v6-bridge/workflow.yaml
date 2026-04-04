@@ -1,0 +1,11 @@
+version: "1"
+name: "Ethers.js v6 BigInt Bridge"
+nodes:
+  - id: ethers-v6-migration
+    name: Ethers.js v6 Evolution
+    type: automatic
+    steps:
+      - name: "Deterministic Ethers Migration"
+        js-ast-grep:
+          js_file: "scripts/codemod.ts"
+          language: "javascript"

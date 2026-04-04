@@ -1,0 +1,10 @@
+schema_version: "1.0"
+name: "web3js-v4-evolution"
+version: "0.1.0"
+description: "Migrate Web3.js v1 legacy patterns to v4 modular syntax"
+author: "Skywalkingzulu1"
+license: "Apache-2.0"
+workflow: "workflow.yaml"
+targets:
+  languages: ["typescript", "javascript"]
+keywords: ["web3", "blockchain", "ethereum"]

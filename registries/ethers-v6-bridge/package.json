@@ -1,0 +1,9 @@
+{
+  "name": "ethers-v6-bridge",
+  "version": "0.1.0",
+  "description": "Migrate Ethers.js v5 to v6 with Rigorous Math Sentinel",
+  "main": "scripts/codemod.ts",
+  "scripts": {
+    "test": "npx codemod test"
+  }
+}

@@ -1,0 +1,6 @@
+id: ethers-v5-detect
+language: javascript
+rule:
+  any:
+    - pattern: "ethers.providers.$P"
+    - pattern: "ethers.BigNumber.from($V)"

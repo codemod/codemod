@@ -1,0 +1,11 @@
+version: "1"
+name: "Web3.js v4 Modular Evolution"
+nodes:
+  - id: web3js-v4-migration
+    name: Web3.js v4 Evolution
+    type: automatic
+    steps:
+      - name: "Deterministic Web3 Migration"
+        js-ast-grep:
+          js_file: "scripts/codemod.ts"
+          language: "javascript"
