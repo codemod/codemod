@@ -5,6 +5,40 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="March 2026">
+- **AI-native CLI & agent skills**: `npx codemod ai` now installs Codemod MCP and the `/codemod` command across Claude, Goose, OpenCode, Cursor, and Codex, with signed managed updates for installed components. Registry packages can now include installable skills, and bare `npx codemod` opens an interactive launcher for creating a package or running one from the registry.
+
+- **Workflow orchestration upgrades**:
+  - New terminal UI for workflow runs with inline logs, task triggering/retry/cancel, runtime dry-run controls, and capability settings
+  - Shell steps can now require approval in interactive runs
+  - Workflow nodes now support commit checkpoints and pull request configuration
+
+- **Sharded campaigns**: Large migrations can now be split into smaller pull requests by directory or `CODEOWNERS` grouping. Campaign creation now includes sharding controls and preview details before launch.
+
+- **Pro codemods can now be previewed with dry-run**: Authenticated users can discover Pro packages in the registry and run them locally in dry-run-only mode before upgrading, while full execution remains gated to Pro plans.
+
+- **JSSG improvements**:
+  - Workspace-wide semantic analysis now works in `jssg test`, including cross-file resolution
+  - Directory snapshot testing now supports created and deleted files, not just modified ones
+  - Renamed files are handled more reliably during execution and test runs
+
+- **Registry & campaign UX**:
+  - Featured packages now surface at the top of matching registry results
+  - Legacy codemods are clearly disabled for cloud campaigns
+  - Skill-only versions are skipped during campaign creation
+  - Project title and description can now be edited inline
+  - Repository pickers load faster with synced repository catalogs
+
+- **Website improvements**:
+  - Website and preview pages load faster and render more reliably
+
+- **CLI polish & reliability**:
+  - Interactive dirty-repo confirmation instead of immediate failure in TTY sessions
+  - Cleaner workflow output with step labels and no duplicate shell output
+  - Empty runs no longer prompt you to open a report
+  - `jssg` semantic analysis behaves better when `node_modules` is missing
+</Update>
+
 <Update label="February 2026">
 - **Shareable reports**: Codemod execution reports can now be shared via URL, complete with metrics, file lists, and diff viewers — with Open Graph previews for social sharing. The CLI now also supports a `--report` flag to open reports locally in the browser.
 
@@ -242,4 +276,3 @@ mode: "center"
 
     As we continue to roll out even more features, your feedback (via email or [Slack](https://go.codemod.com/community)) helps us improve your experience. Thank you for being a valued part of our community!
 </Update>
-
