@@ -714,7 +714,20 @@ impl App {
                 self.settings_cursor = 0;
                 Vec::new()
             }
-            KeyCode::Char('c') => vec![AppEffect::CancelWorkflow { workflow_run_id }],
+            KeyCode::Char('c') => {
+                let is_cancelable = self
+                    .current_workflow_run
+                    .as_ref()
+                    .is_some_and(|run| {
+                        run.status == WorkflowStatus::Running
+                            || run.status == WorkflowStatus::AwaitingTrigger
+                    });
+                if is_cancelable {
+                    vec![AppEffect::CancelWorkflow { workflow_run_id }]
+                } else {
+                    Vec::new()
+                }
+            }
             KeyCode::Esc => {
                 self.navigate_to_run_list();
                 vec![AppEffect::Refresh]

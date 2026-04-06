@@ -30,10 +30,11 @@ pub fn render(
     log_follow: bool,
 ) {
     let status_height = status_bar_height(status);
+    let help_height = help_bar_height(tasks, log_view.is_some(), area.width);
     let chunks = Layout::vertical([
         Constraint::Length(2),             // title bar
         Constraint::Min(0),                // table
-        Constraint::Length(1),             // help bar
+        Constraint::Length(help_height),   // help bar
         Constraint::Length(status_height), // status bar
     ])
     .split(area);
@@ -266,39 +267,16 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
     f.render_widget(target_line, Rect::new(inner.x, inner.y + 1, inner.width, 1));
 }
 
-fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task], log_view_open: bool) {
-    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
-    let padded = area.inner(Margin::new(1, 0));
-
+/// Build the list of hint groups for the current task list state.
+fn build_hint_groups(tasks: &[Task], log_view_open: bool) -> Vec<Vec<Span<'static>>> {
     if log_view_open {
-        let spans = vec![
-            Span::styled(
-                " logs ",
-                Style::default()
-                    .bg(super::KEY_BG)
-                    .fg(TEXT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ↑↓/pg scroll  ", Style::default().fg(TEXT_MUTED)),
-            Span::styled(
-                " esc ",
-                Style::default()
-                    .bg(super::KEY_BG)
-                    .fg(TEXT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" close  ", Style::default().fg(TEXT_MUTED)),
-            Span::styled(
-                " q ",
-                Style::default()
-                    .bg(super::KEY_BG)
-                    .fg(TEXT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" quit  ", Style::default().fg(TEXT_MUTED)),
+        return vec![
+            key_hint("↑↓/pg", "scroll"),
+            key_hint("g", "top"),
+            key_hint("G", "bottom"),
+            key_hint("esc", "close"),
+            key_hint("q", "quit"),
         ];
-        f.render_widget(Line::from(spans), padded);
-        return;
     }
 
     let has_awaiting = tasks
@@ -308,22 +286,74 @@ fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task], log_view_open: boo
         .iter()
         .any(|task| task.status == TaskStatus::Failed && !task.is_master);
 
-    let mut spans: Vec<Span> = Vec::new();
-    spans.extend(key_hint("↑↓", "navigate"));
-    spans.extend(key_hint("⏎", "logs"));
+    let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
+    groups.push(key_hint("↑↓", "navigate"));
+    groups.push(key_hint("⏎", "logs"));
     if has_awaiting {
-        spans.extend(key_hint_colored("t", "trigger", CYAN));
-        spans.extend(key_hint_colored("T", "trigger all", CYAN));
+        groups.push(key_hint_colored("t", "trigger", CYAN));
+        groups.push(key_hint_colored("T", "trigger all", CYAN));
     }
     if has_failed {
-        spans.extend(key_hint_colored("R", "retry", RED));
+        groups.push(key_hint_colored("R", "retry", RED));
     }
-    spans.extend(key_hint("s", "settings"));
-    spans.extend(key_hint("c", "cancel"));
-    spans.extend(key_hint("esc", "back"));
-    spans.extend(key_hint("q", "quit"));
+    groups.push(key_hint("s", "settings"));
+    groups.push(key_hint("c", "cancel"));
+    groups.push(key_hint("esc", "back"));
+    groups.push(key_hint("q", "quit"));
+    groups
+}
 
-    f.render_widget(Line::from(spans), padded);
+/// Pack hint groups greedily into rows of `row_width` chars each.
+fn pack_into_rows(
+    groups: Vec<Vec<Span<'static>>>,
+    row_width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut current_row: Vec<Span<'static>> = Vec::new();
+    let mut current_width = 0usize;
+
+    for group in groups {
+        let w: usize = group.iter().map(|s| s.content.chars().count()).sum();
+        if current_width + w > row_width && !current_row.is_empty() {
+            rows.push(std::mem::take(&mut current_row));
+            current_width = 0;
+        }
+        current_width += w;
+        current_row.extend(group);
+    }
+    if !current_row.is_empty() {
+        rows.push(current_row);
+    }
+    rows
+}
+
+pub fn help_bar_height(tasks: &[Task], log_view_open: bool, available_width: u16) -> u16 {
+    let row_width = available_width.saturating_sub(2) as usize;
+    if row_width == 0 {
+        return 1;
+    }
+    let groups = build_hint_groups(tasks, log_view_open);
+    let num_rows = pack_into_rows(groups, row_width).len().max(1);
+    // each row takes 1 line, with a blank line between rows
+    (num_rows * 2).saturating_sub(1) as u16
+}
+
+fn render_help_bar(f: &mut Frame, area: Rect, tasks: &[Task], log_view_open: bool) {
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
+    let padded = area.inner(Margin::new(1, 0));
+    let row_width = padded.width as usize;
+
+    let groups = build_hint_groups(tasks, log_view_open);
+    let rows = pack_into_rows(groups, row_width);
+
+    for (i, row_spans) in rows.into_iter().enumerate() {
+        // stride of 2: one content row, one blank row between
+        let row_area = Rect::new(padded.x, padded.y + (i * 2) as u16, padded.width, 1);
+        if row_area.y >= area.y + area.height {
+            break;
+        }
+        f.render_widget(Line::from(row_spans), row_area);
+    }
 }
 
 fn render_log_modal(
