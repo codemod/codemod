@@ -232,6 +232,7 @@ impl AppEffect {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum EffectResult {
     Refreshed {
@@ -1082,7 +1083,7 @@ impl App {
 }
 
 fn sort_tasks(tasks: &mut [Task]) {
-    tasks.sort_by(|left, right| task_sort_key(left).cmp(&task_sort_key(right)));
+    tasks.sort_by_key(task_sort_key);
 }
 
 fn hash_workflow_runs(hasher: &mut DefaultHasher, workflow_runs: &[WorkflowRun]) {

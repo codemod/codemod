@@ -103,7 +103,7 @@ impl DirectRunner {
                 )));
             }
 
-            return Ok(combined_output);
+            Ok(combined_output)
         }
 
         #[cfg(not(unix))]

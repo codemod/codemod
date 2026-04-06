@@ -78,7 +78,7 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
         ),
         Span::styled(" / ", Style::default().fg(DIM)),
         Span::styled(
-            truncate_middle(name, available_width.max(1).min(64)),
+            truncate_middle(name, available_width.clamp(1, 64)),
             Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" / ", Style::default().fg(DIM)),

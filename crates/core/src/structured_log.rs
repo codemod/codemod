@@ -15,6 +15,7 @@ fn strip_ansi_escape_sequences(input: &str) -> String {
             match chars.peek().copied() {
                 Some('[') => {
                     chars.next();
+                    #[allow(clippy::while_let_on_iterator)]
                     while let Some(next) = chars.next() {
                         if ('@'..='~').contains(&next) {
                             break;
@@ -23,6 +24,7 @@ fn strip_ansi_escape_sequences(input: &str) -> String {
                 }
                 Some(']') => {
                     chars.next();
+                    #[allow(clippy::while_let_on_iterator)]
                     while let Some(next) = chars.next() {
                         if next == '\u{7}' {
                             break;

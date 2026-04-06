@@ -3079,7 +3079,6 @@ impl Engine {
         }
 
         let watchdog_task = {
-            let task_log_task_id = task_log_task_id;
             tokio::spawn(async move {
                 loop {
                     if watchdog_done_for_watchdog.load(Ordering::Acquire) {

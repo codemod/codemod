@@ -18,6 +18,7 @@ use super::{
 };
 
 /// Render the task list screen.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     f: &mut Frame,
     area: Rect,
@@ -244,7 +245,7 @@ fn render_header(f: &mut Frame, area: Rect, workflow_run: Option<&WorkflowRun>) 
         .map(|path| shorten_home_path(path.as_path()))
         .unwrap_or_default();
     let available_width = inner.width.saturating_sub(2) as usize;
-    let workflow_label = truncate_middle(workflow_name, available_width.max(1).min(72));
+    let workflow_label = truncate_middle(workflow_name, available_width.clamp(1, 72));
     let target_label = truncate_middle(&format!("target: {target}"), available_width.max(1));
 
     let title_line = Line::from(vec![
