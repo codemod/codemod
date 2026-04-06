@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tempfile::TempDir;
 
+type PtyInput<'a> = (Duration, &'a [u8], Option<&'a [&'a str]>);
+
 fn codemod_binary() -> &'static str {
     env!("CARGO_BIN_EXE_codemod")
 }
@@ -105,7 +107,7 @@ fn run_shell_in_pty_with_inputs(
     script: &str,
     cwd: &Path,
     xdg_home: &Path,
-    inputs: &[(Duration, &[u8], Option<&[&str]>)],
+    inputs: &[PtyInput<'_>],
 ) -> (String, portable_pty::ExitStatus) {
     let pty_system = native_pty_system();
     let pair = pty_system
