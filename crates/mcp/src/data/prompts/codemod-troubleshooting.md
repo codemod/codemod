@@ -1,4 +1,4 @@
-# Codemod CLI Core: Troubleshooting
+# Codemod CLI Troubleshooting
 
 Use these checks when commands fail or produce unexpected output.
 
@@ -6,7 +6,6 @@ Use these checks when commands fail or produce unexpected output.
 
 For agents/automation, prefer non-interactive execution:
 - add `--no-interactive` to `codemod workflow run` and `codemod run`.
-- prefer machine output (`--format json`) when commands are parsed by tools.
 
 ## Dirty Git Tree Blocking Execution
 
@@ -59,19 +58,3 @@ Fix:
 - broaden query text and increase result size:
   - `codemod search migration --size 50`
   - `codemod search "jest vitest migration" --size 50`
-
-## Output Parsing Issues in Automation
-
-Fix:
-- use machine formats when piping/parsing:
-  - `--format json`
-  - `--format yaml`
-- avoid parsing table output in scripts.
-
-## AI-Native Harness Resolution
-
-Symptom:
-- Auto-selected harness is unexpected during package skill install prompt.
-
-Fix:
-- re-run `npx codemod <package-id>` and choose the harness explicitly in the install prompts.

@@ -16,6 +16,14 @@ This guide provides comprehensive documentation for creating codemods using Java
 - TypeScript knowledge
 - Familiarity with `codemod-cli-instructions` for project setup and workflow configuration
 
+## Runtime and Capabilities
+
+- JSSG is a QuickJS runtime with LLRT-based Node compatibility.
+- Standard Node-style imports are available in JSSG; some modules are capability-gated.
+- If the codemod uses gated APIs such as `fs`, `fetch`, or `child_process`, update `codemod.yaml` in the same change with the matching `capabilities` entry.
+- For related multi-file JSSG work, prefer `jssgTransform` or other JSSG APIs before falling back to shell steps.
+- For detailed runtime and capability rules, read `jssg-runtime-capabilities-instructions` from Codemod MCP.
+
 ---
 
 # Part 1: ast-grep Fundamentals

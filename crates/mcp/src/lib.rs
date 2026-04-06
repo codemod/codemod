@@ -144,6 +144,20 @@ impl CodemodMcpServer {
     }
 
     #[tool(
+        description = "Get JSSG runtime and capability guidance for LLRT/Node APIs, codemod.yaml capabilities, and multi-file JSSG work"
+    )]
+    async fn get_jssg_runtime_capabilities(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_runtime_capabilities");
+        let instructions_content = include_str!("data/prompts/jssg-runtime-capabilities.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
         description = "Get Codemod CLI instructions for project setup and workflow configuration"
     )]
     async fn get_codemod_cli_instructions(
@@ -152,6 +166,48 @@ impl CodemodMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_codemod_cli_instructions");
         let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get troubleshooting guidance for common Codemod CLI failures and unexpected behavior"
+    )]
+    async fn get_codemod_troubleshooting(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_troubleshooting");
+        let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get the codemod creation workflow guide for authoring, testing, and publishing codemods"
+    )]
+    async fn get_codemod_creation_workflow(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_creation_workflow");
+        let instructions_content = include_str!("data/prompts/codemod-creation-workflow.md");
+        Ok(CallToolResult::success(vec![Content::text(
+            instructions_content,
+        )]))
+    }
+
+    #[tool(
+        description = "Get maintainer monorepo guide for setting up and managing codemod monorepos"
+    )]
+    async fn get_codemod_maintainer_monorepo(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_codemod_maintainer_monorepo");
+        let instructions_content = include_str!("data/prompts/codemod-maintainer-monorepo.md");
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
         )]))
@@ -168,7 +224,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_codemod_troubleshooting (debug failing or unexpected codemod commands), get_codemod_creation_workflow (author, test, and publish codemods), get_codemod_maintainer_monorepo (set up and maintain a codemod monorepo), get_jssg_runtime_capabilities (runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), jssg-runtime-capabilities-instructions (runtime and capability guidance), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs), codemod-troubleshooting-instructions (Codemod CLI troubleshooting), codemod-creation-workflow-instructions (codemod creation workflow), codemod-maintainer-monorepo-instructions (maintainer monorepo guidance). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use get_jssg_runtime_capabilities when the codemod needs Node/LLRT APIs, gated modules like fs/fetch/child_process, or non-trivial multi-file JSSG work. Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
         }
     }
 
@@ -202,6 +258,11 @@ impl ServerHandler for CodemodMcpServer {
                     Some("jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"),
                 ),
                 self._create_resource_text(
+                    "jssg-runtime-capabilities://instructions",
+                    "jssg-runtime-capabilities-instructions",
+                    Some("JSSG runtime and capability guidance for LLRT/Node APIs, codemod.yaml capabilities, and multi-file JSSG work"),
+                ),
+                self._create_resource_text(
                     "codemod-cli://instructions",
                     "codemod-cli-instructions",
                     Some("Codemod CLI instructions for project setup and workflow configuration"),
@@ -210,6 +271,21 @@ impl ServerHandler for CodemodMcpServer {
                     "sharding://instructions",
                     "sharding-instructions",
                     Some("Sharding instructions for splitting large migrations into multiple PRs"),
+                ),
+                self._create_resource_text(
+                    "codemod-troubleshooting://instructions",
+                    "codemod-troubleshooting-instructions",
+                    Some("Troubleshooting guidance for common Codemod CLI failures"),
+                ),
+                self._create_resource_text(
+                    "codemod-creation-workflow://instructions",
+                    "codemod-creation-workflow-instructions",
+                    Some("Codemod creation workflow guide for authoring, testing, and publishing"),
+                ),
+                self._create_resource_text(
+                    "codemod-maintainer-monorepo://instructions",
+                    "codemod-maintainer-monorepo-instructions",
+                    Some("Maintainer monorepo guide for codemod repositories"),
                 ),
             ],
             next_cursor: None,
@@ -234,6 +310,13 @@ impl ServerHandler for CodemodMcpServer {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
             }
+            "jssg-runtime-capabilities://instructions" => {
+                let instructions_content =
+                    include_str!("data/prompts/jssg-runtime-capabilities.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
             "codemod-cli://instructions" => {
                 let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
                 Ok(ReadResourceResult {
@@ -242,6 +325,26 @@ impl ServerHandler for CodemodMcpServer {
             }
             "sharding://instructions" => {
                 let instructions_content = include_str!("data/prompts/sharding-instructions.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-troubleshooting://instructions" => {
+                let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-creation-workflow://instructions" => {
+                let instructions_content =
+                    include_str!("data/prompts/codemod-creation-workflow.md");
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(instructions_content, uri)],
+                })
+            }
+            "codemod-maintainer-monorepo://instructions" => {
+                let instructions_content =
+                    include_str!("data/prompts/codemod-maintainer-monorepo.md");
                 Ok(ReadResourceResult {
                     contents: vec![ResourceContents::text(instructions_content, uri)],
                 })
@@ -323,6 +426,24 @@ mod tests {
         assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
+        let instructions = info.instructions.as_deref().unwrap_or_default();
+        assert!(instructions.contains("get_jssg_runtime_capabilities"));
+        assert!(instructions.contains("jssg-runtime-capabilities-instructions"));
+    }
+
+    #[tokio::test]
+    async fn test_jssg_runtime_capabilities_tool_returns_prompt() {
+        let server = CodemodMcpServer::default();
+        let result = server
+            .get_jssg_runtime_capabilities(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest {},
+            ))
+            .await
+            .expect("expected tool result");
+
+        let serialized = serde_json::to_string(&result).expect("expected serialized tool result");
+        assert!(serialized.contains("JSSG Runtime and Capabilities"));
+        assert!(serialized.contains("jssgTransform"));
     }
 
     #[tokio::test]

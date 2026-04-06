@@ -790,10 +790,6 @@ fn resolve_install_inputs(
     } else {
         let options = vec![
             HarnessPromptOption {
-                harness: Harness::Auto,
-                label: "auto (recommended)",
-            },
-            HarnessPromptOption {
                 harness: Harness::Claude,
                 label: "claude",
             },
@@ -812,10 +808,6 @@ fn resolve_install_inputs(
             HarnessPromptOption {
                 harness: Harness::Codex,
                 label: "codex",
-            },
-            HarnessPromptOption {
-                harness: Harness::Antigravity,
-                label: "antigravity",
             },
         ];
         let starting_cursor = detected_harness_for_interactive_prompt()
