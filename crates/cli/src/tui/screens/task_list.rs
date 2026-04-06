@@ -11,10 +11,10 @@ use ratatui::{
 use crate::tui::app::LogView;
 
 use super::{
-    format_duration, key_hint, key_hint_colored, render_status_line, shorten_home_path,
-    status_bar_height, task_status_color, task_status_icon, task_status_label, truncate_middle,
-    workflow_status_color, workflow_status_icon, workflow_status_label, StatusLine, ACCENT,
-    BODY_BG, CYAN, DIM, HEADER_BG, RED, SURFACE, TEXT, TEXT_MUTED,
+    centered_rect, format_duration, key_hint, key_hint_colored, render_status_line,
+    shorten_home_path, status_bar_height, task_status_color, task_status_icon, task_status_label,
+    truncate_middle, workflow_status_color, workflow_status_icon, workflow_status_label,
+    StatusLine, ACCENT, BODY_BG, CYAN, DIM, HEADER_BG, RED, SURFACE, TEXT, TEXT_MUTED,
 };
 
 /// Render the task list screen.
@@ -304,10 +304,7 @@ fn build_hint_groups(tasks: &[Task], log_view_open: bool) -> Vec<Vec<Span<'stati
 }
 
 /// Pack hint groups greedily into rows of `row_width` chars each.
-fn pack_into_rows(
-    groups: Vec<Vec<Span<'static>>>,
-    row_width: usize,
-) -> Vec<Vec<Span<'static>>> {
+fn pack_into_rows(groups: Vec<Vec<Span<'static>>>, row_width: usize) -> Vec<Vec<Span<'static>>> {
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut current_row: Vec<Span<'static>> = Vec::new();
     let mut current_width = 0usize;
@@ -496,8 +493,10 @@ fn append_tagged_log_entry_lines(
 fn wrap_lines_to_width(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return lines;
-    }
-
+    } // Note: This function wraps lines but does not preserve styling on wrapped chunks.
+      // For styled text that wraps across lines, the style is lost on subsequent lines.
+      // A more sophisticated implementation would track character-level styles and apply
+      // them to wrapped chunks, but this is a reasonable trade-off for log output.
     let mut wrapped = Vec::new();
 
     for line in lines {
@@ -518,20 +517,4 @@ fn wrap_lines_to_width(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'sta
     }
 
     wrapped
-}
-
-fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - height_percent) / 2),
-        Constraint::Percentage(height_percent),
-        Constraint::Percentage((100 - height_percent) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - width_percent) / 2),
-        Constraint::Percentage(width_percent),
-        Constraint::Percentage((100 - width_percent) / 2),
-    ])
-    .split(vertical[1])[1]
 }

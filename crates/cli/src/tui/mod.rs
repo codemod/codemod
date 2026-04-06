@@ -143,7 +143,7 @@ pub(crate) fn configure_engine_for_tui(engine: &mut Engine) -> TuiRuntime {
                 .map(AgentSelectionItem::from_agent_option)
                 .collect();
             options.push(AgentSelectionItem {
-                canonical: "__use_built_in__".to_string(),
+                canonical: app::USE_BUILT_IN_AGENT.to_string(),
                 label: "Use built-in AI".to_string(),
                 is_available: true,
             });

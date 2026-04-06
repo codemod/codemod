@@ -24,8 +24,7 @@ pub fn render(
 ) {
     let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(3),             // title bar
-        Constraint::Length(1),             // spacing
+        Constraint::Length(2),             // title bar
         Constraint::Min(0),                // table
         Constraint::Length(1),             // help bar
         Constraint::Length(status_height), // status bar
@@ -36,16 +35,16 @@ pub fn render(
     render_title_bar(f, chunks[0]);
 
     // -- Content area with horizontal padding --
-    let content = chunks[2].inner(Margin::new(1, 0));
+    let content = chunks[1].inner(Margin::new(1, 0));
     f.render_widget(
         Block::default().style(Style::default().bg(BODY_BG)),
-        chunks[2],
+        chunks[1],
     );
 
     if runs.is_empty() {
         render_empty_state(f, content);
-        render_help_bar(f, chunks[3]);
-        render_status_line(f, chunks[4], status);
+        render_help_bar(f, chunks[2]);
+        render_status_line(f, chunks[3], status);
         return;
     }
 
@@ -130,8 +129,8 @@ pub fn render(
     f.render_stateful_widget(table, content, table_state);
 
     // -- Help bar --
-    render_help_bar(f, chunks[3]);
-    render_status_line(f, chunks[4], status);
+    render_help_bar(f, chunks[2]);
+    render_status_line(f, chunks[3], status);
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect) {

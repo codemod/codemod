@@ -3,8 +3,9 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tempfile::TempDir;
@@ -50,21 +51,61 @@ nodes:
     fs::write(path, workflow).unwrap();
 }
 
+const TUI_READY_PATTERNS: &[&str] = &["Workflow Runs", "Tasks", "Allow execution?", "Select agent"];
+const APPROVAL_PATTERNS: &[&str] = &["Allow execution?", "capabilities", "Select agent"];
+
+fn wait_for_output(
+    reader: &mut dyn Read,
+    patterns: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
+    let start = Instant::now();
+    let mut buffer = [0u8; 4096];
+    let mut accumulated = String::new();
+
+    while start.elapsed() < timeout {
+        match reader.read(&mut buffer) {
+            Ok(0) => {
+                break;
+            }
+            Ok(n) => {
+                if let Ok(chunk) = std::str::from_utf8(&buffer[..n]) {
+                    accumulated.push_str(chunk);
+                    if patterns.iter().any(|p| accumulated.contains(p)) {
+                        return Ok(accumulated);
+                    }
+                }
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(format!("Read error: {}", e));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    Err(format!(
+        "Timeout waiting for patterns {:?}\nAccumulated output:\n{}",
+        patterns, accumulated
+    ))
+}
+
 fn run_shell_in_pty(
     script: &str,
     cwd: &Path,
     xdg_home: &Path,
     input: &[u8],
-    delay: Duration,
+    timeout: Duration,
 ) -> (String, portable_pty::ExitStatus) {
-    run_shell_in_pty_with_inputs(script, cwd, xdg_home, &[(delay, input)])
+    run_shell_in_pty_with_inputs(script, cwd, xdg_home, &[(timeout, input, None)])
 }
 
 fn run_shell_in_pty_with_inputs(
     script: &str,
     cwd: &Path,
     xdg_home: &Path,
-    inputs: &[(Duration, &[u8])],
+    inputs: &[(Duration, &[u8], Option<&[&str]>)],
 ) -> (String, portable_pty::ExitStatus) {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -88,7 +129,7 @@ fn run_shell_in_pty_with_inputs(
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let mut reader = pair.master.try_clone_reader().unwrap();
     thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -97,10 +138,19 @@ fn run_shell_in_pty_with_inputs(
             .unwrap();
     });
 
+    let mut poll_reader = pair.master.try_clone_reader().unwrap();
     {
         let mut writer = pair.master.take_writer().unwrap();
-        for (delay, input) in inputs {
-            thread::sleep(*delay);
+        for (timeout, input, patterns) in inputs {
+            let patterns_to_wait = patterns.unwrap_or(TUI_READY_PATTERNS);
+
+            match wait_for_output(&mut poll_reader, patterns_to_wait, *timeout) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Warning: {}", e);
+                    continue;
+                }
+            }
             writer.write_all(input).unwrap();
             writer.flush().unwrap();
 
@@ -110,12 +160,12 @@ fn run_shell_in_pty_with_inputs(
         }
     }
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             child.kill().unwrap();
             panic!("timed out waiting for PTY child to exit");
         }
@@ -143,7 +193,7 @@ fn workflow_tui_quits_with_q_and_restores_terminal() {
         temp_dir.path(),
         temp_dir.path(),
         b"q",
-        Duration::from_millis(2500),
+        Duration::from_secs(5),
     );
 
     assert!(status.success());
@@ -163,8 +213,8 @@ fn workflow_tui_exits_after_ctrl_c() {
         &script,
         temp_dir.path(),
         temp_dir.path(),
-        &[3],
-        Duration::from_millis(1200),
+        &[3], // Ctrl+C
+        Duration::from_secs(5),
     );
 
     assert!(
@@ -192,7 +242,7 @@ fn workflow_run_auto_enters_tui_and_suppresses_task_stdout() {
         temp_dir.path(),
         temp_dir.path(),
         b"q",
-        Duration::from_millis(3000),
+        Duration::from_secs(5),
     );
 
     assert!(
@@ -232,8 +282,8 @@ fn workflow_run_decline_shell_approval_keeps_terminal_clean() {
         temp_dir.path(),
         temp_dir.path(),
         &[
-            (Duration::from_millis(3000), b"n"),
-            (Duration::from_millis(1000), b"q"),
+            (Duration::from_secs(5), b"n", Some(APPROVAL_PATTERNS)),
+            (Duration::from_secs(3), b"q", None),
         ],
     );
 

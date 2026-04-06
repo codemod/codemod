@@ -16,6 +16,8 @@ use super::event::AppEvent;
 use super::screens::settings;
 use super::screens::StatusLine;
 
+pub const USE_BUILT_IN_AGENT: &str = "__use_built_in__";
+
 #[derive(Debug, Clone)]
 pub enum Screen {
     RunList,
@@ -104,11 +106,15 @@ impl PendingShellApproval {
     }
 
     pub fn respond(self, approved: bool) {
-        let _ = self.response_tx.send(Ok(approved));
+        if let Err(e) = self.response_tx.send(Ok(approved)) {
+            log::warn!("Failed to send shell approval response: {}", e);
+        }
     }
 
     pub fn fail(self, error: anyhow::Error) {
-        let _ = self.response_tx.send(Err(error));
+        if let Err(e) = self.response_tx.send(Err(error)) {
+            log::warn!("Failed to send shell approval error: {}", e);
+        }
     }
 }
 
@@ -132,11 +138,15 @@ impl PendingCapabilityApproval {
         } else {
             Err(anyhow::anyhow!("Aborting due to capabilities warning"))
         };
-        let _ = self.response_tx.send(result);
+        if let Err(e) = self.response_tx.send(result) {
+            log::warn!("Failed to send capability approval response: {}", e);
+        }
     }
 
     pub fn fail(self, error: anyhow::Error) {
-        let _ = self.response_tx.send(Err(error));
+        if let Err(e) = self.response_tx.send(Err(error)) {
+            log::warn!("Failed to send capability approval error: {}", e);
+        }
     }
 }
 
@@ -175,11 +185,15 @@ impl PendingAgentSelection {
     }
 
     pub fn respond(self, selection: Option<String>) {
-        let _ = self.response_tx.send(Ok(selection));
+        if let Err(e) = self.response_tx.send(Ok(selection)) {
+            log::warn!("Failed to send agent selection response: {}", e);
+        }
     }
 
     pub fn fail(self, error: anyhow::Error) {
-        let _ = self.response_tx.send(Err(error));
+        if let Err(e) = self.response_tx.send(Err(error)) {
+            log::warn!("Failed to send agent selection error: {}", e);
+        }
     }
 }
 
@@ -612,7 +626,7 @@ impl App {
                     .as_ref()
                     .and_then(|selection| selection.options.get(self.agent_selection_cursor))
                     .map(|item| {
-                        if item.canonical == "__use_built_in__" {
+                        if item.canonical == USE_BUILT_IN_AGENT {
                             None
                         } else {
                             Some(item.canonical.clone())
@@ -715,13 +729,10 @@ impl App {
                 Vec::new()
             }
             KeyCode::Char('c') => {
-                let is_cancelable = self
-                    .current_workflow_run
-                    .as_ref()
-                    .is_some_and(|run| {
-                        run.status == WorkflowStatus::Running
-                            || run.status == WorkflowStatus::AwaitingTrigger
-                    });
+                let is_cancelable = self.current_workflow_run.as_ref().is_some_and(|run| {
+                    run.status == WorkflowStatus::Running
+                        || run.status == WorkflowStatus::AwaitingTrigger
+                });
                 if is_cancelable {
                     vec![AppEffect::CancelWorkflow { workflow_run_id }]
                 } else {
@@ -867,8 +878,11 @@ impl App {
         {
             let previous_line_count = current_log_view.lines.len();
             self.log_view = Some(LogView::from_task(task));
-            if self.log_follow || task.logs.len() < previous_line_count {
+            if self.log_follow {
                 self.log_scroll = 0;
+            } else if task.logs.len() < previous_line_count {
+                self.log_scroll = 0;
+                self.log_follow = true;
             }
         } else {
             self.log_view = None;
@@ -965,10 +979,12 @@ impl App {
 
     fn scroll_log_view(&mut self, delta: i32) {
         if delta > 0 {
-            self.log_scroll = self.log_scroll.saturating_add(delta as u16);
+            let abs_delta = delta.min(u16::MAX as i32) as u16;
+            self.log_scroll = self.log_scroll.saturating_add(abs_delta);
             self.log_follow = false;
         } else if delta < 0 {
-            self.log_scroll = self.log_scroll.saturating_sub((-delta) as u16);
+            let abs_delta = (-delta).min(u16::MAX as i32) as u16;
+            self.log_scroll = self.log_scroll.saturating_sub(abs_delta);
             if self.log_scroll == 0 {
                 self.log_follow = true;
             }

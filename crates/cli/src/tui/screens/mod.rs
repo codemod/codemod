@@ -466,7 +466,7 @@ fn render_modal_footer(f: &mut Frame, area: Rect, hints: Vec<(&str, &str)>) {
     f.render_widget(Line::from(spans), footer_area);
 }
 
-fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+pub fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
     let vertical = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Percentage((100 - height_percent) / 2),
         ratatui::layout::Constraint::Percentage(height_percent),

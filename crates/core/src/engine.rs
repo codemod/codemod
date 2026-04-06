@@ -297,7 +297,7 @@ async fn await_js_ast_grep_execution_task(
 ) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>> {
     let mut execution_task = std::pin::pin!(execution_task);
     loop {
-        if idle_timed_out.load(Ordering::Relaxed) {
+        if idle_timed_out.load(Ordering::Acquire) {
             execution_task.as_mut().abort();
             let _ = execution_task.await;
             let message = idle_failure_message
@@ -3082,13 +3082,13 @@ impl Engine {
             let task_log_task_id = task_log_task_id;
             tokio::spawn(async move {
                 loop {
-                    if watchdog_done_for_watchdog.load(Ordering::Relaxed) {
+                    if watchdog_done_for_watchdog.load(Ordering::Acquire) {
                         break;
                     }
 
                     tokio::time::sleep(Duration::from_secs(1)).await;
 
-                    if watchdog_done_for_watchdog.load(Ordering::Relaxed) {
+                    if watchdog_done_for_watchdog.load(Ordering::Acquire) {
                         break;
                     }
 
@@ -3102,7 +3102,7 @@ impl Engine {
                     };
 
                     if let Some(message) = timed_out_message {
-                        idle_timed_out_for_watchdog.store(true, Ordering::Relaxed);
+                        idle_timed_out_for_watchdog.store(true, Ordering::Release);
                         if let Ok(mut slot) = idle_failure_message_for_watchdog.lock() {
                             *slot = Some(message.clone());
                         }
@@ -3128,8 +3128,8 @@ impl Engine {
 
         let execute_result = config
             .execute(move |file_path, config| {
-                if canceled_flag_for_closure.load(Ordering::Relaxed)
-                    || idle_timed_out_for_closure.load(Ordering::Relaxed)
+                if canceled_flag_for_closure.load(Ordering::Acquire)
+                    || idle_timed_out_for_closure.load(Ordering::Acquire)
                 {
                     return;
                 }
@@ -3155,7 +3155,7 @@ impl Engine {
                     });
 
                     if was_canceled {
-                        canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                        canceled_flag_for_closure.store(true, Ordering::Release);
                         return;
                     }
                 }
@@ -3358,7 +3358,7 @@ impl Engine {
                     });
 
                     if was_canceled {
-                        canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                        canceled_flag_for_closure.store(true, Ordering::Release);
                         finish_unit_progress(
                             &progress_state_for_closure,
                             &relative_path,
@@ -3533,7 +3533,7 @@ impl Engine {
                                     }
                                 });
                             }
-                            canceled_flag_for_closure.store(true, Ordering::Relaxed);
+                            canceled_flag_for_closure.store(true, Ordering::Release);
                             if let Ok(mut runtime_failure_message) =
                                 runtime_failure_message_for_closure.lock()
                             {
@@ -3611,13 +3611,13 @@ impl Engine {
             })
             .map_err(|e| Error::StepExecution(e.to_string()));
 
-        watchdog_done.store(true, Ordering::Relaxed);
+        watchdog_done.store(true, Ordering::Release);
         let _ = watchdog_task.await;
         if let Some(task_id) = task_log_task_id {
             self.unregister_output_heartbeat(task_id);
         }
 
-        if idle_timed_out.load(Ordering::Relaxed) {
+        if idle_timed_out.load(Ordering::Acquire) {
             let message = idle_failure_message
                 .lock()
                 .ok()
@@ -3647,7 +3647,7 @@ impl Engine {
             return Err(Error::StepExecution(message));
         }
 
-        if canceled_during_execution.load(Ordering::Relaxed) {
+        if canceled_during_execution.load(Ordering::Acquire) {
             return Err(Error::Runtime("Canceled by user".to_string()));
         }
 
@@ -5132,7 +5132,7 @@ mod tests {
                     let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
                     async move {
                         tokio::time::sleep(Duration::from_millis(10)).await;
-                        idle_timed_out.store(true, Ordering::Relaxed);
+                        idle_timed_out.store(true, Ordering::Release);
                         if let Ok(mut message) = idle_failure_message.lock() {
                             *message = Some(
                                 "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"
