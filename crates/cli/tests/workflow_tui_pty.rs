@@ -56,43 +56,6 @@ nodes:
 const TUI_READY_PATTERNS: &[&str] = &["Workflow Runs", "Tasks", "Allow execution?", "Select agent"];
 const APPROVAL_PATTERNS: &[&str] = &["Allow execution?", "capabilities", "Select agent"];
 
-fn wait_for_output(
-    reader: &mut dyn Read,
-    patterns: &[&str],
-    timeout: Duration,
-) -> Result<String, String> {
-    let start = Instant::now();
-    let mut buffer = [0u8; 4096];
-    let mut accumulated = String::new();
-
-    while start.elapsed() < timeout {
-        match reader.read(&mut buffer) {
-            Ok(0) => {
-                break;
-            }
-            Ok(n) => {
-                if let Ok(chunk) = std::str::from_utf8(&buffer[..n]) {
-                    accumulated.push_str(chunk);
-                    if patterns.iter().any(|p| accumulated.contains(p)) {
-                        return Ok(accumulated);
-                    }
-                }
-            }
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(format!("Read error: {}", e));
-                }
-            }
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-
-    Err(format!(
-        "Timeout waiting for patterns {:?}\nAccumulated output:\n{}",
-        patterns, accumulated
-    ))
-}
-
 fn run_shell_in_pty(
     script: &str,
     cwd: &Path,
@@ -131,34 +94,65 @@ fn run_shell_in_pty_with_inputs(
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
 
-    let (tx, rx) = mpsc::channel();
+    // Single reader thread — avoids two-reader race where both readers compete
+    // for the same PTY master bytes (causes blocking reads on Linux).
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(256);
     let mut reader = pair.master.try_clone_reader().unwrap();
     thread::spawn(move || {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).unwrap();
-        tx.send(String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap();
-    });
-
-    let mut poll_reader = pair.master.try_clone_reader().unwrap();
-    {
-        let mut writer = pair.master.take_writer().unwrap();
-        for (timeout, input, patterns) in inputs {
-            let patterns_to_wait = patterns.unwrap_or(TUI_READY_PATTERNS);
-
-            match wait_for_output(&mut poll_reader, patterns_to_wait, *timeout) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Warning: {}", e);
-                    continue;
+        let mut buffer = [0u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buffer[..n].to_vec()).is_err() {
+                        break;
+                    }
                 }
             }
+        }
+    });
+
+    let mut accumulated = String::new();
+
+    {
+        let mut writer = pair.master.take_writer().unwrap();
+        for (wait_timeout, input, patterns) in inputs {
+            let patterns_to_wait = patterns.unwrap_or(TUI_READY_PATTERNS);
+
+            // Wait for pattern using channel recv_timeout so we never block
+            // indefinitely (PTY reads block on Linux when no data is ready).
+            let deadline = Instant::now() + *wait_timeout;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    eprintln!(
+                        "Warning: timeout waiting for patterns {:?}\nAccumulated output:\n{}",
+                        patterns_to_wait, accumulated
+                    );
+                    break;
+                }
+                match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                    Ok(bytes) => {
+                        if let Ok(chunk) = std::str::from_utf8(&bytes) {
+                            accumulated.push_str(chunk);
+                        }
+                        if patterns_to_wait.iter().any(|p| accumulated.contains(p)) {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        eprintln!(
+                            "Warning: timeout waiting for patterns {:?}\nAccumulated output:\n{}",
+                            patterns_to_wait, accumulated
+                        );
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+
             writer.write_all(input).unwrap();
             writer.flush().unwrap();
-
-            if cfg!(target_os = "macos") {
-                thread::sleep(Duration::from_millis(50));
-            }
         }
     }
 
@@ -173,9 +167,27 @@ fn run_shell_in_pty_with_inputs(
         }
         thread::sleep(Duration::from_millis(50));
     };
+
     drop(pair.master);
-    let output = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    (output, status)
+
+    // Drain remaining output from the reader thread (bounded to avoid hanging).
+    let drain_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = drain_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(bytes) => {
+                if let Ok(chunk) = std::str::from_utf8(&bytes) {
+                    accumulated.push_str(chunk);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    (accumulated, status)
 }
 
 fn build_shell_script(command: String) -> String {
