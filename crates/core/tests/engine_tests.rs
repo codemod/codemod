@@ -1437,6 +1437,7 @@ fn create_ai_no_key_fallback_workflow() -> Workflow {
                         model: None,
                         system_prompt: Some("You are a test system prompt.".to_string()),
                         max_steps: None,
+                        timeout_ms: None,
                         tools: None,
                         endpoint: None,
                         api_key: None,

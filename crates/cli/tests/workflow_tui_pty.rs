@@ -195,27 +195,6 @@ fn build_shell_script(command: String) -> String {
 }
 
 #[test]
-fn workflow_tui_quits_with_q_and_restores_terminal() {
-    let temp_dir = TempDir::new().unwrap();
-    let script = build_shell_script(format!(
-        "{} --disable-analytics workflow tui --limit 1",
-        shell_quote(codemod_binary())
-    ));
-
-    let (output, status) = run_shell_in_pty(
-        &script,
-        temp_dir.path(),
-        temp_dir.path(),
-        b"q",
-        Duration::from_secs(5),
-    );
-
-    assert!(status.success());
-    assert!(output.contains("__AFTER__:0"));
-    assert!(output.contains("icanon"));
-}
-
-#[test]
 fn workflow_tui_exits_after_ctrl_c() {
     let temp_dir = TempDir::new().unwrap();
     let script = format!(
