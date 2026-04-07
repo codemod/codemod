@@ -921,17 +921,7 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
 }
 
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let codemod_command = if let Some(package_manager) = &config.package_manager {
-        match package_manager.as_str() {
-            "npm" => "npx codemod@latest",
-            "yarn" => "yarn dlx codemod@latest",
-            "pnpm" => "pnpm dlx codemod@latest",
-            "bun" => "bunx codemod@latest",
-            _ => "npx codemod@latest",
-        }
-    } else {
-        "npx codemod@latest"
-    };
+    let codemod_command = codemod_cli_command_for_package_manager(selected_package_manager(config));
     // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
@@ -1295,14 +1285,19 @@ fn create_gitignore(project_path: &Path) -> Result<()> {
 }
 
 fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let package_manager = selected_package_manager(config);
     let test_command = if config.package_behavior == PackageBehavior::SkillOnly {
-        format!("npx codemod@latest {}", config.name)
+        format!(
+            "{} {}",
+            codemod_cli_command_for_package_manager(package_manager),
+            config.name
+        )
     } else {
         match config.project_type {
             ProjectType::Shell => "bash scripts/transform.sh".to_string(),
-            ProjectType::AstGrepJs => "npm test".to_string(),
+            ProjectType::AstGrepJs => package_manager_test_command(package_manager),
             ProjectType::AstGrepYaml => "ast-grep test rules/".to_string(),
-            ProjectType::Hybrid => "npm test".to_string(),
+            ProjectType::Hybrid => package_manager_test_command(package_manager),
         }
     };
 
@@ -1325,9 +1320,10 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 ## Skill Installation
 
 ```bash
-npx codemod@latest {}
+{} {}
 ```
 "#,
+            codemod_cli_command_for_package_manager(package_manager),
             config.name
         ));
     }
@@ -1465,7 +1461,8 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 
     match config.project_type {
         ProjectType::AstGrepJs | ProjectType::Hybrid => {
-            let package_manager = config.package_manager.clone().unwrap_or("npm".to_string());
+            let package_manager = selected_package_manager(config);
+            let install_command = package_manager_install_command(package_manager);
 
             let output = ProcessCommand::new(package_manager)
                 .arg("install")
@@ -1487,15 +1484,15 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
                         );
                         println!(
                             "  You can run {} manually later",
-                            style("npm install").cyan()
+                            style(&install_command).cyan()
                         );
                     }
                 }
                 Err(e) => {
-                    println!("{} npm not found: {}", style("⚠").red(), e);
+                    println!("{} {} not found: {}", style("⚠").red(), package_manager, e);
                     println!(
                         "  You can run {} manually later",
-                        style("npm install").cyan()
+                        style(&install_command).cyan()
                     );
                 }
             }
@@ -1581,6 +1578,8 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 
 fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let codemod_dir_name = get_codemod_dir_name(&config.name);
+    let package_manager = selected_package_manager(config);
+    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
 
     println!();
     if config.workspace {
@@ -1635,7 +1634,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         );
         println!(
             "  {}",
-            style(format!("npx codemod@latest {}", config.name)).dim()
+            style(format!("{} {}", codemod_command, config.name)).dim()
         );
         println!();
         println!(
@@ -1663,8 +1662,8 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         println!(
             "  {}",
             style(format!(
-                "npx codemod@latest workflow validate -w {}",
-                workflow_path
+                "{} workflow validate -w {}",
+                codemod_command, workflow_path
             ))
             .dim()
         );
@@ -1679,8 +1678,8 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         println!(
             "  {}",
             style(format!(
-                "npx codemod@latest workflow run -w {} --target ./some/target/path",
-                workflow_path
+                "{} workflow run -w {} --target ./some/target/path",
+                codemod_command, workflow_path
             ))
             .dim()
         );
@@ -1695,7 +1694,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             );
             println!(
                 "  {}",
-                style(format!("npx codemod@latest {}", config.name)).dim()
+                style(format!("{} {}", codemod_command, config.name)).dim()
             );
         }
     }
@@ -1747,6 +1746,33 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn selected_package_manager(config: &ProjectConfig) -> &str {
+    config.package_manager.as_deref().unwrap_or("npm")
+}
+
+fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
+    match package_manager {
+        "npm" => "npx codemod@latest",
+        "yarn" => "yarn dlx codemod@latest",
+        "pnpm" => "pnpm dlx codemod@latest",
+        "bun" => "bunx codemod@latest",
+        _ => "npx codemod@latest",
+    }
+}
+
+fn package_manager_install_command(package_manager: &str) -> String {
+    format!("{package_manager} install")
+}
+
+fn package_manager_test_command(package_manager: &str) -> String {
+    match package_manager {
+        "yarn" => "yarn test".to_string(),
+        "pnpm" => "pnpm test".to_string(),
+        "bun" => "bun test".to_string(),
+        _ => "npm test".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1911,6 +1937,36 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
         assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
+    }
+
+    #[test]
+    fn create_project_preserves_selected_package_manager_in_generated_commands() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("yarn-project");
+
+        let config = ProjectConfig {
+            name: "yarn-project".to_string(),
+            description: "Yarn workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("yarn".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+
+        assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
+        assert!(readme.contains("yarn test"));
+        assert!(!readme.contains("npm test"));
     }
 
     #[test]

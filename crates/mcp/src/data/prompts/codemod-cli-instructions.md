@@ -14,4 +14,5 @@ Agent-only reminders:
 - Prefer the current CLI help and public docs over guessed commands.
 - Quote multi-word registry search queries.
 - For codemod authoring, do not continue open-ended planning after a registry miss; scaffold a package first.
+- Preserve the scaffold-selected package manager in `package.json` scripts and package-local README commands. Use the package's own runner (`yarn`, `pnpm`, `bun`, or `npm`) consistently instead of rewriting it to another one.
 - For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.

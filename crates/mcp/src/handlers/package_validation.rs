@@ -106,6 +106,7 @@ pub struct ValidateCodemodPackageResponse {
 #[derive(Debug, Default)]
 struct PackageJsonLite {
     scripts: BTreeMap<String, String>,
+    package_manager: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -166,6 +167,8 @@ impl PackageValidationHandler {
         });
         let test_cases = summarize_test_cases(&tests_path);
         let package_json = load_package_json(&package_root);
+        let preferred_package_manager =
+            preferred_package_manager_name(&package_root, &package_json).to_string();
 
         let scripts = PackageScriptSummary {
             test: package_json.scripts.get("test").cloned(),
@@ -257,6 +260,21 @@ impl PackageValidationHandler {
                     format_line_list(&transform_risks.risky_regex_lines)
                 ),
                 Some(transform_path.clone()),
+            ));
+        }
+
+        let package_manager_drift_scripts =
+            detect_package_manager_drift_in_scripts(&package_json, &preferred_package_manager);
+        if !package_manager_drift_scripts.is_empty() {
+            issues.push(issue(
+                "error",
+                "package_manager_drift_in_scripts",
+                &format!(
+                    "package.json scripts {} use commands from a different package manager than the scaffold-selected package manager (`{}`). Keep package-local install/run/test invocations consistent.",
+                    format_script_list(&package_manager_drift_scripts),
+                    preferred_package_manager
+                ),
+                Some(package_root.join("package.json")),
             ));
         }
 
@@ -470,7 +488,18 @@ fn load_package_json(package_root: &Path) -> PackageJsonLite {
         })
         .unwrap_or_default();
 
-    PackageJsonLite { scripts }
+    let package_manager = parsed
+        .as_ref()
+        .and_then(|value| value.get("packageManager"))
+        .and_then(|value| value.as_str())
+        .map(parse_package_manager_name)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    PackageJsonLite {
+        scripts,
+        package_manager,
+    }
 }
 
 fn push_missing_file_issues(
@@ -546,6 +575,60 @@ fn format_line_list(lines: &[usize]) -> String {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_script_list(scripts: &[String]) -> String {
+    match scripts {
+        [] => String::new(),
+        [only] => format!("(`{only}`)"),
+        _ => format!(
+            "({})",
+            scripts
+                .iter()
+                .map(|script| format!("`{script}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn parse_package_manager_name(value: &str) -> &str {
+    value.split('@').next().unwrap_or(value).trim()
+}
+
+fn preferred_package_manager_name<'a>(
+    package_root: &'a Path,
+    package_json: &'a PackageJsonLite,
+) -> &'a str {
+    if let Some(package_manager) = package_json.package_manager.as_deref() {
+        return package_manager;
+    }
+
+    infer_package_manager_command(package_root)
+}
+
+fn detect_package_manager_drift_in_scripts(
+    package_json: &PackageJsonLite,
+    preferred_package_manager: &str,
+) -> Vec<String> {
+    let mismatch_markers = match preferred_package_manager {
+        "yarn" => ["npx ", "npm ", "pnpm ", "bun ", "bunx "].as_slice(),
+        "pnpm" => ["npx ", "npm ", "yarn ", "bun ", "bunx "].as_slice(),
+        "bun" => ["npx ", "npm ", "yarn ", "pnpm "].as_slice(),
+        _ => ["yarn ", "pnpm ", "bun ", "bunx "].as_slice(),
+    };
+
+    package_json
+        .scripts
+        .iter()
+        .filter_map(|(name, command)| {
+            let lower = command.to_ascii_lowercase();
+            mismatch_markers
+                .iter()
+                .any(|marker| lower.contains(marker))
+                .then_some(name.clone())
+        })
+        .collect()
 }
 
 fn detect_transform_risks(transform_content: Option<&str>) -> TransformRiskSummary {
@@ -752,5 +835,33 @@ mod tests {
         let safe =
             detect_transform_risks(Some("const nextNode = callee.replace(\"amazing.log\");"));
         assert!(safe.risky_regex_lines.is_empty());
+    }
+
+    #[test]
+    fn package_manager_drift_is_detected_in_scripts() {
+        let package_json = PackageJsonLite {
+            scripts: BTreeMap::from([(
+                "test".to_string(),
+                "npx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+            )]),
+            package_manager: Some("yarn".to_string()),
+        };
+
+        let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
+        assert_eq!(issues, vec!["test".to_string()]);
+    }
+
+    #[test]
+    fn matching_package_manager_commands_are_not_flagged_in_scripts() {
+        let package_json = PackageJsonLite {
+            scripts: BTreeMap::from([(
+                "test".to_string(),
+                "yarn dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+            )]),
+            package_manager: Some("yarn".to_string()),
+        };
+
+        let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
+        assert!(issues.is_empty());
     }
 }
