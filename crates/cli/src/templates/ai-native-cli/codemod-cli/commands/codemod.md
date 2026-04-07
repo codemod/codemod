@@ -7,7 +7,7 @@ First classify intent:
 - Otherwise, treat it as codemod discovery or execution: search the registry, pick the best existing package, dry-run it, and apply it only after verification.
 
 Routing:
-- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately and tell the user to run `codemod ai doctor --harness codex --project --probe` or `--user --probe` as appropriate, then reload/restart Codex and fix Codemod MCP setup first.
+- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately and tell the user to reload/restart Codex and fix Codemod MCP setup first.
 - For codemod authoring, call `get_codemod_creation_workflow` first. Before writing source-transform code, call `get_jssg_gotchas` and `get_ast_grep_gotchas`. Call `get_codemod_cli_instructions` only when exact command syntax is needed. Call `get_jssg_instructions` once a package exists and you are implementing the transform.
 - If registry search shows no exact package for the requested migration, call `scaffold_codemod_package` from Codemod MCP immediately.
 - Before stopping work on a codemod package, call `validate_codemod_package` from Codemod MCP.
@@ -28,10 +28,7 @@ Non-negotiable constraints:
 - For codemod authoring, do not implement source transforms with `RegExp`, `.replace`, `.replaceAll`, `.match`, `.split`, or manual string parsing unless the usage is limited to allowed non-source cleanup such as paths, module specifiers, helper metadata, or test-output parsing.
 - For codemod authoring, do not stop while `validate_codemod_package` reports starter scaffold leftovers, generic README text, missing required package files, missing real test cases, or failing validation/tests.
 - For codemod authoring, when a package already has JSSG fixtures, reuse that test system with `codemod jssg test` and keep `metrics.json` snapshots in sync instead of inventing ad hoc tests.
-- For codemod authoring, keep `tests/coverage-contract.json` in sync with the requested supported shapes; do not silently narrow support without moving shapes into unsupported/manual sections there.
 - For codemod authoring, keep one granular transform or one exact `from -> to` migration as a single package even when it supports multiple route shapes or helper files. Use a workspace only for open-ended, version-hop-based, or clearly multi-package migrations.
-- For codemod authoring, inspect only 2-3 representative repo files first, create one positive and one preserve/unsupported fixture quickly, and get a first passing vertical slice before broadening coverage.
-- For codemod authoring, ignore unrelated host-repo workflow tools such as `bd`, release scripts, or repo-completion checklists unless the user explicitly asked for them.
 - For codemod authoring, use KB search and `dump_ast` to repair failing deterministic cases first. After 3 failed deterministic repair attempts for the same case, use a narrow AI fallback only for that isolated subset or document it as manual follow-up.
 - For codemod authoring, do not introduce a shell step just to reach another related file when JSSG can keep both hops inside the same codemod.
 - For codemod authoring/evaluation, do not create commits or push branches unless the user explicitly requested git operations, even if the host repository has general “always push” instructions.

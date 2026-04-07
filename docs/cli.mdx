@@ -137,29 +137,6 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 `ai` performs internal skill validation checks during install flow.
 
-**`ai doctor`**
-
-Verify that the installed Codemod AI + MCP setup for a harness/scope is actually present and, for Codex, optionally probe whether Codemod MCP becomes visible to the agent runtime.
-
-```bash
-npx codemod ai doctor [--harness <codex|claude|goose|opencode|cursor|auto>] [--project|--user] [--probe] [--format <logs|table|json|yaml>]
-```
-
-Use this after `codemod ai` install and before starting codemod authoring. For Codex, the recommended check is:
-
-```bash
-npx codemod ai doctor --harness codex --project --probe
-```
-
-Static checks verify:
-- the core skill path exists
-- the MCP config file exists for the chosen scope
-- the Codemod MCP entry is present and points to a concrete command
-
-For Codex, `--probe` additionally runs a minimal Codex session probe and checks whether `codemod` MCP actually becomes visible (for example via `mcp: codemod ready`).
-
-If `doctor` reports that Codemod MCP is not visible, do not start codemod authoring yet. Reload/restart Codex and fix MCP visibility first.
-
 ### Package skill install (prompted from package run)
 
 Install a package skill from registry metadata into harness skill paths.

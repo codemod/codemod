@@ -602,20 +602,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_ai_doctor() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "ai",
-            "doctor",
-            "--harness",
-            "codex",
-            "--project",
-            "--probe",
-        ]);
-        assert!(parse_result.is_ok());
-    }
-
-    #[test]
     fn parser_accepts_run_with_install_skill_override() {
         let parse_result = Cli::try_parse_from([
             "codemod",

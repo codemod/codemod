@@ -52,7 +52,6 @@ pub struct PackageFilePresence {
     pub readme_md: bool,
     pub scripts_codemod_ts: bool,
     pub tests_dir: bool,
-    pub coverage_contract_json: bool,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -95,8 +94,6 @@ pub struct ValidateCodemodPackageResponse {
     pub scripts: PackageScriptSummary,
     pub workflow_valid: bool,
     pub test_cases: TestCaseSummary,
-    pub coverage_contract_present: bool,
-    pub supported_shape_coverage_complete: bool,
     pub starter_transform_detected: bool,
     pub generic_readme_detected: bool,
     pub risky_regex_transform_detected: bool,
@@ -115,29 +112,11 @@ pub struct ValidateCodemodPackageResponse {
 struct CodemodManifestLite {
     workflow: Option<String>,
     capabilities: Option<Vec<String>>,
-    registry: Option<RegistryLite>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegistryLite {
-    access: Option<String>,
-    visibility: Option<String>,
 }
 
 #[derive(Debug, Default)]
 struct PackageJsonLite {
     scripts: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CoverageContract {
-    supported_shapes: Vec<String>,
-    #[serde(default)]
-    unsupported_shapes: Vec<String>,
-    #[serde(default)]
-    manual_follow_up_shapes: Vec<String>,
-    #[serde(default)]
-    cases: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -205,7 +184,6 @@ impl PackageValidationHandler {
         let transform_path = package_root.join("scripts/codemod.ts");
         let readme_path = package_root.join("README.md");
         let tests_path = package_root.join("tests");
-        let coverage_contract_path = tests_path.join("coverage-contract.json");
         let workflow_content = read_file_if_exists(&workflow_path);
 
         let transform_content = read_file_if_exists(&transform_path);
@@ -234,19 +212,6 @@ impl PackageValidationHandler {
         });
 
         let test_cases = summarize_test_cases(&tests_path);
-        let coverage_contract = load_coverage_contract(&coverage_contract_path);
-        let coverage_contract_present = matches!(coverage_contract, Ok(Some(_)));
-        let coverage_issues = validate_coverage_contract(
-            coverage_contract.as_ref(),
-            &coverage_contract_path,
-            &tests_path,
-            &test_cases,
-        );
-        let supported_shape_coverage_complete = coverage_issues
-            .iter()
-            .all(|issue| issue.code != "missing_supported_shape_coverage"
-                && issue.code != "missing_coverage_contract"
-                && issue.code != "coverage_contract_parse_failed");
 
         let scripts = PackageScriptSummary {
             test: package_json.scripts.get("test").cloned(),
@@ -285,7 +250,6 @@ impl PackageValidationHandler {
 
         let mut issues = Vec::new();
         push_missing_file_issues(&files, &package_root, &mut issues);
-        issues.extend(coverage_issues);
 
         if manifest.is_none() {
             issues.push(issue(
@@ -302,25 +266,6 @@ impl PackageValidationHandler {
                 "package_json_missing_scripts",
                 "package.json has no usable scripts metadata.",
                 Some(package_root.join("package.json")),
-            ));
-        }
-
-        if manifest
-            .as_ref()
-            .and_then(|manifest| manifest.registry.as_ref())
-            .is_some_and(|registry| {
-                matches!(registry.access.as_deref(), Some("private"))
-                    || matches!(registry.visibility.as_deref(), Some("private"))
-            })
-            && readme_content
-                .as_deref()
-                .is_some_and(|content| content.to_ascii_lowercase().contains("reusable"))
-        {
-            issues.push(issue(
-                "warning",
-                "private_registry_default_detected",
-                "The package describes itself as reusable, but codemod.yaml defaults registry access/visibility to private.",
-                Some(package_root.join("codemod.yaml")),
             ));
         }
 
@@ -505,8 +450,6 @@ impl PackageValidationHandler {
             scripts,
             workflow_valid,
             test_cases,
-            coverage_contract_present,
-            supported_shape_coverage_complete,
             starter_transform_detected,
             generic_readme_detected,
             risky_regex_transform_detected: !transform_risks.risky_regex_lines.is_empty(),
@@ -538,7 +481,6 @@ fn collect_file_presence(package_root: &Path) -> PackageFilePresence {
         readme_md: package_root.join("README.md").is_file(),
         scripts_codemod_ts: package_root.join("scripts/codemod.ts").is_file(),
         tests_dir: package_root.join("tests").is_dir(),
-        coverage_contract_json: package_root.join("tests/coverage-contract.json").is_file(),
     }
 }
 
@@ -582,19 +524,6 @@ fn validate_workflow_at_path(workflow_path: &Path) -> anyhow::Result<()> {
 
 fn read_file_if_exists(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok()
-}
-
-fn load_coverage_contract(path: &Path) -> anyhow::Result<Option<CoverageContract>> {
-    let Ok(content) = fs::read_to_string(path) else {
-        return Ok(None);
-    };
-    let contract = serde_json::from_str::<CoverageContract>(&content).with_context(|| {
-        format!(
-            "Failed to parse coverage contract JSON at {}",
-            path.display()
-        )
-    })?;
-    Ok(Some(contract))
 }
 
 fn summarize_test_cases(tests_path: &Path) -> TestCaseSummary {
@@ -961,138 +890,6 @@ fn detect_nonstandard_test_runner(
     test_cases.total_case_dirs > 0 && test_script.contains("node ")
 }
 
-fn validate_coverage_contract(
-    contract: Result<&Option<CoverageContract>, &anyhow::Error>,
-    contract_path: &Path,
-    tests_path: &Path,
-    test_cases: &TestCaseSummary,
-) -> Vec<ValidationIssue> {
-    let mut issues = Vec::new();
-
-    if !tests_path.is_dir() {
-        return issues;
-    }
-
-    let contract = match contract {
-        Ok(Some(contract)) => contract,
-        Ok(None) => {
-            issues.push(issue(
-                "error",
-                "missing_coverage_contract",
-                "tests/coverage-contract.json is required so supported shapes and test coverage are explicit.",
-                Some(contract_path.to_path_buf()),
-            ));
-            return issues;
-        }
-        Err(_) => {
-            issues.push(issue(
-                "error",
-                "coverage_contract_parse_failed",
-                "tests/coverage-contract.json is present but could not be parsed.",
-                Some(contract_path.to_path_buf()),
-            ));
-            return issues;
-        }
-    };
-
-    if contract.supported_shapes.is_empty() {
-        issues.push(issue(
-            "error",
-            "missing_supported_shape_coverage",
-            "coverage-contract.json has no supported_shapes entries.",
-            Some(contract_path.to_path_buf()),
-        ));
-    }
-
-    let unsupported = contract
-        .unsupported_shapes
-        .iter()
-        .chain(contract.manual_follow_up_shapes.iter())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-
-    for shape in &contract.supported_shapes {
-        if unsupported.contains(shape) {
-            issues.push(issue(
-                "error",
-                "unsupported_shape_not_documented",
-                &format!(
-                    "Shape `{shape}` is listed as both supported and unsupported/manual in coverage-contract.json."
-                ),
-                Some(contract_path.to_path_buf()),
-            ));
-            continue;
-        }
-
-        let Some(cases) = contract.cases.get(shape) else {
-            issues.push(issue(
-                "error",
-                "missing_supported_shape_coverage",
-                &format!(
-                    "Supported shape `{shape}` does not map to any fixture cases in coverage-contract.json."
-                ),
-                Some(contract_path.to_path_buf()),
-            ));
-            continue;
-        };
-
-        if cases.is_empty() {
-            issues.push(issue(
-                "error",
-                "missing_supported_shape_coverage",
-                &format!(
-                    "Supported shape `{shape}` maps to an empty case list in coverage-contract.json."
-                ),
-                Some(contract_path.to_path_buf()),
-            ));
-        }
-    }
-
-    let case_dirs = list_case_dir_names(tests_path);
-    for (shape, cases) in &contract.cases {
-        for case_name in cases {
-            if !case_dirs.contains(case_name) {
-                issues.push(issue(
-                    "error",
-                    "coverage_contract_missing_case_dir",
-                    &format!(
-                        "coverage-contract.json maps shape `{shape}` to missing test case directory `{case_name}`."
-                    ),
-                    Some(contract_path.to_path_buf()),
-                ));
-            }
-        }
-    }
-
-    if test_cases.total_case_dirs > 0 && contract.cases.is_empty() {
-        issues.push(issue(
-            "error",
-            "missing_supported_shape_coverage",
-            "coverage-contract.json must map supported shapes to at least one real case directory.",
-            Some(contract_path.to_path_buf()),
-        ));
-    }
-
-    issues
-}
-
-fn list_case_dir_names(tests_path: &Path) -> BTreeSet<String> {
-    let Ok(entries) = fs::read_dir(tests_path) else {
-        return BTreeSet::new();
-    };
-
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            entry
-                .file_type()
-                .ok()
-                .filter(|file_type| file_type.is_dir())
-                .and_then(|_| entry.file_name().into_string().ok())
-        })
-        .collect()
-}
-
 fn infer_package_manager_command(package_root: &Path) -> &'static str {
     if package_root.join("pnpm-lock.yaml").is_file() {
         "pnpm"
@@ -1175,39 +972,6 @@ mod tests {
         dir
     }
 
-    fn write_coverage_contract(
-        dir: &Path,
-        supported_shapes: &[&str],
-        cases: &[(&str, &[&str])],
-    ) {
-        fs::create_dir_all(dir.join("tests")).unwrap();
-        let cases_json = cases
-            .iter()
-            .map(|(shape, mapped_cases)| {
-                let values = mapped_cases
-                    .iter()
-                    .map(|case_name| format!("\"{case_name}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("    \"{shape}\": [{values}]")
-            })
-            .collect::<Vec<_>>()
-            .join(",\n");
-        let supported_json = supported_shapes
-            .iter()
-            .map(|shape| format!("\"{shape}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        fs::write(
-            dir.join("tests/coverage-contract.json"),
-            format!(
-                "{{\n  \"supported_shapes\": [{supported_json}],\n  \"cases\": {{\n{cases_json}\n  }}\n}}\n"
-            ),
-        )
-        .unwrap();
-    }
-
     #[tokio::test]
     async fn detects_starter_scaffold_markers() {
         let dir = temp_package_dir();
@@ -1263,11 +1027,6 @@ nodes:
             STARTER_FIXTURE_EXPECTED_MARKER,
         )
         .unwrap();
-        write_coverage_contract(
-            &dir,
-            &["starter"],
-            &[("starter", &["fixtures"])],
-        );
 
         let handler = PackageValidationHandler::new();
         let response = handler
@@ -1360,7 +1119,6 @@ nodes:
         .unwrap();
         fs::write(dir.join("tests/case-a/input.ts"), "foo();").unwrap();
         fs::write(dir.join("tests/case-a/expected.ts"), "bar();").unwrap();
-        write_coverage_contract(&dir, &["shape-a"], &[("shape-a", &["case-a"])]);
 
         let handler = PackageValidationHandler::new();
         let response = handler
@@ -1431,7 +1189,6 @@ export default async function transform() {
         .unwrap();
         fs::write(dir.join("tests/case-a/input.ts"), "foo();").unwrap();
         fs::write(dir.join("tests/case-a/expected.ts"), "foo();").unwrap();
-        write_coverage_contract(&dir, &["shape-a"], &[("shape-a", &["case-a"])]);
 
         let handler = PackageValidationHandler::new();
         let response = handler
@@ -1501,7 +1258,6 @@ export default async function transform() {
         .unwrap();
         fs::write(dir.join("tests/case-a/input.ts"), "foo();").unwrap();
         fs::write(dir.join("tests/case-a/expected.ts"), "foo();").unwrap();
-        write_coverage_contract(&dir, &["shape-a"], &[("shape-a", &["case-a"])]);
 
         let handler = PackageValidationHandler::new();
         let response = handler
@@ -1568,7 +1324,6 @@ nodes:
         .unwrap();
         fs::write(dir.join("tests/case-a/input.ts"), "foo();").unwrap();
         fs::write(dir.join("tests/case-a/expected.ts"), "foo();").unwrap();
-        write_coverage_contract(&dir, &["shape-a"], &[("shape-a", &["case-a"])]);
 
         let handler = PackageValidationHandler::new();
         let response = handler
@@ -1591,72 +1346,6 @@ nodes:
             .issues
             .iter()
             .any(|issue| issue.code == "nonstandard_test_runner_detected"));
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fails_when_supported_shape_has_no_fixture_mapping() {
-        let dir = temp_package_dir();
-        fs::create_dir_all(dir.join("scripts")).unwrap();
-        fs::create_dir_all(dir.join("tests/case-a")).unwrap();
-        fs::write(
-            dir.join("codemod.yaml"),
-            r#"schema_version: "1.0"
-name: "example"
-version: "0.1.0"
-description: "desc"
-workflow: "workflow.yaml"
-capabilities: []
-"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.join("workflow.yaml"),
-            r#"version: "1"
-nodes:
-  - id: apply
-    name: Apply
-    type: automatic
-    steps:
-      - name: Run codemod
-        js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: "typescript"
-"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.join("package.json"),
-            r#"{"name":"example","scripts":{"test":"echo ok","check-types":"echo ok"}}"#,
-        )
-        .unwrap();
-        fs::write(dir.join("README.md"), "# Example\n\nReusable package.\n").unwrap();
-        fs::write(
-            dir.join("scripts/codemod.ts"),
-            "export default async function transform() { return null; }\n",
-        )
-        .unwrap();
-        fs::write(dir.join("tests/case-a/input.ts"), "foo();").unwrap();
-        fs::write(dir.join("tests/case-a/expected.ts"), "foo();").unwrap();
-        write_coverage_contract(&dir, &["app/page.tsx", "app/contact/page.tsx"], &[("app/page.tsx", &["case-a"])]);
-
-        let handler = PackageValidationHandler::new();
-        let response = handler
-            .validate_package(ValidateCodemodPackageRequest {
-                package_path: Some(dir.display().to_string()),
-                run_default_test: false,
-                run_check_types: false,
-                command_timeout_seconds: 5,
-            })
-            .await
-            .expect("expected package validation response");
-
-        assert!(!response.supported_shape_coverage_complete);
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "missing_supported_shape_coverage"));
 
         fs::remove_dir_all(dir).unwrap();
     }

@@ -28,7 +28,6 @@ Symptom:
 
 Fix:
 - stop codemod authoring immediately
-- run `codemod ai doctor --harness codex --project --probe` for repo installs, or `codemod ai doctor --harness codex --user --probe` for user installs
 - reload or restart the Codex session/workspace after `codemod ai` install
 - confirm the workspace `.codex/config.toml` points at the intended Codemod binary
 - confirm Codemod MCP is enabled in Codex

@@ -16,32 +16,30 @@ Use this local guide only for extra agent workflow policy that is not yet modele
 - Treat the public Codemod docs as the primary source of truth when they exist.
 - Use this file for agent workflow policy, not for replacing the docs.
 - If public docs and this file disagree on public CLI/workflow semantics, prefer the public docs.
-- If the expected Codemod MCP tools are not available in the callable tool list for the current session, stop codemod authoring and instruct the user to run `codemod ai doctor --harness codex --project --probe` or `--user --probe` as appropriate, then fix MCP visibility first.
+- If the expected Codemod MCP tools are not available in the callable tool list for the current session, stop codemod authoring and instruct the user to fix MCP visibility first.
 
 ## Default process
 
 1. Plan the migration and search for an existing codemod before creating a new one.
-2. Inspect only 2-3 representative files from the target codebase first.
+2. Inspect the target codebase for representative real examples.
 3. Call `get_jssg_gotchas` and `get_ast_grep_gotchas` before writing source-transform code.
 4. Research the migration path before choosing package shape.
 5. If registry search yields no exact package, call `scaffold_codemod_package` immediately.
-6. Create one positive and one preserve/unsupported fixture immediately after the first repo inspection.
-7. Implement the first deterministic vertical slice before broadening the fixture matrix.
-8. Use Codemod MCP throughout authoring, not just once at startup.
-9. Keep iterating until workflow validation, package tests, and package validation pass.
+6. Define the test matrix and create the initial fixtures before implementing transforms.
+7. Use Codemod MCP throughout authoring, not just once at startup.
+8. Keep iterating until workflow validation, package tests, and package validation pass.
 
 ## Required action loop
 
 1. Search the registry with one or more quoted queries.
 2. If there is no exact package, scaffold immediately.
 3. Once the package exists, replace the starter transform, README text, and starter fixtures immediately.
-4. Define one representative positive case and one preserve/unsupported case before deep implementation work.
-5. Implement the first deterministic slice and get it passing.
-6. Expand the fixture matrix to the remaining requested supported shapes.
-7. Run tests.
-8. Repair failing cases using KB search and `dump_ast` before considering broader fallbacks.
-9. Call `validate_codemod_package`.
-10. Do not stop until validation is clean.
+4. Define the requested positive, negative, and edge fixtures before deep implementation work.
+5. Implement the deterministic transform.
+6. Run tests.
+7. Repair failing cases using KB search and `dump_ast` before considering broader fallbacks.
+8. Call `validate_codemod_package`.
+9. Do not stop until validation is clean.
 
 ## Non-negotiable rules
 
@@ -62,7 +60,6 @@ Use this local guide only for extra agent workflow policy that is not yet modele
 - Tests must be comprehensive relative to the user's request, not just the easiest documented example.
 - Do not present the codemod as complete while package tests are failing.
 - Do not stop at scaffold. Replace starter transforms, starter README text, and starter fixtures with real package content for the requested migration.
-- Ignore unrelated host-repo workflow tooling such as issue trackers or “landing the plane” checklists unless the user explicitly asked for those workflows.
 
 ## Package-shape heuristics
 
@@ -153,8 +150,6 @@ When the migration has multiple documented hop guides:
 - Prefer `codemod workflow validate` during authoring instead of assuming the generated workflow remains valid after edits.
 - Define the test matrix before implementing transforms.
 - Create the initial fixtures before writing the transform so implementation is driven by expected behavior rather than post-hoc patching.
-- Get a first deterministic positive slice passing quickly before broadening coverage across every requested supported shape.
-- Maintain `tests/coverage-contract.json` so every supported shape maps to at least one real fixture case, or is explicitly moved into unsupported/manual follow-up coverage.
 - Base that matrix on both real repo examples and documented migration cases.
 - Include representative repo-derived cases, realistic doc-derived cases, edge cases, preserve/no-op coverage, negative cases where similar code should stay unchanged, and version-hop-specific cases when behavior changes between hops.
 - If the migration scope is broad, the test matrix must be broad as well.
