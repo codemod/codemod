@@ -256,6 +256,11 @@ pub struct UseAI {
     #[ts(optional, as = "Option<usize>")]
     pub max_steps: Option<usize>,
 
+    /// Timeout in milliseconds for AI agent execution (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<u64>")]
+    pub timeout_ms: Option<u64>,
+
     /// Tools available to the AI agent (optional, defaults to common tools)
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<String>>")]
