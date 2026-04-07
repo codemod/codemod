@@ -40,6 +40,7 @@ const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/jssg/quickstart.
 const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/jssg/reference.md";
 const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/jssg/advanced.md";
 const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/jssg/testing.md";
+const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/jssg/metrics.md";
 const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/jssg/utils.md";
 const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str = "https://docs.codemod.com/jssg/semantic-analysis.md";
 
@@ -349,7 +350,7 @@ impl CodemodMcpServer {
     }
 
     #[tool(
-        description = "Get JSSG guidance for creating and testing TypeScript transformation scripts"
+        description = "Get JSSG guidance for creating and testing transformation scripts"
     )]
     async fn get_jssg_instructions(
         &self,
@@ -363,6 +364,7 @@ impl CodemodMcpServer {
                 JSSG_REFERENCE_DOC_URL,
                 JSSG_ADVANCED_DOC_URL,
                 JSSG_TESTING_DOC_URL,
+                JSSG_METRICS_DOC_URL,
                 JSSG_SEMANTIC_ANALYSIS_DOC_URL,
             ],
             "Agent-Specific Caveats",
@@ -572,6 +574,7 @@ impl ServerHandler for CodemodMcpServer {
                         JSSG_REFERENCE_DOC_URL,
                         JSSG_ADVANCED_DOC_URL,
                         JSSG_TESTING_DOC_URL,
+                        JSSG_METRICS_DOC_URL,
                         JSSG_SEMANTIC_ANALYSIS_DOC_URL,
                     ],
                     "Agent-Specific Caveats",

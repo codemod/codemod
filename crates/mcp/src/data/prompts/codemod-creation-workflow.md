@@ -26,6 +26,9 @@ Use this file only for the extra agent guidance that public docs should not carr
 - Call `get_jssg_gotchas` and `get_ast_grep_gotchas` before writing source-transform code.
 - Use `dump_ast` when the pattern shape is unclear.
 - If symbol origin matters, use semantic analysis and binding-aware checks.
+- Keep JSSG/ast-grep as the primary transformation engine; use shell/native steps only when the user asked for them or no viable AST-safe path exists.
+- If official migration steps require deterministic dependency, manifest, or config edits, keep those in scope instead of reducing the codemod to source-only changes.
+- Do not reduce a requested migration codemod to analysis-only output when safe automatable edits exist.
 - After a registry miss, use `scaffold_codemod_package` immediately.
 - Use `validate_codemod_package` before stopping.
 - Do not create commits or push branches unless the user explicitly asked for git operations.
