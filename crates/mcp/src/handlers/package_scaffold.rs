@@ -345,9 +345,11 @@ impl Default for PackageScaffoldHandler {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::sync::{LazyLock, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     static ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -361,6 +363,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn scaffold_tool_invokes_real_cli_shape() {
         let _guard = ENV_GUARD.lock().unwrap();

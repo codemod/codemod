@@ -146,8 +146,8 @@ impl PackageValidationHandler {
         request: ValidateCodemodPackageRequest,
     ) -> Result<ValidateCodemodPackageResponse> {
         let package_root = canonicalize_package_root(request.package_path.as_deref())?;
-        let files = collect_file_presence(&package_root);
         let workflow_path = workflow_path_for_package(&package_root)?;
+        let files = collect_file_presence(&package_root, &workflow_path);
         let workflow_valid = validate_workflow_at_path(&workflow_path).is_ok();
         let transform_path = package_root.join("scripts/codemod.ts");
         let readme_path = package_root.join("README.md");
@@ -204,7 +204,7 @@ impl PackageValidationHandler {
         };
 
         let mut issues = Vec::new();
-        push_missing_file_issues(&files, &package_root, &mut issues);
+        push_missing_file_issues(&files, &package_root, &workflow_path, &mut issues);
 
         if !workflow_valid && files.workflow_yaml {
             issues.push(issue(
@@ -327,10 +327,10 @@ fn canonicalize_package_root(path: Option<&str>) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn collect_file_presence(package_root: &Path) -> PackageFilePresence {
+fn collect_file_presence(package_root: &Path, workflow_path: &Path) -> PackageFilePresence {
     PackageFilePresence {
         codemod_yaml: package_root.join("codemod.yaml").is_file(),
-        workflow_yaml: package_root.join("workflow.yaml").is_file(),
+        workflow_yaml: workflow_path.is_file(),
         package_json: package_root.join("package.json").is_file(),
         readme_md: package_root.join("README.md").is_file(),
         scripts_codemod_ts: package_root.join("scripts/codemod.ts").is_file(),
@@ -505,6 +505,7 @@ fn load_package_json(package_root: &Path) -> PackageJsonLite {
 fn push_missing_file_issues(
     files: &PackageFilePresence,
     package_root: &Path,
+    workflow_path: &Path,
     issues: &mut Vec<ValidationIssue>,
 ) {
     let checks = [
@@ -512,51 +513,44 @@ fn push_missing_file_issues(
             files.codemod_yaml,
             "missing_codemod_yaml",
             "codemod.yaml is missing.",
+            package_root.join("codemod.yaml"),
         ),
         (
             files.workflow_yaml,
             "missing_workflow_yaml",
             "workflow.yaml is missing.",
+            workflow_path.to_path_buf(),
         ),
         (
             files.package_json,
             "missing_package_json",
             "package.json is missing.",
+            package_root.join("package.json"),
         ),
-        (files.readme_md, "missing_readme", "README.md is missing."),
+        (
+            files.readme_md,
+            "missing_readme",
+            "README.md is missing.",
+            package_root.join("README.md"),
+        ),
         (
             files.scripts_codemod_ts,
             "missing_transform_script",
             "scripts/codemod.ts is missing.",
+            package_root.join("scripts/codemod.ts"),
         ),
         (
             files.tests_dir,
             "missing_tests_dir",
             "tests/ directory is missing.",
+            package_root.join("tests"),
         ),
     ];
 
-    for (present, code, message) in checks {
+    for (present, code, message, path) in checks {
         if !present {
-            issues.push(issue(
-                "error",
-                code,
-                message,
-                Some(package_root.join(code_to_path(code))),
-            ));
+            issues.push(issue("error", code, message, Some(path)));
         }
-    }
-}
-
-fn code_to_path(code: &str) -> &'static str {
-    match code {
-        "missing_codemod_yaml" => "codemod.yaml",
-        "missing_workflow_yaml" => "workflow.yaml",
-        "missing_package_json" => "package.json",
-        "missing_readme" => "README.md",
-        "missing_transform_script" => "scripts/codemod.ts",
-        "missing_tests_dir" => "tests",
-        _ => ".",
     }
 }
 
@@ -692,6 +686,7 @@ async fn run_package_script(
     timeout_seconds: u64,
 ) -> ProcessCheckResult {
     let mut command = Command::new(package_manager);
+    let command_display = package_script_command_display(package_manager, script);
     match package_manager {
         "yarn" => {
             command.arg(script);
@@ -709,7 +704,7 @@ async fn run_package_script(
 
     match result {
         Ok(Ok(output)) => ProcessCheckResult {
-            command: format!("{package_manager} run {script}"),
+            command: command_display.clone(),
             success: output.status.success(),
             exit_code: output.status.code(),
             timed_out: false,
@@ -717,7 +712,7 @@ async fn run_package_script(
             stderr_tail: truncate_tail(&String::from_utf8_lossy(&output.stderr), 2000),
         },
         Ok(Err(error)) => ProcessCheckResult {
-            command: format!("{package_manager} run {script}"),
+            command: command_display.clone(),
             success: false,
             exit_code: None,
             timed_out: false,
@@ -725,7 +720,7 @@ async fn run_package_script(
             stderr_tail: error.to_string(),
         },
         Err(_) => ProcessCheckResult {
-            command: format!("{package_manager} run {script}"),
+            command: command_display,
             success: false,
             exit_code: None,
             timed_out: true,
@@ -750,6 +745,13 @@ fn truncate_tail(value: &str, max_chars: usize) -> String {
         .collect::<String>();
 
     format!("…{truncated}")
+}
+
+fn package_script_command_display(package_manager: &str, script: &str) -> String {
+    match package_manager {
+        "yarn" => format!("{package_manager} {script}"),
+        _ => format!("{package_manager} run {script}"),
+    }
 }
 
 fn infer_package_manager_command(package_root: &Path) -> &'static str {
@@ -825,6 +827,53 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn custom_workflow_path_is_respected_for_presence_and_validation() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::create_dir_all(dir.join("config")).unwrap();
+        fs::write(
+            dir.join("codemod.yaml"),
+            "workflow: config/custom-workflow.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("config/custom-workflow.yaml"),
+            "version: \"1\"\nnodes: []\n",
+        )
+        .unwrap();
+        fs::write(dir.join("package.json"), "{\"scripts\":{}}\n").unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response.files.workflow_yaml);
+        assert!(response.workflow_valid);
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_workflow_yaml"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn raw_source_rewrite_is_flagged_but_ast_node_replace_is_not() {
         let risky = detect_transform_risks(Some(
@@ -863,5 +912,14 @@ mod tests {
 
         let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn yarn_command_display_matches_actual_invocation_shape() {
+        assert_eq!(package_script_command_display("yarn", "test"), "yarn test");
+        assert_eq!(
+            package_script_command_display("npm", "test"),
+            "npm run test"
+        );
     }
 }
