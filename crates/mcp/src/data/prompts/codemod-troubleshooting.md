@@ -1,60 +1,23 @@
-# Codemod CLI Troubleshooting
+# Codemod Troubleshooting Supplement
 
-Use these checks when commands fail or produce unexpected output.
+This file is a compact local supplement.
 
-## Agent-Safe Defaults
+Use the public Codemod docs and current CLI help for canonical command behavior.
 
-For agents/automation, prefer non-interactive execution:
-- add `--no-interactive` to `codemod workflow run` and `codemod run`.
-
-## Dirty Git Tree Blocking Execution
+## Codemod MCP missing in Codex
 
 Symptom:
-- command aborts because working tree is dirty.
+- the installed `codemod` skill references Codemod MCP tools, but those tools are not in the callable tool list
 
 Fix:
-- review and commit/stash changes, or explicitly allow dirty state:
-  - `codemod workflow run -w my-codemod --target <repo-path> --allow-dirty`
-  - `codemod run <package-name> --target <repo-path> --allow-dirty`
+- reload or restart the Codex session/workspace after `codemod ai` install
+- verify the workspace MCP config is present
+- do not continue codemod authoring until Codemod MCP tools are visible
 
-## Parameter Parsing Errors
+## Dirty tree blocking workflow runs
 
 Symptom:
-- parse failure for params.
+- workflow dry-run/apply stops because the target repo is dirty
 
 Fix:
-- pass each parameter as one `key=value` token:
-  - `codemod workflow run -w my-codemod --param strict=true --param format=esm`
-
-## Capability/Permission Failures
-
-Symptom:
-- transform needs filesystem, network, or child process capability.
-
-Fix:
-- enable required capability flags:
-  - `--allow-fs`
-  - `--allow-fetch`
-  - `--allow-child-process`
-- for automation, combine with:
-  - `--no-interactive`
-
-## Registry/Auth Failures
-
-Symptom:
-- package resolution/search/publish fails with auth errors.
-
-Fix:
-- check current auth:
-  - `codemod whoami`
-- login:
-  - `codemod login`
-- logout/reset:
-  - `codemod logout --all`
-
-## Search Returns No Useful Results
-
-Fix:
-- broaden query text and increase result size:
-  - `codemod search migration --size 50`
-  - `codemod search "jest vitest migration" --size 50`
+- clean/stash the target repo, or use `--allow-dirty` when dirty-state execution is intentional

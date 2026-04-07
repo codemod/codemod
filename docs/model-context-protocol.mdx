@@ -50,14 +50,22 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
 
 ## Available tools
 
-The Codemod MCP server provides these tools for AI assistants:
+The Codemod MCP server provides these tools and docs-backed guidance entrypoints for AI assistants:
 
 - **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
 - **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
-- **`run_jssg_tests`** - Run tests for jssg (TypeScript transformation scripts) codemods with test cases
-- **`get_jssg_instructions`** - Get jssg instructions for creating TypeScript transformation scripts
-- **`get_ast_grep_instructions`** - Get ast-grep instructions for creating ast-grep rules
-- **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
+- **`run_jssg_tests`** - Run tests for JSSG codemods with test cases
+- **`get_jssg_gotchas`** - Get the highest-priority JSSG gotchas before implementing transforms
+- **`get_ast_grep_gotchas`** - Get the highest-priority ast-grep gotchas before implementing transforms
+- **`scaffold_codemod_package`** - Scaffold a codemod package via the real `codemod init` CLI
+- **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold or incomplete
+- **`get_jssg_instructions`** - Get docs-backed JSSG guidance for creating and testing transformation scripts
+- **`get_jssg_utils_instructions`** - Get docs-backed import utility guidance for `getImport`, `addImport`, and `removeImport`
+- **`get_jssg_runtime_capabilities`** - Get runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work
+- **`get_codemod_cli_instructions`** - Get docs-backed CLI, package, and workflow guidance
+- **`get_codemod_creation_workflow`** - Get docs-backed codemod authoring workflow guidance with a small local supplement
+- **`get_codemod_troubleshooting`** - Get troubleshooting guidance for common Codemod CLI failures
+- **`get_codemod_maintainer_monorepo`** - Get maintainer guidance for codemod monorepos and version-hop workspaces
 
 ## Why use Codemod MCP?
 

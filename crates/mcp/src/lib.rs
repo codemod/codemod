@@ -6,16 +6,195 @@ use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::LazyLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod handlers;
-use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler};
+use handlers::{
+    AstDumpHandler, JssgTestHandler, NodeTypesHandler, PackageScaffoldHandler,
+    PackageValidationHandler,
+};
+
+const PUBLIC_DOCS_TIMEOUT_SECS: u64 = 10;
+const JSSG_INSTRUCTIONS: &str = include_str!("data/prompts/jssg-instructions.md");
+const JSSG_UTILS_INSTRUCTIONS: &str = include_str!("data/prompts/jssg-utils-instructions.md");
+const JSSG_RUNTIME_CAPABILITIES_INSTRUCTIONS: &str =
+    include_str!("data/prompts/jssg-runtime-capabilities.md");
+const CODEMOD_CLI_INSTRUCTIONS: &str = include_str!("data/prompts/codemod-cli-instructions.md");
+const SHARDING_INSTRUCTIONS: &str = include_str!("data/prompts/sharding-instructions.md");
+const CODEMOD_CREATION_WORKFLOW_SUPPLEMENT: &str =
+    include_str!("data/prompts/codemod-creation-workflow.md");
+const CODEMOD_TROUBLESHOOTING_SUPPLEMENT: &str =
+    include_str!("data/prompts/codemod-troubleshooting.md");
+const CODEMOD_MAINTAINER_MONOREPO_GUIDE: &str =
+    include_str!("data/prompts/codemod-maintainer-monorepo.md");
+const JSSG_GOTCHAS: &str = include_str!("data/prompts/jssg-gotchas.md");
+const AST_GREP_GOTCHAS: &str = include_str!("data/prompts/ast-grep-gotchas.md");
+
+const CLI_DOC_URL: &str = "https://docs.codemod.com/cli.md";
+const OSS_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/oss-quickstart.md";
+const PACKAGE_STRUCTURE_DOC_URL: &str = "https://docs.codemod.com/package-structure.md";
+const WORKFLOW_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/workflows/reference.md";
+const SHARDING_DOC_URL: &str = "https://docs.codemod.com/workflows/sharding.md";
+const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/jssg/quickstart.md";
+const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/jssg/reference.md";
+const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/jssg/advanced.md";
+const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/jssg/testing.md";
+const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/jssg/utils.md";
+const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str = "https://docs.codemod.com/jssg/semantic-analysis.md";
+
+static PUBLIC_DOCS_CLIENT: LazyLock<Option<reqwest::Client>> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(PUBLIC_DOCS_TIMEOUT_SECS))
+        .user_agent(format!("codemod-mcp/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .ok()
+});
+
+fn strip_docs_index(doc: &str) -> &str {
+    fn next_line_bounds(text: &str, start: usize) -> Option<(usize, usize)> {
+        if start >= text.len() {
+            return None;
+        }
+
+        let end = text[start..]
+            .find('\n')
+            .map(|offset| start + offset + 1)
+            .unwrap_or(text.len());
+        Some((start, end))
+    }
+
+    fn next_nonempty_line(text: &str, mut start: usize) -> Option<(usize, usize, &str)> {
+        while let Some((line_start, line_end)) = next_line_bounds(text, start) {
+            let line = text[line_start..line_end].trim_end_matches(['\r', '\n']);
+            if !line.trim().is_empty() {
+                return Some((line_start, line_end, line));
+            }
+            start = line_end;
+        }
+
+        None
+    }
+
+    let doc = doc.trim_start_matches('\u{feff}');
+    let Some((mut line_start, mut line_end, mut line)) = next_nonempty_line(doc, 0) else {
+        return doc;
+    };
+
+    if line == "---" {
+        let mut cursor = line_end;
+        while let Some((_, end, candidate)) = next_nonempty_line(doc, cursor) {
+            cursor = end;
+            if candidate == "---" {
+                if let Some((start, end, candidate)) = next_nonempty_line(doc, cursor) {
+                    line_start = start;
+                    line_end = end;
+                    line = candidate;
+                } else {
+                    return doc;
+                }
+                break;
+            }
+        }
+    }
+
+    if line.starts_with("# ") {
+        return &doc[line_start..];
+    }
+
+    if line == "> ## Documentation Index" || line.starts_with("> ## Documentation Index") {
+        let mut cursor = line_end;
+        while let Some((start, end, candidate)) = next_nonempty_line(doc, cursor) {
+            if candidate.starts_with('>') {
+                cursor = end;
+                continue;
+            }
+
+            return &doc[start..];
+        }
+    }
+
+    doc
+}
+
+async fn fetch_public_doc_markdown(url: &str) -> Option<String> {
+    let client = PUBLIC_DOCS_CLIENT.as_ref()?;
+    let response = client.get(url).send().await.ok()?.error_for_status().ok()?;
+    let text = response.text().await.ok()?;
+    Some(strip_docs_index(&text).trim().to_string())
+}
+
+async fn fetch_public_doc_sections(urls: &[&str]) -> Vec<String> {
+    let mut sections = Vec::new();
+    for url in urls {
+        if let Some(content) = fetch_public_doc_markdown(url).await {
+            sections.push(format!("<!-- Source: {url} -->\n\n{content}"));
+        }
+    }
+    sections
+}
+
+fn build_public_docs_bundle_from_sections(
+    title: &str,
+    sections: &[String],
+    fallback: &str,
+) -> String {
+    if sections.is_empty() {
+        return fallback.to_string();
+    }
+
+    format!(
+        "# {title}\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over local fallback notes when they differ.\n\n{}\n",
+        sections.join("\n\n---\n\n")
+    )
+}
+
+async fn build_public_docs_bundle(title: &str, urls: &[&str], fallback: &str) -> String {
+    let sections = fetch_public_doc_sections(urls).await;
+    build_public_docs_bundle_from_sections(title, &sections, fallback)
+}
+
+fn build_public_docs_bundle_with_supplement_from_sections(
+    title: &str,
+    sections: &[String],
+    supplement_title: &str,
+    supplement: &str,
+    fallback: &str,
+) -> String {
+    if sections.is_empty() {
+        return fallback.to_string();
+    }
+
+    format!(
+        "# {title}\n\n## {supplement_title}\n\n{supplement}\n\n---\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over local fallback notes when they differ.\n\n{}\n",
+        sections.join("\n\n---\n\n")
+    )
+}
+
+async fn build_public_docs_bundle_with_supplement(
+    title: &str,
+    urls: &[&str],
+    supplement_title: &str,
+    supplement: &str,
+    fallback: &str,
+) -> String {
+    let sections = fetch_public_doc_sections(urls).await;
+    build_public_docs_bundle_with_supplement_from_sections(
+        title,
+        &sections,
+        supplement_title,
+        supplement,
+        fallback,
+    )
+}
 
 #[derive(Clone)]
 pub struct CodemodMcpServer {
     ast_dump_handler: AstDumpHandler,
     node_types_handler: NodeTypesHandler,
     jssg_test_handler: JssgTestHandler,
+    package_scaffold_handler: PackageScaffoldHandler,
+    package_validation_handler: PackageValidationHandler,
     usage_log_path: Option<PathBuf>,
     tool_router: ToolRouter<CodemodMcpServer>,
 }
@@ -32,6 +211,8 @@ impl CodemodMcpServer {
             ast_dump_handler: AstDumpHandler::new(),
             node_types_handler: NodeTypesHandler::new(),
             jssg_test_handler: JssgTestHandler::new(),
+            package_scaffold_handler: PackageScaffoldHandler::new(),
+            package_validation_handler: PackageValidationHandler::new(),
             usage_log_path,
             tool_router: Self::tool_router(),
         }
@@ -78,7 +259,6 @@ impl CodemodMcpServer {
         .no_annotation()
     }
 
-    // Delegate to AST dump handler
     #[tool(
         description = "Dump AST nodes in an AI-friendly format for the given source code and language"
     )]
@@ -90,7 +270,6 @@ impl CodemodMcpServer {
         self.ast_dump_handler.dump_ast(params).await
     }
 
-    // Delegate to node types handler
     #[tool(
         description = "Get compressed tree-sitter node types for a specific programming language in AI-friendly format"
     )]
@@ -116,28 +295,100 @@ impl CodemodMcpServer {
     }
 
     #[tool(
-        description = "Get jssg (JavaScript ast-grep) instructions for creating codemods (includes ast-grep fundamentals)"
+        description = "Get the highest-priority JSSG gotchas before implementing a codemod transform."
+    )]
+    async fn get_jssg_gotchas(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_jssg_gotchas");
+        Ok(CallToolResult::success(vec![Content::text(JSSG_GOTCHAS)]))
+    }
+
+    #[tool(
+        description = "Get the highest-priority ast-grep gotchas before implementing a codemod transform."
+    )]
+    async fn get_ast_grep_gotchas(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:get_ast_grep_gotchas");
+        Ok(CallToolResult::success(vec![Content::text(
+            AST_GREP_GOTCHAS,
+        )]))
+    }
+
+    #[tool(
+        description = "Scaffold a codemod package by delegating to the real `codemod init` CLI. Use this immediately after registry search shows there is no exact existing package for the requested migration."
+    )]
+    async fn scaffold_codemod_package(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::package_scaffold::ScaffoldCodemodPackageRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:scaffold_codemod_package");
+        self.package_scaffold_handler
+            .scaffold_codemod_package(params)
+            .await
+    }
+
+    #[tool(
+        description = "Validate whether a codemod package is real and complete. Use this before stopping work on a codemod package."
+    )]
+    async fn validate_codemod_package(
+        &self,
+        params: rmcp::handler::server::wrapper::Parameters<
+            handlers::package_validation::ValidateCodemodPackageRequest,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage("tool:validate_codemod_package");
+        self.package_validation_handler
+            .validate_codemod_package(params)
+            .await
+    }
+
+    #[tool(
+        description = "Get JSSG guidance for creating and testing TypeScript transformation scripts"
     )]
     async fn get_jssg_instructions(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_jssg_instructions");
-        let instructions_content = include_str!("data/prompts/jssg-instructions.md");
+        let instructions_content = build_public_docs_bundle_with_supplement(
+            "Canonical JSSG Documentation",
+            &[
+                JSSG_QUICKSTART_DOC_URL,
+                JSSG_REFERENCE_DOC_URL,
+                JSSG_ADVANCED_DOC_URL,
+                JSSG_TESTING_DOC_URL,
+                JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+            ],
+            "Agent-Specific Caveats",
+            JSSG_INSTRUCTIONS,
+            JSSG_INSTRUCTIONS,
+        )
+        .await;
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
         )]))
     }
 
     #[tool(
-        description = "Get jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"
+        description = "Get JSSG import utility guidance for getImport, addImport, and removeImport"
     )]
     async fn get_jssg_utils_instructions(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_jssg_utils_instructions");
-        let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
+        let instructions_content = build_public_docs_bundle(
+            "Canonical JSSG Import Utilities Documentation",
+            &[JSSG_UTILS_DOC_URL],
+            JSSG_UTILS_INSTRUCTIONS,
+        )
+        .await;
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
         )]))
@@ -151,21 +402,27 @@ impl CodemodMcpServer {
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_jssg_runtime_capabilities");
-        let instructions_content = include_str!("data/prompts/jssg-runtime-capabilities.md");
         Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
+            JSSG_RUNTIME_CAPABILITIES_INSTRUCTIONS,
         )]))
     }
 
-    #[tool(
-        description = "Get Codemod CLI instructions for project setup and workflow configuration"
-    )]
+    #[tool(description = "Get Codemod CLI, package, and workflow guidance")]
     async fn get_codemod_cli_instructions(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_codemod_cli_instructions");
-        let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
+        let instructions_content = build_public_docs_bundle(
+            "Canonical Codemod CLI and Workflow Documentation",
+            &[
+                CLI_DOC_URL,
+                PACKAGE_STRUCTURE_DOC_URL,
+                WORKFLOW_REFERENCE_DOC_URL,
+            ],
+            CODEMOD_CLI_INSTRUCTIONS,
+        )
+        .await;
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
         )]))
@@ -179,37 +436,48 @@ impl CodemodMcpServer {
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_codemod_troubleshooting");
-        let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
         Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
+            CODEMOD_TROUBLESHOOTING_SUPPLEMENT,
         )]))
     }
 
     #[tool(
-        description = "Get the codemod creation workflow guide for authoring, testing, and publishing codemods"
+        description = "Get codemod authoring workflow guidance for planning, scaffolding, testing, and validation"
     )]
     async fn get_codemod_creation_workflow(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_codemod_creation_workflow");
-        let instructions_content = include_str!("data/prompts/codemod-creation-workflow.md");
+        let instructions_content = build_public_docs_bundle_with_supplement(
+            "Canonical Codemod Creation Documentation",
+            &[
+                OSS_QUICKSTART_DOC_URL,
+                CLI_DOC_URL,
+                PACKAGE_STRUCTURE_DOC_URL,
+                WORKFLOW_REFERENCE_DOC_URL,
+                JSSG_TESTING_DOC_URL,
+            ],
+            "Supplemental Agent Workflow Policy",
+            CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+            CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+        )
+        .await;
         Ok(CallToolResult::success(vec![Content::text(
             instructions_content,
         )]))
     }
 
     #[tool(
-        description = "Get maintainer monorepo guide for setting up and managing codemod monorepos"
+        description = "Get maintainer guidance for codemod monorepos and version-hop workspaces"
     )]
     async fn get_codemod_maintainer_monorepo(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.log_usage("tool:get_codemod_maintainer_monorepo");
-        let instructions_content = include_str!("data/prompts/codemod-maintainer-monorepo.md");
         Ok(CallToolResult::success(vec![Content::text(
-            instructions_content,
+            CODEMOD_MAINTAINER_MONOREPO_GUIDE,
         )]))
     }
 }
@@ -224,7 +492,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, and jssg (ast-grep with JS bindings) codemod testing tools. Available tools: dump_ast (get AI-friendly AST representation), get_node_types (get compressed tree-sitter node types), run_jssg_tests (run tests for jssg codemods), get_codemod_troubleshooting (debug failing or unexpected codemod commands), get_codemod_creation_workflow (author, test, and publish codemods), get_codemod_maintainer_monorepo (set up and maintain a codemod monorepo), get_jssg_runtime_capabilities (runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work). Available resources: jssg-instructions (jssg and ast-grep fundamentals), jssg-utils-instructions (import manipulation helpers), jssg-runtime-capabilities-instructions (runtime and capability guidance), codemod-cli-instructions (CLI and workflow setup), sharding-instructions (splitting large migrations into multiple PRs), codemod-troubleshooting-instructions (Codemod CLI troubleshooting), codemod-creation-workflow-instructions (codemod creation workflow), codemod-maintainer-monorepo-instructions (maintainer monorepo guidance). When you are asked to create a codemod or do a large refactor, you should use jssg and read both jssg-instructions (for writing codemods) and codemod-cli-instructions (for project setup). Use get_jssg_runtime_capabilities when the codemod needs Node/LLRT APIs, gated modules like fs/fetch/child_process, or non-trivial multi-file JSSG work. Use jssg-utils-instructions when you need to find, add, or remove imports. Use sharding-instructions when you need to split a large migration into multiple PRs using the shard step action. Call get_codemod_troubleshooting when commands fail or produce unexpected output. Call get_codemod_creation_workflow when authoring, testing, or publishing codemods. Call get_codemod_maintainer_monorepo when setting up or maintaining a codemod monorepo.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, Codemod package scaffolding and validation, docs-backed JSSG/CLI/workflow guidance, and a small set of hot-path codemod gotchas. Available tools: dump_ast, get_node_types, run_jssg_tests, get_jssg_gotchas, get_ast_grep_gotchas, scaffold_codemod_package, validate_codemod_package, get_jssg_instructions, get_jssg_utils_instructions, get_jssg_runtime_capabilities, get_codemod_cli_instructions, get_codemod_creation_workflow, get_codemod_troubleshooting, get_codemod_maintainer_monorepo. Available resources: jssg-instructions, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, call get_codemod_creation_workflow first, then get_jssg_gotchas and get_ast_grep_gotchas before writing source-transform code. If registry search finds no exact existing package, call scaffold_codemod_package immediately. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks.".to_string()),
         }
     }
 
@@ -248,39 +516,37 @@ impl ServerHandler for CodemodMcpServer {
                 self._create_resource_text(
                     "jssg://instructions",
                     "jssg-instructions",
-                    Some(
-                        "jssg instructions for creating codemods (includes ast-grep fundamentals)",
-                    ),
+                    Some("Docs-backed JSSG guidance with a small local supplement"),
                 ),
                 self._create_resource_text(
                     "jssg-utils://instructions",
                     "jssg-utils-instructions",
-                    Some("jssg-utils instructions for import manipulation helpers (getImport, addImport, removeImport)"),
+                    Some("Docs-backed JSSG import utility guidance"),
                 ),
                 self._create_resource_text(
                     "jssg-runtime-capabilities://instructions",
                     "jssg-runtime-capabilities-instructions",
-                    Some("JSSG runtime and capability guidance for LLRT/Node APIs, codemod.yaml capabilities, and multi-file JSSG work"),
+                    Some("JSSG runtime and capability guidance for LLRT/Node APIs and multi-file work"),
                 ),
                 self._create_resource_text(
                     "codemod-cli://instructions",
                     "codemod-cli-instructions",
-                    Some("Codemod CLI instructions for project setup and workflow configuration"),
+                    Some("Docs-backed CLI, package, and workflow guidance"),
                 ),
                 self._create_resource_text(
                     "sharding://instructions",
                     "sharding-instructions",
-                    Some("Sharding instructions for splitting large migrations into multiple PRs"),
+                    Some("Docs-backed sharding guidance"),
                 ),
                 self._create_resource_text(
                     "codemod-troubleshooting://instructions",
                     "codemod-troubleshooting-instructions",
-                    Some("Troubleshooting guidance for common Codemod CLI failures"),
+                    Some("Local troubleshooting supplement for Codemod CLI and MCP issues"),
                 ),
                 self._create_resource_text(
                     "codemod-creation-workflow://instructions",
                     "codemod-creation-workflow-instructions",
-                    Some("Codemod creation workflow guide for authoring, testing, and publishing"),
+                    Some("Docs-backed codemod creation guidance with a small local supplement"),
                 ),
                 self._create_resource_text(
                     "codemod-maintainer-monorepo://instructions",
@@ -297,65 +563,87 @@ impl ServerHandler for CodemodMcpServer {
         ReadResourceRequestParam { uri }: ReadResourceRequestParam,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        match uri.as_str() {
+        let content = match uri.as_str() {
             "jssg://instructions" => {
-                let instructions_content = include_str!("data/prompts/jssg-instructions.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                build_public_docs_bundle_with_supplement(
+                    "Canonical JSSG Documentation",
+                    &[
+                        JSSG_QUICKSTART_DOC_URL,
+                        JSSG_REFERENCE_DOC_URL,
+                        JSSG_ADVANCED_DOC_URL,
+                        JSSG_TESTING_DOC_URL,
+                        JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+                    ],
+                    "Agent-Specific Caveats",
+                    JSSG_INSTRUCTIONS,
+                    JSSG_INSTRUCTIONS,
+                )
+                .await
             }
             "jssg-utils://instructions" => {
-                let instructions_content = include_str!("data/prompts/jssg-utils-instructions.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                build_public_docs_bundle(
+                    "Canonical JSSG Import Utilities Documentation",
+                    &[JSSG_UTILS_DOC_URL],
+                    JSSG_UTILS_INSTRUCTIONS,
+                )
+                .await
             }
             "jssg-runtime-capabilities://instructions" => {
-                let instructions_content =
-                    include_str!("data/prompts/jssg-runtime-capabilities.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                JSSG_RUNTIME_CAPABILITIES_INSTRUCTIONS.to_string()
             }
             "codemod-cli://instructions" => {
-                let instructions_content = include_str!("data/prompts/codemod-cli-instructions.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                build_public_docs_bundle(
+                    "Canonical Codemod CLI and Workflow Documentation",
+                    &[
+                        CLI_DOC_URL,
+                        PACKAGE_STRUCTURE_DOC_URL,
+                        WORKFLOW_REFERENCE_DOC_URL,
+                    ],
+                    CODEMOD_CLI_INSTRUCTIONS,
+                )
+                .await
             }
             "sharding://instructions" => {
-                let instructions_content = include_str!("data/prompts/sharding-instructions.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                build_public_docs_bundle(
+                    "Canonical Sharding Documentation",
+                    &[SHARDING_DOC_URL],
+                    SHARDING_INSTRUCTIONS,
+                )
+                .await
             }
             "codemod-troubleshooting://instructions" => {
-                let instructions_content = include_str!("data/prompts/codemod-troubleshooting.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                CODEMOD_TROUBLESHOOTING_SUPPLEMENT.to_string()
             }
             "codemod-creation-workflow://instructions" => {
-                let instructions_content =
-                    include_str!("data/prompts/codemod-creation-workflow.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                build_public_docs_bundle_with_supplement(
+                    "Canonical Codemod Creation Documentation",
+                    &[
+                        OSS_QUICKSTART_DOC_URL,
+                        CLI_DOC_URL,
+                        PACKAGE_STRUCTURE_DOC_URL,
+                        WORKFLOW_REFERENCE_DOC_URL,
+                        JSSG_TESTING_DOC_URL,
+                    ],
+                    "Supplemental Agent Workflow Policy",
+                    CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+                    CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+                )
+                .await
             }
             "codemod-maintainer-monorepo://instructions" => {
-                let instructions_content =
-                    include_str!("data/prompts/codemod-maintainer-monorepo.md");
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(instructions_content, uri)],
-                })
+                CODEMOD_MAINTAINER_MONOREPO_GUIDE.to_string()
             }
-            _ => Err(McpError::resource_not_found(
-                "resource_not_found",
-                Some(json!({
-                    "uri": uri
-                })),
-            )),
-        }
+            _ => {
+                return Err(McpError::resource_not_found(
+                    "resource_not_found",
+                    Some(json!({ "uri": uri })),
+                ))
+            }
+        };
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::text(content, uri)],
+        })
     }
 
     async fn list_resource_templates(
@@ -418,6 +706,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_docs_bundle_falls_back_when_sections_are_empty() {
+        let content = build_public_docs_bundle_from_sections("Title", &[], "fallback text");
+        assert_eq!(content, "fallback text");
+    }
+
+    #[test]
+    fn public_docs_bundle_with_supplement_includes_supplement() {
+        let content = build_public_docs_bundle_with_supplement_from_sections(
+            "Title",
+            &["section".to_string()],
+            "Supplement",
+            "supplement text",
+            "fallback",
+        );
+        assert!(content.contains("supplement text"));
+        assert!(content.contains("section"));
+    }
+
     #[tokio::test]
     async fn test_mcp_server_creation() {
         let server = CodemodMcpServer::default();
@@ -427,8 +734,9 @@ mod tests {
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
         let instructions = info.instructions.as_deref().unwrap_or_default();
-        assert!(instructions.contains("get_jssg_runtime_capabilities"));
-        assert!(instructions.contains("jssg-runtime-capabilities-instructions"));
+        assert!(instructions.contains("scaffold_codemod_package"));
+        assert!(instructions.contains("validate_codemod_package"));
+        assert!(instructions.contains("get_jssg_gotchas"));
     }
 
     #[tokio::test]
