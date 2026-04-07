@@ -21,3 +21,12 @@ Symptom:
 
 Fix:
 - clean/stash the target repo, or use `--allow-dirty` when dirty-state execution is intentional
+
+## Shell step schema mistake
+
+Symptom:
+- `workflow validate` fails because a shell step was written with `command:` instead of the workflow schema key
+
+Fix:
+- use `run:` for shell command steps in `workflow.yaml`
+- do not invent `command:` as a workflow step field
