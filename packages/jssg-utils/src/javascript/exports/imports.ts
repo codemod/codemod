@@ -84,7 +84,7 @@ function getModuleType<T extends Language>(match: SgNode<T>): "esm" | "cjs" {
  * the identifier for the requested named specifier (using the alias if present).
  *
  * The returned object contains the resolved alias (the name to use at call sites), whether it was a
- * namespace import (currently always false in this implementation), and the underlying identifier node.
+ * namespace import, and the underlying identifier node.
  *
  * @template T extends Language
  * @param program - The program node to search within.
