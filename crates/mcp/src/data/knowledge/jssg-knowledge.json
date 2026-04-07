@@ -70,6 +70,36 @@
       "verified": true,
       "tags": ["tests", "metrics", "snapshots"],
       "content": "If a package uses metrics snapshots, refresh or fix metrics.json along with the rest of the expected outputs."
+    },
+    {
+      "id": "jssg-llrt-fs-surface-differs-from-node-muscle-memory",
+      "title": "Do not assume the full Node fs surface behaves the same in JSSG runtime",
+      "summary": "Observed codemod runs hit runtime friction around Node-style fs helpers such as existsSync; prefer the documented supported runtime APIs and validate capabilities.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, section 'LLRT Runtime Differences'",
+      "verified": true,
+      "tags": ["runtime", "llrt", "fs", "observed-failure"],
+      "content": "The JSSG runtime is not plain Node. Prefer documented supported APIs and verify capability requirements instead of assuming familiar Node helpers will behave the same."
+    },
+    {
+      "id": "jssg-path-surface-may-differ-from-full-node-path",
+      "title": "Do not assume the full Node path API is available in the same way",
+      "summary": "Observed codemod runs hit friction with Node path usage such as posix/relative assumptions; keep path logic minimal and based on documented supported APIs.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, section 'LLRT Runtime Differences'",
+      "verified": true,
+      "tags": ["runtime", "llrt", "path", "observed-failure"],
+      "content": "Path computation is sometimes unavoidable for companion-file generation, but do not assume the entire Node path API behaves the same in JSSG runtime."
+    },
+    {
+      "id": "jssg-package-validation-is-part-of-completion-not-optional-cleanup",
+      "title": "Passing tests is not enough if package validation still fails",
+      "summary": "Observed codemod runs reached green tests before package validation was satisfied; validator findings should be treated as blocking completion criteria.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, section 'Validator Heuristics Arriving Late'",
+      "verified": true,
+      "tags": ["validation", "completion", "observed-failure"],
+      "content": "Do not treat the package as complete when tests pass but validate_codemod_package still reports package-surface or transform-risk problems."
     }
   ],
   "recipes": [

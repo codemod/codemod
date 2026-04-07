@@ -63,11 +63,13 @@ fn default_scaffold_timeout_seconds() -> u64 {
 pub struct ScaffoldCodemodPackageResponse {
     pub success: bool,
     pub package_root: String,
+    pub already_existed: bool,
     pub command: Vec<String>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
+    pub message: Option<String>,
 }
 
 #[derive(Clone)]
@@ -102,6 +104,7 @@ impl PackageScaffoldHandler {
         request: ScaffoldCodemodPackageRequest,
     ) -> anyhow::Result<ScaffoldCodemodPackageResponse> {
         let package_root = canonicalize_requested_root(&request.path)?;
+        let already_existed = package_root.exists();
         let invocation = cli_invocation_for_scaffold()?;
         let project_type = request
             .project_type
@@ -132,7 +135,7 @@ impl PackageScaffoldHandler {
 
         let mut command = invocation;
         command.push("init".to_string());
-        command.push(request.path.clone());
+        command.push(package_root.display().to_string());
 
         if let Some(name) = &request.name {
             command.push("--name".to_string());
@@ -200,29 +203,56 @@ impl PackageScaffoldHandler {
             Ok(Ok(output)) => ScaffoldCodemodPackageResponse {
                 success: output.status.success(),
                 package_root: package_root.display().to_string(),
+                already_existed,
                 command,
                 exit_code: output.status.code(),
                 timed_out: false,
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                message: if already_existed {
+                    Some(
+                        "Target directory already existed before scaffolding. Use `force: true` only when you intentionally want to replace or repair an existing scaffold."
+                            .to_string(),
+                    )
+                } else {
+                    None
+                },
             },
             Ok(Err(error)) => ScaffoldCodemodPackageResponse {
                 success: false,
                 package_root: package_root.display().to_string(),
+                already_existed,
                 command,
                 exit_code: None,
                 timed_out: false,
                 stdout: String::new(),
                 stderr: error.to_string(),
+                message: if already_existed {
+                    Some(
+                        "The requested package directory already existed. Retry with `force: true` only if overwriting that directory is intentional."
+                            .to_string(),
+                    )
+                } else {
+                    None
+                },
             },
             Err(_) => ScaffoldCodemodPackageResponse {
                 success: false,
                 package_root: package_root.display().to_string(),
+                already_existed,
                 command,
                 exit_code: None,
                 timed_out: true,
                 stdout: String::new(),
                 stderr: format!("Timed out after {}s", request.timeout_seconds),
+                message: if already_existed {
+                    Some(
+                        "The target directory already existed before the timed-out scaffold attempt."
+                            .to_string(),
+                    )
+                } else {
+                    None
+                },
             },
         };
 

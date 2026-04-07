@@ -442,6 +442,10 @@ impl RuntimePaths {
     }
 }
 
+pub(crate) fn runtime_working_directory(runtime_paths: &RuntimePaths) -> &Path {
+    &runtime_paths.cwd
+}
+
 pub(crate) fn runtime_paths_for_execution(
     working_directory: Option<&Path>,
     environment: Option<&HashMap<String, String>>,
@@ -2451,7 +2455,7 @@ fn legacy_mcp_config_path_for_harness(
     }
 }
 
-fn mcp_config_path_for_harness(
+pub(crate) fn mcp_config_path_for_harness(
     harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
@@ -2890,6 +2894,31 @@ fn read_codex_mcp_server(document: &DocumentMut) -> AdapterResult<Option<CodexMc
     Ok(Some(CodexMcpServer { command, args }))
 }
 
+pub(crate) fn read_codex_mcp_server_from_path(
+    config_path: &Path,
+) -> AdapterResult<Option<(String, Vec<String>)>> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    let existing_content = fs::read_to_string(config_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let document = existing_content.parse::<DocumentMut>().map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} is not valid TOML: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    Ok(read_codex_mcp_server(&document)?
+        .map(|server| (server.command, server.args)))
+}
+
 fn list_skills_with_runtime(
     harness: Harness,
     runtime_paths: &RuntimePaths,
@@ -3226,7 +3255,7 @@ fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
     Ok(())
 }
 
-fn skills_root_for_harness(
+pub(crate) fn skills_root_for_harness(
     harness: Harness,
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
@@ -3268,6 +3297,16 @@ fn skills_root_for_harness(
                 }
             }),
     }
+}
+
+pub(crate) fn core_skill_path_for_harness(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<PathBuf> {
+    Ok(skills_root_for_harness(harness, scope, runtime_paths)?
+        .join(MCS_SKILL_DIR_NAME)
+        .join(SKILL_FILE_NAME))
 }
 
 fn mcs_command_is_available(harness: Harness, scope: InstallScope) -> bool {

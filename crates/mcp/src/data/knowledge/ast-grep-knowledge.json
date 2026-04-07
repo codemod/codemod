@@ -63,6 +63,16 @@
       "verified": true,
       "tags": ["dump_ast", "debugging", "patterns"],
       "content": "When the pattern is unclear or not matching, inspect the AST node kinds and structure with dump_ast instead of jumping to manual parsing or regex."
+    },
+    {
+      "id": "ast-grep-do-not-rely-on-node-object-identity-across-lookups",
+      "title": "Do not rely on node object identity across helper lookups",
+      "summary": "Observed codemod runs missed matches when comparing nodes by object identity instead of comparing ranges or structure.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, section 'AST Identity Assumptions'",
+      "verified": true,
+      "tags": ["ast", "identity", "ranges", "observed-failure"],
+      "content": "When correlating nodes found by different helper lookups, compare ranges or structural properties rather than assuming object identity will be stable."
     }
   ],
   "recipes": [
@@ -85,6 +95,26 @@
       "verified": true,
       "tags": ["semantic-analysis", "workspace", "cross-file"],
       "content": "Use semantic_analysis: workspace in js-ast-grep steps when cross-file definitions or references are required for safe matching."
+    },
+    {
+      "id": "ast-grep-keep-preview-routes-inside-leading-route-groups",
+      "title": "Keep preview routes inside the same leading route-group ancestry",
+      "summary": "For App Router codemods that add preview routes, preserve the source page's leading route-group ancestry so the preview route inherits the same layout context.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, section 'Route Group Placement'",
+      "verified": true,
+      "tags": ["route-groups", "nextjs", "companion-files", "observed-failure"],
+      "content": "If a source page lives under leading route groups such as `(landing)`, generate the preview route under the same leading route-group chain instead of collapsing it to a plain `app/preview/...` path."
+    },
+    {
+      "id": "ast-grep-use-standard-jssg-fixtures-for-companion-file-generation",
+      "title": "Use standard JSSG directory fixtures for companion-file codemods",
+      "summary": "When a codemod rewrites source files and creates helpers or preview routes, use standard directory fixtures instead of inventing a custom test harness.",
+      "source_type": "observed_failure",
+      "source_ref": "execution-report: candidate evaluation 2026-04-03, sections 'What Was Actually Useful' and 'Specific Codemod AI / MCP changes that would help most'",
+      "verified": true,
+      "tags": ["tests", "fixtures", "companion-files", "observed-failure"],
+      "content": "Prefer `codemod jssg test` with directory snapshots for file-creating codemods; only add a custom runner when the standard JSSG flow truly cannot express the test model."
     }
   ]
 }

@@ -24,7 +24,7 @@ When the intent is migration/update/upgrade oriented, use Codemod first before d
 
 ## MCP invocation guarantees
 
-- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately. Tell the user to reload/restart Codex and fix the Codemod MCP setup first. Do not continue codemod creation without MCP.
+- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately. Tell the user to run `codemod ai doctor --harness codex --project --probe` or `--user --probe` as appropriate, reload/restart Codex, and fix the Codemod MCP setup first. Do not continue codemod creation without MCP.
 
 When the user:
 - **Creates a codemod or does a large refactor** — Call `get_codemod_creation_workflow` first. Before writing source-transform code, call `get_jssg_gotchas` and `get_ast_grep_gotchas`. Call `get_codemod_cli_instructions` only when you need exact command syntax. Call `get_jssg_instructions` once a package exists and you are implementing the transform.
@@ -47,6 +47,7 @@ When the user:
 - For source transforms, do not use `RegExp`, `.replace`, `.replaceAll`, `.match`, `.split`, or manual string parsing as the primary implementation strategy.
 - Minimal string operations are only acceptable for path normalization, import/module-specifier cleanup, helper/metadata formatting, or test-output parsing.
 - If the package already has JSSG fixtures, extend the existing test suite and run `codemod jssg test` instead of inventing ad hoc test files.
+- Maintain `tests/coverage-contract.json` so every supported shape has at least one mapped fixture case, or is explicitly documented as unsupported/manual follow-up.
 - Treat `metrics.json` as part of the expected test output when a package already snapshots metrics.
 - After changing a codemod, inspect and update the whole package surface: `README`, `codemod.yaml`, `workflow.yaml`, tests, package metadata, and capabilities when runtime-gated APIs are used.
 - For non-interactive scaffolding, rely on the public CLI docs or `codemod init --help` for the current required flags instead of guessing them.
@@ -54,12 +55,15 @@ When the user:
 - Prefer `npx codemod@latest ...` or a verified local Codemod binary when the plain `codemod` command behaves unexpectedly.
 - Do not create commits or push branches for codemod authoring/evaluation unless the user explicitly asked for git operations.
 - Do not follow host-repo “always push before stopping” policies for Codemod package authoring unless the user explicitly asked for that behavior.
+- Do not spend long up front reading many guidance docs before the first real fixture and first passing transform slice.
+- Ignore unrelated host-repo workflow tooling such as issue trackers, release scripts, or completion checklists unless the user explicitly asked for them or they are required to understand the target code patterns.
 - If registry search yields no exact package, call `scaffold_codemod_package` immediately in the current package directory instead of continuing broad research without a package.
 - Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
 - If the requested migration is one granular transform or one exact `from -> to` hop, keep it as a single codemod package even when it supports multiple route shapes or helper files.
 - Use a workspace only when the migration is open-ended, version-hop based, or clearly splits into multiple independently runnable codemods.
 - After a registry miss, do not keep doing broad package-shape research before a package exists; scaffold first, then research only what is needed to implement the requested migration.
 - After the package exists, replace the starter transform, README, and starter fixtures before doing anything optional.
+- After scaffolding, inspect only 2-3 representative repo files first, then create one positive and one preserve/unsupported fixture before broadening coverage.
 - For each unresolved failing case, retry deterministic AST/JSSG fixes up to 3 times. After that, allow a narrow AI fallback only for the isolated unresolved subset; if that still does not stabilize, document it as manual follow-up instead of broadening regex/string heuristics.
 
 ## Runtime flow (default)

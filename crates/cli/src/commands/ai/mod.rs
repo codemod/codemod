@@ -1,7 +1,9 @@
 use crate::commands::harness_adapter::{
-    install_restart_hint, mcs_install_requires_force, persist_managed_install_state,
-    read_managed_install_state, resolve_adapter, resolve_install_scope,
-    runtime_paths_for_execution, skill_discovery_guide_paths,
+    core_skill_path_for_harness, install_restart_hint, mcp_config_path_for_harness,
+    mcs_install_requires_force, persist_managed_install_state, read_codex_mcp_server_from_path,
+    read_managed_install_state, resolve_adapter, resolve_install_scope, runtime_paths_for_execution,
+    runtime_working_directory,
+    skill_discovery_guide_paths,
     upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
     upsert_skill_discovery_guides_with_command_status, Harness, HarnessAdapterError,
     InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
@@ -15,10 +17,13 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use codemod_telemetry::send_event::BaseEvent;
 use inquire::Select;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::time::Duration;
+use tokio::process::Command as TokioCommand;
 
 mod update;
 
@@ -51,6 +56,8 @@ enum AiAction {
     Update(UpdateCommand),
     /// List installed codemod skills for a harness
     List(ListCommand),
+    /// Verify that Codemod AI and MCP are actually visible and usable for the chosen harness/scope
+    Doctor(DoctorCommand),
 }
 
 #[derive(Args, Debug)]
@@ -152,6 +159,58 @@ struct ListCommand {
     format: OutputFormat,
 }
 
+#[derive(Args, Debug)]
+struct DoctorCommand {
+    /// Target harness adapter
+    #[arg(long, value_enum, default_value_t = Harness::Codex)]
+    harness: Harness,
+    /// Inspect the current repo workspace scope
+    #[arg(long, conflicts_with = "user")]
+    project: bool,
+    /// Inspect the user-level scope
+    #[arg(long, conflicts_with = "project")]
+    user: bool,
+    /// Run an active Codex probe to verify Codemod MCP becomes visible
+    #[arg(long)]
+    probe: bool,
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Logs)]
+    format: OutputFormat,
+}
+
+#[derive(Serialize)]
+struct DoctorOutput {
+    ok: bool,
+    harness: String,
+    scope: String,
+    skill_path: String,
+    skill_exists: bool,
+    mcp_config_path: Option<String>,
+    mcp_config_exists: bool,
+    mcp_entry_present: bool,
+    configured_command: Option<String>,
+    configured_args: Vec<String>,
+    verification_checks: Vec<DoctorVerificationCheckOutput>,
+    probe: Option<DoctorProbeOutput>,
+    warnings: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DoctorVerificationCheckOutput {
+    skill: String,
+    scope: Option<String>,
+    status: String,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DoctorProbeOutput {
+    status: String,
+    command: Vec<String>,
+    output_tail: String,
+}
+
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     match &args.action {
         None => {
@@ -203,7 +262,273 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .await;
             Ok(())
         }
+        Some(AiAction::Doctor(command)) => handle_doctor_action(command, &telemetry).await,
     }
+}
+
+async fn handle_doctor_action(
+    command: &DoctorCommand,
+    telemetry: &TelemetrySenderMutex,
+) -> Result<()> {
+    let scope = resolve_install_scope(command.project, command.user).unwrap_or_else(|error| {
+        exit_adapter_error(error, command.format);
+    });
+    let runtime_paths = runtime_paths_for_execution(None, None).unwrap_or_else(|error| {
+        exit_adapter_error(error, command.format);
+    });
+    let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
+        exit_adapter_error(error, command.format);
+    });
+
+    let skill_path =
+        core_skill_path_for_harness(resolved_adapter.harness, scope, &runtime_paths).unwrap_or_else(
+            |error| {
+                exit_adapter_error(error, command.format);
+            },
+        );
+    let skill_exists = skill_path.is_file();
+
+    let verification_checks = resolved_adapter
+        .adapter
+        .verify_skills()
+        .unwrap_or_else(|error| {
+            exit_adapter_error(error, command.format);
+        })
+        .into_iter()
+        .map(|check| DoctorVerificationCheckOutput {
+            skill: check.skill,
+            scope: check.scope.map(|scope| scope.as_str().to_string()),
+            status: match check.status {
+                VerificationStatus::Pass => "pass".to_string(),
+                VerificationStatus::Fail => "fail".to_string(),
+            },
+            reason: check.reason,
+        })
+        .collect::<Vec<_>>();
+
+    let harness_supports_mcp = !matches!(resolved_adapter.harness, Harness::Antigravity | Harness::Auto);
+
+    let mcp_config_path = if harness_supports_mcp {
+        Some(
+            mcp_config_path_for_harness(resolved_adapter.harness, scope, &runtime_paths)
+                .unwrap_or_else(|error| exit_adapter_error(error, command.format)),
+        )
+    } else {
+        None
+    };
+    let mcp_config_exists = mcp_config_path.as_ref().is_some_and(|path| path.is_file());
+    let (mcp_entry_present, configured_command, configured_args) = if resolved_adapter.harness
+        == Harness::Codex
+    {
+        if let Some(path) = &mcp_config_path {
+            match read_codex_mcp_server_from_path(path) {
+                Ok(Some((command, args))) => (true, Some(command), args),
+                Ok(None) => (false, None, Vec::new()),
+                Err(error) => {
+                    return Err(anyhow::Error::msg(error.to_string()));
+                }
+            }
+        } else {
+            (false, None, Vec::new())
+        }
+    } else {
+        (mcp_config_exists, None, Vec::new())
+    };
+
+    let mut notes = Vec::new();
+    let mut warnings = resolved_adapter.warnings.clone();
+
+    if !skill_exists {
+        warnings.push("Core codemod skill file is missing for the chosen scope.".to_string());
+    }
+    if harness_supports_mcp && !mcp_config_exists {
+        warnings.push("Codemod MCP config file is missing for the chosen scope.".to_string());
+    }
+    if harness_supports_mcp && mcp_config_exists && !mcp_entry_present {
+        warnings.push("Codemod MCP config exists but does not contain a usable `codemod` MCP entry.".to_string());
+    }
+
+    let probe = if command.probe && resolved_adapter.harness == Harness::Codex {
+        Some(run_codex_probe(runtime_working_directory(&runtime_paths)).await)
+    } else if command.probe {
+        warnings.push("`--probe` is currently only supported for `--harness codex`.".to_string());
+        None
+    } else {
+        None
+    };
+
+    if resolved_adapter.harness == Harness::Codex {
+        notes.push(format!(
+            "Before authoring codemods, confirm Codemod MCP becomes visible in Codex for `{}` scope.",
+            scope.as_str()
+        ));
+    }
+
+    let ok = skill_exists
+        && verification_checks.iter().all(|check| check.status == "pass")
+        && (!harness_supports_mcp || (mcp_config_exists && mcp_entry_present))
+        && probe
+            .as_ref()
+            .map(|probe| probe.status == "probe_passed" || probe.status == "codex_unavailable")
+            .unwrap_or(true);
+
+    let output = DoctorOutput {
+        ok,
+        harness: resolved_adapter.harness.as_str().to_string(),
+        scope: scope.as_str().to_string(),
+        skill_path: format_output_path(&skill_path),
+        skill_exists,
+        mcp_config_path: mcp_config_path.as_ref().map(|path| format_output_path(path)),
+        mcp_config_exists,
+        mcp_entry_present,
+        configured_command,
+        configured_args,
+        verification_checks,
+        probe,
+        warnings,
+        notes,
+    };
+
+    match command.format {
+        OutputFormat::Logs | OutputFormat::Table => {
+            println!("Harness: {}", output.harness);
+            println!("Scope: {}", output.scope);
+            println!("Skill path: {}", output.skill_path);
+            println!("Skill present: {}", output.skill_exists);
+            if let Some(path) = &output.mcp_config_path {
+                println!("MCP config: {}", path);
+                println!("MCP config present: {}", output.mcp_config_exists);
+                println!("Codemod MCP entry present: {}", output.mcp_entry_present);
+            }
+            if let Some(command) = &output.configured_command {
+                let mut parts = vec![command.clone()];
+                parts.extend(output.configured_args.iter().cloned());
+                println!("Configured MCP command: {}", parts.join(" "));
+            }
+            if !output.verification_checks.is_empty() {
+                println!("Verification checks:");
+                for check in &output.verification_checks {
+                    let scope = check.scope.as_deref().unwrap_or("unknown");
+                    println!("  - {} [{}]: {}", check.skill, scope, check.status);
+                    if let Some(reason) = &check.reason {
+                        println!("    {}", reason);
+                    }
+                }
+            }
+            if let Some(probe) = &output.probe {
+                println!("Probe status: {}", probe.status);
+                println!("Probe command: {}", probe.command.join(" "));
+                if !probe.output_tail.is_empty() {
+                    println!("Probe output tail:\n{}", probe.output_tail);
+                }
+            }
+            if !output.notes.is_empty() {
+                println!("Notes:");
+                for note in &output.notes {
+                    println!("  - {note}");
+                }
+            }
+            if !output.warnings.is_empty() {
+                println!("Warnings:");
+                for warning in &output.warnings {
+                    println!("  - {warning}");
+                }
+            }
+        }
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&output)?),
+        OutputFormat::Yaml => println!("{}", serde_yaml::to_string(&output)?),
+    }
+
+    telemetry
+        .send_event(
+            BaseEvent {
+                kind: "aiDoctorRan".to_string(),
+                properties: HashMap::from([
+                    ("harness".to_string(), output.harness.clone()),
+                    ("scope".to_string(), output.scope.clone()),
+                    ("probeRequested".to_string(), command.probe.to_string()),
+                    ("ok".to_string(), output.ok.to_string()),
+                    ("warningsCount".to_string(), output.warnings.len().to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
+
+    Ok(())
+}
+
+async fn run_codex_probe(probe_dir: &std::path::Path) -> DoctorProbeOutput {
+    if std::process::Command::new("codex")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return DoctorProbeOutput {
+            status: "codex_unavailable".to_string(),
+            command: vec!["codex".to_string()],
+            output_tail: String::new(),
+        };
+    }
+
+    let command = vec![
+        "codex".to_string(),
+        "exec".to_string(),
+        "-C".to_string(),
+        probe_dir.display().to_string(),
+        "List the available tools by name only.".to_string(),
+    ];
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        TokioCommand::new("codex")
+            .arg("exec")
+            .arg("-C")
+            .arg(probe_dir)
+            .arg("List the available tools by name only.")
+            .output(),
+    )
+    .await;
+
+    match output {
+        Ok(Ok(output)) => {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let ready = combined.contains("mcp: codemod ready")
+                || combined.contains("mcp startup: ready: codemod");
+            DoctorProbeOutput {
+                status: if ready {
+                    "probe_passed".to_string()
+                } else {
+                    "probe_failed".to_string()
+                },
+                command,
+                output_tail: tail_text(&combined, 60),
+            }
+        }
+        Ok(Err(error)) => DoctorProbeOutput {
+            status: "probe_failed".to_string(),
+            command,
+            output_tail: error.to_string(),
+        },
+        Err(_) => DoctorProbeOutput {
+            status: "probe_failed".to_string(),
+            command,
+            output_tail: "Timed out after 30s".to_string(),
+        },
+    }
+}
+
+fn tail_text(value: &str, max_lines: usize) -> String {
+    let mut lines = value.lines().collect::<Vec<_>>();
+    if lines.len() > max_lines {
+        lines = lines.split_off(lines.len() - max_lines);
+    }
+    lines.join("\n")
 }
 
 async fn handle_install_like_action(
@@ -331,6 +656,15 @@ async fn handle_install_like_action(
         auto_safe_apply.result.as_ref(),
     ) {
         messages.push(policy_runtime_message);
+    }
+    if resolved_adapter.harness == Harness::Codex {
+        let scope_flag = match install_inputs.scope {
+            InstallScope::Project => "--project",
+            InstallScope::User => "--user",
+        };
+        messages.push(format!(
+            "Before authoring codemods, run `codemod ai doctor --harness codex {scope_flag} --probe` and confirm Codemod MCP is visible."
+        ));
     }
 
     let restart_hint = if command.update {
