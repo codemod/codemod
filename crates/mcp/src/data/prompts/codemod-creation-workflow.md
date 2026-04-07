@@ -30,6 +30,7 @@ Use this file only for the extra agent guidance that public docs should not carr
 - Keep JSSG/ast-grep as the primary transformation engine; use shell/native steps only when the user asked for them or no viable AST-safe path exists.
 - If official migration steps require deterministic dependency, manifest, or config edits, keep those in scope instead of reducing the codemod to source-only changes.
 - Do not reduce a requested migration codemod to analysis-only output when safe automatable edits exist.
+- Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn versions by default, but do not leave stale package metadata behind after a rename or material package-surface change.
 - Preserve the scaffold-selected package manager in package scripts and package-local README/development commands. Do not rewrite `yarn`/`pnpm`/`bun` packages to another runner unless the user explicitly asked.
 - After a registry miss, use `scaffold_codemod_package` immediately.
 - Use `validate_codemod_package` before stopping.

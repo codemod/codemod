@@ -21,6 +21,7 @@ Non-negotiable constraints:
 - For codemod authoring, inspect only a small representative slice of the repo after or alongside registry discovery, then scaffold and iterate.
 - For codemod authoring, stay AST-first, define fixtures before deep implementation, keep work inside the requested scope, and do not stop until workflow validation, package validation, and the package default tests are green.
 - For codemod authoring, if symbol origin matters, use semantic analysis and binding-aware checks.
+- For codemod authoring, before stopping, re-check the whole package surface: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths or ids. Update all affected files together instead of leaving stale metadata or docs behind.
 - For codemod authoring, preserve the scaffold-selected package manager in package scripts and package-local README/development commands instead of rewriting them to another runner.
 - For codemod authoring/evaluation, do not create commits or push branches unless the user explicitly requested git operations.
 - For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.
