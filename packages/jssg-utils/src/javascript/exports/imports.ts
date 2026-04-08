@@ -801,6 +801,40 @@ export const getImport = <T extends Language>(
 };
 
 /**
+ * Like `getImport`, but returns ALL matching imports instead of just the first.
+ *
+ * Useful when the same specifier is imported multiple times - e.g. once via ESM
+ * and once via CJS in a mixed codebase, or when scanning for every aliased
+ * re-export. Namespace imports are only returned when no typed matches exist,
+ * mirroring the fallback behaviour of `getImport`, but unlike `getImport` all
+ * namespace imports are returned rather than just the first.
+ *
+ * @template T extends Language
+ * @param program - The program node to search within.
+ * @param options - Import lookup options. Use `{ type: "default", from }` for default/var forms, or `{ type: "named", name, from }` for a specific named specifier.
+ * @returns An array of resolved imports (may be empty).
+ */
+export const getAllImports = <T extends Language>(
+  program: SgNode<T, "program">,
+  options: GetImportOptions,
+): ResolvedImport<T>[] => {
+  const matches = findRawImportMatches(program, options.from);
+  if (matches.length === 0) return [];
+
+  const results = matches.reduce<ResolvedImport<T>[]>((acc, match) => {
+    const result = matchToImportResult<T>(match, options);
+    if (result) acc.push(result);
+    return acc;
+  }, []);
+
+  if (results.length === 0) {
+    return matchToNamespaceImports<T>(matches);
+  }
+
+  return results;
+};
+
+/**
  * Add an import to the program. Smart behavior:
  * - Skip if the import already exists
  * - Merge into existing import statement for named imports
