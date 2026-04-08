@@ -130,6 +130,66 @@ function testNamespaceImportModuleType() {
   assert(res!.moduleType === "esm", "moduleType should be esm for namespace import");
 }
 
+function testSingleNamespaceImport_StillWorks() {
+  // Baseline: getImport with a single namespace import is unaffected
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "ns", "Alias should be ns");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testMultipleNamespaceImports_ReturnsFirstOnly() {
+  // Key behavioural difference: getImport preserves its single-result contract
+  // and returns only the first namespace import even when multiple exist
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "nsA", "Should return only the first namespace import in source order");
+}
+
+function testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly() {
+  // Named query also falls back to namespace — getImport returns only the first
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getImport(program, { type: "named", name: "anything", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "nsA", "Should return only the first namespace import");
+}
+
+function testNamespaceNotReturnedAlongsideTypedResults() {
+  // When a real typed match exists, namespace fallback must not appear in getImport
+  const program = parseProgram(
+    "javascript",
+    [
+      "import foo from 'mod';",
+      "import * as nsA from 'mod';",
+      "import * as nsB from 'mod';",
+      "console.log(foo, nsA, nsB);",
+    ].join("\n"),
+  );
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.alias === "foo", "Should be the default import, not a namespace");
+  assert(res!.isNamespace === false, "Should not be a namespace result");
+}
+
 // ============================================================================
 // addImport tests
 // ============================================================================
@@ -322,6 +382,65 @@ function testRemoveDefaultCJS() {
   assert(!result.includes("require"), "Should remove require statement");
 }
 
+function testRemoveDefault_SingleDeclarator_StillWorks() {
+  // Baseline: normal single-declarator CJS removal is unaffected by the guard
+  const program = parseProgram("javascript", "const foo = require('mod');\nconsole.log(foo);\n");
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit for a normal single-declarator require");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should remove the require statement");
+  assert(result.includes("console.log"), "Should keep unrelated code");
+}
+
+function testRemoveDefault_MultiDeclarator_ReturnsNull() {
+  // Core safety behaviour: `const foo = require('mod'), x = 1` must NOT be
+  // removed - removeImport should return null rather than delete `x`
+  const program = parseProgram(
+    "javascript",
+    "const foo = require('mod'), x = 1;\nconsole.log(foo, x);\n",
+  );
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(
+    edit === null,
+    "Should return null for multi-declarator CJS — removing the whole statement would delete unrelated bindings",
+  );
+}
+
+function testRemoveDefault_MultiDeclarator_SourceCodeUnchanged() {
+  // Companion to the above: verify that when null is returned, no code is modified
+  const src = "const foo = require('mod'), x = 1;\nconsole.log(foo, x);\n";
+  const program = parseProgram("javascript", src);
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit === null, "edit should be null");
+  // No commitEdits call - source is untouched by definition when edit is null
+  assert(program.text() === src, "Program source should be unchanged");
+}
+
+function testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected() {
+  // A multi-declarator declaration for one module must not interfere with
+  // normal single-declarator removal of a different module in the same file
+  const program = parseProgram(
+    "javascript",
+    [
+      "const foo = require('mod'), x = 1;",
+      "const bar = require('other');",
+      "console.log(foo, x, bar);",
+    ].join("\n"),
+  );
+
+  const editMod = removeImport(program, { type: "default", from: "mod" });
+  assert(editMod === null, "Multi-declarator mod should still be null");
+
+  const editOther = removeImport(program, { type: "default", from: "other" });
+  assert(editOther !== null, "Single-declarator other should produce an edit");
+  const result = program.commitEdits([editOther!]);
+  assert(!result.includes("require('other')"), "Should remove the single-declarator require");
+  assert(result.includes("require('mod')"), "Should leave the multi-declarator require intact");
+}
+
 function run() {
   // getImport tests
   testReturnsNullWhenNoMatches();
@@ -334,6 +453,10 @@ function run() {
   testDestructuredRequireModuleType();
   testDestructuredDynamicImportModuleType();
   testNamespaceImportModuleType();
+  testSingleNamespaceImport_StillWorks();
+  testMultipleNamespaceImports_ReturnsFirstOnly();
+  testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly();
+  testNamespaceNotReturnedAlongsideTypedResults();
 
   // addImport tests
   testAddDefaultImportESM();
@@ -353,6 +476,10 @@ function run() {
   testRemoveNamedImportLast();
   testRemoveImportNotFound();
   testRemoveDefaultCJS();
+  testRemoveDefault_SingleDeclarator_StillWorks();
+  testRemoveDefault_MultiDeclarator_ReturnsNull();
+  testRemoveDefault_MultiDeclarator_SourceCodeUnchanged();
+  testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected();
 
   console.log("imports.test.ts: all assertions passed");
 }

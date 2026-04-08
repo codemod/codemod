@@ -1,7 +1,7 @@
 import type JS from "@codemod.com/jssg-types/langs/javascript";
 import type TSX from "@codemod.com/jssg-types/langs/tsx";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
-import type { SgNode } from "@codemod.com/jssg-types/main";
+import type { Rule, SgNode } from "@codemod.com/jssg-types/main";
 import { stringToExactRegexString } from "../../utils";
 
 type GetImportOptions =
@@ -23,6 +23,41 @@ type GetImportResult<T extends Language> = {
 } | null;
 
 type Language = JS | TS | TSX;
+
+type ResolvedImport<T extends Language> = NonNullable<GetImportResult<T>>;
+
+// ============================================================================
+// Import Manipulation Types
+// ============================================================================
+
+type ImportSpecifier = { name: string; alias?: string };
+
+type AddImportOptions =
+  | { type: "default"; name: string; from: string; moduleType?: "esm" | "cjs" }
+  | { type: "namespace"; name: string; from: string }
+  | {
+      type: "named";
+      specifiers: ImportSpecifier[];
+      from: string;
+      moduleType?: "esm" | "cjs";
+    };
+
+type RemoveImportOptions =
+  | { type: "default"; from: string }
+  | { type: "namespace"; from: string }
+  | { type: "named"; specifiers: string[]; from: string };
+
+interface Edit {
+  startPos: number;
+  endPos: number;
+  insertedText: string;
+}
+
+const CJS_OR_DYNAMIC_VALUE_UTIL_RULE = "is-cjs-or-dynamic-value" as const;
+
+// ============================================================================
+// Utils
+// ============================================================================
 
 /**
  * Determines whether an import match is ESM or CJS based on the AST node type.
@@ -70,406 +105,188 @@ function getModuleType<T extends Language>(match: SgNode<T>): "esm" | "cjs" {
 }
 
 /**
- * Locate an import of a given module in a JS/TS program and return its alias/identifier node.
- *
- * The search supports multiple import styles for a specific source (options.from):
- * - Default ESM import: `import foo from "module"`
- * - Named ESM import: `import { bar as baz } from "module"`
- * - Bare ESM import: `import "module"`
- * - CommonJS: `const foo = require("module")` or `const { bar: baz } = require("module")`
- * - Dynamic import: `const foo = await import("module")`
- *
- * When options.type is "default", the function returns the identifier for the default import name
- * or the variable name bound from require/import calls. When options.type is "named", it returns
- * the identifier for the requested named specifier (using the alias if present).
- *
- * The returned object contains the resolved alias (the name to use at call sites), whether it was a
- * namespace import, and the underlying identifier node.
- *
- * @template T extends Language
- * @param program - The program node to search within.
- * @param options - Import lookup options. Use `{ type: "default", from }` for default/var forms, or `{ type: "named", name, from }` for a specific named specifier.
- * @returns The resolved import information or null if not found.
+ * Run the full import-pattern query for a given source and return all raw AST matches.
  */
-export const getImport = <T extends Language>(
+function findRawImportMatches<T extends Language>(
   program: SgNode<T, "program">,
-  options: GetImportOptions,
-): GetImportResult<T> => {
+  from: string,
+): SgNode<TS>[] {
   const tsProgram = program as unknown as SgNode<TS, "program">;
-
-  const imports = tsProgram.findAll({
-    rule: {
-      any: [
-        {
+  const cjsOrDynamicValue = {
+    any: [
+      {
+        all: [
+          { kind: "call_expression" },
+          { has: { field: "function", regex: "^(require|import)$" } },
+          {
+            has: {
+              field: "arguments",
+              has: { kind: "string", pattern: "$SOURCE" },
+            },
+          },
+        ],
+      },
+      {
+        kind: "await_expression",
+        has: {
           all: [
-            {
-              kind: "import_specifier",
-            },
-            {
-              has: {
-                field: "alias",
-                pattern: "$ALIAS",
-              },
-            },
+            { kind: "call_expression" },
+            { has: { field: "function", regex: "^(require|import)$" } },
             {
               has: {
-                field: "name",
-                pattern: "$ORIGINAL",
-              },
-            },
-            {
-              inside: {
-                stopBy: "end",
-                kind: "import_statement",
-                has: {
-                  field: "source",
-                  pattern: "$SOURCE",
-                },
+                field: "arguments",
+                has: { kind: "string", pattern: "$SOURCE" },
               },
             },
           ],
         },
+      },
+    ],
+  } satisfies Rule<Language>;
+
+  return tsProgram.findAll({
+    utils: {
+      [CJS_OR_DYNAMIC_VALUE_UTIL_RULE]: cjsOrDynamicValue,
+    },
+    rule: {
+      any: [
+        // - ESM: named with alias: import { foo as bar } from "mod"
         {
           all: [
+            { kind: "import_specifier" },
+            { has: { field: "alias", pattern: "$ALIAS" } },
+            { has: { field: "name", pattern: "$ORIGINAL" } },
             {
-              kind: "import_statement",
+              inside: {
+                stopBy: "end",
+                kind: "import_statement",
+                has: { field: "source", pattern: "$SOURCE" },
+              },
             },
+          ],
+        },
+        // - ESM: default import: import foo from "mod"
+        {
+          all: [
+            { kind: "import_statement" },
             {
               has: {
                 kind: "import_clause",
-                has: {
-                  kind: "identifier",
-                  pattern: "$DEFAULT_NAME",
-                },
+                has: { kind: "identifier", pattern: "$DEFAULT_NAME" },
               },
             },
-            {
-              has: {
-                field: "source",
-                pattern: "$SOURCE",
-              },
-            },
+            { has: { field: "source", pattern: "$SOURCE" } },
           ],
         },
+        // - ESM: named without alias: import { foo } from "mod"
         {
           all: [
-            {
-              kind: "import_specifier",
-            },
-            {
-              has: {
-                field: "name",
-                pattern: "$ORIGINAL",
-              },
-            },
+            { kind: "import_specifier" },
+            { has: { field: "name", pattern: "$ORIGINAL" } },
             {
               inside: {
                 stopBy: "end",
                 kind: "import_statement",
-                has: {
-                  field: "source",
-                  pattern: "$SOURCE",
-                },
+                has: { field: "source", pattern: "$SOURCE" },
               },
             },
           ],
         },
+        // - CJS/dynamic: const foo = require("mod") / import("mod")
         {
           all: [
-            {
-              kind: "variable_declarator",
-            },
-            {
-              has: {
-                field: "name",
-                kind: "identifier",
-                pattern: "$VAR_NAME",
-              },
-            },
+            { kind: "variable_declarator" },
+            { has: { field: "name", kind: "identifier", pattern: "$VAR_NAME" } },
             {
               has: {
                 field: "value",
-                any: [
-                  {
-                    all: [
-                      {
-                        kind: "call_expression",
-                      },
-                      {
-                        has: {
-                          field: "function",
-                          regex: "^(require|import)$",
-                        },
-                      },
-                      {
-                        has: {
-                          field: "arguments",
-                          has: {
-                            kind: "string",
-                            pattern: "$SOURCE",
-                          },
-                        },
-                      },
-                    ],
-                  },
-                  {
-                    kind: "await_expression",
-                    has: {
-                      all: [
-                        {
-                          kind: "call_expression",
-                        },
-                        {
-                          has: {
-                            field: "function",
-                            regex: "^(require|import)$",
-                          },
-                        },
-                        {
-                          has: {
-                            field: "arguments",
-                            has: {
-                              kind: "string",
-                              pattern: "$SOURCE",
-                            },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                ],
+                matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
               },
             },
           ],
         },
+        // - CJS: const { foo } = require("mod")
         {
           all: [
-            {
-              kind: "shorthand_property_identifier_pattern",
-            },
-            {
-              pattern: "$ORIGINAL",
-            },
+            { kind: "shorthand_property_identifier_pattern" },
+            { pattern: "$ORIGINAL" },
             {
               inside: {
                 kind: "object_pattern",
                 inside: {
+                  stopBy: "end",
                   kind: "variable_declarator",
                   has: {
                     field: "value",
-                    any: [
-                      {
-                        all: [
-                          {
-                            kind: "call_expression",
-                          },
-                          {
-                            has: {
-                              field: "function",
-                              regex: "^(require|import)$",
-                            },
-                          },
-                          {
-                            has: {
-                              field: "arguments",
-                              has: {
-                                kind: "string",
-                                pattern: "$SOURCE",
-                              },
-                            },
-                          },
-                        ],
-                      },
-                      {
-                        kind: "await_expression",
-                        has: {
-                          all: [
-                            {
-                              kind: "call_expression",
-                            },
-                            {
-                              has: {
-                                field: "function",
-                                regex: "^(require|import)$",
-                              },
-                            },
-                            {
-                              has: {
-                                field: "arguments",
-                                has: {
-                                  kind: "string",
-                                  pattern: "$SOURCE",
-                                },
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
+                    matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
                   },
-                  stopBy: "end",
                 },
               },
             },
           ],
         },
+        // - CJS: const { foo: bar } = require("mod")
         {
           all: [
-            {
-              kind: "pair_pattern",
-            },
-            {
-              has: {
-                field: "key",
-                kind: "property_identifier",
-                pattern: "$ORIGINAL",
-              },
-            },
-            {
-              has: {
-                field: "value",
-                kind: "identifier",
-                pattern: "$ALIAS",
-              },
-            },
+            { kind: "pair_pattern" },
+            { has: { field: "key", kind: "property_identifier", pattern: "$ORIGINAL" } },
+            { has: { field: "value", kind: "identifier", pattern: "$ALIAS" } },
             {
               inside: {
-                kind: "object_pattern",
-                inside: {
-                  kind: "variable_declarator",
-                  has: {
-                    field: "value",
-                    any: [
-                      {
-                        all: [
-                          {
-                            kind: "call_expression",
-                          },
-                          {
-                            has: {
-                              field: "function",
-                              regex: "^(require|import)$",
-                            },
-                          },
-                          {
-                            has: {
-                              field: "arguments",
-                              has: {
-                                kind: "string",
-                                pattern: "$SOURCE",
-                              },
-                            },
-                          },
-                        ],
-                      },
-                      {
-                        kind: "await_expression",
-                        has: {
-                          all: [
-                            {
-                              kind: "call_expression",
-                            },
-                            {
-                              has: {
-                                field: "function",
-                                regex: "^(require|import)$",
-                              },
-                            },
-                            {
-                              has: {
-                                field: "arguments",
-                                has: {
-                                  kind: "string",
-                                  pattern: "$SOURCE",
-                                },
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                  stopBy: "end",
-                },
                 stopBy: "end",
+                kind: "object_pattern",
+                inside: {
+                  stopBy: "end",
+                  kind: "variable_declarator",
+                  has: {
+                    field: "value",
+                    matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
+                  },
+                },
               },
             },
           ],
         },
+        // - Bare require/import (no binding): require("mod")
         {
           all: [
-            {
-              kind: "string",
-            },
-            {
-              pattern: "$SOURCE",
-            },
+            { kind: "string" },
+            { pattern: "$SOURCE" },
             {
               inside: {
+                stopBy: "end",
                 kind: "arguments",
                 inside: {
                   kind: "call_expression",
-                  has: {
-                    field: "function",
-                    regex: "^(require|import)$",
-                  },
-                },
-                stopBy: "end",
-              },
-            },
-            {
-              not: {
-                inside: {
-                  kind: "lexical_declaration",
-                  stopBy: "end",
+                  has: { field: "function", regex: "^(require|import)$" },
                 },
               },
             },
+            { not: { inside: { stopBy: "end", kind: "lexical_declaration" } } },
           ],
         },
+        // - ESM namespace: import * as foo from "mod"
         {
           all: [
-            {
-              kind: "import_statement",
-            },
+            { kind: "import_statement" },
             {
               has: {
                 kind: "import_clause",
                 has: {
                   kind: "namespace_import",
-                  has: {
-                    kind: "identifier",
-                    pattern: "$NAMESPACE_ALIAS",
-                  },
+                  has: { kind: "identifier", pattern: "$NAMESPACE_ALIAS" },
                 },
               },
             },
-            {
-              has: {
-                field: "source",
-                pattern: "$SOURCE",
-              },
-            },
+            { has: { field: "source", pattern: "$SOURCE" } },
           ],
         },
+        // - ESM bare: import "mod"
         {
           all: [
-            {
-              kind: "import_statement",
-            },
-            {
-              not: {
-                has: {
-                  kind: "import_clause",
-                },
-              },
-            },
-            {
-              has: {
-                field: "source",
-                pattern: "$SOURCE",
-              },
-            },
+            { kind: "import_statement" },
+            { not: { has: { kind: "import_clause" } } },
+            { has: { field: "source", pattern: "$SOURCE" } },
           ],
         },
       ],
@@ -477,106 +294,90 @@ export const getImport = <T extends Language>(
     constraints: {
       SOURCE: {
         any: [
-          {
-            regex: stringToExactRegexString(options.from),
-          },
+          { regex: stringToExactRegexString(from) },
           {
             has: {
               kind: "string_fragment",
-              regex: stringToExactRegexString(options.from),
+              regex: stringToExactRegexString(from),
             },
           },
         ],
       },
     },
   });
+}
 
-  if (imports.length === 0) {
-    return null;
-  }
-
+/**
+ * Attempt to interpret a single raw AST match against the requested import type.
+ * Returns a resolved import if the match is relevant to `options`, null otherwise.
+ *
+ * Namespace imports are NOT handled here - use `matchToNamespaceImport(s)()` for those.
+ */
+function matchToImportResult<T extends Language>(
+  match: SgNode<TS>,
+  options: GetImportOptions,
+): ResolvedImport<T> | null {
   if (options.type === "default") {
-    const foundMatch = imports.find((m) => {
-      return !!(m.getMatch("DEFAULT_NAME") ?? m.getMatch("VAR_NAME"));
-    });
-    if (foundMatch) {
-      const defaultName = foundMatch.getMatch("DEFAULT_NAME");
-      const varName = foundMatch.getMatch("VAR_NAME");
-      const name = defaultName?.text() ?? varName?.text() ?? "";
-      return {
-        alias: name,
-        isNamespace: false,
-        moduleType: getModuleType(foundMatch),
-        node: (defaultName ?? varName)! as unknown as SgNode<T, "identifier">,
-      };
-    }
+    const nameNode = match.getMatch("DEFAULT_NAME") ?? match.getMatch("VAR_NAME");
+    if (!nameNode) return null;
+    return {
+      alias: nameNode.text(),
+      isNamespace: false,
+      moduleType: getModuleType(match),
+      node: nameNode as unknown as SgNode<T, "identifier">,
+    };
   }
 
   if (options.type === "named") {
-    const foundMatch = imports.find((m) => {
-      return m.getMatch("ORIGINAL")?.text() === options.name;
-    });
-
-    if (foundMatch) {
-      const original = foundMatch.getMatch("ORIGINAL");
-      const alias = foundMatch.getMatch("ALIAS");
-      return {
-        alias: alias?.text() ?? original?.text() ?? "",
-        isNamespace: false,
-        moduleType: getModuleType(foundMatch),
-        node: (alias ?? original)! as unknown as SgNode<T, "identifier">,
-      };
-    }
-  }
-
-  const namespaceImport = imports.find((m) => {
-    return m.getMatch("NAMESPACE_ALIAS");
-  });
-  if (namespaceImport) {
+    const original = match.getMatch("ORIGINAL");
+    if (original?.text() !== options.name) return null;
+    const alias = match.getMatch("ALIAS");
     return {
-      alias: namespaceImport.getMatch("NAMESPACE_ALIAS")?.text() ?? "",
-      isNamespace: true,
-      moduleType: "esm" as const, // Namespace imports are always ESM
-      node: namespaceImport.getMatch("NAMESPACE_ALIAS")! as unknown as SgNode<T, "identifier">,
+      alias: alias?.text() ?? original?.text() ?? "",
+      isNamespace: false,
+      moduleType: getModuleType(match),
+      node: (alias ?? original)! as unknown as SgNode<T, "identifier">,
     };
   }
 
   return null;
-};
-
-// ============================================================================
-// Import Manipulation Types
-// ============================================================================
-
-type ImportSpecifier = { name: string; alias?: string };
-
-type AddImportOptions =
-  | { type: "default"; name: string; from: string; moduleType?: "esm" | "cjs" }
-  | { type: "namespace"; name: string; from: string }
-  | {
-      type: "named";
-      specifiers: ImportSpecifier[];
-      from: string;
-      moduleType?: "esm" | "cjs";
-    };
-
-type RemoveImportOptions =
-  | { type: "default"; from: string }
-  | { type: "namespace"; from: string }
-  | { type: "named"; specifiers: string[]; from: string };
-
-interface Edit {
-  startPos: number;
-  endPos: number;
-  insertedText: string;
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
+/**
+ * Extract ALL namespace import results from a list of raw matches.
+ */
+function matchToNamespaceImports<T extends Language>(matches: SgNode<TS>[]): ResolvedImport<T>[] {
+  return matches
+    .filter((m) => m.getMatch("NAMESPACE_ALIAS"))
+    .map((m) => {
+      const aliasNode = m.getMatch("NAMESPACE_ALIAS")!;
+      return {
+        alias: aliasNode.text(),
+        isNamespace: true,
+        moduleType: "esm" as const, // Namespace imports are always ESM
+        node: aliasNode as unknown as SgNode<T, "identifier">,
+      };
+    });
+}
+
+/**
+ * Extract the first namespace import result from a list of raw matches, if one exists.
+ */
+function matchToNamespaceImport<T extends Language>(
+  matches: SgNode<TS>[],
+): ResolvedImport<T> | null {
+  return matchToNamespaceImports<T>(matches)[0] ?? null;
+}
 
 /**
  * Find all import statements and require declarations in the program.
+ * Single source of truth for locating import-level AST nodes — used by both
+ * addImport (insertion point) and removeImport (statement lookup).
+ *
+ * Only single-declarator CJS declarations are included. Multi-declarator
+ * declarations (e.g. `const foo = require('mod'), x = 1`) are excluded to
+ * prevent removeImport from accidentally deleting unrelated bindings when it
+ * removes the whole statement. Such declarations return null from removeImport.
  */
 function findAllImportStatements<T extends Language>(program: SgNode<T, "program">): SgNode<T>[] {
   const tsProgram = program as unknown as SgNode<TS, "program">;
@@ -587,6 +388,9 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
   });
 
   // Find CJS require declarations (const x = require(...))
+  // Restricted to single-declarator declarations only - if a second variable_declarator
+  // exists in the same declaration, we skip it entirely rather than risk removing
+  // unrelated bindings during whole-statement removal.
   const cjsImports = tsProgram.findAll({
     rule: {
       kind: "lexical_declaration",
@@ -614,6 +418,13 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
               },
             },
           ],
+        },
+      },
+      // Guard: skip declarations with more than one declarator
+      not: {
+        has: {
+          kind: "variable_declarator",
+          nthChild: 2,
         },
       },
     },
@@ -713,129 +524,6 @@ function generateCjsRequire(options: AddImportOptions): string {
     .join(", ");
   return `const { ${specifierStr} } = require('${source}');\n`;
 }
-
-// ============================================================================
-// addImport
-// ============================================================================
-
-/**
- * Add an import to the program. Smart behavior:
- * - Skip if the import already exists
- * - Merge into existing import statement for named imports
- * - Create new import statement otherwise
- *
- * @returns Edit to apply, or null if import already exists
- */
-export function addImport<T extends Language>(
-  program: SgNode<T, "program">,
-  options: AddImportOptions,
-): Edit | null {
-  const moduleType = options.type === "namespace" ? "esm" : (options.moduleType ?? "esm");
-
-  // Check if import already exists
-  if (options.type === "default") {
-    const existing = getImport(program, { type: "default", from: options.from });
-    if (existing && !existing.isNamespace) {
-      return null; // Already has default import
-    }
-  } else if (options.type === "namespace") {
-    const existing = getImport(program, { type: "default", from: options.from });
-    if (existing && existing.isNamespace) {
-      return null; // Already has namespace import
-    }
-  } else if (options.type === "named") {
-    // Filter out specifiers that already exist
-    const newSpecifiers: ImportSpecifier[] = [];
-    for (const spec of options.specifiers) {
-      const existing = getImport(program, {
-        type: "named",
-        name: spec.name,
-        from: options.from,
-      });
-      if (!existing) {
-        newSpecifiers.push(spec);
-      }
-    }
-
-    if (newSpecifiers.length === 0) {
-      return null; // All specifiers already exist
-    }
-
-    // For ESM named imports, try to merge into existing import
-    if (moduleType === "esm") {
-      const existingImport = findExistingEsmImport(program, options.from);
-      if (existingImport) {
-        const namedImports = findNamedImports(existingImport);
-        if (namedImports) {
-          // Add to existing named_imports: insert before the closing brace
-          const namedImportsText = namedImports.text();
-          const closingBraceIdx = namedImportsText.lastIndexOf("}");
-          if (closingBraceIdx > 0) {
-            const insertPos = namedImports.range().start.index + closingBraceIdx;
-            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
-            // Check if there are existing specifiers (need comma)
-            const hasExistingSpecifiers =
-              namedImportsText.slice(1, closingBraceIdx).trim().length > 0;
-            const insertText = hasExistingSpecifiers ? `, ${specifierStr}` : ` ${specifierStr} `;
-
-            return {
-              startPos: insertPos,
-              endPos: insertPos,
-              insertedText: insertText,
-            };
-          }
-        } else {
-          // Import exists but has no named_imports (e.g., default import only)
-          // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
-          const importClause = (existingImport as unknown as SgNode<TS>).find({
-            rule: { kind: "import_clause" },
-          });
-          if (importClause) {
-            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
-            const insertPos = importClause.range().end.index;
-            return {
-              startPos: insertPos,
-              endPos: insertPos,
-              insertedText: `, { ${specifierStr} }`,
-            };
-          }
-        }
-      }
-    }
-
-    // Update options with filtered specifiers for new import creation
-    options = { ...options, specifiers: newSpecifiers };
-  }
-
-  // Find insertion position (after last import, or at file start)
-  const allImports = findAllImportStatements(program);
-  let insertPos = 0;
-  let prefix = "";
-
-  const lastImport = allImports[allImports.length - 1];
-  if (lastImport) {
-    insertPos = lastImport.range().end.index;
-    // Check if there's a newline after the last import
-    const programText = program.text();
-    if (programText[insertPos] !== "\n") {
-      prefix = "\n";
-    }
-  }
-
-  // Generate import text
-  const importText =
-    moduleType === "esm" ? generateEsmImport(options) : generateCjsRequire(options);
-
-  return {
-    startPos: insertPos,
-    endPos: insertPos,
-    insertedText: prefix + importText,
-  };
-}
-
-// ============================================================================
-// removeImport
-// ============================================================================
 
 /**
  * Find the import statement containing a specific specifier.
@@ -1018,7 +706,7 @@ function countSpecifiersInStatement<T extends Language>(statement: SgNode<T>): n
 }
 
 /**
- * Find the full range of a statement including leading/trailing whitespace.
+ * Find the full range of a statement including trailing newline.
  */
 function getStatementRangeWithNewline<T extends Language>(
   statement: SgNode<T>,
@@ -1071,11 +759,171 @@ function getSpecifierRangeWithSeparator<T extends Language>(
   return { start, end };
 }
 
+// ============================================================================
+// Public API
+// ============================================================================
+
+/**
+ * Locate an import of a given module in a JS/TS program and return its alias/identifier node.
+ *
+ * The search supports multiple import styles for a specific source (options.from):
+ * - Default ESM import: `import foo from "module"`
+ * - Named ESM import: `import { bar as baz } from "module"`
+ * - Bare ESM import: `import "module"`
+ * - CommonJS: `const foo = require("module")` or `const { bar: baz } = require("module")`
+ * - Dynamic import: `const foo = await import("module")`
+ *
+ * When options.type is "default", the function returns the identifier for the default import name
+ * or the variable name bound from require/import calls. When options.type is "named", it returns
+ * the identifier for the requested named specifier (using the alias if present).
+ *
+ * The returned object contains the resolved alias (the name to use at call sites), whether it was a
+ * namespace import, and the underlying identifier node.
+ *
+ * @template T extends Language
+ * @param program - The program node to search within.
+ * @param options - Import lookup options. Use `{ type: "default", from }` for default/var forms, or `{ type: "named", name, from }` for a specific named specifier.
+ * @returns The resolved import information or null if not found.
+ */
+export const getImport = <T extends Language>(
+  program: SgNode<T, "program">,
+  options: GetImportOptions,
+): GetImportResult<T> => {
+  const matches = findRawImportMatches(program, options.from);
+  if (matches.length === 0) return null;
+
+  for (const match of matches) {
+    const result = matchToImportResult<T>(match, options);
+    if (result) return result;
+  }
+
+  return matchToNamespaceImport<T>(matches);
+};
+
+/**
+ * Add an import to the program. Smart behavior:
+ * - Skip if the import already exists
+ * - Merge into existing import statement for named imports
+ * - Create new import statement otherwise
+ *
+ * @returns Edit to apply, or null if import already exists
+ */
+export function addImport<T extends Language>(
+  program: SgNode<T, "program">,
+  options: AddImportOptions,
+): Edit | null {
+  const moduleType = options.type === "namespace" ? "esm" : (options.moduleType ?? "esm");
+
+  // Check if import already exists
+  if (options.type === "default") {
+    const existing = getImport(program, { type: "default", from: options.from });
+    if (existing && !existing.isNamespace) {
+      return null; // Already has default import
+    }
+  } else if (options.type === "namespace") {
+    const existing = getImport(program, { type: "default", from: options.from });
+    if (existing && existing.isNamespace) {
+      return null; // Already has namespace import
+    }
+  } else if (options.type === "named") {
+    // Filter out specifiers that already exist
+    const newSpecifiers: ImportSpecifier[] = [];
+    for (const spec of options.specifiers) {
+      const existing = getImport(program, {
+        type: "named",
+        name: spec.name,
+        from: options.from,
+      });
+      if (!existing) {
+        newSpecifiers.push(spec);
+      }
+    }
+
+    if (newSpecifiers.length === 0) {
+      return null; // All specifiers already exist
+    }
+
+    // For ESM named imports, try to merge into existing import
+    if (moduleType === "esm") {
+      const existingImport = findExistingEsmImport(program, options.from);
+      if (existingImport) {
+        const namedImports = findNamedImports(existingImport);
+        if (namedImports) {
+          // Add to existing named_imports: insert before the closing brace
+          const namedImportsText = namedImports.text();
+          const closingBraceIdx = namedImportsText.lastIndexOf("}");
+          if (closingBraceIdx > 0) {
+            const insertPos = namedImports.range().start.index + closingBraceIdx;
+            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
+            // Check if there are existing specifiers (need comma)
+            const hasExistingSpecifiers =
+              namedImportsText.slice(1, closingBraceIdx).trim().length > 0;
+            const insertText = hasExistingSpecifiers ? `, ${specifierStr}` : ` ${specifierStr} `;
+
+            return {
+              startPos: insertPos,
+              endPos: insertPos,
+              insertedText: insertText,
+            };
+          }
+        } else {
+          // Import exists but has no named_imports (e.g., default import only)
+          // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
+          const importClause = (existingImport as unknown as SgNode<TS>).find({
+            rule: { kind: "import_clause" },
+          });
+          if (importClause) {
+            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
+            const insertPos = importClause.range().end.index;
+            return {
+              startPos: insertPos,
+              endPos: insertPos,
+              insertedText: `, { ${specifierStr} }`,
+            };
+          }
+        }
+      }
+    }
+
+    // Update options with filtered specifiers for new import creation
+    options = { ...options, specifiers: newSpecifiers };
+  }
+
+  // Find insertion position (after last import, or at file start)
+  const allImports = findAllImportStatements(program);
+  let insertPos = 0;
+  let prefix = "";
+
+  const lastImport = allImports[allImports.length - 1];
+  if (lastImport) {
+    insertPos = lastImport.range().end.index;
+    // Check if there's a newline after the last import
+    const programText = program.text();
+    if (programText[insertPos] !== "\n") {
+      prefix = "\n";
+    }
+  }
+
+  // Generate import text
+  const importText =
+    moduleType === "esm" ? generateEsmImport(options) : generateCjsRequire(options);
+
+  return {
+    startPos: insertPos,
+    endPos: insertPos,
+    insertedText: prefix + importText,
+  };
+}
+
 /**
  * Remove an import from the program. Smart behavior:
  * - Default/namespace: Removes entire import statement
  * - Named (multiple specifiers exist): Removes only the specified specifiers
  * - Named (removing last specifiers): Removes entire import statement
+ *
+ * Note: removeImport returns null for multi-declarator CJS declarations
+ * (e.g. `const foo = require('mod'), x = 1`). These are not tracked by
+ * findAllImportStatements to prevent accidental deletion of unrelated bindings.
  *
  * @returns Edit to apply, or null if import not found
  */
@@ -1084,178 +932,77 @@ export function removeImport<T extends Language>(
   options: RemoveImportOptions,
 ): Edit | null {
   const programText = program.text();
+  const allStatements = findAllImportStatements(program);
 
   if (options.type === "default") {
-    // Find default import and remove entire statement
     const existing = getImport(program, { type: "default", from: options.from });
-    if (!existing || existing.isNamespace) {
-      return null;
-    }
+    if (!existing || existing.isNamespace) return null;
 
-    // Find the import statement containing this default import
-    const tsProgram = program as unknown as SgNode<TS, "program">;
-    const importStmt = tsProgram.find({
-      rule: {
-        kind: "import_statement",
-        all: [
-          {
-            has: {
-              kind: "import_clause",
-              has: {
-                kind: "identifier",
-                regex: stringToExactRegexString(existing.alias),
-              },
-            },
+    const statement =
+      allStatements.find((stmt) => {
+        const tsStmt = stmt as unknown as SgNode<TS>;
+        const matchesAlias = tsStmt.has({
+          rule: {
+            any: [{ kind: "identifier", regex: stringToExactRegexString(existing.alias) }],
           },
-          {
-            has: {
-              field: "source",
-              any: [
-                { regex: stringToExactRegexString(options.from) },
-                {
-                  has: {
-                    kind: "string_fragment",
-                    regex: stringToExactRegexString(options.from),
-                  },
+        });
+        const matchesSource = tsStmt.has({
+          rule: {
+            any: [
+              { regex: stringToExactRegexString(options.from) },
+              {
+                has: {
+                  kind: "string_fragment",
+                  regex: stringToExactRegexString(options.from),
                 },
-              ],
-            },
+              },
+            ],
           },
-        ],
-      },
-    });
+        });
+        return matchesAlias && matchesSource;
+      }) ?? null;
 
-    if (importStmt) {
-      const { start, end } = getStatementRangeWithNewline(
-        importStmt as unknown as SgNode<T>,
-        programText,
-      );
-      return { startPos: start, endPos: end, insertedText: "" };
-    }
-
-    // Check for CJS require
-    const cjsDecl = tsProgram.find({
-      rule: {
-        kind: "lexical_declaration",
-        has: {
-          kind: "variable_declarator",
-          all: [
-            {
-              has: {
-                field: "name",
-                kind: "identifier",
-                regex: stringToExactRegexString(existing.alias),
-              },
-            },
-            {
-              has: {
-                field: "value",
-                any: [
-                  {
-                    kind: "call_expression",
-                    has: {
-                      field: "function",
-                      kind: "identifier",
-                      regex: "^require$",
-                    },
-                  },
-                  {
-                    kind: "await_expression",
-                    has: {
-                      kind: "call_expression",
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    if (cjsDecl) {
-      const { start, end } = getStatementRangeWithNewline(
-        cjsDecl as unknown as SgNode<T>,
-        programText,
-      );
-      return { startPos: start, endPos: end, insertedText: "" };
-    }
-
-    return null;
+    if (!statement) return null;
+    const { start, end } = getStatementRangeWithNewline(statement, programText);
+    return { startPos: start, endPos: end, insertedText: "" };
   }
 
   if (options.type === "namespace") {
-    // Find namespace import and remove entire statement
     const existing = getImport(program, { type: "default", from: options.from });
-    if (!existing || !existing.isNamespace) {
-      return null;
-    }
+    if (!existing || !existing.isNamespace) return null;
 
-    const tsProgram = program as unknown as SgNode<TS, "program">;
-    const importStmt = tsProgram.find({
-      rule: {
-        kind: "import_statement",
-        all: [
-          {
-            has: {
-              kind: "import_clause",
-              has: {
-                kind: "namespace_import",
-                has: {
-                  kind: "identifier",
-                  regex: stringToExactRegexString(existing.alias),
-                },
-              },
-            },
+    const statement =
+      allStatements.find((stmt) => {
+        const tsStmt = stmt as unknown as SgNode<TS>;
+        return tsStmt.has({
+          rule: {
+            kind: "namespace_import",
+            has: { kind: "identifier", regex: stringToExactRegexString(existing.alias) },
           },
-          {
-            has: {
-              field: "source",
-              any: [
-                { regex: stringToExactRegexString(options.from) },
-                {
-                  has: {
-                    kind: "string_fragment",
-                    regex: stringToExactRegexString(options.from),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    });
+        });
+      }) ?? null;
 
-    if (importStmt) {
-      const { start, end } = getStatementRangeWithNewline(
-        importStmt as unknown as SgNode<T>,
-        programText,
-      );
-      return { startPos: start, endPos: end, insertedText: "" };
-    }
-
-    return null;
+    if (!statement) return null;
+    const { start, end } = getStatementRangeWithNewline(statement, programText);
+    return { startPos: start, endPos: end, insertedText: "" };
   }
 
-  // Named imports: remove specific specifiers
   if (options.type === "named") {
-    // Find the first specifier to remove
     for (const specName of options.specifiers) {
       const found = findImportStatementForSpecifier(program, specName, options.from);
+      if (!found) continue;
 
-      if (found) {
-        const specifierCount = countSpecifiersInStatement(found.statement);
+      const specifierCount = countSpecifiersInStatement(found.statement);
 
-        // If this is the last specifier, remove the entire statement
-        if (specifierCount <= options.specifiers.length) {
-          const { start, end } = getStatementRangeWithNewline(found.statement, programText);
-          return { startPos: start, endPos: end, insertedText: "" };
-        }
-
-        // Otherwise, just remove this specifier
-        const { start, end } = getSpecifierRangeWithSeparator(found.specifier, programText);
+      // If this is the last specifier, remove the entire statement
+      if (specifierCount <= options.specifiers.length) {
+        const { start, end } = getStatementRangeWithNewline(found.statement, programText);
         return { startPos: start, endPos: end, insertedText: "" };
       }
+
+      // Otherwise, just remove this specifier
+      const { start, end } = getSpecifierRangeWithSeparator(found.specifier, programText);
+      return { startPos: start, endPos: end, insertedText: "" };
     }
 
     return null;
