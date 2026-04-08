@@ -15,9 +15,8 @@ static EXPR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}").expect("valid expr regex"));
 
 /// Matches `task.<var_name>` references inside expressions.
-static TASK_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex")
-});
+static TASK_VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex"));
 
 use crate::error::Error;
 use crate::Result;
