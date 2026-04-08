@@ -146,8 +146,7 @@ pub fn resolve_expressions(
     // Pre-populate any `task.*` identifiers referenced in the expression that
     // are not already in the context with an empty string so that missing
     // CODEMOD_TASK_* env vars resolve gracefully instead of erroring.
-    let task_var_re =
-        Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex");
+    let task_var_re = Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex");
     for cap in task_var_re.captures_iter(expression) {
         let var_name = format!("task.{}", &cap[1]);
         if context.get_value(&var_name).is_none() {
@@ -311,9 +310,9 @@ pub fn value_to_string_vec(value: &Value) -> Option<Vec<String>> {
         Value::Array(arr) => {
             let strings: Vec<String> = arr
                 .iter()
-                .filter_map(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    other => Some(other.to_string()),
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 })
                 .collect();
             Some(strings)
@@ -323,9 +322,9 @@ pub fn value_to_string_vec(value: &Value) -> Option<Vec<String>> {
             if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(s) {
                 let strings: Vec<String> = arr
                     .iter()
-                    .filter_map(|v| match v {
-                        Value::String(s) => Some(s.clone()),
-                        other => Some(other.to_string()),
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
                     })
                     .collect();
                 Some(strings)
@@ -1466,10 +1465,7 @@ mod tests {
         let mut state = HashMap::new();
         state.insert("extra".to_string(), json!(["lib/**/*.ts"]));
 
-        let items = vec![
-            "**/*.js".to_string(),
-            "${{ state.extra }}".to_string(),
-        ];
+        let items = vec!["**/*.js".to_string(), "${{ state.extra }}".to_string()];
         let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
         assert_eq!(result, vec!["**/*.js", "lib/**/*.ts"]);
     }
@@ -1490,10 +1486,7 @@ mod tests {
         let params = HashMap::new();
         let mut state = HashMap::new();
         // Simulates a CODEMOD_STATE_* env var that was JSON-encoded
-        state.insert(
-            "batch".to_string(),
-            json!(r#"["file1.js","file2.js"]"#),
-        );
+        state.insert("batch".to_string(), json!(r#"["file1.js","file2.js"]"#));
 
         let items = vec!["${{ state.batch }}".to_string()];
         let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
@@ -1505,10 +1498,7 @@ mod tests {
         let params = HashMap::new();
         let state = HashMap::new();
         let mut matrix = HashMap::new();
-        matrix.insert(
-            "files".to_string(),
-            json!(["a.ts", "b.ts"]),
-        );
+        matrix.insert("files".to_string(), json!(["a.ts", "b.ts"]));
 
         let items = vec!["${{ matrix.files }}".to_string()];
         let result =

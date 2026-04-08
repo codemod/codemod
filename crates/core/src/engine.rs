@@ -2213,8 +2213,11 @@ impl Engine {
                         None,
                         task_expr_ctx,
                     )?;
-                    resolved_ast_grep.include =
-                        if resolved.is_empty() { None } else { Some(resolved) };
+                    resolved_ast_grep.include = if resolved.is_empty() {
+                        None
+                    } else {
+                        Some(resolved)
+                    };
                 }
                 if let Some(exc) = &ast_grep.exclude {
                     let resolved = resolve_string_list(
@@ -2225,8 +2228,11 @@ impl Engine {
                         None,
                         task_expr_ctx,
                     )?;
-                    resolved_ast_grep.exclude =
-                        if resolved.is_empty() { None } else { Some(resolved) };
+                    resolved_ast_grep.exclude = if resolved.is_empty() {
+                        None
+                    } else {
+                        Some(resolved)
+                    };
                 }
                 self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
                     .await
@@ -2546,11 +2552,12 @@ impl Engine {
                 None,
                 None,
             )?;
-            if resolved.is_empty() { None } else { Some(resolved) }
-        } else if let Some(meta_files) = matrix_input
-            .as_ref()
-            .and_then(|m| m.get("_meta_files"))
-        {
+            if resolved.is_empty() {
+                None
+            } else {
+                Some(resolved)
+            }
+        } else if let Some(meta_files) = matrix_input.as_ref().and_then(|m| m.get("_meta_files")) {
             // Auto-apply matrix._meta_files as the include list when no
             // explicit include is configured.
             butterflow_models::variable::value_to_string_vec(meta_files)
@@ -2567,7 +2574,11 @@ impl Engine {
                 None,
                 None,
             )?;
-            if resolved.is_empty() { None } else { Some(resolved) }
+            if resolved.is_empty() {
+                None
+            } else {
+                Some(resolved)
+            }
         } else {
             None
         };

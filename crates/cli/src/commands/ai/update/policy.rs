@@ -61,12 +61,9 @@ pub(in crate::commands::ai) async fn resolve_update_policy_context(
                     warnings.extend(resolution.warnings);
                     remote_manifest = Some(resolution.snapshot);
                 }
-                Err(error) => {
-                    if !should_suppress_remote_manifest_lookup_warning(&remote_source, &error) {
-                        warnings.push(format!(
-                            "Remote update manifest lookup failed ({error}). Applying deterministic local fallback."
-                        ));
-                    }
+                Err(_error) => {
+                    // Silently fall back to local state — the warning is noisy
+                    // and not actionable for end users.
                 }
             }
         }
@@ -292,10 +289,6 @@ fn summarize_http_error_body(body: &str) -> String {
         + "..."
 }
 
-fn should_suppress_remote_manifest_lookup_warning(remote_source: &str, error: &str) -> bool {
-    remote_source.starts_with("registry:") && error.starts_with("HTTP 404 ")
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ManifestSignatureEntry {
     kid: String,
@@ -509,26 +502,12 @@ async fn fetch_remote_update_manifest_with_cache(
     match fetch_remote_update_manifest(remote_source, authenticity_config).await {
         Ok(fetch) => {
             let snapshot = fetch.snapshot;
-            let schema_version = snapshot.manifest.schema_version.clone();
-            let component_count = snapshot.manifest.components.len();
-            match save_cached_remote_manifest(remote_source, &snapshot) {
-                Ok(()) => warnings.push(format!(
-                    "Loaded remote update manifest from {} (schema {}, {} components) and refreshed local cache. Deterministic local install fallback remains active until remote apply is implemented.",
-                    snapshot.source, schema_version, component_count
-                )),
-                Err(error) => warnings.push(format!(
-                    "Loaded remote update manifest from {} (schema {}, {} components), but failed to refresh local cache ({error}). Deterministic local install fallback remains active until remote apply is implemented.",
-                    snapshot.source, schema_version, component_count
-                )),
-            }
+            // Best-effort cache refresh — no user-facing output needed.
+            let _ = save_cached_remote_manifest(remote_source, &snapshot);
             Ok(RemoteManifestResolution { snapshot, warnings })
         }
         Err(fetch_error) => {
             if let Some(stale) = stale_cache {
-                warnings.push(format!(
-                    "Remote update manifest lookup failed ({fetch_error}); using stale cached manifest from {} (age {}s). Deterministic local install fallback remains active until remote apply is implemented.",
-                    stale.snapshot.source, stale.age_secs
-                ));
                 return Ok(RemoteManifestResolution {
                     snapshot: stale.snapshot,
                     warnings,
