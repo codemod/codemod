@@ -81,12 +81,9 @@ impl Command {
         }
 
         // Output the bundle
-        if self.output.is_some() {
+        if let Some(output_path) = &self.output {
             if self.verbose {
-                eprintln!(
-                    "💾 Bundle written to: {}",
-                    self.output.as_ref().unwrap().display()
-                );
+                eprintln!("💾 Bundle written to: {}", output_path.display());
             }
         } else {
             // Output to stdout

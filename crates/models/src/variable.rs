@@ -4,19 +4,22 @@ use evalexpr::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
-/// Matches a full `${{ expression }}` template string (anchored).
-static EXPR_ONLY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\$\{\{\s*([^}]+?)\s*\}\}$").expect("valid expr-only regex"));
+fn expr_only_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\$\{\{\s*([^}]+?)\s*\}\}$").expect("valid expr-only regex"))
+}
 
-/// Matches all `${{ expression }}` template patterns (unanchored).
-static EXPR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}").expect("valid expr regex"));
+fn expr_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}").expect("valid expr regex"))
+}
 
-/// Matches `task.<var_name>` references inside expressions.
-static TASK_VAR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex"));
+fn task_var_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex"))
+}
 
 use crate::error::Error;
 use crate::Result;
@@ -159,7 +162,7 @@ pub fn resolve_expressions(
     // Pre-populate any `task.*` identifiers referenced in the expression that
     // are not already in the context with an empty string so that missing
     // CODEMOD_TASK_* env vars resolve gracefully instead of erroring.
-    for cap in TASK_VAR_RE.captures_iter(expression) {
+    for cap in task_var_re().captures_iter(expression) {
         let var_name = format!("task.{}", &cap[1]);
         if context.get_value(&var_name).is_none() {
             context.set_value(var_name, EvalValue::String(String::new()))?;
@@ -202,7 +205,7 @@ pub fn resolve_string_with_expression(
 ) -> Result<String> {
     let mut result = template.to_string();
 
-    for captures in EXPR_RE.captures_iter(template) {
+    for captures in expr_re().captures_iter(template) {
         let full_match = captures.get(0).unwrap().as_str();
         let expression = captures.get(1).unwrap().as_str().trim();
 
@@ -256,7 +259,7 @@ pub fn resolve_string_list(
     for item in items {
         // If the entire item is a single expression, check whether the
         // underlying value is an array so we can expand it.
-        if let Some(caps) = EXPR_ONLY_RE.captures(item) {
+        if let Some(caps) = expr_only_re().captures(item) {
             let expression = caps.get(1).unwrap().as_str().trim();
 
             // Try to look up the raw JSON value from state / params / matrix
