@@ -4,6 +4,20 @@ use evalexpr::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// Matches a full `${{ expression }}` template string (anchored).
+static EXPR_ONLY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\$\{\{\s*([^}]+?)\s*\}\}$").expect("valid expr-only regex"));
+
+/// Matches all `${{ expression }}` template patterns (unanchored).
+static EXPR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}").expect("valid expr regex"));
+
+/// Matches `task.<var_name>` references inside expressions.
+static TASK_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex")
+});
 
 use crate::error::Error;
 use crate::Result;
@@ -146,8 +160,7 @@ pub fn resolve_expressions(
     // Pre-populate any `task.*` identifiers referenced in the expression that
     // are not already in the context with an empty string so that missing
     // CODEMOD_TASK_* env vars resolve gracefully instead of erroring.
-    let task_var_re = Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex");
-    for cap in task_var_re.captures_iter(expression) {
+    for cap in TASK_VAR_RE.captures_iter(expression) {
         let var_name = format!("task.{}", &cap[1]);
         if context.get_value(&var_name).is_none() {
             context.set_value(var_name, EvalValue::String(String::new()))?;
@@ -188,13 +201,9 @@ pub fn resolve_string_with_expression(
     steps: Option<&HashMap<String, HashMap<String, String>>>,
     task_context: Option<&TaskExpressionContext>,
 ) -> Result<String> {
-    // regex to find all ${{ }} patterns
-    let re = Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}")
-        .map_err(|e| Error::VariableResolution(format!("Regex error: {}", e)))?;
-
     let mut result = template.to_string();
 
-    for captures in re.captures_iter(template) {
+    for captures in EXPR_RE.captures_iter(template) {
         let full_match = captures.get(0).unwrap().as_str();
         let expression = captures.get(1).unwrap().as_str().trim();
 
@@ -243,15 +252,12 @@ pub fn resolve_string_list(
     steps: Option<&HashMap<String, HashMap<String, String>>>,
     task_context: Option<&TaskExpressionContext>,
 ) -> Result<Vec<String>> {
-    let expr_only_re = Regex::new(r"^\$\{\{\s*([^}]+?)\s*\}\}$")
-        .map_err(|e| Error::VariableResolution(format!("Regex error: {}", e)))?;
-
     let mut result = Vec::new();
 
     for item in items {
         // If the entire item is a single expression, check whether the
         // underlying value is an array so we can expand it.
-        if let Some(caps) = expr_only_re.captures(item) {
+        if let Some(caps) = EXPR_ONLY_RE.captures(item) {
             let expression = caps.get(1).unwrap().as_str().trim();
 
             // Try to look up the raw JSON value from state / params / matrix

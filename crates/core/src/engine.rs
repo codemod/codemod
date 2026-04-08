@@ -132,6 +132,26 @@ fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String
     message
 }
 
+/// Resolve an optional list of glob patterns, expanding `${{ }}` expressions.
+/// Returns `None` when the input is `None` or all items resolve to empty strings.
+fn resolve_optional_glob_list(
+    items: &Option<Vec<String>>,
+    params: &HashMap<String, serde_json::Value>,
+    state: &HashMap<String, serde_json::Value>,
+    matrix_values: Option<&HashMap<String, serde_json::Value>>,
+    task_context: Option<&TaskExpressionContext>,
+) -> Result<Option<Vec<String>>> {
+    let Some(items) = items else {
+        return Ok(None);
+    };
+    let resolved = resolve_string_list(items, params, state, matrix_values, None, task_context)?;
+    Ok(if resolved.is_empty() {
+        None
+    } else {
+        Some(resolved)
+    })
+}
+
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -2204,36 +2224,20 @@ impl Engine {
             StepAction::AstGrep(ast_grep) => {
                 // Resolve ${{ }} expressions in include/exclude globs
                 let mut resolved_ast_grep = ast_grep.clone();
-                if let Some(inc) = &ast_grep.include {
-                    let resolved = resolve_string_list(
-                        inc,
-                        params,
-                        state,
-                        task.matrix_values.as_ref(),
-                        None,
-                        task_expr_ctx,
-                    )?;
-                    resolved_ast_grep.include = if resolved.is_empty() {
-                        None
-                    } else {
-                        Some(resolved)
-                    };
-                }
-                if let Some(exc) = &ast_grep.exclude {
-                    let resolved = resolve_string_list(
-                        exc,
-                        params,
-                        state,
-                        task.matrix_values.as_ref(),
-                        None,
-                        task_expr_ctx,
-                    )?;
-                    resolved_ast_grep.exclude = if resolved.is_empty() {
-                        None
-                    } else {
-                        Some(resolved)
-                    };
-                }
+                resolved_ast_grep.include = resolve_optional_glob_list(
+                    &ast_grep.include,
+                    params,
+                    state,
+                    task.matrix_values.as_ref(),
+                    task_expr_ctx,
+                )?;
+                resolved_ast_grep.exclude = resolve_optional_glob_list(
+                    &ast_grep.exclude,
+                    params,
+                    state,
+                    task.matrix_values.as_ref(),
+                    task_expr_ctx,
+                )?;
                 self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
                     .await
             }
@@ -2258,6 +2262,7 @@ impl Engine {
                     Some(state),
                     logger,
                     None,
+                    task_expr_ctx,
                 )
                 .await
             }
@@ -2486,6 +2491,7 @@ impl Engine {
         initial_state: Option<&HashMap<String, serde_json::Value>>,
         logger: &StructuredLogger,
         modified_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
+        task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
 
@@ -2543,45 +2549,29 @@ impl Engine {
         let resolved_params_ref = params.as_ref().unwrap_or(&empty_params);
         let resolved_state_ref = initial_state.unwrap_or(&empty_state);
 
-        let resolved_include = if let Some(inc) = &js_ast_grep.include {
-            let resolved = resolve_string_list(
-                inc,
-                resolved_params_ref,
-                resolved_state_ref,
-                matrix_input.as_ref(),
-                None,
-                None,
-            )?;
-            if resolved.is_empty() {
-                None
-            } else {
-                Some(resolved)
-            }
-        } else if let Some(meta_files) = matrix_input.as_ref().and_then(|m| m.get("_meta_files")) {
+        let resolved_include = resolve_optional_glob_list(
+            &js_ast_grep.include,
+            resolved_params_ref,
+            resolved_state_ref,
+            matrix_input.as_ref(),
+            task_expr_ctx,
+        )?
+        .or_else(|| {
             // Auto-apply matrix._meta_files as the include list when no
-            // explicit include is configured.
-            butterflow_models::variable::value_to_string_vec(meta_files)
-        } else {
-            None
-        };
+            // explicit include is configured or resolves to empty.
+            matrix_input
+                .as_ref()
+                .and_then(|m| m.get("_meta_files"))
+                .and_then(butterflow_models::variable::value_to_string_vec)
+        });
 
-        let resolved_exclude = if let Some(exc) = &js_ast_grep.exclude {
-            let resolved = resolve_string_list(
-                exc,
-                resolved_params_ref,
-                resolved_state_ref,
-                matrix_input.as_ref(),
-                None,
-                None,
-            )?;
-            if resolved.is_empty() {
-                None
-            } else {
-                Some(resolved)
-            }
-        } else {
-            None
-        };
+        let resolved_exclude = resolve_optional_glob_list(
+            &js_ast_grep.exclude,
+            resolved_params_ref,
+            resolved_state_ref,
+            matrix_input.as_ref(),
+            task_expr_ctx,
+        )?;
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
@@ -3656,6 +3646,7 @@ impl Engine {
             None,
             logger,
             Some(collector.clone()),
+            None,
         )
         .await?;
 

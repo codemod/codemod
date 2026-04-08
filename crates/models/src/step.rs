@@ -449,7 +449,15 @@ where
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(s)) => Ok(Some(s)),
         Some(serde_json::Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(other) => Ok(Some(other.to_string())),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "unsupported type for `if` condition: expected string or boolean, got {}",
+            match &other {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::Object(_) => "object",
+                _ => "unknown",
+            }
+        ))),
     }
 }
 
