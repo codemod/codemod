@@ -6,7 +6,7 @@ use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod handlers;
@@ -44,13 +44,19 @@ const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/jssg/metrics.md";
 const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/jssg/utils.md";
 const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str = "https://docs.codemod.com/jssg/semantic-analysis.md";
 
-static PUBLIC_DOCS_CLIENT: LazyLock<Option<reqwest::Client>> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(PUBLIC_DOCS_TIMEOUT_SECS))
-        .user_agent(format!("codemod-mcp/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .ok()
-});
+static PUBLIC_DOCS_CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+
+fn public_docs_client() -> Option<&'static reqwest::Client> {
+    PUBLIC_DOCS_CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(PUBLIC_DOCS_TIMEOUT_SECS))
+                .user_agent(format!("codemod-mcp/{}", env!("CARGO_PKG_VERSION")))
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
 
 fn strip_docs_index(doc: &str) -> &str {
     fn next_line_bounds(text: &str, start: usize) -> Option<(usize, usize)> {
@@ -119,7 +125,7 @@ fn strip_docs_index(doc: &str) -> &str {
 }
 
 async fn fetch_public_doc_markdown(url: &str) -> Option<String> {
-    let client = PUBLIC_DOCS_CLIENT.as_ref()?;
+    let client = public_docs_client()?;
     let response = client.get(url).send().await.ok()?.error_for_status().ok()?;
     let text = response.text().await.ok()?;
     Some(strip_docs_index(&text).trim().to_string())
@@ -349,9 +355,7 @@ impl CodemodMcpServer {
             .await
     }
 
-    #[tool(
-        description = "Get JSSG guidance for creating and testing transformation scripts"
-    )]
+    #[tool(description = "Get JSSG guidance for creating and testing transformation scripts")]
     async fn get_jssg_instructions(
         &self,
         _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
@@ -668,10 +672,10 @@ struct GetInstructionsRequest {}
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    static CURRENT_DIR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    static CURRENT_DIR_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 
     struct CurrentDirGuard {
         original: PathBuf,
@@ -759,7 +763,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_log_usage_supports_relative_paths() {
-        let _guard = CURRENT_DIR_GUARD.lock().unwrap();
+        let _guard = CURRENT_DIR_GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("expected monotonic system time")

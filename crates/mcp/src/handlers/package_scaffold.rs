@@ -345,13 +345,13 @@ impl Default for PackageScaffoldHandler {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    static ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    static ENV_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
     fn unique_temp_dir() -> PathBuf {
         let unique = SystemTime::now()
@@ -366,7 +366,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn scaffold_tool_invokes_real_cli_shape() {
-        let _guard = ENV_GUARD.lock().unwrap();
+        let _guard = ENV_GUARD
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         let temp_dir = unique_temp_dir();
         let fake_cli = temp_dir.join("fake-codemod.sh");
         let args_file = temp_dir.join("args.txt");
@@ -424,9 +427,12 @@ mod tests {
         fs::remove_dir_all(temp_dir).unwrap();
     }
 
-    #[test]
-    fn resolve_requested_paths_uses_pwd_for_relative_inputs() {
-        let _guard = ENV_GUARD.lock().unwrap();
+    #[tokio::test]
+    async fn resolve_requested_paths_uses_pwd_for_relative_inputs() {
+        let _guard = ENV_GUARD
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         let temp_dir = unique_temp_dir();
         std::env::set_var("PWD", temp_dir.display().to_string());
 
