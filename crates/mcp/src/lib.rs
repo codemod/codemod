@@ -151,7 +151,7 @@ fn build_public_docs_bundle_from_sections(
     }
 
     format!(
-        "# {title}\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over local fallback notes when they differ.\n\n{}\n",
+        "# {title}\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`).\n\n{}\n",
         sections.join("\n\n---\n\n")
     )
 }
@@ -173,7 +173,7 @@ fn build_public_docs_bundle_with_supplement_from_sections(
     }
 
     format!(
-        "# {title}\n\n## {supplement_title}\n\n{supplement}\n\n---\n\nThese instructions are sourced from the public Codemod docs deployment (`docs.codemod.com`). Prefer this content over local fallback notes when they differ.\n\n{}\n",
+        "# {title}\n\n## {supplement_title}\n\n{supplement}\n\n---\n\nThe documentation below is sourced from the public Codemod docs deployment (`docs.codemod.com`).\n\n{}\n",
         sections.join("\n\n---\n\n")
     )
 }
