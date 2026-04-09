@@ -3,7 +3,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use std::{
     collections::HashSet,
     fs,
-    io::{self, Write},
+    io::{self, BufRead, BufReader, IsTerminal, Write},
     path::PathBuf,
 };
 
@@ -131,15 +131,34 @@ pub(crate) fn prompt_capabilities(
 }
 
 fn prompt_yes_no(prompt: &str, default_yes: bool, help: &str) -> io::Result<bool> {
+    let mut input = open_prompt_reader()?;
     let mut stderr = io::stderr().lock();
-    loop {
-        writeln!(stderr, "  [{help}]")?;
-        write!(stderr, "  {prompt}")?;
-        stderr.flush()?;
+    prompt_yes_no_with_io(prompt, default_yes, help, &mut input, &mut stderr)
+}
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let answer = input.trim().to_ascii_lowercase();
+fn prompt_yes_no_with_io<R: BufRead, W: Write>(
+    prompt: &str,
+    default_yes: bool,
+    help: &str,
+    input: &mut R,
+    output: &mut W,
+) -> io::Result<bool> {
+    loop {
+        writeln!(output, "  [{help}]")?;
+        write!(output, "  {prompt}")?;
+        output.flush()?;
+
+        let mut answer = String::new();
+        let bytes_read = input.read_line(&mut answer)?;
+        if bytes_read == 0 {
+            writeln!(output)?;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal prompt closed before a response was provided",
+            ));
+        }
+
+        let answer = answer.trim().to_ascii_lowercase();
 
         let accepted = match answer.as_str() {
             "" => Some(default_yes),
@@ -150,15 +169,41 @@ fn prompt_yes_no(prompt: &str, default_yes: bool, help: &str) -> io::Result<bool
 
         match accepted {
             Some(value) => {
-                writeln!(stderr)?;
+                writeln!(output)?;
                 return Ok(value);
             }
             None => {
-                writeln!(stderr, "  Please answer y or n.")?;
-                writeln!(stderr)?;
+                writeln!(output, "  Please answer y or n.")?;
+                writeln!(output)?;
             }
         }
     }
+}
+
+fn open_prompt_reader() -> io::Result<Box<dyn BufRead>> {
+    #[cfg(unix)]
+    {
+        if let Ok(tty) = fs::OpenOptions::new().read(true).open("/dev/tty") {
+            return Ok(Box::new(BufReader::new(tty)));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(tty) = fs::OpenOptions::new().read(true).open("CONIN$") {
+            return Ok(Box::new(BufReader::new(tty)));
+        }
+    }
+
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        return Ok(Box::new(BufReader::new(stdin)));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "interactive prompt is unavailable because stdin is not a terminal",
+    ))
 }
 
 fn reset_terminal_for_prompt() {
@@ -182,5 +227,46 @@ fn reset_terminal_for_prompt() {
                 LeaveAlternateScreen
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_yes_no_accepts_explicit_default_line() {
+        let mut input = io::Cursor::new(b"\n");
+        let mut output = Vec::new();
+
+        let accepted = prompt_yes_no_with_io(
+            "Grant these permissions? (Y/n): ",
+            true,
+            "help",
+            &mut input,
+            &mut output,
+        )
+        .unwrap();
+
+        assert!(accepted);
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("Grant these permissions?"));
+    }
+
+    #[test]
+    fn prompt_yes_no_rejects_eof_without_approving() {
+        let mut input = io::Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+
+        let error = prompt_yes_no_with_io(
+            "Grant these permissions? (Y/n): ",
+            true,
+            "help",
+            &mut input,
+            &mut output,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
