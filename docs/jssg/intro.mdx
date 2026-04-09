@@ -1,0 +1,234 @@
+---
+title: "Intro"
+---
+
+On this page, you will learn what JSSG is and how it works, see a sample codemod, and understand how it differs from typical JavaScript-only toolkits. To scaffold a package, run tests, and publish, use the [Quickstart](/oss-quickstart).
+
+## What is JSSG?
+
+**JavaScript ast-grep (JSSG)** is Codemod’s engine for running **ast-grep** codemods: your transform executes in a **sandboxed JavaScript** runtime (QuickJS, with LLRT for Node-compatible builtins) and loads **`codemod:ast-grep`** for Tree-sitter parsing, pattern matching, and edits—so you author TypeScript against a small AST API instead of wiring Babel or Recast yourself.
+
+### How it works
+
+- A JSSG codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
+- The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
+- You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
+
+<Info>
+For engine details and built-ins, see <a href="/jssg/reference#runtime-and-built-ins">Runtime and built-ins</a> in the API reference.
+</Info>
+
+### Key concepts
+
+- **Patterns**: Describe code shapes using ast-grep’s pattern syntax with captures (for example, `$NAME`, `$$$ARGS`).
+- **Rules**: Compose patterns with `any`, `all`, `kind`, relational constraints (`inside`, `has`, `precedes`, `follows`), and utilities like `matches` and `constraints`.
+- **Edits**: Build replacements with `node.replace(text)` and apply them with `commitEdits(edits)`.
+- **Lifecycle**: Select → Traverse → Capture → Edit → Commit & Return.
+
+You can author rules as plain JavaScript objects. See the [ast‑grep rule configuration docs](https://ast-grep.github.io/guide/rule-config.html) and the [JSSG API reference](/jssg/reference#rule-configuration).
+
+### Sample codemod
+
+Below is a sample JSSG codemod that moves React components declared inside other components up to module scope.
+
+```ts scripts/codemod.ts expandable
+import type { Transform, Edit } from "codemod:ast-grep";
+import type { SgNode } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+  const edits: Edit[] = [];
+
+  // Function components nested inside another function component
+  const innerFuncComponents = rootNode.findAll({
+    rule: {
+      kind: "function_declaration",
+      has: {
+        field: "name",
+        kind: "identifier",
+        regex: "^[A-Z]",
+      },
+      inside: {
+        kind: "statement_block",
+        inside: {
+          kind: "function_declaration",
+          has: {
+            field: "name",
+            kind: "identifier",
+            regex: "^[A-Z]",
+          },
+        },
+      },
+    },
+  });
+
+  // `const Foo = () => { ... }` inside another component
+  const innerArrowComponents = rootNode.findAll({
+    rule: {
+      kind: "lexical_declaration",
+      has: {
+        kind: "variable_declarator",
+        has: {
+          field: "name",
+          kind: "identifier",
+          regex: "^[A-Z]",
+        },
+      },
+      inside: {
+        kind: "statement_block",
+        inside: {
+          kind: "function_declaration",
+          has: {
+            field: "name",
+            kind: "identifier",
+            regex: "^[A-Z]",
+          },
+        },
+      },
+    },
+  });
+
+  if (innerFuncComponents.length === 0 && innerArrowComponents.length === 0) {
+    return null;
+  }
+
+  const allInner = [...innerFuncComponents, ...innerArrowComponents];
+
+  const parentMap = new Map<
+    number,
+    { parent: SgNode<TSX>; children: SgNode<TSX>[] }
+  >();
+
+  for (const inner of allInner) {
+    const ancestors = inner.ancestors();
+    const parentComponent = ancestors.find(
+      (a) =>
+        a.kind() === "function_declaration" &&
+        a.field("name")?.matches({ rule: { regex: "^[A-Z]" } }),
+    );
+    if (!parentComponent) continue;
+
+    const parentId = parentComponent.id();
+    if (!parentMap.has(parentId)) {
+      parentMap.set(parentId, { parent: parentComponent, children: [] });
+    }
+    parentMap.get(parentId)!.children.push(inner);
+  }
+
+  for (const { parent, children } of parentMap.values()) {
+    const extractedParts: string[] = [];
+
+    for (const child of children) {
+      extractedParts.push(child.text());
+
+      edits.push({
+        startPos: child.range().start.index,
+        endPos: child.range().end.index,
+        insertedText: "",
+      });
+    }
+
+    // Insert before the parent, or before `export function ...` if wrapped
+    const parentParent = parent.parent();
+    const insertTarget =
+      parentParent && parentParent.kind() === "export_statement"
+        ? parentParent
+        : parent;
+
+    const insertText = extractedParts.join("\n\n") + "\n\n";
+    edits.push({
+      startPos: insertTarget.range().start.index,
+      endPos: insertTarget.range().start.index,
+      insertedText: insertText,
+    });
+  }
+
+  return rootNode.commitEdits(edits);
+};
+
+export default transform;
+```
+
+## How JSSG differs
+
+[jscodeshift](https://github.com/facebook/jscodeshift) and similar toolkits are centered on Babel-style ASTs and usually process **one file at a time**. JSSG is a different stack: patterns and rules run on [ast-grep](https://ast-grep.github.io/) (Rust + [Tree-sitter](https://tree-sitter.github.io/tree-sitter/)) inside Codemod’s sandboxed runtime, and the broader Codemod CLI adds publishing, workflows, and platform features. The sections below group benefits by concern—architecture, author experience, execution, and everything after you have written a transform.
+### Core Architecture & Capabilities
+
+*What JSSG is fundamentally better at: a different class of tool than per-file, JavaScript-only runners.*
+
+- **Workspace-level semantic analysis** — With per-file runners, following a symbol through re-exports (for example a barrel file) into another module means building resolution yourself. JSSG supports project-wide analysis out of the box: definition lookup, cross-file reference tracking, and module resolution for JS/TS (including **oxc_resolver**). That is what makes import-aware refactors practical without a custom linker. See [Semantic analysis](/jssg/semantic-analysis).
+- **Not only JavaScript** — jscodeshift targets JS/TS. JSSG is built on ast-grep and Tree-sitter, so the same tool and workflow can cover Python, Rust, Go, Java, and other languages Tree-sitter supports—one system for humans and agents to learn.
+- **Performance at repo scale** — Parsing and transforming thousands of files with a JavaScript-heavy pipeline costs real time. JSSG uses Tree-sitter for parsing and Rust for pattern matching and the semantic analyzer—full workspace scans in seconds, not minutes, for many repositories.
+
+### Developer & Agent Experience
+
+*Usability and reliability when writing codemods—where LLMs and humans hit less friction.*
+
+- **A small, direct API** — Large, loosely typed, chain-heavy AST APIs are easy for LLMs to misuse. JSSG stays close to the tree: `find`, `findAll`, `replace`, `text()`, and related helpers—less surface area, fewer invented methods, less time debugging transforms that never could have worked. See the [JSSG reference](/jssg/reference).
+- **MCP: agents can inspect real ASTs** — Through [Codemod MCP](/model-context-protocol), an agent can dump the AST of a snippet, browse Tree-sitter node types, and run codemod tests inside the conversation. It does not have to guess what the tree looks like; that feedback loop is what makes agent-driven codemods reliable instead of hopeful.
+
+### Runtime & Execution Model
+
+*How codemods run: safety, observability, and power during execution.*
+
+- **Deny-by-default security** — No file system, child processes, or network access unless you grant [capabilities](/jssg/security)—unlike typical Node transform runners where full `fs` and `require` are the default.
+- **Metrics for mining, not only edits** — Use [`codemod:metrics`](/jssg/metrics) to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
+- **Import and edit utilities** — [`@jssg/utils`](/jssg/utils) and similar helpers cover tedious import and AST chores without custom Babel plugins.
+- **Multi-file and file-path changes** — Use [`jssgTransform`](/jssg/reference#multi-file-transforms-with-jssgtransform) to drive coordinated edits across files, and [`root.rename()`](/jssg/reference#file-renaming) for moves and extension changes—not only in-place source edits.
+
+### Platform & Distribution
+
+*Everything beyond writing a transform: shipping, orchestration, and operating migrations at scale—not “just a toolkit.”*
+
+- **Registry** — Publish a package to the [Codemod Registry](/publishing) so anyone can run it with `npx codemod @scope/name`—no cloning or local setup for consumers.
+- **Workflow engine** — Real migrations are rarely a single pass. Compose JSSG steps in YAML with deterministic stages, optional AI-assisted steps where patterns are not enough, and shared state between steps; the engine handles orchestration, [sharding across PRs](/workflows/sharding), and progress. See the [Workflow reference](/workflows/reference).
+- **Beyond the CLI** — For large organizations, the [Codemod Platform](/platform/quickstart) builds on the same analysis: [Insights](/platform/insights) for adoption and impact, [Campaigns](/platform/campaigns) to split work across teams and repos, and enterprise workflows so you are not landing one enormous PR across every owner at once.
+- **Active development** — jscodeshift’s meaningful releases have been sparse for years while the ecosystem moved on. JSSG and the Codemod toolchain ship ongoing improvements: features, fixes, and runtime updates.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="JSSG API reference"
+    href="/jssg/reference"
+    icon="book"
+  >
+    Explore the full API reference for node navigation, editing, and pattern matching.
+  </Card>
+  <Card
+    title="Security & Capabilities"
+    href="/jssg/security"
+    icon="shield-check"
+  >
+    Learn about JSSG's security model and how to enable file system, network, and process capabilities.
+  </Card>
+  <Card
+    title="Semantic Analysis"
+    href="/jssg/semantic-analysis"
+    icon="magnifying-glass"
+  >
+    Find symbol definitions and references across your codebase.
+  </Card>
+  <Card
+    title="Advanced patterns"
+    href="/jssg/advanced"
+    icon="code"
+  >
+    Learn advanced transformation techniques and best practices.
+  </Card>
+  <Card
+    title="Test your codemod"
+    href="/jssg/testing"
+    icon="flask"
+  >
+    Validate your codemod with before/after fixtures and the test runner.
+  </Card>
+  <Card
+    title="Metrics"
+    href="/jssg/metrics"
+    icon="chart-simple"
+  >
+    Collect and aggregate data during runs—codebase analysis, migration tracking, and read-only mining without editing files.
+  </Card>
+</CardGroup>

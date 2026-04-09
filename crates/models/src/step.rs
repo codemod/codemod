@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use ts_rs::TS;
 /// Represents a step in a node
@@ -22,9 +22,10 @@ pub struct Step {
     #[ts(optional, as = "Option<HashMap<String, String>>")]
     pub env: Option<HashMap<String, String>>,
 
-    /// Conditional expression to determine if this step should be executed
+    /// Conditional expression to determine if this step should be executed.
+    /// Accepts a string expression or a literal boolean (`if: true` / `if: false`).
     #[serde(rename = "if")]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_condition")]
     #[ts(optional, as = "Option<String>")]
     pub condition: Option<String>,
 
@@ -433,6 +434,31 @@ pub struct CommitConfig {
 
 fn default_allow_empty() -> bool {
     true
+}
+
+/// Deserialize the `if` condition field from either a string or a boolean.
+/// YAML `if: true` / `if: false` are parsed as booleans; this converts them
+/// to the string literals `"true"` / `"false"` so the expression engine can
+/// evaluate them uniformly.
+fn deserialize_condition<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "unsupported type for `if` condition: expected string or boolean, got {}",
+            match &other {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::Object(_) => "object",
+                _ => "unknown",
+            }
+        ))),
+    }
 }
 
 /// Configuration for automatic pull request creation at the end of a node.

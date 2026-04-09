@@ -51,9 +51,9 @@ use butterflow_models::step::{
     UseJSAstGrep,
 };
 use butterflow_models::{
-    evaluate_condition, resolve_string_with_expression, DiffOperation, Error, FieldDiff, Node,
-    Result, StateDiff, Strategy, Task, TaskDiff, TaskStatus, Workflow, WorkflowRun,
-    WorkflowRunDiff, WorkflowStatus,
+    evaluate_condition, resolve_string_list, resolve_string_with_expression, DiffOperation, Error,
+    FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff, TaskExpressionContext,
+    TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -357,6 +357,26 @@ fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String
         message.push_str(line);
     }
     message
+}
+
+/// Resolve an optional list of glob patterns, expanding `${{ }}` expressions.
+/// Returns `None` when the input is `None` or all items resolve to empty strings.
+fn resolve_optional_glob_list(
+    items: &Option<Vec<String>>,
+    params: &HashMap<String, serde_json::Value>,
+    state: &HashMap<String, serde_json::Value>,
+    matrix_values: Option<&HashMap<String, serde_json::Value>>,
+    task_context: Option<&TaskExpressionContext>,
+) -> Result<Option<Vec<String>>> {
+    let Some(items) = items else {
+        return Ok(None);
+    };
+    let resolved = resolve_string_list(items, params, state, matrix_values, None, task_context)?;
+    Ok(if resolved.is_empty() {
+        None
+    } else {
+        Some(resolved)
+    })
 }
 
 /// Workflow engine
@@ -1986,13 +2006,11 @@ impl Engine {
 
         // Cloud mode: checkout a task-specific branch before running steps
         let cloud_mode = crate::git_ops::is_cloud_mode();
-        let task_expr_ctx = if cloud_mode {
-            Some(crate::git_ops::build_task_expression_context(
-                &task.id.to_string(),
-            ))
-        } else {
-            None
-        };
+        // Always build task expression context so CODEMOD_TASK_* env vars are
+        // available as `task.*` template variables regardless of mode.
+        let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
+            &task.id.to_string(),
+        ));
         let cloud_branch_name = if cloud_mode {
             let ctx = task_expr_ctx.as_ref().unwrap();
             let configured_branch = node.branch_name.as_ref().map(|tmpl| {
@@ -2044,7 +2062,7 @@ impl Engine {
                     &state,
                     task.matrix_values.as_ref(),
                     None, // step outputs
-                    None, // task context
+                    task_expr_ctx.as_ref(),
                 )
                 .unwrap_or_default();
 
@@ -2156,6 +2174,7 @@ impl Engine {
                     &workflow_run.bundle_path,
                     &[],
                     &self.workflow_run_config.capabilities,
+                    task_expr_ctx.as_ref(),
                     &step_logger,
                 )
                 .await;
@@ -2536,6 +2555,7 @@ impl Engine {
         bundle_path: &Option<PathBuf>,
         dependency_chain: &[CodemodDependency],
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
+        task_expr_ctx: Option<&TaskExpressionContext>,
         logger: &StructuredLogger,
     ) -> Result<()> {
         match action {
@@ -2588,7 +2608,7 @@ impl Engine {
                             state,
                             task.matrix_values.as_ref(),
                             None, // step outputs
-                            None, // task context
+                            task_expr_ctx,
                         )?;
 
                         if !should_execute {
@@ -2614,6 +2634,7 @@ impl Engine {
                         bundle_path,
                         dependency_chain,
                         capabilities,
+                        task_expr_ctx,
                         logger,
                     ))
                     .await?;
@@ -2621,7 +2642,23 @@ impl Engine {
                 Ok(())
             }
             StepAction::AstGrep(ast_grep) => {
-                self.execute_ast_grep_step(node.id.clone(), ast_grep, logger)
+                // Resolve ${{ }} expressions in include/exclude globs
+                let mut resolved_ast_grep = ast_grep.clone();
+                resolved_ast_grep.include = resolve_optional_glob_list(
+                    &ast_grep.include,
+                    params,
+                    state,
+                    task.matrix_values.as_ref(),
+                    task_expr_ctx,
+                )?;
+                resolved_ast_grep.exclude = resolve_optional_glob_list(
+                    &ast_grep.exclude,
+                    params,
+                    state,
+                    task.matrix_values.as_ref(),
+                    task_expr_ctx,
+                )?;
+                self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
                     .await
             }
             StepAction::JSAstGrep(js_ast_grep) => {
@@ -2645,6 +2682,7 @@ impl Engine {
                     Some(state),
                     logger,
                     None,
+                    task_expr_ctx,
                 )
                 .await
             }
@@ -2873,6 +2911,7 @@ impl Engine {
         initial_state: Option<&HashMap<String, serde_json::Value>>,
         logger: &StructuredLogger,
         modified_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
+        task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
         let task_log_task_id = Uuid::parse_str(&id).ok();
@@ -2931,13 +2970,43 @@ impl Engine {
                 Ok(())
             })),
         };
+        // Resolve ${{ }} expressions in include/exclude globs.
+        let empty_params = HashMap::new();
+        let empty_state = HashMap::new();
+        let resolved_params_ref = params.as_ref().unwrap_or(&empty_params);
+        let resolved_state_ref = initial_state.unwrap_or(&empty_state);
+
+        let resolved_include = resolve_optional_glob_list(
+            &js_ast_grep.include,
+            resolved_params_ref,
+            resolved_state_ref,
+            matrix_input.as_ref(),
+            task_expr_ctx,
+        )?
+        .or_else(|| {
+            // Auto-apply matrix._meta_files as the include list when no
+            // explicit include is configured or resolves to empty.
+            matrix_input
+                .as_ref()
+                .and_then(|m| m.get("_meta_files"))
+                .and_then(butterflow_models::variable::value_to_string_vec)
+        });
+
+        let resolved_exclude = resolve_optional_glob_list(
+            &js_ast_grep.exclude,
+            resolved_params_ref,
+            resolved_state_ref,
+            matrix_input.as_ref(),
+            task_expr_ctx,
+        )?;
+
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
             progress_callback: self.workflow_run_config.progress_callback.clone(),
             target_path: Some(target_path.clone()),
             base_path: None,
-            include_globs: js_ast_grep.include.as_deref().map(|v| v.to_vec()),
-            exclude_globs: js_ast_grep.exclude.as_deref().map(|v| v.to_vec()),
+            include_globs: resolved_include,
+            exclude_globs: resolved_exclude,
             dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
             languages: Some(vec![js_ast_grep
                 .language
@@ -4208,6 +4277,10 @@ impl Engine {
         let runner: Box<dyn Runner> =
             Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet));
 
+        // Build task expression context for variable resolution in codemod steps
+        let codemod_task_expr_ctx =
+            crate::git_ops::build_task_expression_context(&task.id.to_string());
+
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
             for step in &node.steps {
@@ -4218,7 +4291,7 @@ impl Engine {
                         state,
                         task.matrix_values.as_ref(),
                         None,
-                        None, // task context
+                        Some(&codemod_task_expr_ctx),
                     )?;
                     if !should_execute {
                         slog!(
@@ -4246,6 +4319,7 @@ impl Engine {
                     &Some(resolved_package.package_dir.clone()),
                     dependency_chain,
                     capabilities,
+                    Some(&codemod_task_expr_ctx),
                     logger,
                 ))
                 .await?;
@@ -4393,6 +4467,7 @@ impl Engine {
             None,
             logger,
             Some(collector.clone()),
+            None,
         )
         .await?;
 

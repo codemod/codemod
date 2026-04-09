@@ -17,12 +17,36 @@ pub fn is_cloud_mode() -> bool {
 }
 
 /// Build a [`TaskExpressionContext`] from a task ID.
+///
+/// In addition to computing the task signature, this reads all environment
+/// variables prefixed with `CODEMOD_TASK_` (excluding `CODEMOD_TASK_ID`) and
+/// exposes them as `task.<lowercase_suffix>` template variables.
 pub fn build_task_expression_context(task_id: &str) -> TaskExpressionContext {
     let signature = compute_task_signature(task_id);
+    let extra = collect_task_env_vars();
     TaskExpressionContext {
         id: task_id.to_string(),
         signature,
+        extra,
     }
+}
+
+/// Collect `CODEMOD_TASK_*` environment variables (excluding `CODEMOD_TASK_ID`)
+/// into a map keyed by the lowercased suffix.
+///
+/// Example: `CODEMOD_TASK_JIRA_TITLE=Fix bug` → `("jira_title", "Fix bug")`
+pub fn collect_task_env_vars() -> std::collections::HashMap<String, String> {
+    let mut extra = std::collections::HashMap::new();
+    for (key, value) in std::env::vars() {
+        if let Some(suffix) = key.strip_prefix("CODEMOD_TASK_") {
+            // Skip CODEMOD_TASK_ID — it's already handled as task.id
+            if suffix == "ID" {
+                continue;
+            }
+            extra.insert(suffix.to_lowercase(), value);
+        }
+    }
+    extra
 }
 
 /// SHA-256 the task id and return the first 8 hex characters.
