@@ -49,14 +49,14 @@
               {
                 "group": "JSSG",
                 "pages": [
-                  "jssg/quickstart",
-                  "jssg/testing",
+                  "jssg/intro",
                   "jssg/reference",
-                  "jssg/metrics",
+                  "jssg/security",
                   "jssg/semantic-analysis",
                   "jssg/advanced",
                   "jssg/utils",
-                  "jssg/security"
+                  "jssg/testing",
+                  "jssg/metrics"
                 ]
               },
               "publishing",
@@ -142,6 +142,10 @@
     }
   },
   "redirects": [
+    {
+      "source": "/jssg/quickstart",
+      "destination": "/jssg/intro"
+    },
     {
       "source": "/more-resources/legal/telemetry-compliance",
       "destination": "https://codemod.com/telemetry-compliance"
