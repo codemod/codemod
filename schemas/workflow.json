@@ -204,7 +204,7 @@
           "type": "string"
         },
         "pull_request": {
-          "description": "Pull request configuration. When present (and in cloud mode), a PR is\nautomatically created at the end of the node execution.",
+          "description": "Pull request configuration. When present, the engine creates a managed\ngit branch and opens a PR at the end of the node execution.",
           "anyOf": [
             {
               "$ref": "#/$defs/PullRequestConfig"
