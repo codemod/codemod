@@ -561,7 +561,17 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
+In interactive mode, `codemod init` prompts for the core package decisions, then shows a review screen before scaffolding. You can edit fields from that review screen before creating files.
+
+Interactive defaults:
+
+- directory: current directory when `[PATH]` is omitted
+- agent skill behavior: included by default for workflow packages
+- description: `Codemod package for <name>`
+- author: logged-in user as `username <email>` when available; otherwise omitted
+- license: `MIT`
+- package manager: `npm`
+- GitHub Actions publishing workflow: disabled
 
 You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
 
@@ -573,7 +583,7 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 [See the publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
 
 <ResponseField name="[PATH]" type="string">
-  Project directory name.
+  Project directory name. Defaults to the current directory in interactive mode.
 </ResponseField>
 
 <ResponseField name="--name <NAME>" type="string">
@@ -621,19 +631,19 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 <ResponseField name="--description <DESCRIPTION>" type="string">
   Project description.
 
-  Defaults to `Codemod package for <name>` in `--no-interactive` mode.
+  Defaults to `Codemod package for <name>`.
 </ResponseField>
 
 <ResponseField name="--author <AUTHOR>" type="string">
   Author name and email.
 
-  Defaults to the logged-in user as `username <email>` in `--no-interactive` mode when available. Otherwise omitted.
+  Defaults to the logged-in user as `username <email>` when available. Otherwise omitted.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
   License.
 
-  Defaults to `MIT` in `--no-interactive` mode.
+  Defaults to `MIT`.
 </ResponseField>
 
 <ResponseField name="--private" type="boolean">
