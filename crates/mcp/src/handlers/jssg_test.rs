@@ -257,6 +257,8 @@ impl JssgTestHandler {
                         semantic_provider: None,
                         metrics_context: Some(metrics_context),
                         shared_state_context: None,
+                        runtime_event_callback: None,
+                        cancellation_flag: None,
                         test_mode: true,
                         dry_run: false,
                         target_directory: None,

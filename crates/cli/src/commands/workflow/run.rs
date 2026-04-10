@@ -117,6 +117,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap()),
     )?;
+    let workflow_label = workflow_file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| args.workflow.clone());
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -168,21 +173,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
-    // Set the workflow name so it's stored on the WorkflowRun for TUI display
-    engine.set_name(Some(args.workflow.clone()));
+    engine.set_name(Some(workflow_label));
 
     if use_tui {
-        // Don't set quiet=true on the engine — the TUI's StdioGuard already
-        // redirects fd 1/2 to /dev/null, so runner println! is suppressed.
-        // During passthrough (log viewer), stdout is restored and we *want*
-        // runner output to reach the terminal.
+        engine.set_quiet(true);
+        engine.set_progress_callback(Arc::new(None));
         config.progress_callback = Arc::new(None);
     }
 
     // Run workflow -- with TUI if manual nodes, otherwise text-based
     #[cfg(unix)]
     let (_, seconds) = if use_tui {
-        run_workflow_with_tui(&engine, config).await?
+        run_workflow_with_tui(&mut engine, config).await?
     } else {
         run_workflow(&engine, config).await?
     };

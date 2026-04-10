@@ -385,16 +385,14 @@ pub async fn handler(
     let use_tui = false;
 
     if use_tui {
-        // Don't set quiet=true on the engine — the TUI's StdioGuard already
-        // redirects fd 1/2 to /dev/null, so runner println! is suppressed.
-        // During passthrough (log viewer), stdout is restored and we *want*
-        // runner output to reach the terminal.
+        engine.set_quiet(true);
+        engine.set_progress_callback(Arc::new(None));
         config.progress_callback = Arc::new(None);
     }
 
     #[cfg(unix)]
     let run_result = if use_tui {
-        run_workflow_with_tui(&engine, config).await
+        run_workflow_with_tui(&mut engine, config).await
     } else {
         run_workflow(&engine, config).await
     };

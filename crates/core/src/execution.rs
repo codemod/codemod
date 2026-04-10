@@ -14,7 +14,10 @@ use std::{
     },
 };
 
-type PreRunCallbackFn = Box<dyn Fn(&Path, bool, &CodemodExecutionConfig) + Send + Sync>;
+type PreRunCallbackError = Box<dyn Error + Send + Sync>;
+type PreRunCallbackFn = Box<
+    dyn Fn(&Path, bool, &CodemodExecutionConfig) -> Result<(), PreRunCallbackError> + Send + Sync,
+>;
 
 #[derive(Clone)]
 pub struct PreRunCallback {
@@ -82,7 +85,8 @@ impl CodemodExecutionConfig {
         let search_base = self.get_search_base()?;
 
         if let Some(ref pre_run_cb) = self.pre_run_callback {
-            (pre_run_cb.callback)(&search_base, !self.dry_run, self);
+            (pre_run_cb.callback)(&search_base, !self.dry_run, self)
+                .map_err(|e| -> Box<dyn Error> { e })?;
         }
 
         let globs = self.build_globs(&search_base)?;

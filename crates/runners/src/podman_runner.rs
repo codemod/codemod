@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use butterflow_models::Error;
 use butterflow_models::Result;
 
-use crate::Runner;
+use crate::{OutputCallback, Runner};
 
 /// Podman runner (runs commands in Podman containers)
 pub struct PodmanRunner;
@@ -26,7 +26,12 @@ impl Default for PodmanRunner {
 
 #[async_trait]
 impl Runner for PodmanRunner {
-    async fn run_command(&self, command: &str, env: &HashMap<String, String>) -> Result<String> {
+    async fn run_command(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
         // Create environment variables array
         let env_args: Vec<String> = env
             .iter()
@@ -48,9 +53,19 @@ impl Runner for PodmanRunner {
             .output()
             .map_err(|e| Error::Runtime(format!("Failed to execute podman command: {e}")))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if let Some(callback) = output_callback {
+            for line in stdout.lines().filter(|line| !line.is_empty()) {
+                callback(format!("[stdout] {}", line));
+            }
+            for line in stderr.lines().filter(|line| !line.is_empty()) {
+                callback(format!("[stderr] {}", line));
+            }
+        }
+
         // Check if the command succeeded
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Runtime(format!(
                 "Podman command failed with exit code {}: {}",
                 output.status.code().unwrap_or(-1),
@@ -59,7 +74,6 @@ impl Runner for PodmanRunner {
         }
 
         // Return the output
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(stdout)
     }
 }

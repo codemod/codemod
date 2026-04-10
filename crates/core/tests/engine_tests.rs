@@ -98,6 +98,32 @@ where
     }
 }
 
+async fn wait_for_workflow_status<F>(
+    engine: &Engine,
+    workflow_run_id: Uuid,
+    predicate: F,
+) -> WorkflowStatus
+where
+    F: Fn(WorkflowStatus) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+
+    loop {
+        let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
+        if predicate(workflow_run.status) {
+            return workflow_run.status;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for workflow '{workflow_run_id}' to reach expected status, last status was {:?}",
+            workflow_run.status
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+}
+
 // Helper function to create a simple test workflow
 fn create_long_running_workflow() -> Workflow {
     Workflow {
@@ -463,6 +489,88 @@ fn create_matrix_workflow() -> Workflow {
     }
 }
 
+fn create_manual_matrix_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "node1".to_string(),
+                name: "Node 1".to_string(),
+                description: Some("Test node 1".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'Hello, World!'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+            Node {
+                id: "node2".to_string(),
+                name: "Node 2".to_string(),
+                description: Some("Manual matrix node".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["node1".to_string()],
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: Some(vec![
+                        HashMap::from([(
+                            "region".to_string(),
+                            serde_json::to_value("us-east").unwrap(),
+                        )]),
+                        HashMap::from([(
+                            "region".to_string(),
+                            serde_json::to_value("us-west").unwrap(),
+                        )]),
+                    ]),
+                    from_state: None,
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'Manual matrix shard'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+        ],
+    }
+}
+
 // Helper function to create a workflow with templates
 fn create_template_workflow() -> Workflow {
     let template = Template {
@@ -697,6 +805,10 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
         .expect("shell-node task should exist");
 
     let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("Step started: Shell Step"),
+        "task logs should include the active step marker, got: {logs}"
+    );
     assert!(
         logs.contains("shell command executed"),
         "task logs should include the command output, got: {logs}"
@@ -1084,6 +1196,80 @@ async fn test_trigger_all() {
     assert!(status == WorkflowStatus::Running || status == WorkflowStatus::Completed);
 }
 
+#[tokio::test]
+async fn test_manual_matrix_master_tracks_child_trigger_state() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_manual_matrix_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let workflow_status = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(workflow_status, WorkflowStatus::AwaitingTrigger);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap();
+    assert_eq!(master_task.status, TaskStatus::AwaitingTrigger);
+    assert!(master_task.ended_at.is_none());
+
+    let awaiting_children: Vec<&Task> = tasks
+        .iter()
+        .filter(|task| task.master_task_id == Some(master_task.id))
+        .collect();
+    assert_eq!(awaiting_children.len(), 2);
+    assert!(awaiting_children
+        .iter()
+        .all(|task| task.status == TaskStatus::AwaitingTrigger));
+}
+
+#[tokio::test]
+async fn test_trigger_all_clears_matrix_master_terminal_metadata() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_manual_matrix_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    engine.trigger_all(workflow_run_id).await.unwrap();
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap();
+
+    assert!(
+        matches!(
+            master_task.status,
+            TaskStatus::Pending | TaskStatus::Running | TaskStatus::Completed
+        ),
+        "unexpected master task status after trigger_all: {:?}",
+        master_task.status
+    );
+    assert!(
+        master_task.ended_at.is_none() || master_task.status == TaskStatus::Completed,
+        "master task should not keep a stale ended_at while active: {:?}",
+        master_task
+    );
+}
+
 // Helper function to create a workflow with environment variables
 fn create_env_var_workflow() -> Workflow {
     Workflow {
@@ -1246,12 +1432,12 @@ fn create_ai_no_key_fallback_workflow() -> Workflow {
                     action: StepAction::AI(UseAI {
                         prompt: "Print these instructions when no key is available.".to_string(),
                         working_dir: None,
-                        timeout_ms: None,
                         env: None,
                         dry_run: None,
                         model: None,
                         system_prompt: Some("You are a test system prompt.".to_string()),
                         max_steps: None,
+                        timeout_ms: None,
                         tools: None,
                         endpoint: None,
                         api_key: None,

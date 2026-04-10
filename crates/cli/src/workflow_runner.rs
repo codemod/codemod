@@ -183,9 +183,11 @@ pub fn workflow_has_manual_nodes(workflow: &Workflow) -> bool {
 /// Run a workflow and then launch the TUI for interactive monitoring
 #[cfg(unix)]
 pub async fn run_workflow_with_tui(
-    engine: &Engine,
+    engine: &mut Engine,
     config: WorkflowRunConfig,
 ) -> Result<(String, f64)> {
+    let tui_runtime = crate::tui::configure_engine_for_tui(engine);
+
     // Parse workflow file
     let workflow = utils::parse_workflow_file(engine.get_workflow_file_path()).context(format!(
         "Failed to parse workflow file: {}",
@@ -206,7 +208,7 @@ pub async fn run_workflow_with_tui(
         .context("Failed to run workflow")?;
 
     // Launch TUI in task list mode for this run
-    crate::tui::run_tui_for_run(engine.clone(), workflow_run_id).await?;
+    crate::tui::run_tui_for_run_with_runtime(engine.clone(), workflow_run_id, tui_runtime).await?;
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
     println!("✨ Done in {seconds:.3}s");
