@@ -720,7 +720,7 @@ mod tests {
             name: "example".to_string(),
             version: "1.0.0".to_string(),
             description: "example".to_string(),
-            author: "codemod".to_string(),
+            author: Some("codemod".to_string()),
             license: None,
             copyright: None,
             repository: None,

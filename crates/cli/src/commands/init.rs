@@ -1,3 +1,4 @@
+use crate::auth::{format_author_from_user_info, load_stored_user_for_registry, TokenStorage};
 use crate::utils::skill_layout::{
     expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
 };
@@ -5,7 +6,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use console::{style, Emoji};
 use inquire::{Confirm, Select, Text};
-use log::info;
+use log::{debug, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -116,7 +117,7 @@ impl PackageBehavior {
 struct ProjectConfig {
     name: String,
     description: String,
-    author: String,
+    author: Option<String>,
     license: String,
     project_type: ProjectType,
     package_behavior: PackageBehavior,
@@ -298,18 +299,7 @@ pub fn handler(args: &Command) -> Result<()> {
 
         let project_name = match args.name.clone() {
             Some(name) => name,
-            None => {
-                let file_name = project_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Could not determine project name from path {}",
-                            project_path.display()
-                        )
-                    })?;
-                file_name.to_string()
-            }
+            None => derive_project_name_from_path(&project_path)?,
         };
 
         (project_path, project_name, git_repository_url)
@@ -351,78 +341,37 @@ pub fn handler(args: &Command) -> Result<()> {
         }
 
         let project_type = if package_behavior.includes_workflow() {
-            let selected_project_type = args
-                .project_type
-                .clone()
-                .ok_or_else(|| anyhow!("Project type is required --project-type"))?;
-            normalize_project_type(selected_project_type)
+            normalize_project_type(args.project_type.clone().unwrap_or(ProjectType::AstGrepJs))
         } else {
             // Skill-only packages do not scaffold workflow project assets.
             ProjectType::AstGrepJs
         };
 
-        let package_manager = match (
-            package_behavior,
-            &project_type,
-            args.package_manager.clone(),
-            args.workspace,
-        ) {
-            (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::AstGrepJs,
-                Some(pm),
-                _,
+        let requires_package_manager = (package_behavior.includes_workflow()
+            && matches!(project_type, ProjectType::AstGrepJs | ProjectType::Hybrid))
+            || args.workspace;
+        let package_manager = if requires_package_manager {
+            Some(
+                args.package_manager
+                    .clone()
+                    .unwrap_or_else(|| "npm".to_string()),
             )
-            | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::Hybrid,
-                Some(pm),
-                _,
-            )
-            | (_, _, Some(pm), true) => Some(pm),
-            (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::AstGrepJs,
-                None,
-                _,
-            )
-            | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::Hybrid,
-                None,
-                _,
-            ) => {
-                return Err(anyhow!(
-                    "--package-manager is required when --project-type is ast-grep-js or hybrid"
-                ));
-            }
-            (_, _, None, true) => {
-                return Err(anyhow!(
-                    "--package-manager is required when --workspace is enabled"
-                ));
-            }
-            _ => None,
+        } else {
+            args.package_manager.clone()
         };
+        let default_description = format!("Codemod package for {}", project_name);
         ProjectConfig {
             name: project_name,
-            description: args
-                .description
-                .clone()
-                .ok_or_else(|| anyhow!("Description is required --description"))?,
-            author: args
-                .author
-                .clone()
-                .ok_or_else(|| anyhow!("Author is required --author"))?,
-            license: args
-                .license
-                .clone()
-                .ok_or_else(|| anyhow!("License is required --license"))?,
+            description: args.description.clone().unwrap_or(default_description),
+            author: normalize_optional_string(args.author.clone())
+                .or_else(resolve_default_author_from_active_registry),
+            license: args.license.clone().unwrap_or_else(|| "MIT".to_string()),
             project_type,
             package_behavior,
             language: args
                 .language
                 .clone()
-                .ok_or_else(|| anyhow!("Language is required --language"))?,
+                .unwrap_or_else(|| "typescript".to_string()),
             private: args.private,
             package_manager,
             git_repository_url,
@@ -465,6 +414,40 @@ fn get_codemod_dir_name(name: &str) -> String {
     }
 }
 
+fn derive_project_name_from_path(project_path: &Path) -> Result<String> {
+    let resolved = if project_path.is_absolute() {
+        project_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(project_path))
+            .map_err(|error| anyhow!("Failed to determine current working directory: {error}"))?
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in resolved.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(name) => normalized.push(name),
+        }
+    }
+
+    normalized
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            anyhow!(
+                "Could not determine project name from path {}",
+                project_path.display()
+            )
+        })
+}
+
 fn codemod_scope(name: &str) -> Option<&str> {
     let trimmed = name.trim();
     if !trimmed.starts_with('@') {
@@ -497,6 +480,39 @@ fn workspace_root_readme_scope_guidance(name: &str) -> String {
         .unwrap_or_else(|| {
             "Reserve an organization scope in Codemod before publishing so your packages stay grouped in the Codemod Registry.".to_string()
         })
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn default_author_for_registry(storage: &TokenStorage, registry_url: &str) -> Option<String> {
+    load_stored_user_for_registry(storage, registry_url)
+        .ok()
+        .flatten()
+        .and_then(|user| format_author_from_user_info(&user))
+}
+
+fn resolve_default_author_from_active_registry() -> Option<String> {
+    let storage = match TokenStorage::new() {
+        Ok(storage) => storage,
+        Err(error) => {
+            debug!("Failed to initialize token storage while resolving default author: {error}");
+            return None;
+        }
+    };
+
+    let config = match storage.load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            debug!("Failed to load CLI config while resolving default author: {error}");
+            return None;
+        }
+    };
+
+    default_author_for_registry(&storage, &config.default_registry)
 }
 
 fn normalize_project_type(selected: ProjectType) -> ProjectType {
@@ -631,12 +647,18 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
             .prompt()?
     };
 
-    let author = if let Some(auth) = &args.author {
-        auth.clone()
+    let author = if let Some(author) = normalize_optional_string(args.author.clone()) {
+        Some(author)
     } else {
-        Text::new("Author:")
-            .with_default("Author <author@example.com>")
-            .prompt()?
+        let default_author = resolve_default_author_from_active_registry();
+        let author_prompt = if let Some(default_author) = default_author.as_deref() {
+            Text::new("Author:")
+                .with_default(default_author)
+                .with_help_message("Leave empty to omit the author field.")
+        } else {
+            Text::new("Author:").with_help_message("Leave empty to omit the author field.")
+        };
+        normalize_optional_string(Some(author_prompt.prompt()?))
     };
 
     let license = if let Some(lic) = &args.license {
@@ -858,7 +880,14 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let manifest_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
-        .replace("{author}", &config.author)
+        .replace(
+            "{author_block}",
+            &config
+                .author
+                .as_ref()
+                .map(|author| format!("author: \"{author}\""))
+                .unwrap_or_default(),
+        )
         .replace("{license}", &config.license)
         .replace("{language}", &config.language)
         .replace(
@@ -1295,14 +1324,19 @@ fn create_gitignore(project_path: &Path) -> Result<()> {
 }
 
 fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let package_manager = selected_package_manager(config);
     let test_command = if config.package_behavior == PackageBehavior::SkillOnly {
-        format!("npx codemod@latest {}", config.name)
+        format!(
+            "{} {}",
+            codemod_cli_command_for_package_manager(package_manager),
+            config.name
+        )
     } else {
         match config.project_type {
             ProjectType::Shell => "bash scripts/transform.sh".to_string(),
-            ProjectType::AstGrepJs => "npm test".to_string(),
+            ProjectType::AstGrepJs => package_manager_test_command(package_manager),
             ProjectType::AstGrepYaml => "ast-grep test rules/".to_string(),
-            ProjectType::Hybrid => "npm test".to_string(),
+            ProjectType::Hybrid => package_manager_test_command(package_manager),
         }
     };
 
@@ -1325,9 +1359,10 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 ## Skill Installation
 
 ```bash
-npx codemod@latest {}
+{} {}
 ```
 "#,
+            codemod_cli_command_for_package_manager(package_manager),
             config.name
         ));
     }
@@ -1465,7 +1500,8 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 
     match config.project_type {
         ProjectType::AstGrepJs | ProjectType::Hybrid => {
-            let package_manager = config.package_manager.clone().unwrap_or("npm".to_string());
+            let package_manager = selected_package_manager(config);
+            let install_command = package_manager_install_command(package_manager);
 
             let output = ProcessCommand::new(package_manager)
                 .arg("install")
@@ -1487,15 +1523,15 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
                         );
                         println!(
                             "  You can run {} manually later",
-                            style("npm install").cyan()
+                            style(&install_command).cyan()
                         );
                     }
                 }
                 Err(e) => {
-                    println!("{} npm not found: {}", style("⚠").red(), e);
+                    println!("{} {} not found: {}", style("⚠").red(), package_manager, e);
                     println!(
                         "  You can run {} manually later",
-                        style("npm install").cyan()
+                        style(&install_command).cyan()
                     );
                 }
             }
@@ -1581,6 +1617,8 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 
 fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let codemod_dir_name = get_codemod_dir_name(&config.name);
+    let package_manager = selected_package_manager(config);
+    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
 
     println!();
     if config.workspace {
@@ -1635,7 +1673,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         );
         println!(
             "  {}",
-            style(format!("npx codemod@latest {}", config.name)).dim()
+            style(format!("{} {}", codemod_command, config.name)).dim()
         );
         println!();
         println!(
@@ -1663,8 +1701,8 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         println!(
             "  {}",
             style(format!(
-                "npx codemod@latest workflow validate -w {}",
-                workflow_path
+                "{} workflow validate -w {}",
+                codemod_command, workflow_path
             ))
             .dim()
         );
@@ -1679,8 +1717,8 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         println!(
             "  {}",
             style(format!(
-                "npx codemod@latest workflow run -w {} --target ./some/target/path",
-                workflow_path
+                "{} workflow run -w {} --target ./some/target/path",
+                codemod_command, workflow_path
             ))
             .dim()
         );
@@ -1695,7 +1733,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             );
             println!(
                 "  {}",
-                style(format!("npx codemod@latest {}", config.name)).dim()
+                style(format!("{} {}", codemod_command, config.name)).dim()
             );
         }
     }
@@ -1749,6 +1787,33 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
+fn selected_package_manager(config: &ProjectConfig) -> &str {
+    config.package_manager.as_deref().unwrap_or("npm")
+}
+
+fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
+    match package_manager {
+        "npm" => "npx codemod@latest",
+        "yarn" => "yarn dlx codemod@latest",
+        "pnpm" => "pnpm dlx codemod@latest",
+        "bun" => "bunx codemod@latest",
+        _ => "npx codemod@latest",
+    }
+}
+
+fn package_manager_install_command(package_manager: &str) -> String {
+    format!("{package_manager} install")
+}
+
+fn package_manager_test_command(package_manager: &str) -> String {
+    match package_manager {
+        "yarn" => "yarn test".to_string(),
+        "pnpm" => "pnpm test".to_string(),
+        "bun" => "bun test".to_string(),
+        _ => "npm test".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1760,7 +1825,7 @@ mod tests {
         ProjectConfig {
             name: "@codemod/sample-skill".to_string(),
             description: "Sample skill package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::SkillOnly,
@@ -1855,7 +1920,7 @@ mod tests {
         let config = ProjectConfig {
             name: "workflow-project".to_string(),
             description: "Workflow package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
             license: "MIT".to_string(),
             project_type: ProjectType::Hybrid,
             package_behavior: PackageBehavior::WorkflowOnly,
@@ -1882,7 +1947,7 @@ mod tests {
         let config = ProjectConfig {
             name: "@codemod/hybrid-project".to_string(),
             description: "Hybrid package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowAndSkill,
@@ -1914,6 +1979,122 @@ mod tests {
     }
 
     #[test]
+    fn create_project_preserves_selected_package_manager_in_generated_commands() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("yarn-project");
+
+        let config = ProjectConfig {
+            name: "yarn-project".to_string(),
+            description: "Yarn workflow package".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("yarn".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+
+        assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
+        assert!(readme.contains("yarn test"));
+        assert!(!readme.contains("npm test"));
+    }
+
+    #[test]
+    fn create_manifest_omits_author_when_not_provided() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("authorless-project");
+        fs::create_dir_all(&project_path).unwrap();
+
+        let config = ProjectConfig {
+            name: "authorless-project".to_string(),
+            description: "Workflow package".to_string(),
+            author: None,
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_manifest(&project_path, &config).unwrap();
+        let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
+        let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
+
+        assert!(!manifest.contains("author:"));
+        assert_eq!(parsed_manifest.author, None);
+    }
+
+    #[test]
+    fn default_author_for_registry_uses_stored_auth_user() {
+        let temp_dir = tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("config")).unwrap();
+        let registry_url = "https://registry.example.com";
+        storage
+            .save_auth(&crate::auth::storage::StoredAuth {
+                tokens: crate::auth::types::AuthTokens {
+                    access_token: "token".to_string(),
+                    refresh_token: None,
+                    expires_at: None,
+                    scope: vec!["publish".to_string()],
+                    token_type: "Bearer".to_string(),
+                },
+                user: crate::auth::types::UserInfo {
+                    id: "user-1".to_string(),
+                    username: "alice".to_string(),
+                    email: "alice@example.com".to_string(),
+                    organizations: None,
+                },
+                registry: registry_url.to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            default_author_for_registry(&storage, registry_url),
+            Some("alice <alice@example.com>".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_project_name_from_current_dir_paths_without_name_flag() {
+        let temp_dir = tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let current_name = derive_project_name_from_path(Path::new(".")).unwrap();
+        assert_eq!(
+            current_name,
+            temp_dir.path().file_name().unwrap().to_string_lossy()
+        );
+
+        let parent_name = derive_project_name_from_path(Path::new("..")).unwrap();
+        assert_eq!(
+            parent_name,
+            temp_dir
+                .path()
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+        );
+
+        std::env::set_current_dir(original).unwrap();
+    }
+
+    #[test]
     fn create_workspace_with_skill_generates_root_readme() {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path().join("workspace");
@@ -1921,7 +2102,7 @@ mod tests {
         let config = ProjectConfig {
             name: "sample-workflow-skill".to_string(),
             description: "Workflow + skill package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowAndSkill,
@@ -1950,7 +2131,7 @@ mod tests {
         let config = ProjectConfig {
             name: "workflow-only".to_string(),
             description: "Workflow package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
+            author: Some("Codemod Team <team@codemod.com>".to_string()),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowOnly,

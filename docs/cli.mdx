@@ -579,14 +579,14 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 <ResponseField name="--name <NAME>" type="string">
   Project name (defaults to directory name).
 
-  Required in `--no-interactive` mode when the project name cannot be derived from `[PATH]` (for example, when `[PATH]` is `.`, `..`, or another path without a final directory component).
+  Required in `--no-interactive` mode only when the project name cannot be derived from `[PATH]`.
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
   Workflow project type: `ast-grep-js` or `hybrid`.
   Mutually exclusive with `--skill`.
-  
-  Required in `--no-interactive` mode for workflow packages.
+
+  Defaults to `ast-grep-js` in `--no-interactive` mode for workflow packages.
 
   <Accordion title="More package types (advanced)">
     - `shell`: Shell script-based codemods
@@ -608,32 +608,32 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--package-manager <PACKAGE_MANAGER>" type="string">
   Package manager.
-  
-  Required in `--no-interactive` mode for `ast-grep-js`, `hybrid`, and `--workspace`.
+
+  Defaults to `npm` in `--no-interactive` mode for `ast-grep-js`, `hybrid`, and `--workspace`.
 </ResponseField>
 
 <ResponseField name="--language <LANGUAGE>" type="string">
   Target language.
 
-  Required in `--no-interactive` mode.
+  Defaults to `typescript` in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--description <DESCRIPTION>" type="string">
   Project description.
-  
-  Required in `--no-interactive` mode.
+
+  Defaults to `Codemod package for <name>` in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--author <AUTHOR>" type="string">
   Author name and email.
-  
-  Required in `--no-interactive` mode.
+
+  Defaults to the logged-in user as `username <email>` in `--no-interactive` mode when available. Otherwise omitted.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
   License.
-  
-  Required in `--no-interactive` mode.
+
+  Defaults to `MIT` in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--private" type="boolean">
@@ -719,6 +719,7 @@ npx codemod publish [PATH]
 
 <Info>
   Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Package Structure](/package-structure#package-metadata-codemod-yaml) for configuration options.
+  If `author` is omitted locally, `codemod publish` resolves it from the authenticated user before upload.
 </Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">

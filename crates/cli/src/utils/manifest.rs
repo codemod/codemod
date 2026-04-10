@@ -6,7 +6,8 @@ pub(crate) struct CodemodManifest {
     pub(crate) name: String,
     pub(crate) version: String,
     pub(crate) description: String,
-    pub(crate) author: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) license: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
