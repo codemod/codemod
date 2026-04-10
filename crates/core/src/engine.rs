@@ -191,6 +191,10 @@ fn select_shard_scan_eligible_files(
     }
 }
 
+fn should_manage_git_for_node(node: &Node) -> bool {
+    crate::git_ops::is_cloud_mode() || node.pull_request.is_some() || node.branch_name.is_some()
+}
+
 fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
@@ -2015,14 +2019,15 @@ impl Engine {
 
         info!("Executing task {} ({})", task_id, node.id);
 
-        // Cloud mode: checkout a task-specific branch before running steps
-        let cloud_mode = crate::git_ops::is_cloud_mode();
+        // Workflows that declare git outputs should use the managed branch/commit/PR path
+        // in both cloud and local runs.
+        let manage_git = should_manage_git_for_node(node);
         // Always build task expression context so CODEMOD_TASK_* env vars are
         // available as `task.*` template variables regardless of mode.
         let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
             &task.id.to_string(),
         ));
-        let cloud_branch_name = if cloud_mode {
+        let managed_branch_name = if manage_git {
             let ctx = task_expr_ctx.as_ref().unwrap();
             let configured_branch = node.branch_name.as_ref().map(|tmpl| {
                 resolve_string_with_expression(
@@ -2213,8 +2218,7 @@ impl Engine {
                         task_id
                     );
 
-                    // Cloud mode: execute commit checkpoint if configured on this step
-                    if cloud_mode {
+                    if manage_git {
                         if let Some(commit_config) = &step.commit {
                             let resolved_message = resolve_string_with_expression(
                                 &commit_config.message,
@@ -2313,9 +2317,9 @@ impl Engine {
             }
         }
 
-        // Cloud mode: finalize — fallback commit if needed, then push + create PR
-        if cloud_mode {
-            if let Some(ref branch) = cloud_branch_name {
+        // Managed git mode: finalize — fallback commit if needed, then push + create PR
+        if manage_git {
+            if let Some(ref branch) = managed_branch_name {
                 let target_path = &self.workflow_run_config.target_path;
 
                 let git_step_logger = self.structured_logger.with_context(StepContext {
@@ -5180,6 +5184,32 @@ mod tests {
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[test]
+    fn managed_git_mode_is_enabled_for_local_pull_request_nodes() {
+        let _guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+        let node = Node {
+            id: "apply-transforms".to_string(),
+            name: "Apply AST Transformations".to_string(),
+            description: None,
+            r#type: butterflow_models::node::NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: Some(butterflow_models::step::PullRequestConfig {
+                title: "PR".to_string(),
+                body: None,
+                draft: Some(true),
+                base: None,
+            }),
+        };
+
+        assert!(should_manage_git_for_node(&node));
     }
 
     #[test]
