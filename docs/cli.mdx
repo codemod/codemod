@@ -565,7 +565,7 @@ In interactive mode, `codemod init` prompts for the core package decisions, then
 
 Interactive defaults:
 
-- directory: current directory when `[PATH]` is omitted
+- directory: name-derived package directory when `[PATH]` is omitted
 - agent skill behavior: included by default for workflow packages
 - description: `Codemod package for <name>`
 - author: logged-in user as `username <email>` when available; otherwise omitted
@@ -573,7 +573,7 @@ Interactive defaults:
 - package manager: `npm`
 - GitHub Actions publishing workflow: disabled
 
-You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
+You can enable a GitHub Actions publishing workflow from the review screen. This generates `.github/workflows/publish.yml`:
 
 - **Single codemod repo**: Triggers on `v*` tags (e.g., `v1.0.0`)
 - **Monorepo**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name
@@ -583,7 +583,7 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 [See the publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
 
 <ResponseField name="[PATH]" type="string">
-  Project directory name. Defaults to the current directory in interactive mode.
+  Project directory name. In interactive mode, when omitted, the CLI defaults to a directory derived from the final codemod name.
 </ResponseField>
 
 <ResponseField name="--name <NAME>" type="string">

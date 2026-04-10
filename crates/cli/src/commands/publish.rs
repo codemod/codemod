@@ -94,8 +94,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let config = storage.load_config()?;
     let registry_url = config.default_registry.clone();
     let auth_source = resolve_publish_auth_source(&storage, &registry_url)?;
-    let effective_manifest =
-        resolve_effective_manifest(manifest, auth_source.inferred_author(&registry_url).await?)?;
+    let inferred_author = if manifest_needs_inferred_author(&manifest) {
+        auth_source.inferred_author(&registry_url).await?
+    } else {
+        None
+    };
+    let effective_manifest = resolve_effective_manifest(manifest, inferred_author)?;
 
     // Validate package structure and get JS files to bundle
     let js_files_to_bundle = validate_package_structure(&package_path, &effective_manifest)?;
@@ -165,6 +169,10 @@ fn normalize_manifest_author(author: Option<String>) -> Option<String> {
     author
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn manifest_needs_inferred_author(manifest: &CodemodManifest) -> bool {
+    normalize_manifest_author(manifest.author.clone()).is_none()
 }
 
 fn resolve_effective_manifest(
@@ -619,12 +627,9 @@ fn resolve_publish_auth_source(
     storage: &TokenStorage,
     registry_url: &str,
 ) -> Result<PublishAuthSource> {
-    match std::env::var("CODEMOD_AUTH_TOKEN") {
-        Ok(token) if !token.trim().is_empty() => {
-            debug!("Using auth token from CODEMOD_AUTH_TOKEN environment variable");
-            return Ok(PublishAuthSource::EnvironmentToken(token));
-        }
-        _ => {}
+    if let Some(token) = normalize_env_auth_token(std::env::var("CODEMOD_AUTH_TOKEN").ok()) {
+        debug!("Using auth token from CODEMOD_AUTH_TOKEN environment variable");
+        return Ok(PublishAuthSource::EnvironmentToken(token));
     }
 
     let auth = storage
@@ -637,6 +642,12 @@ fn resolve_publish_auth_source(
         })?;
 
     Ok(PublishAuthSource::StoredAuth(Box::new(auth)))
+}
+
+fn normalize_env_auth_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
 }
 
 #[cfg(test)]
@@ -761,6 +772,30 @@ codemod-skill-version: 0.1.0
 
         let error = resolve_effective_manifest(manifest, None).unwrap_err();
         assert!(error.to_string().contains("Package author is missing"));
+    }
+
+    #[test]
+    fn manifest_author_inference_is_needed_only_when_missing_or_blank() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        assert!(!manifest_needs_inferred_author(&manifest));
+
+        let mut blank_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        blank_author_manifest.author = Some("  ".to_string());
+        assert!(manifest_needs_inferred_author(&blank_author_manifest));
+
+        let mut missing_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        missing_author_manifest.author = None;
+        assert!(manifest_needs_inferred_author(&missing_author_manifest));
+    }
+
+    #[test]
+    fn environment_auth_token_is_trimmed_and_blank_values_are_ignored() {
+        assert_eq!(
+            normalize_env_auth_token(Some("  token-value\n".to_string())),
+            Some("token-value".to_string())
+        );
+        assert_eq!(normalize_env_auth_token(Some("  \n".to_string())), None);
+        assert_eq!(normalize_env_auth_token(None), None);
     }
 
     #[test]
