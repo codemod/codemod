@@ -180,6 +180,17 @@ fn js_ast_grep_idle_timeout() -> Duration {
     Duration::from_millis(override_ms.unwrap_or(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT))
 }
 
+fn select_shard_scan_eligible_files(
+    modified_files: Vec<String>,
+    selector_matched_files: Vec<String>,
+) -> Vec<String> {
+    if modified_files.is_empty() {
+        selector_matched_files
+    } else {
+        modified_files
+    }
+}
+
 fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
@@ -2682,6 +2693,7 @@ impl Engine {
                     Some(state),
                     logger,
                     None,
+                    None,
                     task_expr_ctx,
                 )
                 .await
@@ -2911,6 +2923,7 @@ impl Engine {
         initial_state: Option<&HashMap<String, serde_json::Value>>,
         logger: &StructuredLogger,
         modified_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
+        selector_matched_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
         task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
         let metrics_context = self.metrics_context.clone();
@@ -3114,6 +3127,7 @@ impl Engine {
         let shared_state_context_clone = shared_state_context.clone();
         let logger = logger.clone();
         let modified_files_collector_clone = modified_files_collector.clone();
+        let selector_matched_files_collector_clone = selector_matched_files_collector.clone();
         let state_adapter = Arc::clone(&self.state_adapter);
         let target_path_for_logs = target_path.clone();
         let canceled_during_execution = Arc::new(AtomicBool::new(false));
@@ -3122,6 +3136,7 @@ impl Engine {
         let idle_timed_out = Arc::new(AtomicBool::new(false));
         let watchdog_done = Arc::new(AtomicBool::new(false));
         let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+        let has_selector = selector_config.is_some();
 
         // Collect deferred file deletions from renames — applied after all transforms complete
         let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
@@ -3557,8 +3572,24 @@ impl Engine {
                                 if let Some(ref collector) = modified_files_collector_clone {
                                     collector.lock().unwrap().push(file_path.to_path_buf());
                                 }
+                                if let Some(ref collector) = selector_matched_files_collector_clone
+                                {
+                                    collector.lock().unwrap().push(file_path.to_path_buf());
+                                }
                             }
-                            ExecutionResult::Unmodified | ExecutionResult::Skipped => {
+                            ExecutionResult::Unmodified => {
+                                if has_selector {
+                                    if let Some(ref collector) =
+                                        selector_matched_files_collector_clone
+                                    {
+                                        collector.lock().unwrap().push(file_path.to_path_buf());
+                                    }
+                                }
+                                self.execution_stats
+                                    .files_unmodified
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            ExecutionResult::Skipped => {
                                 self.execution_stats
                                     .files_unmodified
                                     .fetch_add(1, Ordering::Relaxed);
@@ -4441,6 +4472,8 @@ impl Engine {
 
         let collector: Arc<std::sync::Mutex<Vec<PathBuf>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
+        let selector_match_collector: Arc<std::sync::Mutex<Vec<PathBuf>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let capabilities = self
             .workflow_run_config
@@ -4467,6 +4500,7 @@ impl Engine {
             None,
             logger,
             Some(collector.clone()),
+            Some(selector_match_collector.clone()),
             None,
         )
         .await?;
@@ -4474,8 +4508,11 @@ impl Engine {
         let modified_paths = Arc::try_unwrap(collector)
             .map(|mutex| mutex.into_inner().unwrap())
             .unwrap_or_else(|arc| arc.lock().unwrap().clone());
+        let selector_matched_paths = Arc::try_unwrap(selector_match_collector)
+            .map(|mutex| mutex.into_inner().unwrap())
+            .unwrap_or_else(|arc| arc.lock().unwrap().clone());
 
-        let eligible: Vec<String> = modified_paths
+        let modified_files: Vec<String> = modified_paths
             .into_iter()
             .filter_map(|p| {
                 p.strip_prefix(target_path)
@@ -4483,6 +4520,25 @@ impl Engine {
                     .map(|rel| rel.to_string_lossy().to_string())
             })
             .collect();
+        let selector_matched_files: Vec<String> = selector_matched_paths
+            .into_iter()
+            .filter_map(|p| {
+                p.strip_prefix(target_path)
+                    .ok()
+                    .map(|rel| rel.to_string_lossy().to_string())
+            })
+            .collect();
+        let used_selector_fallback =
+            modified_files.is_empty() && !selector_matched_files.is_empty();
+        let eligible = select_shard_scan_eligible_files(modified_files, selector_matched_files);
+
+        if used_selector_fallback {
+            slog!(
+                logger,
+                info,
+                "Shard scan found selector matches but no dry-run edits; using selector-matched files"
+            );
+        }
 
         slog!(
             logger,
@@ -5104,6 +5160,26 @@ mod tests {
 
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn shard_scan_falls_back_to_selector_matches_when_dry_run_finds_no_edits() {
+        let eligible = select_shard_scan_eligible_files(
+            Vec::new(),
+            vec!["src/a.ts".to_string(), "src/b.ts".to_string()],
+        );
+
+        assert_eq!(eligible, vec!["src/a.ts", "src/b.ts"]);
+    }
+
+    #[test]
+    fn shard_scan_prefers_modified_files_when_available() {
+        let eligible = select_shard_scan_eligible_files(
+            vec!["src/changed.ts".to_string()],
+            vec!["src/selector-only.ts".to_string()],
+        );
+
+        assert_eq!(eligible, vec!["src/changed.ts"]);
     }
 
     #[test]

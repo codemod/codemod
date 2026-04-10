@@ -1,6 +1,6 @@
 {
   "name": "@jssg/utils",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Codemod utils for jssg engine",
   "homepage": "https://github.com/codemod/codemod",
   "repository": "https://github.com/codemod/codemod",
