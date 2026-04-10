@@ -74,6 +74,8 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 
 For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 
+When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
+
 ## Why use Codemod MCP?
 
 Codemod MCP democratizes code transformation by integrating robust deterministic engines into AI-powered development workflows:

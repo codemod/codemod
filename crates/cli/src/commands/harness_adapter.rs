@@ -5011,6 +5011,9 @@ codemod-skill-version: 0.1.0
         assert!(MCS_SKILL_MD.contains("jssg-gotchas"));
         assert!(MCS_SKILL_MD.contains("ast-grep-gotchas"));
         assert!(MCS_SKILL_MD.contains("validate_codemod_package"));
+        assert!(MCS_SKILL_MD.contains("codemod init <path> --no-interactive"));
+        assert!(MCS_SKILL_MD.contains("do not invent `--author`"));
+        assert!(MCS_SKILL_MD.contains("publish-time auth fallback"));
         assert!(!MCS_SKILL_MD.contains("scaffold_codemod_package"));
     }
 
@@ -5020,6 +5023,8 @@ codemod-skill-version: 0.1.0
         assert!(MCS_COMMAND_MD.contains("codemod-creation-workflow-instructions"));
         assert!(MCS_COMMAND_MD.contains("jssg-gotchas"));
         assert!(MCS_COMMAND_MD.contains("codemod init"));
+        assert!(MCS_COMMAND_MD.contains("do not invent author"));
+        assert!(MCS_COMMAND_MD.contains("authenticated user"));
         assert!(MCS_COMMAND_MD.contains("validate_codemod_package"));
     }
 

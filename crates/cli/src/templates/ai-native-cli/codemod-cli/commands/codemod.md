@@ -9,7 +9,7 @@ First classify intent:
 Routing:
 - If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring and tell the user to reload/restart Codex and fix Codemod MCP setup first.
 - For codemod authoring, read `codemod-creation-workflow-instructions` first. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas`. Read `codemod-cli-instructions` only when exact command syntax is needed. Read `jssg-instructions` once a package exists and you are implementing the transform.
-- If registry search shows no exact package, run `codemod init` immediately.
+- If registry search shows no exact package, run `codemod init` immediately. In headless/non-interactive flows, use `codemod init <path> --no-interactive` and pass only flags that come from the user or task; do not invent author, license, description, or git repository metadata.
 - Before stopping work on a codemod package, call `validate_codemod_package`.
 - If the authoring request uses Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work, also read `jssg-runtime-capabilities-instructions`.
 - If the authoring request implies a monorepo, maintainer workflow, or multi-hop version series, also read `codemod-maintainer-monorepo-instructions`.
@@ -23,5 +23,6 @@ Non-negotiable constraints:
 - For codemod authoring, if symbol origin matters, use semantic analysis and binding-aware checks.
 - For codemod authoring, before stopping, re-check the whole package surface: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths or ids. Update all affected files together instead of leaving stale metadata or docs behind.
 - For codemod authoring, preserve the scaffold-selected package manager in package scripts and package-local README/development commands instead of rewriting them to another runner.
+- For codemod authoring, let the CLI default missing package metadata and let publish infer a missing author from the authenticated user unless the user explicitly supplied those values.
 - For codemod authoring/evaluation, do not create commits or push branches unless the user explicitly requested git operations.
 - For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.

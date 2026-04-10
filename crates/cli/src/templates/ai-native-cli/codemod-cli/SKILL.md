@@ -44,13 +44,14 @@ When the user:
 - If symbol origin matters, use semantic analysis and binding-aware checks.
 - Keep one granular transform or one exact `from -> to` migration as a single package unless the request is clearly open-ended or multi-hop.
 - Inspect 1-3 representative repo files after or alongside registry discovery before you finalize the transform shape.
-- If registry search yields no exact package, run `codemod init` immediately instead of continuing broad research without a package.
+- If registry search yields no exact package, run `codemod init` immediately instead of continuing broad research without a package. In headless/non-interactive flows, use the simplified `codemod init <path> --no-interactive` interface and pass only user- or task-provided flags; do not invent `--author`, `--license`, `--description`, or `--git-repository-url`.
 - After the package exists, replace the starter transform, README, and starter fixtures before doing optional work.
 - Define positive, negative, and edge fixtures before deep implementation work.
 - Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn version numbers by default, but do not leave stale package metadata behind after a rename or material package-surface change.
 - Preserve the scaffold-selected package manager in `package.json` scripts and package-local README/development commands. Infer it from the scaffold choice, lockfile, or existing package metadata; do not rewrite `yarn`/`pnpm`/`bun` packages to `npx`/`npm` unless the user explicitly asked.
 - Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
 - For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.
+- Leave missing package author metadata to the CLI defaults/publish-time auth fallback unless the user supplied an explicit author.
 - Do not create commits or push branches for codemod authoring/evaluation unless the user explicitly asked for git operations.
 
 ## Runtime flow (default)
