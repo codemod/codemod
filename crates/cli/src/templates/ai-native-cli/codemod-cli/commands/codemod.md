@@ -8,13 +8,13 @@ First classify intent:
 
 Routing:
 - If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring and tell the user to reload/restart Codex and fix Codemod MCP setup first.
-- For codemod authoring, call `get_codemod_creation_workflow` first. Before writing source-transform code, call `get_jssg_gotchas` and `get_ast_grep_gotchas`. Call `get_codemod_cli_instructions` only when exact command syntax is needed. Call `get_jssg_instructions` once a package exists and you are implementing the transform.
-- If registry search shows no exact package, call `scaffold_codemod_package` immediately.
+- For codemod authoring, read `codemod-creation-workflow-instructions` first. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas`. Read `codemod-cli-instructions` only when exact command syntax is needed. Read `jssg-instructions` once a package exists and you are implementing the transform.
+- If registry search shows no exact package, run `codemod init` immediately.
 - Before stopping work on a codemod package, call `validate_codemod_package`.
-- If the authoring request uses Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work, also call `get_jssg_runtime_capabilities`.
-- If the authoring request implies a monorepo, maintainer workflow, or multi-hop version series, also call `get_codemod_maintainer_monorepo`.
-- For codemod discovery or execution, call `get_codemod_cli_instructions`.
-- When commands fail or produce unexpected behavior, call `get_codemod_troubleshooting`.
+- If the authoring request uses Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work, also read `jssg-runtime-capabilities-instructions`.
+- If the authoring request implies a monorepo, maintainer workflow, or multi-hop version series, also read `codemod-maintainer-monorepo-instructions`.
+- For codemod discovery or execution, read `codemod-cli-instructions`.
+- When commands fail or produce unexpected behavior, read `codemod-troubleshooting-instructions`.
 
 Non-negotiable constraints:
 - For migration, upgrade, update, or deprecation-rollout requests that do not explicitly ask to create a codemod, search the registry first before proposing a custom codemod plan.

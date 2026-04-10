@@ -23,7 +23,7 @@ Use this file only for the extra agent guidance that public docs should not carr
 ## Hot-path caveats
 
 - If Codemod MCP is missing from the callable tool list, stop and tell the user to fix MCP visibility first.
-- Call `get_jssg_gotchas` and `get_ast_grep_gotchas` before writing source-transform code.
+- Read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 - Use `dump_ast` when the pattern shape is unclear.
 - If symbol origin matters, use semantic analysis and binding-aware checks.
 - In `workflow.yaml`, shell steps use `run:`, not `command:`.
@@ -32,6 +32,6 @@ Use this file only for the extra agent guidance that public docs should not carr
 - Do not reduce a requested migration codemod to analysis-only output when safe automatable edits exist.
 - Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn versions by default, but do not leave stale package metadata behind after a rename or material package-surface change.
 - Preserve the scaffold-selected package manager in package scripts and package-local README/development commands. Do not rewrite `yarn`/`pnpm`/`bun` packages to another runner unless the user explicitly asked.
-- After a registry miss, use `scaffold_codemod_package` immediately.
+- After a registry miss, run `codemod init` immediately.
 - Use `validate_codemod_package` before stopping.
 - Do not create commits or push branches unless the user explicitly asked for git operations.

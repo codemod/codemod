@@ -5001,19 +5001,26 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn skill_md_routes_to_mcp_tools() {
-        assert!(MCS_SKILL_MD.contains("get_codemod_creation_workflow"));
-        assert!(MCS_SKILL_MD.contains("get_codemod_maintainer_monorepo"));
-        assert!(MCS_SKILL_MD.contains("get_codemod_troubleshooting"));
-        assert!(MCS_SKILL_MD.contains("get_jssg_instructions"));
-        assert!(MCS_SKILL_MD.contains("get_jssg_runtime_capabilities"));
-        assert!(MCS_SKILL_MD.contains("get_codemod_cli_instructions"));
+    fn skill_md_routes_to_mcp_resources_and_validation_tool() {
+        assert!(MCS_SKILL_MD.contains("codemod-creation-workflow-instructions"));
+        assert!(MCS_SKILL_MD.contains("codemod-maintainer-monorepo-instructions"));
+        assert!(MCS_SKILL_MD.contains("codemod-troubleshooting-instructions"));
+        assert!(MCS_SKILL_MD.contains("jssg-instructions"));
+        assert!(MCS_SKILL_MD.contains("jssg-runtime-capabilities-instructions"));
+        assert!(MCS_SKILL_MD.contains("codemod-cli-instructions"));
+        assert!(MCS_SKILL_MD.contains("jssg-gotchas"));
+        assert!(MCS_SKILL_MD.contains("ast-grep-gotchas"));
+        assert!(MCS_SKILL_MD.contains("validate_codemod_package"));
+        assert!(!MCS_SKILL_MD.contains("scaffold_codemod_package"));
     }
 
     #[test]
-    fn command_md_routes_to_runtime_capabilities_guidance() {
-        assert!(MCS_COMMAND_MD.contains("get_jssg_runtime_capabilities"));
-        assert!(MCS_COMMAND_MD.contains("do not introduce a shell step"));
+    fn command_md_routes_to_resources_and_direct_init_scaffolding() {
+        assert!(MCS_COMMAND_MD.contains("jssg-runtime-capabilities-instructions"));
+        assert!(MCS_COMMAND_MD.contains("codemod-creation-workflow-instructions"));
+        assert!(MCS_COMMAND_MD.contains("jssg-gotchas"));
+        assert!(MCS_COMMAND_MD.contains("codemod init"));
+        assert!(MCS_COMMAND_MD.contains("validate_codemod_package"));
     }
 
     #[test]

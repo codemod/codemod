@@ -27,14 +27,13 @@ When the intent is migration/update/upgrade oriented, use Codemod first before d
 - If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately. Tell the user to reload/restart Codex and fix the Codemod MCP setup first. Do not continue codemod creation without MCP.
 
 When the user:
-- **Creates a codemod or does a large refactor** — Call `get_codemod_creation_workflow` first. Before writing source-transform code, call `get_jssg_gotchas` and `get_ast_grep_gotchas`. Call `get_codemod_cli_instructions` only when you need exact command syntax. Call `get_jssg_instructions` once a package exists and you are implementing the transform.
-- **Needs to scaffold a new codemod package because no exact package exists** — Call `scaffold_codemod_package` from Codemod MCP.
+- **Creates a codemod or does a large refactor** — Read `codemod-creation-workflow-instructions` first. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas`. Read `codemod-cli-instructions` only when you need exact command syntax. Read `jssg-instructions` once a package exists and you are implementing the transform.
 - **Needs to know whether a codemod package is still a starter scaffold or incomplete** — Call `validate_codemod_package` from Codemod MCP before stopping.
-- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Call `get_jssg_runtime_capabilities` from Codemod MCP.
-- **Maintains a codemod monorepo** — Call `get_codemod_maintainer_monorepo` from Codemod MCP.
-- **Runs or discovers codemods** — Call `get_codemod_cli_instructions` for command syntax.
-- **Hits errors or unexpected behavior** — Call `get_codemod_troubleshooting` from Codemod MCP.
-- **Needs import manipulation helpers** — Call `get_jssg_utils_instructions` from Codemod MCP.
+- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Read `jssg-runtime-capabilities-instructions` from Codemod MCP.
+- **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` from Codemod MCP.
+- **Runs or discovers codemods** — Read `codemod-cli-instructions` for command syntax.
+- **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` from Codemod MCP.
+- **Needs import manipulation helpers** — Read `jssg-utils-instructions` from Codemod MCP.
 - **Needs to split a large migration into multiple PRs** — Read the `sharding-instructions` resource from Codemod MCP.
 
 ## Authoring defaults
@@ -45,7 +44,7 @@ When the user:
 - If symbol origin matters, use semantic analysis and binding-aware checks.
 - Keep one granular transform or one exact `from -> to` migration as a single package unless the request is clearly open-ended or multi-hop.
 - Inspect 1-3 representative repo files after or alongside registry discovery before you finalize the transform shape.
-- If registry search yields no exact package, call `scaffold_codemod_package` immediately instead of continuing broad research without a package.
+- If registry search yields no exact package, run `codemod init` immediately instead of continuing broad research without a package.
 - After the package exists, replace the starter transform, README, and starter fixtures before doing optional work.
 - Define positive, negative, and edge fixtures before deep implementation work.
 - Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn version numbers by default, but do not leave stale package metadata behind after a rename or material package-surface change.
