@@ -1,3 +1,4 @@
+use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use inquire::Confirm;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,8 @@ pub fn capabilities_security_callback(
     pre_approved: Option<HashSet<LlrtSupportedModules>>,
 ) -> CapabilitiesSecurityCallback {
     let checked_capabilities = Arc::new(Mutex::new(pre_approved.unwrap_or_default()));
+    let unsafe_capabilities: HashSet<LlrtSupportedModules> =
+        UNSAFE_MODULES.iter().copied().collect();
 
     Arc::new(move |config: &CodemodExecutionConfig| {
         if no_interaction {
@@ -24,7 +27,7 @@ pub fn capabilities_security_callback(
             .as_ref()
             .unwrap_or(&HashSet::new())
             .iter()
-            .filter(|c| !checked.contains(c))
+            .filter(|c| unsafe_capabilities.contains(c) && !checked.contains(c))
             .cloned()
             .collect::<Vec<_>>();
         drop(checked);

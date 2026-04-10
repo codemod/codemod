@@ -9,17 +9,25 @@ use ratatui::{
 };
 
 use super::{
-    format_duration, key_hint, workflow_status_color, workflow_status_icon, workflow_status_label,
-    ACCENT, DIM, HEADER_BG, SURFACE, TEXT, TEXT_MUTED,
+    format_duration, key_hint, render_status_line, status_bar_height, workflow_status_color,
+    workflow_status_icon, workflow_status_label, StatusLine, ACCENT, BODY_BG, DIM, HEADER_BG,
+    SURFACE, TEXT, TEXT_MUTED,
 };
 
 /// Render the run list screen
-pub fn render(f: &mut Frame, area: Rect, runs: &[WorkflowRun], table_state: &mut TableState) {
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    runs: &[WorkflowRun],
+    table_state: &mut TableState,
+    status: Option<&StatusLine>,
+) {
+    let status_height = status_bar_height(status);
     let chunks = Layout::vertical([
-        Constraint::Length(3), // title bar
-        Constraint::Length(1), // spacing
-        Constraint::Min(0),    // table
-        Constraint::Length(1), // help bar
+        Constraint::Length(2),             // title bar
+        Constraint::Min(0),                // table
+        Constraint::Length(1),             // help bar
+        Constraint::Length(status_height), // status bar
     ])
     .split(area);
 
@@ -27,11 +35,16 @@ pub fn render(f: &mut Frame, area: Rect, runs: &[WorkflowRun], table_state: &mut
     render_title_bar(f, chunks[0]);
 
     // -- Content area with horizontal padding --
-    let content = chunks[2].inner(Margin::new(1, 0));
+    let content = chunks[1].inner(Margin::new(1, 0));
+    f.render_widget(
+        Block::default().style(Style::default().bg(BODY_BG)),
+        chunks[1],
+    );
 
     if runs.is_empty() {
         render_empty_state(f, content);
-        render_help_bar(f, chunks[3]);
+        render_help_bar(f, chunks[2]);
+        render_status_line(f, chunks[3], status);
         return;
     }
 
@@ -110,12 +123,14 @@ pub fn render(f: &mut Frame, area: Rect, runs: &[WorkflowRun], table_state: &mut
         ],
     )
     .header(header)
+    .style(Style::default().bg(BODY_BG))
     .row_highlight_style(Style::default().bg(SURFACE));
 
     f.render_stateful_widget(table, content, table_state);
 
     // -- Help bar --
-    render_help_bar(f, chunks[3]);
+    render_help_bar(f, chunks[2]);
+    render_status_line(f, chunks[3], status);
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect) {
@@ -155,6 +170,7 @@ fn render_empty_state(f: &mut Frame, area: Rect) {
 }
 
 fn render_help_bar(f: &mut Frame, area: Rect) {
+    f.render_widget(Block::default().style(Style::default().bg(BODY_BG)), area);
     let padded = area.inner(Margin::new(1, 0));
     let mut spans: Vec<Span> = Vec::new();
     spans.extend(key_hint("\u{2191}\u{2193}", "navigate"));

@@ -24,6 +24,12 @@ title: "API Reference"
 JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
 </Info>
 
+Built-in codemod modules:
+- `codemod:ast-grep` — parsing, traversal, pattern matching
+- `codemod:workflow` — shared state and workflow integration
+- `codemod:metrics` — metrics collection across files
+- `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
+
 ## Transform Function
 
 Every JSSG codemod exports a transform function:
@@ -917,4 +923,54 @@ function helper(node: SgNode<TSX>): Edit | null {
 Language kinds and editor IntelliSense are available via [codemod:ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/packages/jssg-types/src/langs). E.g., `import { TSX } from "codemod:ast-grep/langs/tsx"`.
 </Info>
 
+## Runtime Hooks
+
+```ts
+import runtime, {
+  progress,
+  warn,
+  setCurrentUnit,
+  failFile,
+  failStep,
+  isCanceled,
+} from "codemod:runtime";
+```
+
+### Types
+
+<ParamField path="RuntimeMeta" type="string | number | boolean | null | Record<string, RuntimeMeta | undefined> | RuntimeMeta[]">
+  Optional structured metadata that can be attached to runtime events and failures.
+</ParamField>
+
+### Functions
+
+<ParamField path="progress(message, meta?)" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured progress event and refreshes the engine heartbeat.
+</ParamField>
+
+<ParamField path="warn(message, meta?)" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured warning without failing the task.
+</ParamField>
+
+<ParamField path="setCurrentUnit(unitId, meta?)" type="(unitId: string, meta?: RuntimeMeta) => void">
+  Sets the current logical execution unit for diagnostics, typically a file path or shard label.
+</ParamField>
+
+<ParamField path="failFile(message, meta?)" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current file or execution unit immediately. The runtime currently treats this as terminal for the running task.
+</ParamField>
+
+<ParamField path="failStep(message, meta?)" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current step immediately and marks the task as failed.
+</ParamField>
+
+<ParamField path="isCanceled()" type="() => boolean">
+  Returns `true` if the current task has been canceled and the codemod should stop cooperatively.
+</ParamField>
+
+### Notes
+
+- Hooks are the preferred way to report semantic failures or progress to workflows and the TUI.
+- Uncaught exceptions still fail the task, but they provide less structured context.
+- `codemod:runtime` requires a runtime version that includes runtime-hook support.
 

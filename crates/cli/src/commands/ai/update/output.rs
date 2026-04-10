@@ -8,6 +8,7 @@ use crate::commands::harness_adapter::{
 };
 use crate::commands::output::format_output_path;
 use anyhow::Result;
+use console::style;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -235,41 +236,68 @@ pub(in crate::commands::ai) fn print_install_output(
 }
 
 pub(in crate::commands::ai) fn print_install_output_logs(output: &InstallSkillsOutput) {
-    println!(
-        "Installed codemod skills for `{}` ({})",
-        output.harness, output.scope
-    );
+    println!();
 
     if output.installed.is_empty() {
-        println!("No skills were installed.");
+        println!("  {} No skills were installed.", style("⚠").yellow());
     } else {
-        println!("Installed components:");
-        for installed_skill in &output.installed {
-            let version = installed_skill.version.as_deref().unwrap_or("n/a");
+        for skill in &output.installed {
+            let label = humanize_skill_name(&skill.name);
+            let version_suffix = skill
+                .version
+                .as_deref()
+                .map(|v| format!("@{v}"))
+                .unwrap_or_default();
             println!(
-                "  - {}@{} -> {}",
-                installed_skill.name, version, installed_skill.path
+                "  {} {} ({}{} → {})",
+                style("✓").green().bold(),
+                label,
+                skill.name,
+                version_suffix,
+                style(&skill.path).dim(),
             );
         }
     }
 
-    if !output.notes.is_empty() {
-        println!("Notes:");
-        for note in &output.notes {
-            println!("  - {note}");
-        }
-    }
-
-    if !output.warnings.is_empty() {
-        println!("Warnings:");
-        for warning in &output.warnings {
-            println!("  - {warning}");
+    for note in &output.notes {
+        if let Some(line) = humanize_note(note) {
+            println!("  {} {line}", style("✓").green().bold());
         }
     }
 
     if let Some(restart_hint) = &output.restart_hint {
-        println!("🎉 {restart_hint}");
+        println!();
+        println!("  {} {}", style("→").cyan().bold(), restart_hint);
     }
+
+    println!();
+}
+
+fn humanize_skill_name(name: &str) -> String {
+    match name {
+        "codemod" => "Installed Codemod skill".to_string(),
+        "codemod-mcp" => "Installed Codemod MCP".to_string(),
+        other => format!("Installed {other}"),
+    }
+}
+
+fn humanize_note(note: &str) -> Option<String> {
+    if note.starts_with("Installed codemod creation command in: ") {
+        let paths = note.trim_start_matches("Installed codemod creation command in: ");
+        return Some(format!(
+            "Installed /codemod command ({})",
+            style(paths).dim()
+        ));
+    }
+    if note.starts_with("Updated discovery hints in: ") {
+        let paths = note.trim_start_matches("Updated discovery hints in: ");
+        return Some(format!(
+            "Updated discovery hints in: {}",
+            style(paths).dim()
+        ));
+    }
+    // Suppress internal/noisy messages
+    None
 }
 
 pub(in crate::commands::ai) fn print_install_output_table(output: &InstallSkillsOutput) {
@@ -300,22 +328,14 @@ pub(in crate::commands::ai) fn print_install_output_table(output: &InstallSkills
         println!("{table}");
     }
 
-    if !output.notes.is_empty() {
-        println!("Notes:");
-        for note in &output.notes {
-            println!("  - {note}");
-        }
-    }
-
-    if !output.warnings.is_empty() {
-        println!("Warnings:");
-        for warning in &output.warnings {
-            println!("  - {warning}");
+    for note in &output.notes {
+        if let Some(human_note) = humanize_note(note) {
+            println!("  {human_note}");
         }
     }
 
     if let Some(restart_hint) = &output.restart_hint {
-        println!("🎉 {restart_hint}");
+        println!("  {restart_hint}");
     }
 }
 

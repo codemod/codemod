@@ -1,9 +1,25 @@
 use evalexpr::{
-    eval_with_context, ContextWithMutableVariables, HashMapContext, Value as EvalValue,
+    eval_with_context, Context, ContextWithMutableVariables, HashMapContext, Value as EvalValue,
 };
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+fn expr_only_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\$\{\{\s*([^}]+?)\s*\}\}$").expect("valid expr-only regex"))
+}
+
+fn expr_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}").expect("valid expr regex"))
+}
+
+fn task_var_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex"))
+}
 
 use crate::error::Error;
 use crate::Result;
@@ -68,13 +84,21 @@ pub fn resolve_state_path<'a>(state: &'a HashMap<String, Value>, path: &str) -> 
     Ok(current_value)
 }
 
-/// Extra context for task-level template variables (`task.id`, `task.signature`).
+/// Extra context for task-level template variables (`task.id`, `task.signature`, etc.).
+///
+/// In addition to the built-in `id` and `signature` fields, arbitrary extra
+/// variables can be supplied via `CODEMOD_TASK_*` environment variables.
+/// For example, `CODEMOD_TASK_JIRA_TITLE=Fix bug` becomes `task.jira_title`.
 #[derive(Debug, Clone)]
 pub struct TaskExpressionContext {
     /// Raw task ID (e.g. the UUID string from `CODEMOD_TASK_ID`)
     pub id: String,
     /// Short deterministic hash derived from the task ID (first 8 hex chars of SHA-256)
     pub signature: String,
+    /// Additional task variables derived from `CODEMOD_TASK_*` environment variables.
+    /// Keys are lowercase with the `CODEMOD_TASK_` prefix stripped
+    /// (e.g. `CODEMOD_TASK_JIRA_TITLE` → `jira_title`).
+    pub extra: std::collections::HashMap<String, String>,
 }
 
 pub fn resolve_expressions(
@@ -129,6 +153,20 @@ pub fn resolve_expressions(
             "task.signature".to_string(),
             EvalValue::String(task_ctx.signature.clone()),
         )?;
+        for (key, value) in &task_ctx.extra {
+            let context_key = format!("task.{}", key);
+            context.set_value(context_key, EvalValue::String(value.clone()))?;
+        }
+    }
+
+    // Pre-populate any `task.*` identifiers referenced in the expression that
+    // are not already in the context with an empty string so that missing
+    // CODEMOD_TASK_* env vars resolve gracefully instead of erroring.
+    for cap in task_var_re().captures_iter(expression) {
+        let var_name = format!("task.{}", &cap[1]);
+        if context.get_value(&var_name).is_none() {
+            context.set_value(var_name, EvalValue::String(String::new()))?;
+        }
     }
 
     eval_with_context(expression, &context).map_err(Error::ExpressionEvaluation)
@@ -165,13 +203,9 @@ pub fn resolve_string_with_expression(
     steps: Option<&HashMap<String, HashMap<String, String>>>,
     task_context: Option<&TaskExpressionContext>,
 ) -> Result<String> {
-    // regex to find all ${{ }} patterns
-    let re = Regex::new(r"\$\{\{\s*([^}]+?)\s*\}\}")
-        .map_err(|e| Error::VariableResolution(format!("Regex error: {}", e)))?;
-
     let mut result = template.to_string();
 
-    for captures in re.captures_iter(template) {
+    for captures in expr_re().captures_iter(template) {
         let full_match = captures.get(0).unwrap().as_str();
         let expression = captures.get(1).unwrap().as_str().trim();
 
@@ -197,6 +231,117 @@ pub fn resolve_string_with_expression(
     }
 
     Ok(result)
+}
+
+/// Resolve a list of strings that may contain `${{ }}` template expressions.
+///
+/// Each element is resolved via [`resolve_string_with_expression`]. If an
+/// element is *solely* a `${{ expr }}` expression and the referenced value is a
+/// JSON array (e.g. from state or params), the array items are expanded inline
+/// into the result list. This enables patterns like:
+///
+/// ```yaml
+/// include:
+///   - "${{ state.files }}"        # expands JSON array ["a.js","b.js"] → two entries
+///   - "**/*.test.ts"              # kept as-is
+///   - "${{ params.extra_glob }}"  # scalar string kept as single entry
+/// ```
+pub fn resolve_string_list(
+    items: &[String],
+    params: &HashMap<String, Value>,
+    state: &HashMap<String, Value>,
+    matrix_values: Option<&HashMap<String, Value>>,
+    steps: Option<&HashMap<String, HashMap<String, String>>>,
+    task_context: Option<&TaskExpressionContext>,
+) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+
+    for item in items {
+        // If the entire item is a single expression, check whether the
+        // underlying value is an array so we can expand it.
+        if let Some(caps) = expr_only_re().captures(item) {
+            let expression = caps.get(1).unwrap().as_str().trim();
+
+            // Try to look up the raw JSON value from state / params / matrix
+            // so we can detect arrays before evalexpr stringifies them.
+            if let Some(array_items) = lookup_json_array(expression, params, state, matrix_values) {
+                for v in array_items {
+                    result.push(v);
+                }
+                continue;
+            }
+        }
+
+        // Default: resolve as a template string (scalar).
+        let resolved = resolve_string_with_expression(
+            item,
+            params,
+            state,
+            matrix_values,
+            steps,
+            task_context,
+        )?;
+        if !resolved.is_empty() {
+            result.push(resolved);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Try to look up a dotted identifier (e.g. `state.files`, `params.globs`,
+/// `matrix.batch`) as a raw JSON value and, if it is an array of strings,
+/// return the items. Returns `None` for non-array values or unknown paths.
+fn lookup_json_array(
+    expression: &str,
+    params: &HashMap<String, Value>,
+    state: &HashMap<String, Value>,
+    matrix_values: Option<&HashMap<String, Value>>,
+) -> Option<Vec<String>> {
+    let (scope, key) = expression.split_once('.')?;
+    let map: &HashMap<String, Value> = match scope {
+        "state" => state,
+        "params" => params,
+        "matrix" => matrix_values?,
+        _ => return None,
+    };
+
+    let value = map.get(key)?;
+
+    value_to_string_vec(value)
+}
+
+/// Convert a JSON value to a `Vec<String>` if it is an array of strings, or a
+/// JSON-encoded string containing an array of strings. Returns `None` otherwise.
+pub fn value_to_string_vec(value: &Value) -> Option<Vec<String>> {
+    match value {
+        Value::Array(arr) => {
+            let strings: Vec<String> = arr
+                .iter()
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
+            Some(strings)
+        }
+        // Handle JSON-encoded array strings (e.g. from CODEMOD_STATE_* env vars)
+        Value::String(s) => {
+            if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(s) {
+                let strings: Vec<String> = arr
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect();
+                Some(strings)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1296,5 +1441,112 @@ mod tests {
             None
         )
         .is_err());
+    }
+
+    #[test]
+    fn test_resolve_string_list_literal_values() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let items = vec!["**/*.js".to_string(), "**/*.ts".to_string()];
+
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert_eq!(result, vec!["**/*.js", "**/*.ts"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_expands_state_array() {
+        let params = HashMap::new();
+        let mut state = HashMap::new();
+        state.insert(
+            "files".to_string(),
+            json!(["src/a.js", "src/b.js", "src/c.js"]),
+        );
+
+        let items = vec!["${{ state.files }}".to_string()];
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert_eq!(result, vec!["src/a.js", "src/b.js", "src/c.js"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_mixed_literal_and_array() {
+        let params = HashMap::new();
+        let mut state = HashMap::new();
+        state.insert("extra".to_string(), json!(["lib/**/*.ts"]));
+
+        let items = vec!["**/*.js".to_string(), "${{ state.extra }}".to_string()];
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert_eq!(result, vec!["**/*.js", "lib/**/*.ts"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_scalar_expression() {
+        let mut params = HashMap::new();
+        params.insert("glob".to_string(), json!("src/**/*.tsx"));
+        let state = HashMap::new();
+
+        let items = vec!["${{ params.glob }}".to_string()];
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert_eq!(result, vec!["src/**/*.tsx"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_json_encoded_array_string() {
+        let params = HashMap::new();
+        let mut state = HashMap::new();
+        // Simulates a CODEMOD_STATE_* env var that was JSON-encoded
+        state.insert("batch".to_string(), json!(r#"["file1.js","file2.js"]"#));
+
+        let items = vec!["${{ state.batch }}".to_string()];
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert_eq!(result, vec!["file1.js", "file2.js"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_matrix_array() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let mut matrix = HashMap::new();
+        matrix.insert("files".to_string(), json!(["a.ts", "b.ts"]));
+
+        let items = vec!["${{ matrix.files }}".to_string()];
+        let result =
+            resolve_string_list(&items, &params, &state, Some(&matrix), None, None).unwrap();
+        assert_eq!(result, vec!["a.ts", "b.ts"]);
+    }
+
+    #[test]
+    fn test_resolve_string_list_empty_on_missing_var() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+
+        // Missing task var should resolve to empty and be filtered out
+        let items = vec!["${{ task.missing }}".to_string()];
+        let result = resolve_string_list(&items, &params, &state, None, None, None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_value_to_string_vec_array() {
+        let val = json!(["a", "b", "c"]);
+        assert_eq!(
+            value_to_string_vec(&val),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_value_to_string_vec_json_string() {
+        let val = json!(r#"["x","y"]"#);
+        assert_eq!(
+            value_to_string_vec(&val),
+            Some(vec!["x".to_string(), "y".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_value_to_string_vec_non_array() {
+        assert_eq!(value_to_string_vec(&json!("hello")), None);
+        assert_eq!(value_to_string_vec(&json!(42)), None);
+        assert_eq!(value_to_string_vec(&json!(true)), None);
     }
 }

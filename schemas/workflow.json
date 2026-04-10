@@ -686,7 +686,7 @@
           "default": null
         },
         "if": {
-          "description": "Conditional expression to determine if this step should be executed",
+          "description": "Conditional expression to determine if this step should be executed.\nAccepts a string expression or a literal boolean (`if: true` / `if: false`).",
           "type": [
             "string",
             "null"

@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use ts_rs::TS;
 /// Represents a step in a node
@@ -22,9 +22,10 @@ pub struct Step {
     #[ts(optional, as = "Option<HashMap<String, String>>")]
     pub env: Option<HashMap<String, String>>,
 
-    /// Conditional expression to determine if this step should be executed
+    /// Conditional expression to determine if this step should be executed.
+    /// Accepts a string expression or a literal boolean (`if: true` / `if: false`).
     #[serde(rename = "if")]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_condition")]
     #[ts(optional, as = "Option<String>")]
     pub condition: Option<String>,
 
@@ -231,11 +232,6 @@ pub struct UseAI {
     #[ts(optional, as = "Option<String>")]
     pub working_dir: Option<String>,
 
-    /// Timeout in milliseconds for AI agent execution (optional)
-    #[serde(default)]
-    #[ts(optional, as = "Option<u64>")]
-    pub timeout_ms: Option<u64>,
-
     /// Environment variables to set for the AI agent execution (optional)
     #[serde(default)]
     #[ts(optional, as = "Option<HashMap<String, String>>")]
@@ -260,6 +256,11 @@ pub struct UseAI {
     #[serde(default)]
     #[ts(optional, as = "Option<usize>")]
     pub max_steps: Option<usize>,
+
+    /// Timeout in milliseconds for AI agent execution (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<u64>")]
+    pub timeout_ms: Option<u64>,
 
     /// Tools available to the AI agent (optional, defaults to common tools)
     #[serde(default)]
@@ -433,6 +434,31 @@ pub struct CommitConfig {
 
 fn default_allow_empty() -> bool {
     true
+}
+
+/// Deserialize the `if` condition field from either a string or a boolean.
+/// YAML `if: true` / `if: false` are parsed as booleans; this converts them
+/// to the string literals `"true"` / `"false"` so the expression engine can
+/// evaluate them uniformly.
+fn deserialize_condition<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "unsupported type for `if` condition: expected string or boolean, got {}",
+            match &other {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::Object(_) => "object",
+                _ => "unknown",
+            }
+        ))),
+    }
 }
 
 /// Configuration for automatic pull request creation at the end of a node.

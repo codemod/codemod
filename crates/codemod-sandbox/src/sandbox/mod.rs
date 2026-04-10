@@ -6,6 +6,8 @@ pub mod errors;
 pub mod filesystem;
 #[cfg(feature = "native")]
 pub mod resolvers;
+#[cfg(feature = "native")]
+pub mod runtime_module;
 
 #[cfg(feature = "wasm")]
 pub mod wasm_exports;

@@ -2,34 +2,24 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthTokens {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub scope: Vec<String>,
-    pub token_type: String,
+pub(crate) struct AuthTokens {
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) expires_at: Option<DateTime<Utc>>,
+    pub(crate) scope: Vec<String>,
+    pub(crate) token_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserInfo {
-    pub id: String,
-    pub username: String,
-    pub email: String,
-    pub organizations: Option<Vec<OrganizationMembership>>,
+pub(crate) struct UserInfo {
+    pub(crate) id: String,
+    pub(crate) username: String,
+    pub(crate) email: String,
+    pub(crate) organizations: Option<Vec<OrganizationMembership>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrganizationMembership {
-    pub name: String,
-    pub role: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OidcResponse {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_in: Option<u64>,
-    pub token_type: String,
-    pub scope: Option<String>,
-    pub user: UserInfo,
+pub(crate) struct OrganizationMembership {
+    pub(crate) name: String,
+    pub(crate) role: String,
 }

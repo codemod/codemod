@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
+libc = "0.2"
 
 [features]
 docker = ["butterflow-models/docker"]

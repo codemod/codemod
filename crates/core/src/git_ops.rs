@@ -17,12 +17,36 @@ pub fn is_cloud_mode() -> bool {
 }
 
 /// Build a [`TaskExpressionContext`] from a task ID.
+///
+/// In addition to computing the task signature, this reads all environment
+/// variables prefixed with `CODEMOD_TASK_` (excluding `CODEMOD_TASK_ID`) and
+/// exposes them as `task.<lowercase_suffix>` template variables.
 pub fn build_task_expression_context(task_id: &str) -> TaskExpressionContext {
     let signature = compute_task_signature(task_id);
+    let extra = collect_task_env_vars();
     TaskExpressionContext {
         id: task_id.to_string(),
         signature,
+        extra,
     }
+}
+
+/// Collect `CODEMOD_TASK_*` environment variables (excluding `CODEMOD_TASK_ID`)
+/// into a map keyed by the lowercased suffix.
+///
+/// Example: `CODEMOD_TASK_JIRA_TITLE=Fix bug` → `("jira_title", "Fix bug")`
+pub fn collect_task_env_vars() -> std::collections::HashMap<String, String> {
+    let mut extra = std::collections::HashMap::new();
+    for (key, value) in std::env::vars() {
+        if let Some(suffix) = key.strip_prefix("CODEMOD_TASK_") {
+            // Skip CODEMOD_TASK_ID — it's already handled as task.id
+            if suffix == "ID" {
+                continue;
+            }
+            extra.insert(suffix.to_lowercase(), value);
+        }
+    }
+    extra
 }
 
 /// SHA-256 the task id and return the first 8 hex characters.
@@ -332,75 +356,138 @@ pub async fn create_pull_request(
     task_id: &str,
     working_dir: &std::path::Path,
 ) -> Result<Option<String>> {
-    let api_endpoint = std::env::var("BUTTERFLOW_API_ENDPOINT").map_err(|_| {
-        butterflow_models::Error::Runtime(
-            "BUTTERFLOW_API_ENDPOINT environment variable is required".to_string(),
-        )
-    })?;
-    let auth_token = std::env::var("BUTTERFLOW_API_AUTH_TOKEN").map_err(|_| {
-        butterflow_models::Error::Runtime(
-            "BUTTERFLOW_API_AUTH_TOKEN environment variable is required".to_string(),
-        )
-    })?;
-
     let resolved_base = match base {
         Some(b) if !b.is_empty() => b.to_string(),
         _ => detect_remote_base_branch(working_dir).await,
     };
 
-    let mut pr_data = serde_json::json!({
-        "title": title,
-        "head": head,
-        "base": resolved_base,
-        "body": body.unwrap_or(""),
-    });
+    let api_endpoint = std::env::var("BUTTERFLOW_API_ENDPOINT").ok();
+    let auth_token = std::env::var("BUTTERFLOW_API_AUTH_TOKEN").ok();
 
-    if draft {
-        pr_data["draft"] = serde_json::Value::Bool(true);
+    if let (Some(api_endpoint), Some(auth_token)) = (api_endpoint.as_ref(), auth_token.as_ref()) {
+        let mut pr_data = serde_json::json!({
+            "title": title,
+            "head": head,
+            "base": resolved_base,
+            "body": body.unwrap_or(""),
+        });
+
+        if draft {
+            pr_data["draft"] = serde_json::Value::Bool(true);
+        }
+
+        let pr_url = format!(
+            "{}/api/butterflow/v1/tasks/{}/pull-request",
+            api_endpoint, task_id
+        );
+
+        info!("Creating pull request...");
+        info!("  URL: {}", pr_url);
+        info!("  Title: {}", title);
+        info!("  Head: {}", head);
+        info!("  Base: {}", resolved_base);
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&pr_url)
+            .header("Authorization", format!("Bearer {}", auth_token))
+            .header("Content-Type", "application/json")
+            .json(&pr_data)
+            .send()
+            .await
+            .map_err(|e| {
+                butterflow_models::Error::Runtime(format!("Failed to create pull request: {e}"))
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(butterflow_models::Error::Runtime(format!(
+                "Failed to create pull request: HTTP {} - {}",
+                status, error_text
+            )));
+        }
+
+        let pr_url = response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|body| body.get("url").and_then(|v| v.as_str()).map(String::from));
+
+        match &pr_url {
+            Some(url) => info!("Pull request created: {}", url),
+            None => info!("Pull request created successfully!"),
+        }
+
+        return Ok(pr_url);
     }
 
-    let pr_url = format!(
-        "{}/api/butterflow/v1/tasks/{}/pull-request",
-        api_endpoint, task_id
-    );
+    if api_endpoint.is_some() || auth_token.is_some() {
+        return Err(butterflow_models::Error::Runtime(
+            "BUTTERFLOW_API_ENDPOINT and BUTTERFLOW_API_AUTH_TOKEN must either both be set or both be unset".to_string(),
+        ));
+    }
 
-    info!("Creating pull request...");
-    info!("  URL: {}", pr_url);
-    info!("  Title: {}", title);
-    info!("  Head: {}", head);
-    info!("  Base: {}", resolved_base);
+    create_pull_request_via_gh(title, body, draft, head, &resolved_base, working_dir).await
+}
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&pr_url)
-        .header("Authorization", format!("Bearer {}", auth_token))
-        .header("Content-Type", "application/json")
-        .json(&pr_data)
-        .send()
-        .await
-        .map_err(|e| {
-            butterflow_models::Error::Runtime(format!("Failed to create pull request: {e}"))
-        })?;
+async fn create_pull_request_via_gh(
+    title: &str,
+    body: Option<&str>,
+    draft: bool,
+    head: &str,
+    base: &str,
+    working_dir: &std::path::Path,
+) -> Result<Option<String>> {
+    info!("Creating pull request via gh CLI...");
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
+    let mut command = Command::new("gh");
+    command
+        .args([
+            "pr",
+            "create",
+            "--head",
+            head,
+            "--base",
+            base,
+            "--title",
+            title,
+            "--body",
+            body.unwrap_or(""),
+        ])
+        .current_dir(working_dir);
+
+    if draft {
+        command.arg("--draft");
+    }
+
+    let output = command.output().await.map_err(|e| {
+        butterflow_models::Error::Runtime(format!("gh pr create failed to start: {e}"))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let details = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
         return Err(butterflow_models::Error::Runtime(format!(
-            "Failed to create pull request: HTTP {} - {}",
-            status, error_text
+            "gh pr create failed: {details}"
         )));
     }
 
-    // Extract the PR URL from the response if available
-    let pr_url = response
-        .json::<serde_json::Value>()
-        .await
-        .ok()
-        .and_then(|body| body.get("url").and_then(|v| v.as_str()).map(String::from));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pr_url = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with("http"))
+        .map(|line| line.trim().to_string());
 
     match &pr_url {
         Some(url) => info!("Pull request created: {}", url),
-        None => info!("Pull request created successfully!"),
+        None => info!("Pull request created successfully via gh"),
     }
 
     Ok(pr_url)
