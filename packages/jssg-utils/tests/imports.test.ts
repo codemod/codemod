@@ -717,6 +717,54 @@ function testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected() {
   assert(result.includes("require('mod')"), "Should leave the multi-declarator require intact");
 }
 
+/** Before removeImport supported `variable_declaration`, this returned null (only lexical_declaration was matched). */
+function testRemoveDefaultVarCJS() {
+  const program = parseProgram("javascript", "var foo = require('mod');\nconsole.log(foo);\n");
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit for var + require");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should remove var require statement");
+  assert(result.includes("console.log(foo)"), "Should keep usage");
+}
+
+/** Bare `require('mod')` has no binding, so getImport is null; removal required `removeSideEffectForms`. */
+function testRemoveBareRequireOnlyWithSideEffectFlag() {
+  const src = "require('mod');\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without removeSideEffectForms, bare require should not be removed (backward compatible)",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, bare require should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require('mod')"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Side-effect `import 'mod'` — same as bare require: needs removeSideEffectForms. */
+function testRemoveSideEffectImportWithFlag() {
+  const src = "import 'mod';\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without flag, side-effect import should not be removed",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, side-effect import should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("import 'mod'"), "Should strip side-effect import");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
 function run() {
   // getAllImports tests
   testReturnsEmptyArrayWhenNoImports();
@@ -777,6 +825,9 @@ function run() {
   testRemoveDefault_MultiDeclarator_ReturnsNull();
   testRemoveDefault_MultiDeclarator_SourceCodeUnchanged();
   testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected();
+  testRemoveDefaultVarCJS();
+  testRemoveBareRequireOnlyWithSideEffectFlag();
+  testRemoveSideEffectImportWithFlag();
 
   console.log("imports.test.ts: all assertions passed");
 }
