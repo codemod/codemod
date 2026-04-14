@@ -746,6 +746,36 @@ function testRemoveBareRequireOnlyWithSideEffectFlag() {
   assert(result.includes("console.log(1)"), "Should keep other statements");
 }
 
+/** Do not strip `require` when the module id only appears nested (not the direct specifier). */
+function testRemoveBareRequireNestedStringNotRemoved() {
+  const src = "require(getName('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Nested string literal must not be treated as require('mod')",
+  );
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+/** Parenthesized string literal is still a direct specifier. */
+function testRemoveBareRequireParenthesizedLiteralStillRemoved() {
+  const src = "require(('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "Parenthesized literal should still count as direct specifier");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
 /** Side-effect `import 'mod'` — same as bare require: needs removeSideEffectForms. */
 function testRemoveSideEffectImportWithFlag() {
   const src = "import 'mod';\nconsole.log(1);\n";
@@ -763,6 +793,21 @@ function testRemoveSideEffectImportWithFlag() {
   const result = program.commitEdits([edit!]);
   assert(!result.includes("import 'mod'"), "Should strip side-effect import");
   assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Only the module source string counts — not other string literals (e.g. import attributes). */
+function testRemoveSideEffectImportOnlyMatchesSourceField() {
+  const src = "import 'foo' assert { type: 'mod' };\nconsole.log(1);\n";
+  const program = parseProgram("typescript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Package name only in import attributes must not remove the statement",
+  );
+  assert(program.text() === src, "Source must be unchanged");
 }
 
 function run() {
@@ -827,7 +872,10 @@ function run() {
   testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected();
   testRemoveDefaultVarCJS();
   testRemoveBareRequireOnlyWithSideEffectFlag();
+  testRemoveBareRequireNestedStringNotRemoved();
+  testRemoveBareRequireParenthesizedLiteralStillRemoved();
   testRemoveSideEffectImportWithFlag();
+  testRemoveSideEffectImportOnlyMatchesSourceField();
 
   console.log("imports.test.ts: all assertions passed");
 }

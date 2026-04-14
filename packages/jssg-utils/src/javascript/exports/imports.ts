@@ -753,7 +753,8 @@ function countSpecifiersInStatement<T extends Language>(statement: SgNode<T>): n
 }
 
 /**
- * Find the full range of a statement including trailing newline.
+ * Find the full range of a statement including one trailing line ending, if present.
+ * Handles CRLF, LF, and legacy lone CR so removal edits stay consistent across platforms.
  */
 function getStatementRangeWithNewline<T extends Language>(
   statement: SgNode<T>,
@@ -762,8 +763,11 @@ function getStatementRangeWithNewline<T extends Language>(
   const range = statement.range();
   let end = range.end.index;
 
-  // Include trailing newline if present
-  if (programText[end] === "\n") {
+  if (programText.slice(end, end + 2) === "\r\n") {
+    end += 2;
+  } else if (programText[end] === "\n") {
+    end++;
+  } else if (programText[end] === "\r") {
     end++;
   }
 
@@ -997,6 +1001,47 @@ export function addImport<T extends Language>(
 }
 
 /**
+ * First argument to `require(...)`, after stripping redundant parentheses.
+ * Does not recurse into nested calls — only literal module specifiers match.
+ */
+function unwrapParentheses(node: SgNode<TS>): SgNode<TS> {
+  let current = node;
+  while (current.kind() === "parenthesized_expression") {
+    const inner = current.child(1);
+    if (!inner) break;
+    current = inner as SgNode<TS>;
+  }
+  return current;
+}
+
+function requireCallFirstArgIsLiteralSpecifier(
+  requireCall: SgNode<TS>,
+  packageName: string,
+): boolean {
+  const args = requireCall.field("arguments");
+  if (!args) return false;
+  let firstArg: SgNode<TS> | null = null;
+  for (const child of args.children()) {
+    const k = child.kind();
+    if (k === "(" || k === ")" || k === ",") continue;
+    firstArg = child as SgNode<TS>;
+    break;
+  }
+  if (!firstArg) return false;
+  const arg = unwrapParentheses(firstArg);
+  if (arg.kind() !== "string") {
+    return false;
+  }
+  const frag = arg.find({
+    rule: {
+      kind: "string_fragment",
+      regex: stringToExactRegexString(packageName),
+    },
+  });
+  return frag != null;
+}
+
+/**
  * `require('pkg');` as a standalone expression statement (e.g. polyfill registration).
  */
 function removeBareRequireSideEffectEdit(
@@ -1015,29 +1060,21 @@ function removeBareRequireSideEffectEdit(
     if (fn?.text() !== "require") {
       continue;
     }
-    const str = expr.find({
-      rule: {
-        kind: "string_fragment",
-        regex: stringToExactRegexString(packageName),
-      },
-    });
-    if (!str) {
+    if (!requireCallFirstArgIsLiteralSpecifier(expr as SgNode<TS>, packageName)) {
       continue;
     }
-    const range = stmt.range();
-    let end = range.end.index;
-    if (programText[end] === "\n") {
-      end++;
-    } else if (programText.slice(end, end + 2) === "\r\n") {
-      end += 2;
-    }
-    return { startPos: range.start.index, endPos: end, insertedText: "" };
+    const { start, end } = getStatementRangeWithNewline(
+      stmt as unknown as SgNode<Language>,
+      programText,
+    );
+    return { startPos: start, endPos: end, insertedText: "" };
   }
   return null;
 }
 
 /**
  * Side-effect only: `import 'pkg'` / `import "pkg"` (no binding clause in grammar).
+ * The module id is matched only on the statement’s `source` field (not other strings, e.g. import attributes).
  */
 function removeSideEffectImportStatementEdit(
   program: SgNode<TS, "program">,
@@ -1047,13 +1084,17 @@ function removeSideEffectImportStatementEdit(
   for (const stmt of program.findAll({
     rule: { kind: "import_statement" },
   })) {
-    const src = stmt.find({
+    const sourceNode = stmt.field("source");
+    if (!sourceNode) {
+      continue;
+    }
+    const frag = sourceNode.find({
       rule: {
         kind: "string_fragment",
         regex: stringToExactRegexString(packageName),
       },
     });
-    if (!src) {
+    if (!frag) {
       continue;
     }
     const hasBinding = stmt.find({
@@ -1062,14 +1103,11 @@ function removeSideEffectImportStatementEdit(
     if (hasBinding) {
       continue;
     }
-    const range = stmt.range();
-    let end = range.end.index;
-    if (programText[end] === "\n") {
-      end++;
-    } else if (programText.slice(end, end + 2) === "\r\n") {
-      end += 2;
-    }
-    return { startPos: range.start.index, endPos: end, insertedText: "" };
+    const { start, end } = getStatementRangeWithNewline(
+      stmt as unknown as SgNode<Language>,
+      programText,
+    );
+    return { startPos: start, endPos: end, insertedText: "" };
   }
   return null;
 }
