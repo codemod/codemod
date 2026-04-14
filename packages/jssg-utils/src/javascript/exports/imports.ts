@@ -43,7 +43,15 @@ type AddImportOptions =
     };
 
 type RemoveImportOptions =
-  | { type: "default"; from: string }
+  | {
+      type: "default";
+      from: string;
+      /**
+       * When `getImport` finds no binding, also remove side-effect-only lines:
+       * `import 'module'` and `require('module');`. Default false.
+       */
+      removeSideEffectForms?: boolean;
+    }
   | { type: "namespace"; from: string }
   | { type: "named"; specifiers: string[]; from: string };
 
@@ -387,7 +395,7 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
     rule: { kind: "import_statement" },
   });
 
-  // Find CJS require declarations (const x = require(...))
+  // Find CJS require declarations (`const`/`let` and `var`: x = require(...))
   // Restricted to single-declarator declarations only - if a second variable_declarator
   // exists in the same declaration, we skip it entirely rather than risk removing
   // unrelated bindings during whole-statement removal.
@@ -430,7 +438,46 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
     },
   });
 
-  return [...esmImports, ...cjsImports] as unknown as SgNode<T>[];
+  // `var foo = require(...)` uses variable_declaration, not lexical_declaration
+  const cjsVarImports = tsProgram.findAll({
+    rule: {
+      kind: "variable_declaration",
+      has: {
+        kind: "variable_declarator",
+        has: {
+          field: "value",
+          any: [
+            {
+              kind: "call_expression",
+              has: {
+                field: "function",
+                kind: "identifier",
+                regex: "^require$",
+              },
+            },
+            {
+              kind: "await_expression",
+              has: {
+                kind: "call_expression",
+                has: {
+                  field: "function",
+                  regex: "^import$",
+                },
+              },
+            },
+          ],
+        },
+      },
+      not: {
+        has: {
+          kind: "variable_declarator",
+          nthChild: 2,
+        },
+      },
+    },
+  });
+
+  return [...esmImports, ...cjsImports, ...cjsVarImports] as unknown as SgNode<T>[];
 }
 
 /**
@@ -706,7 +753,8 @@ function countSpecifiersInStatement<T extends Language>(statement: SgNode<T>): n
 }
 
 /**
- * Find the full range of a statement including trailing newline.
+ * Find the full range of a statement including one trailing line ending, if present.
+ * Handles CRLF, LF, and legacy lone CR so removal edits stay consistent across platforms.
  */
 function getStatementRangeWithNewline<T extends Language>(
   statement: SgNode<T>,
@@ -715,8 +763,11 @@ function getStatementRangeWithNewline<T extends Language>(
   const range = statement.range();
   let end = range.end.index;
 
-  // Include trailing newline if present
-  if (programText[end] === "\n") {
+  if (programText.slice(end, end + 2) === "\r\n") {
+    end += 2;
+  } else if (programText[end] === "\n") {
+    end++;
+  } else if (programText[end] === "\r") {
     end++;
   }
 
@@ -950,10 +1001,124 @@ export function addImport<T extends Language>(
 }
 
 /**
+ * First argument to `require(...)`, after stripping redundant parentheses.
+ * Does not recurse into nested calls — only literal module specifiers match.
+ */
+function unwrapParentheses(node: SgNode<TS>): SgNode<TS> {
+  let current = node;
+  while (current.kind() === "parenthesized_expression") {
+    const inner = current.child(1);
+    if (!inner) break;
+    current = inner as SgNode<TS>;
+  }
+  return current;
+}
+
+function requireCallFirstArgIsLiteralSpecifier(
+  requireCall: SgNode<TS>,
+  packageName: string,
+): boolean {
+  const args = requireCall.field("arguments");
+  if (!args) return false;
+  let firstArg: SgNode<TS> | null = null;
+  for (const child of args.children()) {
+    const k = child.kind();
+    if (k === "(" || k === ")" || k === ",") continue;
+    firstArg = child as SgNode<TS>;
+    break;
+  }
+  if (!firstArg) return false;
+  const arg = unwrapParentheses(firstArg);
+  if (arg.kind() !== "string") {
+    return false;
+  }
+  const frag = arg.find({
+    rule: {
+      kind: "string_fragment",
+      regex: stringToExactRegexString(packageName),
+    },
+  });
+  return frag != null;
+}
+
+/**
+ * `require('pkg');` as a standalone expression statement (e.g. polyfill registration).
+ */
+function removeBareRequireSideEffectEdit(
+  program: SgNode<TS, "program">,
+  packageName: string,
+): Edit | null {
+  const programText = program.text();
+  for (const stmt of program.findAll({
+    rule: { kind: "expression_statement" },
+  })) {
+    const expr = stmt.child(0);
+    if (!expr || expr.kind() !== "call_expression") {
+      continue;
+    }
+    const fn = expr.field("function");
+    if (fn?.text() !== "require") {
+      continue;
+    }
+    if (!requireCallFirstArgIsLiteralSpecifier(expr as SgNode<TS>, packageName)) {
+      continue;
+    }
+    const { start, end } = getStatementRangeWithNewline(
+      stmt as unknown as SgNode<Language>,
+      programText,
+    );
+    return { startPos: start, endPos: end, insertedText: "" };
+  }
+  return null;
+}
+
+/**
+ * Side-effect only: `import 'pkg'` / `import "pkg"` (no binding clause in grammar).
+ * The module id is matched only on the statement’s `source` field (not other strings, e.g. import attributes).
+ */
+function removeSideEffectImportStatementEdit(
+  program: SgNode<TS, "program">,
+  packageName: string,
+): Edit | null {
+  const programText = program.text();
+  for (const stmt of program.findAll({
+    rule: { kind: "import_statement" },
+  })) {
+    const sourceNode = stmt.field("source");
+    if (!sourceNode) {
+      continue;
+    }
+    const frag = sourceNode.find({
+      rule: {
+        kind: "string_fragment",
+        regex: stringToExactRegexString(packageName),
+      },
+    });
+    if (!frag) {
+      continue;
+    }
+    const hasBinding = stmt.find({
+      rule: { kind: "import_clause" },
+    });
+    if (hasBinding) {
+      continue;
+    }
+    const { start, end } = getStatementRangeWithNewline(
+      stmt as unknown as SgNode<Language>,
+      programText,
+    );
+    return { startPos: start, endPos: end, insertedText: "" };
+  }
+  return null;
+}
+
+/**
  * Remove an import from the program. Smart behavior:
  * - Default/namespace: Removes entire import statement
  * - Named (multiple specifiers exist): Removes only the specified specifiers
  * - Named (removing last specifiers): Removes entire import statement
+ * - Default + `var` + `require()`: removed (same as `const`/`let`)
+ * - Default + `removeSideEffectForms`: also removes bare `require('m')` and `import 'm'` when there is no binding import
  *
  * Note: removeImport returns null for multi-declarator CJS declarations
  * (e.g. `const foo = require('mod'), x = 1`). These are not tracked by
@@ -969,36 +1134,52 @@ export function removeImport<T extends Language>(
   const allStatements = findAllImportStatements(program);
 
   if (options.type === "default") {
+    const stripSideEffects = options.removeSideEffectForms === true;
     const existing = getImport(program, { type: "default", from: options.from });
-    if (!existing || existing.isNamespace) return null;
 
-    const statement =
-      allStatements.find((stmt) => {
-        const tsStmt = stmt as unknown as SgNode<TS>;
-        const matchesAlias = tsStmt.has({
-          rule: {
-            any: [{ kind: "identifier", regex: stringToExactRegexString(existing.alias) }],
-          },
-        });
-        const matchesSource = tsStmt.has({
-          rule: {
-            any: [
-              { regex: stringToExactRegexString(options.from) },
-              {
-                has: {
-                  kind: "string_fragment",
-                  regex: stringToExactRegexString(options.from),
+    if (existing?.isNamespace) {
+      return null;
+    }
+
+    if (existing) {
+      const statement =
+        allStatements.find((stmt) => {
+          const tsStmt = stmt as unknown as SgNode<TS>;
+          const matchesAlias = tsStmt.has({
+            rule: {
+              any: [{ kind: "identifier", regex: stringToExactRegexString(existing.alias) }],
+            },
+          });
+          const matchesSource = tsStmt.has({
+            rule: {
+              any: [
+                { regex: stringToExactRegexString(options.from) },
+                {
+                  has: {
+                    kind: "string_fragment",
+                    regex: stringToExactRegexString(options.from),
+                  },
                 },
-              },
-            ],
-          },
-        });
-        return matchesAlias && matchesSource;
-      }) ?? null;
+              ],
+            },
+          });
+          return matchesAlias && matchesSource;
+        }) ?? null;
 
-    if (!statement) return null;
-    const { start, end } = getStatementRangeWithNewline(statement, programText);
-    return { startPos: start, endPos: end, insertedText: "" };
+      if (!statement) return null;
+      const { start, end } = getStatementRangeWithNewline(statement, programText);
+      return { startPos: start, endPos: end, insertedText: "" };
+    }
+
+    if (stripSideEffects) {
+      const tsProgram = program as unknown as SgNode<TS, "program">;
+      return (
+        removeBareRequireSideEffectEdit(tsProgram, options.from) ??
+        removeSideEffectImportStatementEdit(tsProgram, options.from)
+      );
+    }
+
+    return null;
   }
 
   if (options.type === "namespace") {
