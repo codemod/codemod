@@ -147,6 +147,7 @@ function shouldBootstrapLatestNoCommand(argv, env = process.env) {
 function spawnLatestCli({ env = process.env, platform = process.platform, spawnImpl = spawn }) {
   return spawnImpl(npmExecutable(platform), latestBootstrapArgs(), {
     stdio: "inherit",
+    shell: platform === "win32",
     env: {
       ...env,
       [CODEMOD_BOOTSTRAPPED_ENV]: "1",

@@ -390,11 +390,15 @@ async fn main() -> Result<()> {
 
     let implicit_cli_params = Cli::try_parse_from(cli.trailing_args.clone());
 
-    if cli.disable_analytics
+    let is_analytics_disabled = cli.disable_analytics
+        || std::env::var("DO_NOT_TRACK").is_ok()
+        || std::env::var("DISABLE_ANALYTICS").is_ok()
         || implicit_cli_params
+            .as_ref()
             .map(|params| params.disable_analytics)
-            .unwrap_or(false)
-    {
+            .unwrap_or(false);
+
+    if is_analytics_disabled {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
