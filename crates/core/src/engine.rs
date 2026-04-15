@@ -76,7 +76,11 @@ use semantic_factory::LazySemanticProvider;
 /// True when every task for each `depends_on` node is [`TaskStatus::Completed`], matching
 /// [`Scheduler::find_runnable_tasks_internal`]. Used so matrix masters are not marked
 /// completed while dependency nodes (e.g. shard evaluation) are still running.
-fn workflow_node_dependencies_satisfied(workflow: &Workflow, tasks: &[Task], node_id: &str) -> bool {
+fn workflow_node_dependencies_satisfied(
+    workflow: &Workflow,
+    tasks: &[Task],
+    node_id: &str,
+) -> bool {
     let Some(node) = workflow.nodes.iter().find(|n| n.id == node_id) else {
         return false;
     };
@@ -85,10 +89,7 @@ fn workflow_node_dependencies_satisfied(workflow: &Workflow, tasks: &[Task], nod
         if dep_tasks.is_empty() {
             return false;
         }
-        if !dep_tasks
-            .iter()
-            .all(|t| t.status == TaskStatus::Completed)
-        {
+        if !dep_tasks.iter().all(|t| t.status == TaskStatus::Completed) {
             return false;
         }
     }

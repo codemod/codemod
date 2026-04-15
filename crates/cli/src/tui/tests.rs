@@ -576,12 +576,7 @@ fn refresh_result_seeds_session_overrides_from_workflow_run_once() {
 fn refresh_orders_tasks_by_workflow_yaml_node_order() {
     let run_id = Uuid::new_v4();
     let mut app = App::new_for_run(false, None, run_id);
-    let add = task(
-        run_id,
-        "add-descriptions",
-        TaskStatus::Pending,
-        vec![],
-    );
+    let add = task(run_id, "add-descriptions", TaskStatus::Pending, vec![]);
     let evaluate = task(run_id, "evaluate-shards", TaskStatus::Pending, vec![]);
     let workflow = Workflow {
         version: "1".to_string(),

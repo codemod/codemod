@@ -1193,9 +1193,8 @@ fn workflow_status_discriminant(status: WorkflowStatus) -> u8 {
 
 /// Order tasks like `workflow.yaml`: follow `workflow.nodes`, then matrix shards within a node.
 fn cmp_tasks_by_workflow_order(a: &Task, b: &Task, workflow: Option<&Workflow>) -> Ordering {
-    let pos = |task: &Task| {
-        workflow.and_then(|w| w.nodes.iter().position(|n| n.id == task.node_id))
-    };
+    let pos =
+        |task: &Task| workflow.and_then(|w| w.nodes.iter().position(|n| n.id == task.node_id));
     match (pos(a), pos(b)) {
         (Some(ia), Some(ib)) => ia
             .cmp(&ib)

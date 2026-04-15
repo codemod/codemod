@@ -13,22 +13,20 @@ pub(crate) fn task_visible_in_list(task: &Task, all_tasks: &[Task]) -> bool {
     if !task.is_master {
         return true;
     }
-    let has_children = all_tasks
-        .iter()
-        .any(|t| t.master_task_id == Some(task.id));
+    let has_children = all_tasks.iter().any(|t| t.master_task_id == Some(task.id));
     !has_children
 }
 
 pub(crate) fn awaiting_trigger_visible(tasks: &[Task]) -> bool {
-    tasks.iter().any(|task| {
-        task.status == TaskStatus::AwaitingTrigger && task_visible_in_list(task, tasks)
-    })
+    tasks
+        .iter()
+        .any(|task| task.status == TaskStatus::AwaitingTrigger && task_visible_in_list(task, tasks))
 }
 
 pub(crate) fn failed_visible(tasks: &[Task]) -> bool {
-    tasks.iter().any(|task| {
-        task.status == TaskStatus::Failed && task_visible_in_list(task, tasks)
-    })
+    tasks
+        .iter()
+        .any(|task| task.status == TaskStatus::Failed && task_visible_in_list(task, tasks))
 }
 
 #[cfg(test)]
@@ -62,23 +60,30 @@ mod tests {
     fn non_master_always_visible() {
         let run = Uuid::new_v4();
         let t = base_task(run, "evaluate-shards", false, None);
-        assert!(task_visible_in_list(&t, &[t.clone()]));
+        assert!(task_visible_in_list(&t, std::slice::from_ref(&t)));
     }
 
     #[test]
     fn matrix_master_visible_until_children_exist() {
         let run = Uuid::new_v4();
         let master = base_task(run, "apply-transforms", true, None);
-        assert!(task_visible_in_list(&master, &[master.clone()]));
+        assert!(task_visible_in_list(&master, std::slice::from_ref(&master)));
 
         let child = {
             let mut c = base_task(run, "apply-transforms", false, Some(master.id));
-            c.matrix_values = Some(
-                std::collections::HashMap::from([("name".to_string(), serde_json::json!("a"))]),
-            );
+            c.matrix_values = Some(std::collections::HashMap::from([(
+                "name".to_string(),
+                serde_json::json!("a"),
+            )]));
             c
         };
-        assert!(!task_visible_in_list(&master, &[master.clone(), child.clone()]));
-        assert!(task_visible_in_list(&child, &[master.clone(), child.clone()]));
+        assert!(!task_visible_in_list(
+            &master,
+            &[master.clone(), child.clone()]
+        ));
+        assert!(task_visible_in_list(
+            &child,
+            &[master.clone(), child.clone()]
+        ));
     }
 }
