@@ -1539,7 +1539,7 @@ impl Engine {
 
         // Use the stored target path from the workflow run so that the engine
         // operates on the correct directory, even when launched from a
-        // different cwd (e.g. via `workflow tui`).
+        // different cwd selected by the caller.
         if let Some(target_path) = &workflow_run.target_path {
             self.workflow_run_config.target_path = target_path.clone();
         }

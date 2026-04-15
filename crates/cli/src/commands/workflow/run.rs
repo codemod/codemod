@@ -18,8 +18,6 @@ use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
 use crate::workflow_runner::{resolve_workflow_source, run_workflow};
-#[cfg(unix)]
-use crate::workflow_runner::{run_workflow_with_tui, workflow_has_manual_nodes};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -133,33 +131,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    // Determine TUI mode early so we can run the dirty-git-check before the
-    // TUI redirects stdout/stderr to /dev/null (which would hang the prompt).
-    #[cfg(unix)]
-    let use_tui = {
-        let workflow = butterflow_core::utils::parse_workflow_file(&workflow_file_path)?;
-        !args.no_interactive && workflow_has_manual_nodes(&workflow)
-    };
-    #[cfg(not(unix))]
-    let use_tui = false;
-
-    // When TUI is active, run the dirty check now while the terminal is still
-    // available for interactive prompts. Then tell the engine to skip it later.
-    let allow_dirty = if use_tui && !args.allow_dirty {
-        let check = crate::dirty_git_check::dirty_check(false);
-        // This will prompt the user or exit(1) if they decline.
-        // If it returns, the user approved (or the repo is clean).
-        check(&target_path, false);
-        true
-    } else {
-        args.allow_dirty
-    };
-
-    let (mut engine, mut config) = create_engine(
+    let (mut engine, config) = create_engine(
         workflow_file_path,
         target_path.clone(),
         args.dry_run,
-        allow_dirty,
+        args.allow_dirty,
         params,
         None,
         Some(capabilities.clone()),
@@ -174,21 +150,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     )?;
 
     engine.set_name(Some(workflow_label));
-
-    if use_tui {
-        engine.set_quiet(true);
-        engine.set_progress_callback(Arc::new(None));
-        config.progress_callback = Arc::new(None);
-    }
-
-    // Run workflow -- with TUI if manual nodes, otherwise text-based
-    #[cfg(unix)]
-    let (_, seconds) = if use_tui {
-        run_workflow_with_tui(&mut engine, config).await?
-    } else {
-        run_workflow(&engine, config).await?
-    };
-    #[cfg(not(unix))]
     let (_, seconds) = run_workflow(&engine, config).await?;
 
     let duration_ms = started.elapsed().as_millis() as f64;
@@ -200,35 +161,33 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
-    if !use_tui {
-        if crate::utils::metrics::should_show_report(
-            args.report,
-            args.no_interactive,
-            &metrics_data,
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let report = ExecutionReport::build(
+            args.workflow.clone(),
+            None,
+            duration_ms,
+            args.dry_run,
+            target_path.display().to_string(),
+            CLI_VERSION.to_string(),
             files_modified,
-        ) {
-            let collected_diffs = diff_collector
-                .map(|c| c.lock().unwrap().clone())
-                .unwrap_or_default();
+            files_unmodified,
+            files_with_errors,
+            convert_metrics(&metrics_data),
+            convert_diffs(&collected_diffs, &target_path.display().to_string()),
+        );
 
-            let report = ExecutionReport::build(
-                args.workflow.clone(),
-                None,
-                duration_ms,
-                args.dry_run,
-                target_path.display().to_string(),
-                CLI_VERSION.to_string(),
-                files_modified,
-                files_unmodified,
-                files_with_errors,
-                convert_metrics(&metrics_data),
-                convert_diffs(&collected_diffs, &target_path.display().to_string()),
-            );
-
-            crate::report_server::serve_report(report).await?;
-        } else {
-            crate::utils::metrics::print_metrics(&metrics_data);
-        }
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
