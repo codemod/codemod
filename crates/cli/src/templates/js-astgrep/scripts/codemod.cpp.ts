@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
-import type CPP from "codemod:ast-grep/langs/cpp";
+import type { Codemod } from "codemod:ast-grep";
+import type Cpp from "codemod:ast-grep/langs/cpp";
 
-async function transform(root: SgRoot<CPP>): Promise<string> {
+export const codemod: Codemod<Cpp> = async (root) => {
   const rootNode = root.root();
 
   // Find raw pointer declarations with new
@@ -58,4 +58,4 @@ async function transform(root: SgRoot<CPP>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Ruby from "codemod:ast-grep/langs/ruby";
 
-async function transform(root: SgRoot<Ruby>): Promise<string> {
+const codemod: Codemod<Ruby> = async (root) => {
   const rootNode = root.root();
 
   const nodes = rootNode.findAll({
@@ -19,4 +19,4 @@ async function transform(root: SgRoot<Ruby>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

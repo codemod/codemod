@@ -32,11 +32,11 @@ You can author rules as plain JavaScript objects. See the [ast‑grep rule confi
 Below is a sample JSSG codemod that moves React components declared inside other components up to module scope.
 
 ```ts scripts/codemod.ts expandable
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type { SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -147,7 +147,7 @@ const transform: Transform<TSX> = async (root) => {
   return rootNode.commitEdits(edits);
 };
 
-export default transform;
+export default codemod;
 ```
 
 ## How JSSG differs
