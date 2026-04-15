@@ -501,13 +501,8 @@ async fn resolve_skill_package_for_install(
     environment: Option<&HashMap<String, String>>,
     local_bundle_root: Option<&Path>,
 ) -> std::result::Result<(SkillPackageInstallSpec, Vec<String>), HarnessAdapterError> {
-    let resolved_package = resolve_skill_package(
-        package_id,
-        configured_path,
-        environment,
-        local_bundle_root,
-    )
-    .await?;
+    let resolved_package =
+        resolve_skill_package(package_id, configured_path, environment, local_bundle_root).await?;
     if !resolved_package.behavior_shape.includes_skill() {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
             unsupported_skill_install_error(
@@ -584,9 +579,7 @@ fn finish_resolve_skill_package(
     let description = manifest
         .as_ref()
         .map(|m| m.description.clone())
-        .unwrap_or_else(|| {
-            format!("Install package skill for `{manifest_name_fallback}`.")
-        });
+        .unwrap_or_else(|| format!("Install package skill for `{manifest_name_fallback}`."));
     let manifest_name = manifest
         .as_ref()
         .map(|m| m.name.as_str())
@@ -607,8 +600,7 @@ fn finish_resolve_skill_package(
     } else {
         None
     };
-    let behavior_shape =
-        detect_package_behavior_shape_with_manifest_hint(package_dir, manifest);
+    let behavior_shape = detect_package_behavior_shape_with_manifest_hint(package_dir, manifest);
 
     Ok(ResolvedSkillPackage {
         id: canonical_package_id,
@@ -1083,12 +1075,15 @@ nodes:
         install-skill:
           package: "{pkg}"
 "#,
-            pkg = install_skill_package_field.replace('\\', "\\\\").replace('"', "\\\"")
+            pkg = install_skill_package_field
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
         );
         fs::write(root.join("workflow.yaml"), workflow).unwrap();
 
-        let skill_name =
-            crate::utils::skill_layout::derive_skill_name_from_package_name(install_skill_package_field);
+        let skill_name = crate::utils::skill_layout::derive_skill_name_from_package_name(
+            install_skill_package_field,
+        );
         let skill_dir = root.join("agents/skill").join(skill_name);
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
