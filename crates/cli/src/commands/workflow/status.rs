@@ -16,6 +16,10 @@ pub struct Command {
     /// Workflow run ID
     #[arg(short, long)]
     id: Uuid,
+
+    /// Print persisted workflow state as JSON (includes `shards` after evaluate-shards)
+    #[arg(long)]
+    show_state: bool,
 }
 
 #[derive(Tabled)]
@@ -104,6 +108,17 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     println!("{table}");
 
+    if args.show_state {
+        let state = engine
+            .get_workflow_state(args.id)
+            .await
+            .context("Failed to load workflow state")?;
+        let pretty = serde_json::to_string_pretty(&serde_json::json!(state))
+            .context("Failed to serialize workflow state")?;
+        println!("Workflow state:");
+        println!("{pretty}");
+    }
+
     // Group tasks by node
     let mut tasks_by_node: HashMap<String, Vec<&Task>> = HashMap::new();
     for task in &tasks {
@@ -145,9 +160,9 @@ pub async fn handler(args: &Command) -> Result<()> {
                     })
                     .unwrap_or_else(|| "unknown".to_string());
                 tasks_rows.push(TaskRow {
-                    id: master_task.id.to_string(),
+                    id: task.id.to_string(),
                     node_id: node.id.clone(),
-                    status: format!("{:?}", master_task.status),
+                    status: format!("{:?}", task.status),
                     matrix_info,
                 });
             }

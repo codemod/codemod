@@ -2,6 +2,8 @@ pub mod app;
 pub mod event;
 pub mod screens;
 
+mod task_visibility;
+
 use std::collections::{HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::sync::Arc;
