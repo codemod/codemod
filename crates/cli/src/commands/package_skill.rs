@@ -47,6 +47,8 @@ pub struct PackageSkillInstallRequest {
     pub emit_output: bool,
     pub working_directory: Option<PathBuf>,
     pub environment: Option<HashMap<String, String>>,
+    /// Local codemod bundle root; when set and `codemod.yaml` matches `package_id`, skip registry.
+    pub bundle_path: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -114,6 +116,7 @@ impl InstallSkillExecutor for CliInstallSkillExecutor {
             emit_output,
             working_directory: Some(request.target_path),
             environment: Some(request.env),
+            bundle_path: request.bundle_path,
         };
 
         install_package_skill(&install_request, &self.telemetry).await
@@ -152,6 +155,7 @@ pub async fn install_from_run_request(
         emit_output: true,
         working_directory: target_path,
         environment: None,
+        bundle_path: None,
     };
     install_package_skill(&request, telemetry).await
 }
@@ -186,6 +190,7 @@ async fn execute_install_package_skill(
         &request.package_id,
         request.configured_path.as_deref(),
         request.environment.as_ref(),
+        request.bundle_path.as_deref(),
     )
     .await?;
 
@@ -494,8 +499,15 @@ async fn resolve_skill_package_for_install(
     package_id: &str,
     configured_path: Option<&str>,
     environment: Option<&HashMap<String, String>>,
+    local_bundle_root: Option<&Path>,
 ) -> std::result::Result<(SkillPackageInstallSpec, Vec<String>), HarnessAdapterError> {
-    let resolved_package = resolve_skill_package(package_id, configured_path, environment).await?;
+    let resolved_package = resolve_skill_package(
+        package_id,
+        configured_path,
+        environment,
+        local_bundle_root,
+    )
+    .await?;
     if !resolved_package.behavior_shape.includes_skill() {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
             unsupported_skill_install_error(
@@ -543,11 +555,95 @@ struct ResolvedSkillPackage {
     behavior_shape: PackageBehaviorShape,
 }
 
+fn canonical_package_id_from_manifest(manifest: &CodemodManifest) -> String {
+    format_registry_id(
+        &manifest.registry.as_ref().and_then(|r| r.scope.clone()),
+        &manifest.name,
+    )
+}
+
+fn local_bundle_matches_install_request(
+    requested_package_id: &str,
+    manifest: &CodemodManifest,
+) -> bool {
+    if requested_package_id == manifest.name {
+        return true;
+    }
+    let canonical = canonical_package_id_from_manifest(manifest);
+    requested_package_id == canonical
+}
+
+fn finish_resolve_skill_package(
+    package_dir: &Path,
+    manifest: Option<&CodemodManifest>,
+    canonical_package_id: String,
+    manifest_name_fallback: &str,
+    version: String,
+    configured_path: Option<&str>,
+) -> std::result::Result<ResolvedSkillPackage, HarnessAdapterError> {
+    let description = manifest
+        .as_ref()
+        .map(|m| m.description.clone())
+        .unwrap_or_else(|| {
+            format!("Install package skill for `{manifest_name_fallback}`.")
+        });
+    let manifest_name = manifest
+        .as_ref()
+        .map(|m| m.name.as_str())
+        .unwrap_or(manifest_name_fallback);
+    let candidate = resolve_skill_install_candidate(
+        package_dir,
+        manifest,
+        manifest_name,
+        configured_path,
+        &canonical_package_id,
+    )?;
+    let expected_skill_file = candidate.path;
+    let has_explicit_skill_path = candidate.explicit;
+    let skill_source_dir = if expected_skill_file.is_file() {
+        expected_skill_file.parent().map(Path::to_path_buf)
+    } else if !has_explicit_skill_path {
+        find_authored_skill_dir(package_dir, Some(manifest_name))
+    } else {
+        None
+    };
+    let behavior_shape =
+        detect_package_behavior_shape_with_manifest_hint(package_dir, manifest);
+
+    Ok(ResolvedSkillPackage {
+        id: canonical_package_id,
+        version,
+        description,
+        package_dir: package_dir.to_path_buf(),
+        expected_skill_file,
+        skill_source_dir,
+        behavior_shape,
+    })
+}
+
 async fn resolve_skill_package(
     package_id: &str,
     configured_path: Option<&str>,
     environment: Option<&HashMap<String, String>>,
+    local_bundle_root: Option<&Path>,
 ) -> std::result::Result<ResolvedSkillPackage, HarnessAdapterError> {
+    if let Some(bundle_root) = local_bundle_root {
+        let manifest_path = bundle_root.join("codemod.yaml");
+        if let Some(manifest) = read_package_manifest(&manifest_path) {
+            if local_bundle_matches_install_request(package_id, &manifest) {
+                let canonical_id = canonical_package_id_from_manifest(&manifest);
+                return finish_resolve_skill_package(
+                    bundle_root,
+                    Some(&manifest),
+                    canonical_id,
+                    manifest.name.as_str(),
+                    manifest.version.clone(),
+                    configured_path,
+                );
+            }
+        }
+    }
+
     let registry_client = create_registry_client_with_env(None, environment).map_err(|error| {
         HarnessAdapterError::SkillPackageInstallFailed(format!(
             "failed to initialize registry client: {error}"
@@ -559,52 +655,19 @@ async fn resolve_skill_package(
         .await
         .map_err(|error| map_registry_error_to_install_error(package_id, error))?;
 
-    let package_id = format_registry_id(&resolved_package.spec.scope, &resolved_package.spec.name);
+    let canonical_package_id =
+        format_registry_id(&resolved_package.spec.scope, &resolved_package.spec.name);
     let manifest_path = resolved_package.package_dir.join("codemod.yaml");
     let manifest = read_package_manifest(&manifest_path);
-    let description = manifest
-        .as_ref()
-        .map(|manifest| manifest.description.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "Install package skill for `{}`.",
-                resolved_package.spec.name
-            )
-        });
-    let manifest_name = manifest
-        .as_ref()
-        .map(|manifest| manifest.name.as_str())
-        .unwrap_or(resolved_package.spec.name.as_str());
-    let candidate = resolve_skill_install_candidate(
-        &resolved_package.package_dir,
-        manifest.as_ref(),
-        manifest_name,
-        configured_path,
-        &package_id,
-    )?;
-    let expected_skill_file = candidate.path;
-    let has_explicit_skill_path = candidate.explicit;
-    let skill_source_dir = if expected_skill_file.is_file() {
-        expected_skill_file.parent().map(Path::to_path_buf)
-    } else if !has_explicit_skill_path {
-        find_authored_skill_dir(&resolved_package.package_dir, Some(manifest_name))
-    } else {
-        None
-    };
-    let behavior_shape = detect_package_behavior_shape_with_manifest_hint(
-        &resolved_package.package_dir,
-        manifest.as_ref(),
-    );
 
-    Ok(ResolvedSkillPackage {
-        id: package_id,
-        version: resolved_package.version,
-        description,
-        package_dir: resolved_package.package_dir,
-        expected_skill_file,
-        skill_source_dir,
-        behavior_shape,
-    })
+    finish_resolve_skill_package(
+        &resolved_package.package_dir,
+        manifest.as_ref(),
+        canonical_package_id,
+        resolved_package.spec.name.as_str(),
+        resolved_package.version,
+        configured_path,
+    )
 }
 
 fn resolve_skill_install_candidate(
@@ -983,5 +1046,118 @@ nodes:
             workflow_install_output_behavior(WorkflowOutputFormat::Jsonl),
             (OutputFormat::Logs, false)
         );
+    }
+
+    /// Minimal tree: `codemod.yaml`, `workflow.yaml` with install-skill, and `agents/skill/<name>/SKILL.md`.
+    fn write_minimal_installable_skill_bundle(
+        root: &Path,
+        manifest_name: &str,
+        install_skill_package_field: &str,
+        registry_scope: Option<&str>,
+    ) {
+        let mut manifest_yaml = format!(
+            r#"schema_version: "1"
+name: {name}
+version: "1.0.0"
+description: test
+author: test
+workflow: workflow.yaml
+"#,
+            name = manifest_name
+        );
+        if let Some(scope) = registry_scope {
+            manifest_yaml.push_str(&format!("registry:\n  scope: {scope}\n"));
+        }
+        fs::write(root.join("codemod.yaml"), manifest_yaml).unwrap();
+
+        // Quote package so scoped ids (e.g. `@scope/name`) are valid YAML.
+        let workflow = format!(
+            r#"version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "{pkg}"
+"#,
+            pkg = install_skill_package_field.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        fs::write(root.join("workflow.yaml"), workflow).unwrap();
+
+        let skill_name =
+            crate::utils::skill_layout::derive_skill_name_from_package_name(install_skill_package_field);
+        let skill_dir = root.join("agents/skill").join(skill_name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join(SKILL_FILE_NAME), "# Skill\n").unwrap();
+    }
+
+    #[test]
+    fn local_bundle_matches_accepts_bare_name_and_canonical_scoped_id() {
+        let mut m = manifest_with("workflow.yaml");
+        m.name = "mypkg".to_string();
+        assert!(local_bundle_matches_install_request("mypkg", &m));
+        assert!(!local_bundle_matches_install_request("otherpkg", &m));
+
+        m.registry = Some(crate::utils::manifest::RegistryConfig {
+            access: None,
+            scope: Some("codemod".to_string()),
+            visibility: None,
+        });
+        assert!(local_bundle_matches_install_request("mypkg", &m));
+        assert!(local_bundle_matches_install_request("@codemod/mypkg", &m));
+        assert!(!local_bundle_matches_install_request("@codemod/other", &m));
+    }
+
+    #[test]
+    fn canonical_package_id_from_manifest_matches_format_registry_id() {
+        let mut m = manifest_with("workflow.yaml");
+        m.name = "jest-to-vitest".to_string();
+        m.registry = Some(crate::utils::manifest::RegistryConfig {
+            access: None,
+            scope: Some("codemod".to_string()),
+            visibility: None,
+        });
+        assert_eq!(
+            canonical_package_id_from_manifest(&m),
+            "@codemod/jest-to-vitest"
+        );
+
+        m.registry = None;
+        assert_eq!(canonical_package_id_from_manifest(&m), "jest-to-vitest");
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_package_uses_local_bundle_when_bare_name_matches() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_minimal_installable_skill_bundle(root, "localtestpkg", "localtestpkg", None);
+
+        let resolved = resolve_skill_package("localtestpkg", None, None, Some(root))
+            .await
+            .expect("expected local bundle resolution");
+
+        assert_eq!(resolved.package_dir, root);
+        assert_eq!(resolved.id, "localtestpkg");
+        assert_eq!(resolved.version, "1.0.0");
+        assert!(resolved.behavior_shape.includes_skill());
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_package_uses_local_bundle_when_scoped_id_matches() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_minimal_installable_skill_bundle(root, "mypkg", "@codemod/mypkg", Some("codemod"));
+
+        let resolved = resolve_skill_package("@codemod/mypkg", None, None, Some(root))
+            .await
+            .expect("expected local bundle resolution");
+
+        assert_eq!(resolved.package_dir, root);
+        assert_eq!(resolved.id, "@codemod/mypkg");
+        assert_eq!(resolved.version, "1.0.0");
+        assert!(resolved.behavior_shape.includes_skill());
     }
 }
