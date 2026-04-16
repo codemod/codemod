@@ -169,6 +169,14 @@ Example Okta attribute statements:
 
 After saving, make sure the SAML app is turned **On** for the correct users or organizational units.
 
+## User provisioning and access control
+
+Codemod uses **just-in-time (JIT) provisioning** by default. A user account is created automatically the first time someone signs in through your IdP — there is no separate user import or directory sync to configure.
+
+Because of this, who can access Codemod is controlled by your IdP: only users (or groups) that your IdP administrator assigns to the Codemod SAML app can sign in. To grant or revoke access, update the app assignment in your IdP (for example, in Okta under the app's **Assignments** tab, or in Google Workspace by turning the app **On** for specific organizational units).
+
+Once a user has signed in, an organization Admin can change their **role** (Admin, Member, or Viewer) from **Organization Settings** → **Members**. See [Managing team members](/platform/integrations/github#managing-team-members) for role definitions.
+
 ## Finalize
 
 When setup is complete, let the Codemod team know. We will remove the initial non-SSO login method so the first user also signs in through SSO going forward.
