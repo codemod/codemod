@@ -177,6 +177,12 @@ Because of this, who can access Codemod is controlled by your IdP: only users (o
 
 Once a user has signed in, an organization Admin can change their **role** (Admin, Member, or Viewer) from **Organization Settings** → **Members**. See [Managing team members](/platform/integrations/github#managing-team-members) for role definitions.
 
+## Require SSO for all members
+
+After SSO is configured, an organization Admin can enforce SSO-only access from **Organization Settings** → **Security** → **Single Sign-On (SSO)** by toggling **Require SSO for all members** on.
+
+When enabled, members must authenticate through your SSO provider to access the organization. Members without an SSO-linked account will not be able to switch to this organization from the team switcher (top-left corner of the app), even if they previously connected GitHub or GitLab.
+
 ## Finalize
 
 When setup is complete, let the Codemod team know. We will remove the initial non-SSO login method so the first user also signs in through SSO going forward.
