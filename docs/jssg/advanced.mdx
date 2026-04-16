@@ -54,7 +54,8 @@ Dynamic parsing allows you to parse and analyze different types of code within a
 Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import { parseAsync } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root) => {
@@ -123,7 +124,7 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root, options) => {
@@ -195,7 +196,7 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";    
 
 const codemod: Codemod<TSX> = async (root, options) => {
@@ -677,7 +678,7 @@ Use `stopBy` to bound relational searches (e.g., to immediate neighbors or the e
 ### Consistent Patterns
 
 1. **Use `const codemod: Codemod<TSX> = async (root, options) => {}` with `export default codemod`**
-2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `codemod:ast-grep`
+2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod:ast-grep`
 3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
 4. **Use early returns** - skip processing when possible, especially for sharding
 5. **Batch operations** - collect edits before committing

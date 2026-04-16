@@ -1,7 +1,7 @@
 import type { Codemod } from "codemod:ast-grep";
 import type Angular from "codemod:ast-grep/langs/angular";
 
-export const codemod: Codemod<Angular> = async (root) => {
+const codemod: Codemod<Angular> = async (root) => {
   const rootNode = root.root();
 
   // Find all ngClass array bindings

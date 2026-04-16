@@ -1,7 +1,7 @@
 import type { Codemod } from "codemod:ast-grep";
 import type Cpp from "codemod:ast-grep/langs/cpp";
 
-export const codemod: Codemod<Cpp> = async (root) => {
+const codemod: Codemod<Cpp> = async (root) => {
   const rootNode = root.root();
 
   // Find raw pointer declarations with new
