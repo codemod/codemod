@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::tui::app::LogView;
+use crate::tui::task_visibility::{awaiting_trigger_visible, failed_visible, task_visible_in_list};
 
 use super::{
     centered_rect, format_duration, key_hint, key_hint_colored, render_status_line,
@@ -47,7 +48,10 @@ pub fn render(
         Block::default().style(Style::default().bg(BODY_BG)),
         chunks[1],
     );
-    let visible_tasks: Vec<&Task> = tasks.iter().filter(|task| !task.is_master).collect();
+    let visible_tasks: Vec<&Task> = tasks
+        .iter()
+        .filter(|task| task_visible_in_list(task, tasks))
+        .collect();
 
     if visible_tasks.is_empty() {
         let y = content.y + content.height / 2;
@@ -103,7 +107,7 @@ fn collect_matrix_columns(tasks: &[&Task]) -> Vec<String> {
                 .map(|value| match value {
                     serde_json::Value::String(value) => value.len(),
                     other => other.to_string().len(),
-                } < 32)
+                } < 96)
                 .unwrap_or(true)
         })
     });
@@ -212,7 +216,7 @@ fn build_widths(tasks: &[&Task], matrix_columns: &[String]) -> Vec<Constraint> {
             .max()
             .unwrap_or(0);
         widths.push(Constraint::Length(
-            max_len.max(key.len()).min(32) as u16 + 2,
+            max_len.max(key.len()).min(96) as u16 + 2,
         ));
     }
     widths.push(Constraint::Length(10));
@@ -280,12 +284,8 @@ fn build_hint_groups(tasks: &[Task], log_view_open: bool) -> Vec<Vec<Span<'stati
         ];
     }
 
-    let has_awaiting = tasks
-        .iter()
-        .any(|task| task.status == TaskStatus::AwaitingTrigger && !task.is_master);
-    let has_failed = tasks
-        .iter()
-        .any(|task| task.status == TaskStatus::Failed && !task.is_master);
+    let has_awaiting = awaiting_trigger_visible(tasks);
+    let has_failed = failed_visible(tasks);
 
     let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
     groups.push(key_hint("↑↓", "navigate"));

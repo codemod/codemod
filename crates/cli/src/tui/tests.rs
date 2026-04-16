@@ -79,9 +79,18 @@ fn workflow_run(
     status: WorkflowStatus,
     capabilities: Option<HashSet<LlrtSupportedModules>>,
 ) -> WorkflowRun {
+    workflow_run_with_workflow(id, status, capabilities, empty_workflow())
+}
+
+fn workflow_run_with_workflow(
+    id: Uuid,
+    status: WorkflowStatus,
+    capabilities: Option<HashSet<LlrtSupportedModules>>,
+    workflow: Workflow,
+) -> WorkflowRun {
     WorkflowRun {
         id,
-        workflow: empty_workflow(),
+        workflow,
         status,
         params: HashMap::new(),
         tasks: vec![],
@@ -91,6 +100,24 @@ fn workflow_run(
         capabilities,
         name: Some("Example Workflow".to_string()),
         target_path: Some(Path::new("/tmp/example-target").to_path_buf()),
+    }
+}
+
+fn minimal_script_node(id: &str, name: &str) -> Node {
+    let step_id = format!("{id}-step");
+    Node {
+        id: id.to_string(),
+        name: name.to_string(),
+        description: None,
+        r#type: NodeType::Automatic,
+        depends_on: vec![],
+        trigger: None,
+        strategy: None,
+        runtime: direct_runtime(),
+        steps: vec![script_step(&step_id, name, "true".to_string())],
+        env: HashMap::new(),
+        branch_name: None,
+        pull_request: None,
     }
 }
 
@@ -543,6 +570,36 @@ fn refresh_result_seeds_session_overrides_from_workflow_run_once() {
         .capabilities
         .as_ref()
         .is_some_and(|set| set.contains(&LlrtSupportedModules::Fetch)));
+}
+
+#[test]
+fn refresh_orders_tasks_by_workflow_yaml_node_order() {
+    let run_id = Uuid::new_v4();
+    let mut app = App::new_for_run(false, None, run_id);
+    let add = task(run_id, "add-descriptions", TaskStatus::Pending, vec![]);
+    let evaluate = task(run_id, "evaluate-shards", TaskStatus::Pending, vec![]);
+    let workflow = Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            minimal_script_node("evaluate-shards", "Evaluate"),
+            minimal_script_node("add-descriptions", "Add descriptions"),
+        ],
+    };
+    app.apply_effect_result(EffectResult::Refreshed {
+        workflow_runs: vec![],
+        current_workflow_run: Some(workflow_run_with_workflow(
+            run_id,
+            WorkflowStatus::Running,
+            None,
+            workflow,
+        )),
+        tasks: vec![add, evaluate],
+    });
+    assert_eq!(app.tasks[0].node_id, "evaluate-shards");
+    assert_eq!(app.tasks[1].node_id, "add-descriptions");
 }
 
 #[test]

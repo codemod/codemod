@@ -73,6 +73,29 @@ use codemod_sandbox::{
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 
+/// True when every task for each `depends_on` node is [`TaskStatus::Completed`], matching
+/// [`Scheduler::find_runnable_tasks_internal`]. Used so matrix masters are not marked
+/// completed while dependency nodes (e.g. shard evaluation) are still running.
+fn workflow_node_dependencies_satisfied(
+    workflow: &Workflow,
+    tasks: &[Task],
+    node_id: &str,
+) -> bool {
+    let Some(node) = workflow.nodes.iter().find(|n| n.id == node_id) else {
+        return false;
+    };
+    for dep_id in &node.depends_on {
+        let dep_tasks: Vec<&Task> = tasks.iter().filter(|t| t.node_id == *dep_id).collect();
+        if dep_tasks.is_empty() {
+            return false;
+        }
+        if !dep_tasks.iter().all(|t| t.status == TaskStatus::Completed) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
     notify: Arc<Notify>,
@@ -1407,6 +1430,19 @@ impl Engine {
             .lock()
             .await
             .list_workflow_runs(limit)
+            .await
+    }
+
+    /// Persisted workflow state (e.g. `shards` written by shard steps). Stored on disk by the
+    /// local adapter under `<data_dir>/butterflow/state/<workflow_run_id>.json`.
+    pub async fn get_workflow_state(
+        &self,
+        workflow_run_id: Uuid,
+    ) -> Result<HashMap<String, serde_json::Value>> {
+        self.state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
             .await
     }
 
@@ -4894,17 +4930,25 @@ impl Engine {
             .filter(|t| t.master_task_id == Some(master_task_id))
             .collect();
 
-        // If there are no child tasks (e.g., state was empty or cleared), the master should reflect that.
+        // If there are no child tasks: either shard state is not ready yet, or the matrix is
+        // genuinely empty. Do not complete the master while `depends_on` nodes are still
+        // running — otherwise the UI shows the matrix node "done" during shard evaluation.
         if child_tasks.is_empty() {
-            debug!("No child tasks found for master task {master_task_id}, setting status to Completed (or Pending if master just created).");
-            let final_status = if master_task.status == TaskStatus::Pending {
-                // If the master was just created and has no children yet (empty state)
-                // Keep it Pending until state potentially provides children.
-                // Or should it be Completed? Let's try Completed.
-                TaskStatus::Completed // Or Pending? Needs careful consideration. Let's assume Completed for empty state.
-            } else {
-                TaskStatus::Completed // If children existed and were removed, it's Completed.
-            };
+            let workflow_run = self.get_workflow_run(master_task.workflow_run_id).await?;
+            if !workflow_node_dependencies_satisfied(
+                &workflow_run.workflow,
+                &tasks,
+                &master_task.node_id,
+            ) {
+                debug!(
+                    "No child tasks for matrix master {master_task_id} (node {}); dependencies not finished — leaving status as {:?}",
+                    master_task.node_id, master_task.status
+                );
+                return Ok(());
+            }
+
+            debug!("No child tasks for master task {master_task_id} after dependencies satisfied; treating as empty matrix.");
+            let final_status = TaskStatus::Completed;
 
             let mut fields = HashMap::new();
             fields.insert(
@@ -5258,5 +5302,149 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("No progress observed"));
         assert!(message.contains("src/stalled.ts"));
+    }
+
+    /// Matrix master with `from_state` has no child tasks until state exists. While dependency
+    /// nodes are not fully completed, the master must not be marked completed (regression guard).
+    #[tokio::test]
+    async fn update_matrix_master_with_no_children_skips_completion_until_depends_on_complete() {
+        use butterflow_models::node::NodeType;
+        use butterflow_models::runtime::{Runtime, RuntimeType};
+        use butterflow_models::strategy::StrategyType;
+        use butterflow_models::{Step, WorkflowState};
+        use butterflow_state::mock_adapter::MockStateAdapter;
+
+        let workflow_run_id = Uuid::new_v4();
+        let workflow = Workflow {
+            version: "1".to_string(),
+            params: None,
+            state: Some(WorkflowState::default()),
+            templates: vec![],
+            nodes: vec![
+                Node {
+                    id: "node1".to_string(),
+                    name: "Node 1".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: Some(Runtime {
+                        r#type: RuntimeType::Direct,
+                        image: None,
+                        working_dir: None,
+                        user: None,
+                        network: None,
+                        options: None,
+                    }),
+                    steps: vec![Step {
+                        id: Some("step-1".to_string()),
+                        name: "Step 1".to_string(),
+                        action: StepAction::RunScript("true".to_string()),
+                        env: None,
+                        condition: None,
+                        commit: None,
+                    }],
+                    env: HashMap::new(),
+                    branch_name: None,
+                    pull_request: None,
+                },
+                Node {
+                    id: "node2".to_string(),
+                    name: "Node 2".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec!["node1".to_string()],
+                    trigger: None,
+                    strategy: Some(Strategy {
+                        r#type: StrategyType::Matrix,
+                        values: None,
+                        from_state: Some("files".to_string()),
+                    }),
+                    runtime: Some(Runtime {
+                        r#type: RuntimeType::Direct,
+                        image: None,
+                        working_dir: None,
+                        user: None,
+                        network: None,
+                        options: None,
+                    }),
+                    steps: vec![Step {
+                        id: Some("step-2".to_string()),
+                        name: "Step 1".to_string(),
+                        action: StepAction::RunScript("true".to_string()),
+                        env: None,
+                        condition: None,
+                        commit: None,
+                    }],
+                    env: HashMap::new(),
+                    branch_name: None,
+                    pull_request: None,
+                },
+            ],
+        };
+
+        let workflow_run = WorkflowRun {
+            id: workflow_run_id,
+            workflow,
+            status: WorkflowStatus::Running,
+            params: HashMap::new(),
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            bundle_path: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        };
+
+        let engine = Engine::with_state_adapter(
+            Box::new(MockStateAdapter::new()),
+            WorkflowRunConfig::default(),
+        );
+
+        engine
+            .state_adapter
+            .lock()
+            .await
+            .save_workflow_run(&workflow_run)
+            .await
+            .unwrap();
+
+        let node1_task = Task::new(workflow_run_id, "node1".to_string(), false);
+        let master_task = Task::new(workflow_run_id, "node2".to_string(), true);
+
+        engine
+            .state_adapter
+            .lock()
+            .await
+            .save_task(&node1_task)
+            .await
+            .unwrap();
+        engine
+            .state_adapter
+            .lock()
+            .await
+            .save_task(&master_task)
+            .await
+            .unwrap();
+
+        engine
+            .update_matrix_master_status(master_task.id)
+            .await
+            .unwrap();
+
+        let master_after = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_task(master_task.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            master_after.status,
+            TaskStatus::Pending,
+            "master must stay non-terminal while dependency node tasks are not all completed"
+        );
     }
 }

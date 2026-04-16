@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -6,7 +7,7 @@ use std::sync::mpsc::SyncSender;
 use anyhow::Result;
 use butterflow_core::ai_handoff::AgentOption;
 use butterflow_core::config::ShellCommandExecutionRequest;
-use butterflow_models::{Task, TaskStatus, WorkflowRun, WorkflowStatus};
+use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::widgets::TableState;
@@ -15,6 +16,7 @@ use uuid::Uuid;
 use super::event::AppEvent;
 use super::screens::settings;
 use super::screens::StatusLine;
+use super::task_visibility::task_visible_in_list;
 
 pub const USE_BUILT_IN_AGENT: &str = "__use_built_in__";
 
@@ -367,7 +369,10 @@ impl App {
             } => {
                 self.workflow_runs = workflow_runs;
                 self.current_workflow_run = current_workflow_run;
-                sort_tasks(&mut tasks);
+                sort_tasks(
+                    &mut tasks,
+                    self.current_workflow_run.as_ref().map(|r| &r.workflow),
+                );
                 self.tasks = tasks;
                 self.sync_task_selection();
 
@@ -815,7 +820,7 @@ impl App {
         let visible_task_ids: Vec<Uuid> = self
             .tasks
             .iter()
-            .filter(|task| !task.is_master)
+            .filter(|task| task_visible_in_list(task, &self.tasks))
             .map(|task| task.id)
             .collect();
         let len = visible_task_ids.len();
@@ -893,14 +898,17 @@ impl App {
     }
 
     fn visible_tasks(&self) -> Vec<&Task> {
-        self.tasks.iter().filter(|task| !task.is_master).collect()
+        self.tasks
+            .iter()
+            .filter(|task| task_visible_in_list(task, &self.tasks))
+            .collect()
     }
 
     fn sync_task_selection(&mut self) {
         let visible_task_ids: Vec<Uuid> = self
             .tasks
             .iter()
-            .filter(|task| !task.is_master)
+            .filter(|task| task_visible_in_list(task, &self.tasks))
             .map(|task| task.id)
             .collect();
 
@@ -1082,8 +1090,8 @@ impl App {
     }
 }
 
-fn sort_tasks(tasks: &mut [Task]) {
-    tasks.sort_by_key(task_sort_key);
+fn sort_tasks(tasks: &mut [Task], workflow: Option<&Workflow>) {
+    tasks.sort_by(|a, b| cmp_tasks_by_workflow_order(a, b, workflow));
 }
 
 fn hash_workflow_runs(hasher: &mut DefaultHasher, workflow_runs: &[WorkflowRun]) {
@@ -1183,8 +1191,23 @@ fn workflow_status_discriminant(status: WorkflowStatus) -> u8 {
     }
 }
 
-fn task_sort_key(task: &Task) -> (String, String, Uuid) {
-    (task.node_id.clone(), matrix_sort_key(task), task.id)
+/// Order tasks like `workflow.yaml`: follow `workflow.nodes`, then matrix shards within a node.
+fn cmp_tasks_by_workflow_order(a: &Task, b: &Task, workflow: Option<&Workflow>) -> Ordering {
+    let pos =
+        |task: &Task| workflow.and_then(|w| w.nodes.iter().position(|n| n.id == task.node_id));
+    match (pos(a), pos(b)) {
+        (Some(ia), Some(ib)) => ia
+            .cmp(&ib)
+            .then_with(|| matrix_sort_key(a).cmp(&matrix_sort_key(b)))
+            .then_with(|| a.id.cmp(&b.id)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a
+            .node_id
+            .cmp(&b.node_id)
+            .then_with(|| matrix_sort_key(a).cmp(&matrix_sort_key(b)))
+            .then_with(|| a.id.cmp(&b.id)),
+    }
 }
 
 fn matrix_sort_key(task: &Task) -> String {
