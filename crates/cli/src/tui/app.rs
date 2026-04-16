@@ -37,7 +37,8 @@ pub struct TuiState {
     pub selected_task: usize,
     pub approval: Option<ApprovalPrompt>,
     pub banner: Option<StatusBanner>,
-    pub show_logs: bool,
+    pub show_log_modal: bool,
+    pub log_modal_scroll: u16,
 }
 
 impl Default for TuiState {
@@ -51,7 +52,8 @@ impl Default for TuiState {
             selected_task: 0,
             approval: None,
             banner: None,
-            show_logs: true,
+            show_log_modal: false,
+            log_modal_scroll: 0,
         }
     }
 }
@@ -149,6 +151,8 @@ impl TuiState {
         self.selected_task = 0;
         self.approval = None;
         self.banner = None;
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
     }
 
     pub fn reconcile_snapshot(&mut self, snapshot: WorkflowSnapshot) {
@@ -175,6 +179,8 @@ impl TuiState {
         self.selected_task = 0;
         self.approval = None;
         self.banner = None;
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
     }
 
     pub fn selected_run_id(&self) -> Option<Uuid> {
@@ -183,6 +189,55 @@ impl TuiState {
 
     pub fn selected_task(&self) -> Option<&Task> {
         self.visible_tasks().get(self.selected_task).copied()
+    }
+
+    pub fn selected_task_log_text(&self) -> String {
+        self.selected_task()
+            .map(|task| {
+                if task.logs.is_empty() {
+                    "No logs yet".to_string()
+                } else {
+                    task.logs.join("\n")
+                }
+            })
+            .unwrap_or_else(|| "No task selected".to_string())
+    }
+
+    pub fn open_log_modal(&mut self, viewport_height: u16) {
+        if self.selected_task().is_none() {
+            return;
+        }
+        self.show_log_modal = true;
+        self.scroll_logs_to_bottom(viewport_height);
+    }
+
+    pub fn close_log_modal(&mut self) {
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
+    }
+
+    pub fn log_modal_max_scroll(&self, viewport_height: u16) -> u16 {
+        let line_count = self.selected_task_log_text().lines().count();
+        line_count.saturating_sub(viewport_height as usize) as u16
+    }
+
+    pub fn scroll_logs_up(&mut self, amount: u16) {
+        self.log_modal_scroll = self.log_modal_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_logs_down(&mut self, viewport_height: u16, amount: u16) {
+        self.log_modal_scroll = self
+            .log_modal_scroll
+            .saturating_add(amount)
+            .min(self.log_modal_max_scroll(viewport_height));
+    }
+
+    pub fn scroll_logs_to_top(&mut self) {
+        self.log_modal_scroll = 0;
+    }
+
+    pub fn scroll_logs_to_bottom(&mut self, viewport_height: u16) {
+        self.log_modal_scroll = self.log_modal_max_scroll(viewport_height);
     }
 
     pub fn move_up(&mut self) {
@@ -649,5 +704,61 @@ mod tests {
 
         assert!(state.is_effectively_complete());
         assert_eq!(state.display_run_status(), "Failed");
+    }
+
+    #[test]
+    fn open_log_modal_scrolls_to_bottom() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: (0..10).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        state.open_log_modal(4);
+
+        assert!(state.show_log_modal);
+        assert_eq!(state.log_modal_scroll, 6);
+    }
+
+    #[test]
+    fn log_modal_scroll_clamps() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: (0..6).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        state.open_log_modal(3);
+        state.scroll_logs_up(10);
+        assert_eq!(state.log_modal_scroll, 0);
+
+        state.scroll_logs_down(3, 10);
+        assert_eq!(state.log_modal_scroll, 3);
+
+        state.scroll_logs_to_top();
+        assert_eq!(state.log_modal_scroll, 0);
+
+        state.scroll_logs_to_bottom(3);
+        assert_eq!(state.log_modal_scroll, 3);
     }
 }

@@ -12,6 +12,10 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
         Screen::RunDetail => render_run_detail(frame, state),
     }
 
+    if state.show_log_modal {
+        render_log_modal(frame, state);
+    }
+
     if let Some(approval) = &state.approval {
         render_approval_modal(frame, approval);
     }
@@ -46,11 +50,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Percentage(45),
-            Constraint::Percentage(55),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(size);
 
     let header = if let Some(run) = &state.current_run {
@@ -63,7 +63,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Run (q back, g trigger, a all, c cancel, l logs)"),
+                .title("Run (Enter logs, q back, g trigger, a all, c cancel)"),
         )
     } else {
         Paragraph::new("No run selected")
@@ -84,25 +84,6 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let tasks = List::new(task_items).block(Block::default().borders(Borders::ALL).title("Tasks"));
     frame.render_widget(tasks, chunks[1]);
 
-    let log_lines = if state.show_logs {
-        state
-            .selected_task()
-            .map(|task| {
-                if task.logs.is_empty() {
-                    "No logs yet".to_string()
-                } else {
-                    task.logs.join("\n")
-                }
-            })
-            .unwrap_or_else(|| "No task selected".to_string())
-    } else {
-        "Logs hidden".to_string()
-    };
-    let logs = Paragraph::new(log_lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title("Logs"));
-    frame.render_widget(logs, chunks[2]);
-
     if let Some(banner) = &state.banner {
         let banner_area = ratatui::layout::Rect {
             x: size.x,
@@ -117,6 +98,32 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         });
         frame.render_widget(banner, banner_area);
     }
+}
+
+fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
+    let size = frame.area();
+    let area = ratatui::layout::Rect {
+        x: size.width / 10,
+        y: size.height / 5,
+        width: size.width * 4 / 5,
+        height: size.height * 3 / 5,
+    };
+    frame.render_widget(Clear, area);
+
+    let title = state
+        .selected_task()
+        .map(|task| format!("Logs: {} ({:?})", task.node_id, task.status))
+        .unwrap_or_else(|| "Logs".to_string());
+
+    let logs = Paragraph::new(state.selected_task_log_text())
+        .scroll((state.log_modal_scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("{title}  (q close, ↑/↓ scroll, g top, G bottom)")),
+        );
+    frame.render_widget(logs, area);
 }
 
 fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {

@@ -38,6 +38,10 @@ impl Drop for TerminalGuard {
     }
 }
 
+fn log_modal_viewport_height(terminal_height: u16) -> u16 {
+    terminal_height.saturating_mul(3).saturating_div(5).saturating_sub(2)
+}
+
 pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: usize) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     engine.set_quiet(true);
@@ -192,6 +196,10 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
             },
             Screen::RunDetail => match key.code {
                 KeyCode::Char('q') => {
+                    if state.show_log_modal {
+                        state.close_log_modal();
+                        continue;
+                    }
                     if let Some(task) = snapshot_task.take() {
                         task.abort();
                     }
@@ -200,10 +208,34 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
                     session = None;
                     state.leave_run();
                 }
-                KeyCode::Up | KeyCode::Char('k') => state.move_up(),
-                KeyCode::Down | KeyCode::Char('j') => state.move_down(),
-                KeyCode::Char('l') => state.show_logs = !state.show_logs,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if state.show_log_modal {
+                        state.scroll_logs_up(1);
+                    } else {
+                        state.move_up();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if state.show_log_modal {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.scroll_logs_down(viewport_height, 1);
+                    } else {
+                        state.move_down();
+                    }
+                }
+                KeyCode::Enter => {
+                    if state.show_log_modal {
+                        state.close_log_modal();
+                    } else {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.open_log_modal(viewport_height);
+                    }
+                }
                 KeyCode::Char('g') => {
+                    if state.show_log_modal {
+                        state.scroll_logs_to_top();
+                        continue;
+                    }
                     if let (Some(session), Some(command)) = (
                         session.as_ref(),
                         state.selected_task_trigger_command(),
@@ -216,6 +248,12 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
                             message: "Trigger request accepted".to_string(),
                             is_error: false,
                         });
+                    }
+                }
+                KeyCode::Char('G') => {
+                    if state.show_log_modal {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.scroll_logs_to_bottom(viewport_height);
                     }
                 }
                 KeyCode::Char('a') => {
