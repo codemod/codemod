@@ -154,6 +154,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,
+        explicit_files: None,
         exclude_globs: None,
         dry_run: args.dry_run,
         languages: Some(vec![args.language.clone()]),

@@ -16,6 +16,7 @@ mod engine;
 mod progress_bar;
 mod report_server;
 mod suitability;
+mod tui;
 mod utils;
 mod workflow_runner;
 use crate::auth::TokenStorage;
@@ -123,6 +124,9 @@ enum WorkflowCommands {
 
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
+
+    /// Browse and interact with workflow runs in the terminal
+    Tui(commands::workflow::tui::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -437,6 +441,9 @@ async fn main() -> Result<()> {
             }
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
+            }
+            WorkflowCommands::Tui(args) => {
+                commands::workflow::tui::handler(args).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {

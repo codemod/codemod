@@ -2,10 +2,24 @@ use anyhow::{Context, Result};
 use butterflow_core::config::WorkflowRunConfig;
 use butterflow_core::engine::Engine;
 use butterflow_core::utils;
-use butterflow_models::{Task, TaskStatus, WorkflowStatus};
+use butterflow_models::node::NodeType;
+use butterflow_models::trigger::TriggerType;
+use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
 use log::{error, info};
 use std::path::PathBuf;
 use uuid::Uuid;
+
+use crate::tui::run_workflow_tui;
+
+pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
+    workflow.nodes.iter().any(|node| {
+        node.r#type == NodeType::Manual
+            || node
+                .trigger
+                .as_ref()
+                .is_some_and(|trigger| trigger.r#type == TriggerType::Manual)
+    })
+}
 
 /// Run a workflow with the given configuration
 pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
@@ -14,6 +28,7 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
         "Failed to parse workflow file: {}",
         engine.get_workflow_file_path().display()
     ))?;
+    let auto_launch_tui = !config.no_interactive && workflow_has_manual_steps(&workflow);
 
     let started = std::time::Instant::now();
 
@@ -30,7 +45,9 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
 
     println!("💥 Workflow started with ID: {workflow_run_id}");
 
-    if config.wait_for_completion {
+    if auto_launch_tui {
+        run_workflow_tui(engine.clone(), Some(workflow_run_id), 20).await?;
+    } else if config.wait_for_completion {
         wait_for_workflow_completion(engine, workflow_run_id.to_string()).await?;
     }
 

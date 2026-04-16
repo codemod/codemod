@@ -5,7 +5,7 @@ use crate::utils::package_validation::{
     detect_package_behavior_shape_with_manifest_hint, expected_workflow_path, PackageBehaviorShape,
 };
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::workflow_runner::run_workflow;
+use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
@@ -314,6 +314,9 @@ pub async fn handler(
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+    let workflow_definition = butterflow_core::utils::parse_workflow_file(&workflow_path)
+        .map_err(|e| anyhow::anyhow!("Failed to parse workflow before run: {}", e))?;
+    let auto_launch_tui = !args.no_interactive && workflow_has_manual_steps(&workflow_definition);
 
     let capabilities = resolve_capabilities(
         ResolveCapabilitiesArgs {
@@ -357,6 +360,11 @@ pub async fn handler(
 
     // Set the package name so it's stored on the WorkflowRun
     engine.set_name(Some(args.package.clone()));
+    if auto_launch_tui {
+        engine.set_quiet(true);
+        engine.set_progress_callback(Arc::new(None));
+        engine.workflow_run_config_mut().capture_stdout_in_quiet_mode = false;
+    }
 
     // For pro codemod dry-run: streamline execution — auto-trigger manual
     // steps, skip shards, skip state writes, flatten matrix to one task per node.

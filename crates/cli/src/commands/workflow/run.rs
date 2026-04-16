@@ -17,7 +17,7 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
-use crate::workflow_runner::{resolve_workflow_source, run_workflow};
+use crate::workflow_runner::{resolve_workflow_source, run_workflow, workflow_has_manual_steps};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -120,6 +120,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| args.workflow.clone());
+    let workflow_definition = utils::parse_workflow_file(&workflow_file_path)
+        .context("Failed to parse workflow before run")?;
+    let auto_launch_tui = !args.no_interactive && workflow_has_manual_steps(&workflow_definition);
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -150,6 +153,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     )?;
 
     engine.set_name(Some(workflow_label));
+    if auto_launch_tui {
+        engine.set_quiet(true);
+        engine.set_progress_callback(std::sync::Arc::new(None));
+        engine.workflow_run_config_mut().capture_stdout_in_quiet_mode = false;
+    }
     let (_, seconds) = run_workflow(&engine, config).await?;
 
     let duration_ms = started.elapsed().as_millis() as f64;

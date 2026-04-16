@@ -1,21 +1,28 @@
 use butterflow_core::config::{
-    ShellCommandApprovalCallback, ShellCommandExecutionRequest, WorkflowRunConfig,
+    InstallSkillExecutionRequest, InstallSkillExecutor, ShellCommandApprovalCallback,
+    ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use butterflow_state::mock_adapter::MockStateAdapter;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use butterflow_core::engine::{CapabilitiesData, Engine};
 use butterflow_core::structured_log::StructuredLogger;
+use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSession};
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
     WorkflowStatus,
 };
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseJSAstGrep,
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseInstallSkill,
+    UseJSAstGrep,
 };
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
@@ -569,6 +576,479 @@ fn create_manual_matrix_workflow() -> Workflow {
             },
         ],
     }
+}
+
+fn create_manual_matrix_install_skill_workflow() -> Workflow {
+    let mut workflow = create_manual_matrix_workflow();
+    if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
+        node.steps = vec![Step {
+            id: Some("install-skill-step".to_string()),
+            name: "Install Skill".to_string(),
+            action: StepAction::InstallSkill(UseInstallSkill {
+                package: "@codemod/test-skill".to_string(),
+                path: None,
+                harness: None,
+                scope: None,
+                force: None,
+            }),
+            env: None,
+            condition: None,
+            commit: None,
+        }];
+    }
+    workflow
+}
+
+fn create_manual_matrix_install_skill_git_workflow() -> Workflow {
+    let mut workflow = create_manual_matrix_install_skill_workflow();
+    if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
+        node.branch_name = Some("codemod-${{ task.signature }}".to_string());
+    }
+    workflow
+}
+
+struct PanicInstallSkillExecutor;
+
+#[async_trait]
+impl InstallSkillExecutor for PanicInstallSkillExecutor {
+    async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        panic!("panic install skill executor");
+    }
+}
+
+struct FailingInstallSkillExecutor;
+
+#[async_trait]
+impl InstallSkillExecutor for FailingInstallSkillExecutor {
+    async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!("failing install skill executor"))
+    }
+}
+
+fn create_manual_matrix_long_running_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "node1".to_string(),
+                name: "Node 1".to_string(),
+                description: Some("Test node 1".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'ready'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+            Node {
+                id: "node2".to_string(),
+                name: "Node 2".to_string(),
+                description: Some("Manual matrix node".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["node1".to_string()],
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: Some(vec![
+                        HashMap::from([(
+                            "region".to_string(),
+                            serde_json::to_value("us-east").unwrap(),
+                        )]),
+                        HashMap::from([(
+                            "region".to_string(),
+                            serde_json::to_value("us-west").unwrap(),
+                        )]),
+                    ]),
+                    from_state: None,
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("sleep 1 && echo 'Manual matrix shard'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+        ],
+    }
+}
+
+fn create_manual_matrix_long_running_git_workflow() -> Workflow {
+    let mut workflow = create_manual_matrix_long_running_workflow();
+    let node = workflow
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "node2")
+        .expect("node2 should exist");
+    node.branch_name = Some("codemod-${{ task.signature }}".to_string());
+    workflow
+}
+
+fn create_manual_matrix_git_js_ast_grep_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "node1".to_string(),
+                name: "Node 1".to_string(),
+                description: Some("Prepare shards".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'ready'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+            Node {
+                id: "node2".to_string(),
+                name: "Debarrel".to_string(),
+                description: Some("Manual matrix js-ast-grep node".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["node1".to_string()],
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: Some(vec![
+                        HashMap::from([
+                            ("name".to_string(), json!("shard-0")),
+                            (
+                                "_meta_files".to_string(),
+                                json!([
+                                    "apps/nextjs/src/app/(protected)/wish/_atoms/push-notifications.ts",
+                                    "apps/nextjs/src/app/(protected)/wish/_hooks/use-wish-thread.ts"
+                                ]),
+                            ),
+                        ]),
+                        HashMap::from([
+                            ("name".to_string(), json!("shard-1")),
+                            (
+                                "_meta_files".to_string(),
+                                json!([
+                                    "apps/website/src/app/(landing)/blog/_utils/blog-helpers.ts",
+                                    "apps/website/src/app/(payload)/payload/graphql/route.ts"
+                                ]),
+                            ),
+                        ]),
+                    ]),
+                    from_state: None,
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("js-ast-grep-step".to_string()),
+                    name: "Debarrel: rewrite imports and clean up barrels".to_string(),
+                    action: StepAction::JSAstGrep(UseJSAstGrep {
+                        js_file: "codemod.js".to_string(),
+                        include: None,
+                        exclude: None,
+                        base_path: None,
+                        max_threads: Some(2),
+                        dry_run: Some(false),
+                        language: Some("typescript".to_string()),
+                        capabilities: None,
+                        semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                            SemanticAnalysisMode::File,
+                        )),
+                    }),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-${{ task.signature }}".to_string()),
+                pull_request: None,
+            },
+        ],
+    }
+}
+
+fn create_manual_matrix_real_debarrel_workspace_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "node1".to_string(),
+                name: "Prepare shards".to_string(),
+                description: Some("Prepare manual shards".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'ready'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+            Node {
+                id: "node2".to_string(),
+                name: "Apply transforms".to_string(),
+                description: Some("Manual matrix using real debarrel bundle".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["node1".to_string()],
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: Some(vec![
+                        HashMap::from([
+                            ("name".to_string(), json!("shard-0")),
+                            (
+                                "_meta_files".to_string(),
+                                json!([
+                                    "src/App.ts",
+                                    "src/components/index.ts",
+                                    "src/components/Button.ts"
+                                ]),
+                            ),
+                        ]),
+                        HashMap::from([
+                            ("name".to_string(), json!("shard-1")),
+                            (
+                                "_meta_files".to_string(),
+                                json!([
+                                    "src/consumer.ts",
+                                    "src/utils/index.ts",
+                                    "src/utils/calc.ts"
+                                ]),
+                            ),
+                        ]),
+                    ]),
+                    from_state: None,
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("debarrel-step".to_string()),
+                    name: "Debarrel: rewrite imports and clean up barrels".to_string(),
+                    action: StepAction::JSAstGrep(UseJSAstGrep {
+                        js_file: "scripts/codemod.ts".to_string(),
+                        include: None,
+                        exclude: None,
+                        base_path: None,
+                        max_threads: Some(2),
+                        dry_run: Some(false),
+                        language: Some("typescript".to_string()),
+                        capabilities: None,
+                        semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                            SemanticAnalysisMode::Workspace,
+                        )),
+                    }),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-${{ task.signature }}".to_string()),
+                pull_request: None,
+            },
+        ],
+    }
+}
+
+fn create_many_shard_real_debarrel_workspace_workflow(shard_count: usize) -> Workflow {
+    let shard_values = (0..shard_count)
+        .map(|index| {
+            HashMap::from([
+                ("name".to_string(), json!(format!("shard-{index}"))),
+                (
+                    "_meta_files".to_string(),
+                    json!([
+                        format!("src/shard_{index}/App.ts"),
+                        format!("src/shard_{index}/components/index.ts"),
+                        format!("src/shard_{index}/components/Button.ts"),
+                    ]),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![
+            Node {
+                id: "node1".to_string(),
+                name: "Prepare shards".to_string(),
+                description: Some("Prepare manual shards".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("step-1".to_string()),
+                    name: "Step 1".to_string(),
+                    action: StepAction::RunScript("echo 'ready'".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            },
+            Node {
+                id: "node2".to_string(),
+                name: "Apply transforms".to_string(),
+                description: Some("Many concurrent real debarrel shards".to_string()),
+                r#type: NodeType::Automatic,
+                depends_on: vec!["node1".to_string()],
+                trigger: Some(butterflow_models::trigger::Trigger {
+                    r#type: TriggerType::Manual,
+                }),
+                strategy: Some(Strategy {
+                    r#type: butterflow_models::strategy::StrategyType::Matrix,
+                    values: Some(shard_values),
+                    from_state: None,
+                }),
+                runtime: Some(Runtime {
+                    r#type: RuntimeType::Direct,
+                    image: None,
+                    working_dir: None,
+                    user: None,
+                    network: None,
+                    options: None,
+                }),
+                steps: vec![Step {
+                    id: Some("debarrel-step".to_string()),
+                    name: "Debarrel: rewrite imports and clean up barrels".to_string(),
+                    action: StepAction::JSAstGrep(UseJSAstGrep {
+                        js_file: "scripts/codemod.ts".to_string(),
+                        include: None,
+                        exclude: None,
+                        base_path: None,
+                        max_threads: Some(2),
+                        dry_run: Some(true),
+                        language: Some("typescript".to_string()),
+                        capabilities: None,
+                        semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                            SemanticAnalysisMode::Workspace,
+                        )),
+                    }),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-${{ task.signature }}".to_string()),
+                pull_request: None,
+            },
+        ],
+    }
+}
+
+fn init_test_git_repo(path: &std::path::Path) {
+    let run = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .status()
+            .expect("failed to spawn git");
+        assert!(status.success(), "git command failed: git {}", args.join(" "));
+    };
+
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.name", "Codex Test"]);
+    run(&["config", "user.email", "codex@example.com"]);
+    fs::write(path.join("README.md"), "test repo\n").unwrap();
+    run(&["add", "README.md"]);
+    run(&["commit", "-m", "initial"]);
 }
 
 // Helper function to create a workflow with templates
@@ -1268,6 +1748,1012 @@ async fn test_trigger_all_clears_matrix_master_terminal_metadata() {
         "master task should not keep a stale ended_at while active: {:?}",
         master_task
     );
+}
+
+#[tokio::test]
+async fn test_panicking_task_thread_fails_child_and_reconciles_matrix_master() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+
+    let latest_state: Arc<Mutex<Option<(TaskStatus, TaskStatus, Vec<String>)>>> =
+        Arc::new(Mutex::new(None));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child = tasks.iter().find(|task| task.id == child_task).unwrap();
+            let master = tasks.iter().find(|task| task.id == master_task).unwrap();
+            *latest_state_for_loop.lock().unwrap() = Some((
+                child.status,
+                master.status,
+                child.logs.clone(),
+            ));
+
+            if child.status == TaskStatus::Failed && master.status == TaskStatus::Failed {
+                assert!(
+                    child.error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("panic install skill executor")),
+                    "expected panic message in child error, got {:?}",
+                    child.error
+                );
+                assert!(
+                    child
+                        .logs
+                        .iter()
+                        .any(|line| line.contains("helper thread panicked")),
+                    "expected panic log in child logs, got {:?}",
+                    child.logs
+                );
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "panic-path task should fail and reconcile master; last state was {:?}",
+            latest_state.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+#[serial]
+async fn test_panicking_task_thread_cleans_up_git_worktree() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_git_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child = tasks.iter().find(|task| task.id == child_task).unwrap();
+            if child.status == TaskStatus::Failed {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("panic-path git task should fail");
+
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git worktree list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let worktree_entries: Vec<_> = stdout
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .collect();
+    assert_eq!(
+        worktree_entries.len(),
+        1,
+        "expected only the main repo worktree after panic cleanup, got {:?}",
+        worktree_entries
+    );
+}
+
+#[tokio::test]
+async fn test_failing_install_skill_child_reconciles_matrix_master() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(FailingInstallSkillExecutor)),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+
+    let latest_state: Arc<
+        Mutex<
+            Vec<(
+                Uuid,
+                Option<Uuid>,
+                bool,
+                TaskStatus,
+                Option<String>,
+                Vec<String>,
+            )>,
+        >,
+    > = Arc::new(Mutex::new(Vec::new()));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child = tasks.iter().find(|task| task.id == child_task).unwrap();
+            let master = tasks.iter().find(|task| task.id == master_task).unwrap();
+            *latest_state_for_loop.lock().unwrap() = tasks
+                .iter()
+                .filter(|task| task.node_id == "node2")
+                .map(|task| {
+                    (
+                        task.id,
+                        task.master_task_id,
+                        task.is_master,
+                        task.status,
+                        task.error.clone(),
+                        task.logs.clone(),
+                    )
+                })
+                .collect();
+
+            if child.status == TaskStatus::Failed && master.status == TaskStatus::Failed {
+                assert!(
+                    child.error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("failing install skill executor")),
+                    "expected failing executor message in child error, got {:?}",
+                    child.error
+                );
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "error-path task should fail and reconcile master; selected child={} master={} node2_tasks={:?}",
+            child_task,
+            master_task,
+            latest_state.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+async fn test_resume_workflow_advances_all_manual_matrix_children() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_manual_matrix_long_running_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+
+    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+
+    engine
+        .resume_workflow(workflow_run_id, child_task_ids.clone())
+        .await
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    loop {
+        let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+        let child_statuses: Vec<TaskStatus> = tasks
+            .iter()
+            .filter(|task| child_task_ids.contains(&task.id))
+            .map(|task| task.status)
+            .collect();
+
+        if child_statuses.len() == child_task_ids.len()
+            && child_statuses
+                .iter()
+                .all(|status| *status == TaskStatus::Running || *status == TaskStatus::Completed)
+        {
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for all manual matrix children to advance, last statuses were {:?}",
+            child_statuses
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn test_resume_workflow_manual_matrix_children_produce_logs_and_finish() {
+    use std::sync::{Arc, Mutex};
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_manual_matrix_long_running_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+
+    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+
+    engine
+        .resume_workflow(workflow_run_id, child_task_ids.clone())
+        .await
+        .unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| child_task_ids.contains(&task.id))
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_step_progress = child_tasks.iter().all(|task| {
+                let logs = task.logs.join("\n");
+                logs.contains("Step started: Step 1") || logs.contains("Manual matrix shard")
+            });
+            let all_terminal = child_tasks.iter().all(|task| {
+                matches!(task.status, TaskStatus::Completed | TaskStatus::Failed)
+            });
+
+            if child_tasks.len() == child_task_ids.len() && all_have_step_progress && all_terminal {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for resumed manual matrix children to produce step progress and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+async fn test_trigger_all_manual_matrix_children_produce_logs_and_finish() {
+    use std::sync::{Arc, Mutex};
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_manual_matrix_long_running_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    engine.trigger_all(workflow_run_id).await.unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_step_progress = child_tasks.iter().all(|task| {
+                let logs = task.logs.join("\n");
+                logs.contains("Step started: Step 1") || logs.contains("Manual matrix shard")
+            });
+            let all_terminal = child_tasks.iter().all(|task| {
+                matches!(task.status, TaskStatus::Completed | TaskStatus::Failed)
+            });
+
+            if child_tasks.len() == 2 && all_have_step_progress && all_terminal {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for trigger_all manual matrix children to produce step progress and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+#[serial]
+async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_and_finish() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_long_running_git_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+
+    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+
+    engine
+        .resume_workflow(workflow_run_id, child_task_ids.clone())
+        .await
+        .unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(15), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| child_task_ids.contains(&task.id))
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_worktree_progress = child_tasks.iter().all(|task| {
+                let logs = task.logs.join("\n");
+                logs.contains("Git worktree ready at")
+                    && (logs.contains("Step started: Step 1") || logs.contains("Manual matrix shard"))
+            });
+            let all_terminal = child_tasks.iter().all(|task| {
+                matches!(task.status, TaskStatus::Completed | TaskStatus::Failed)
+            });
+
+            if child_tasks.len() == child_task_ids.len() && all_have_worktree_progress && all_terminal {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for git-managed manual matrix children to produce worktree+step progress and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_session_capabilities_approval_unblocks_manual_matrix_children() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+
+    create_test_file(
+        repo_dir.path(),
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  return "transformed";
+}
+"#,
+    );
+
+    for relative_path in [
+        "apps/nextjs/src/app/(protected)/wish/_atoms/push-notifications.ts",
+        "apps/nextjs/src/app/(protected)/wish/_hooks/use-wish-thread.ts",
+        "apps/website/src/app/(landing)/blog/_utils/blog-helpers.ts",
+        "apps/website/src/app/(payload)/payload/graphql/route.ts",
+    ] {
+        create_test_file(repo_dir.path(), relative_path, "export const value = 1;\n");
+    }
+
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "fixture"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        bundle_path: repo_dir.path().to_path_buf(),
+        capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_git_js_ast_grep_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), Some(repo_dir.path().to_path_buf()), None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(child_task_ids.len(), 2);
+
+    let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
+    let handle = session.handle();
+    let mut rx = handle.subscribe();
+    handle.dispatch_trigger_tasks(child_task_ids.clone());
+
+    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
+                    break request_id;
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("unexpected workflow event receive error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("capabilities approval event should arrive");
+
+    handle
+        .send(WorkflowCommand::RespondCapabilitiesApproval {
+            request_id,
+            approved: true,
+        })
+        .await
+        .unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(20), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| child_task_ids.contains(&task.id))
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_file_progress = child_tasks
+                .iter()
+                .all(|task| task.logs.join("\n").contains("Processing file:"));
+            let all_terminal = child_tasks
+                .iter()
+                .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
+
+            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for session-driven capability-approved manual matrix children to process files and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_session_real_debarrel_workspace_children_process_files() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+
+    create_test_file(
+        repo_dir.path(),
+        "tsconfig.json",
+        r#"{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+  "moduleResolution": "bundler",
+    "baseUrl": "."
+  },
+  "include": ["src"]
+}
+"#,
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/App.ts",
+        "import { Button } from \"./components\";\n\nconsole.log(Button());\n",
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/components/index.ts",
+        "export { Button } from \"./Button\";\n",
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/components/Button.ts",
+        "export const Button = () => \"button\";\n",
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/consumer.ts",
+        "import { calc } from \"./utils\";\n\nconsole.log(calc(1, 2));\n",
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/utils/index.ts",
+        "export { calc } from \"./calc\";\n",
+    );
+    create_test_file(
+        repo_dir.path(),
+        "src/utils/calc.ts",
+        "export const calc = (a: number, b: number) => a + b;\n",
+    );
+
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "fixture"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+
+    let bundle_path =
+        PathBuf::from("/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel");
+    assert!(
+        bundle_path.exists(),
+        "expected debarrel bundle at {}",
+        bundle_path.display()
+    );
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        bundle_path: bundle_path.clone(),
+        capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_real_debarrel_workspace_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), Some(bundle_path), None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(child_task_ids.len(), 2);
+
+    let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
+    let handle = session.handle();
+    let mut rx = handle.subscribe();
+    handle.dispatch_trigger_tasks(child_task_ids.clone());
+
+    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
+                    break request_id;
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("unexpected workflow event receive error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("capabilities approval event should arrive");
+
+    handle
+        .send(WorkflowCommand::RespondCapabilitiesApproval {
+            request_id,
+            approved: true,
+        })
+        .await
+        .unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(30), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| child_task_ids.contains(&task.id))
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_file_progress = child_tasks.iter().all(|task| {
+                let logs = task.logs.join("\n");
+                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
+                    && logs.contains("Processing file:")
+            });
+            let all_terminal = child_tasks
+                .iter()
+                .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
+
+            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for session-driven real debarrel workspace children to process files and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_session_many_real_debarrel_workspace_children_process_files() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+
+    create_test_file(
+        repo_dir.path(),
+        "tsconfig.json",
+        r#"{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": "."
+  },
+  "include": ["src"]
+}
+"#,
+    );
+
+    let shard_count = 12usize;
+    for index in 0..shard_count {
+        create_test_file(
+            repo_dir.path(),
+            &format!("src/shard_{index}/App.ts"),
+            "import { Button } from \"./components\";\n\nconsole.log(Button());\n",
+        );
+        create_test_file(
+            repo_dir.path(),
+            &format!("src/shard_{index}/components/index.ts"),
+            "export { Button } from \"./Button\";\n",
+        );
+        create_test_file(
+            repo_dir.path(),
+            &format!("src/shard_{index}/components/Button.ts"),
+            "export const Button = () => \"button\";\n",
+        );
+    }
+
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "fixture"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+
+    let bundle_path =
+        PathBuf::from("/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel");
+    assert!(
+        bundle_path.exists(),
+        "expected debarrel bundle at {}",
+        bundle_path.display()
+    );
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        bundle_path: bundle_path.clone(),
+        capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_many_shard_real_debarrel_workspace_workflow(shard_count);
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), Some(bundle_path), None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let child_task_ids: Vec<Uuid> = tasks
+        .iter()
+        .filter(|task| task.node_id == "node2" && task.master_task_id.is_some())
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(child_task_ids.len(), shard_count);
+
+    let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
+    let handle = session.handle();
+    let mut rx = handle.subscribe();
+    handle.dispatch_trigger_tasks(child_task_ids.clone());
+
+    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
+                    break request_id;
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("unexpected workflow event receive error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("capabilities approval event should arrive");
+
+    handle
+        .send(WorkflowCommand::RespondCapabilitiesApproval {
+            request_id,
+            approved: true,
+        })
+        .await
+        .unwrap();
+
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let latest_states_for_loop = Arc::clone(&latest_states);
+    tokio::time::timeout(tokio::time::Duration::from_secs(60), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child_tasks: Vec<&Task> = tasks
+                .iter()
+                .filter(|task| child_task_ids.contains(&task.id))
+                .collect();
+
+            let snapshot: Vec<(Uuid, TaskStatus, String)> = child_tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.id,
+                        task.status,
+                        task.logs.last().cloned().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            *latest_states_for_loop.lock().unwrap() = snapshot;
+
+            let all_have_file_progress = child_tasks.iter().all(|task| {
+                let logs = task.logs.join("\n");
+                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
+                    && logs.contains("Processing file:")
+            });
+            let all_terminal = child_tasks
+                .iter()
+                .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
+
+            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            {
+                return;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for many session-driven real debarrel workspace children to process files and finish; last child states were {:?}",
+            latest_states.lock().unwrap().clone()
+        )
+    });
 }
 
 // Helper function to create a workflow with environment variables
