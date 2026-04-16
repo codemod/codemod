@@ -133,10 +133,14 @@ struct PendingApprovals {
 }
 
 impl PendingApprovals {
-    fn new() -> Self {
+    fn with_approved(approved: HashSet<LlrtSupportedModules>) -> Self {
         Self {
             shell: Mutex::new(HashMap::new()),
-            capabilities: Mutex::new(CapabilityApprovalState::default()),
+            capabilities: Mutex::new(CapabilityApprovalState {
+                approved,
+                pending_by_request: HashMap::new(),
+                in_flight_by_key: HashMap::new(),
+            }),
             agent: Mutex::new(HashMap::new()),
         }
     }
@@ -379,7 +383,8 @@ impl WorkflowSession {
             .or_default()
             .insert(registration_id, Arc::clone(&sink));
 
-        let pending = Arc::new(PendingApprovals::new());
+        let preapproved_capabilities = engine.get_capabilities().clone().unwrap_or_default();
+        let pending = Arc::new(PendingApprovals::with_approved(preapproved_capabilities));
         let interactor = WorkflowSessionInteractor::new(event_tx.clone(), Arc::clone(&pending));
         engine.set_quiet(true);
         engine.set_progress_callback(Arc::new(None));
@@ -590,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn capabilities_approval_is_cached_within_session() {
         let (sender, _) = broadcast::channel(16);
-        let pending = Arc::new(PendingApprovals::new());
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
         let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
         let callback = interactor.capabilities_callback();
         let mut approval_rx = sender.subscribe();
@@ -659,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_capabilities_requests_share_one_prompt() {
         let (sender, _) = broadcast::channel(16);
-        let pending = Arc::new(PendingApprovals::new());
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
         let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
         let callback = interactor.capabilities_callback();
         let mut rx = sender.subscribe();
@@ -731,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn many_concurrent_capabilities_requests_share_one_prompt_and_all_unblock() {
         let (sender, _) = broadcast::channel(32);
-        let pending = Arc::new(PendingApprovals::new());
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
         let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
         let callback = interactor.capabilities_callback();
         let mut rx = sender.subscribe();
@@ -796,5 +801,35 @@ mod tests {
         for thread in threads {
             thread.join().unwrap().unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn preapproved_capabilities_do_not_prompt_again() {
+        let (sender, _) = broadcast::channel(16);
+        let approved: HashSet<LlrtSupportedModules> = [LlrtSupportedModules::Fs].into_iter().collect();
+        let pending = Arc::new(PendingApprovals::with_approved(approved.clone()));
+        let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
+        let callback = interactor.capabilities_callback();
+        let mut rx = sender.subscribe();
+
+        let config = CodemodExecutionConfig {
+            pre_run_callback: None,
+            progress_callback: Arc::new(None),
+            target_path: None,
+            base_path: None,
+            include_globs: None,
+            explicit_files: None,
+            exclude_globs: None,
+            dry_run: false,
+            languages: None,
+            threads: None,
+            capabilities: Some(approved),
+        };
+
+        callback(&config).expect("preapproved capabilities should not prompt");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 }
