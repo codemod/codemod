@@ -1070,6 +1070,12 @@ async fn test_manual_node_workflow() {
         .await
         .unwrap();
 
+    let workflow_status = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+    assert_eq!(workflow_status, WorkflowStatus::AwaitingTrigger);
+
     let node2_status = wait_for_task_status(&engine, workflow_run_id, "node2", |status| {
         status == TaskStatus::AwaitingTrigger
     })
