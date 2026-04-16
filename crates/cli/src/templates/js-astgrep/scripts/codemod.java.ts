@@ -1,7 +1,7 @@
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Java from "codemod:ast-grep/langs/java";
 
-const transform: Transform<Java> = async (root) => {
+const codemod: Codemod<Java> = async (root) => {
   const rootNode = root.root();
 
   // Find for-each loops that iterate over a collection and add items to another collection
@@ -63,4 +63,4 @@ const transform: Transform<Java> = async (root) => {
   return newSource;
 };
 
-export default transform;
+export default codemod;

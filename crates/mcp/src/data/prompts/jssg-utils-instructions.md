@@ -60,11 +60,11 @@ Returns `null` if the import is not found.
 ### Example
 
 ```typescript
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { getImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
 
   // Find the default import of "express"
@@ -84,7 +84,7 @@ const transform: Transform<TSX> = async (root) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ---
@@ -112,11 +112,11 @@ Add an import to the program. Smart behavior:
 ### Example
 
 ```typescript
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { addImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -148,7 +148,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ---
@@ -176,11 +176,11 @@ Remove an import from the program. Smart behavior:
 ### Example
 
 ```typescript
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { removeImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -195,7 +195,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ---

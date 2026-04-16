@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
-import type TS from "codemod:ast-grep/langs/typescript";
+import type { Codemod } from "codemod:ast-grep";
+import type C from "codemod:ast-grep/langs/c";
 
-async function transform(root: SgRoot<TS>): Promise<string> {
+const codemod: Codemod<C> = async (root) => {
   const rootNode = root.root();
 
   const nodes = rootNode.findAll({
@@ -22,4 +22,4 @@ async function transform(root: SgRoot<TS>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

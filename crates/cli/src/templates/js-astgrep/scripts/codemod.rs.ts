@@ -1,7 +1,7 @@
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Rust from "codemod:ast-grep/langs/rust";
 
-const transform: Transform<Rust> = async (root) => {
+const codemod: Codemod<Rust> = async (root) => {
   const rootNode = root.root();
 
   // Find all println! macro calls
@@ -69,4 +69,4 @@ ${firstItem.text()}`),
   return newSource;
 };
 
-export default transform;
+export default codemod;

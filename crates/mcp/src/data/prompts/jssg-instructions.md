@@ -216,23 +216,22 @@ const node: SgNode<TSX> = rootNode.find({
 });
 ```
 
-## Transform Function
+## Codemod Function
 
-Your main transformation logic with proper type annotations:
+Your main transformation/detection logic with proper type annotations:
 
 ```typescript
 import type { SgRoot, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-// Main transformation function - return null to skip file
-async function transform(root: SgRoot<TSX>): Promise<string | null> {
+// Main codemod function - return null to skip file
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
 
   // Your transformation logic here
   const edits: Edit[] = [];
 
   // Collect edits...
-
   if (edits.length === 0) {
     return null; // No changes needed
   }
@@ -240,7 +239,7 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
   return rootNode.commitEdits(edits);
 }
 
-export default transform;
+export default codemod;
 ```
 
 ## Pattern Matching
@@ -795,7 +794,7 @@ Use `root.rename()` to rename a file alongside content changes. This is useful f
 
 ```typescript
 // Rename .less → .css
-const codemod: Transform<CSS> = async (root) => {
+const codemod: Codemod<CSS> = async (root) => {
   root.rename(root.filename().replace('.less', '.css'));
   return transformedContent; // or null for rename-only
 };
@@ -820,19 +819,19 @@ Use `jssgTransform()` to apply a transform function to a secondary file from wit
 
 ```typescript
 import { jssgTransform } from "codemod:ast-grep";
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import type CSS from "codemod:ast-grep/langs/css";
 
 // A secondary transform that converts .less → .css
-const lessToCSS: Transform<CSS> = async (root) => {
+const lessToCSS: Codemod<CSS> = async (root) => {
   root.rename(root.filename().replace('.less', '.css'));
   // Transform LESS-specific syntax to CSS...
   return transformedCSS;
 };
 
 // Main transform: update imports and trigger the .less → .css conversion
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -854,7 +853,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 **Key behavior:**
@@ -993,13 +992,13 @@ const changeCount = useMetricAtom("changes");
 ### 1. Count matches before transforming
 
 ```typescript
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { useMetricAtom } from "codemod:metrics";
 
 const migrationMetric = useMetricAtom("api-migrations");
 
-const codemod: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -1039,7 +1038,7 @@ componentMetric.increment({
 Sometimes you just want to gather data without changing code. Return `null` from your transform and only collect metrics:
 
 ```typescript
-const codemod: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
 
   const patterns = rootNode.findAll({
