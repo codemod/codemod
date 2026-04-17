@@ -4,8 +4,8 @@ use futures_util::FutureExt;
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::fs::File;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
@@ -2293,16 +2293,15 @@ impl Engine {
                     .unwrap(); // Should exist based on how tasks are created
 
                 // Execute task synchronously to ensure state updates are applied before matrix recompilation
-                let execution_result =
-                    std::panic::AssertUnwindSafe(self.execute_task(task_id))
-                        .catch_unwind()
-                        .await
-                        .unwrap_or_else(|panic_payload| {
-                            Err(Error::Runtime(format!(
-                                "Task execution panicked: {}",
-                                panic_payload_message(panic_payload.as_ref())
-                            )))
-                        });
+                let execution_result = std::panic::AssertUnwindSafe(self.execute_task(task_id))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|panic_payload| {
+                        Err(Error::Runtime(format!(
+                            "Task execution panicked: {}",
+                            panic_payload_message(panic_payload.as_ref())
+                        )))
+                    });
                 if let Err(e) = execution_result {
                     self.emit_error(format!("Task execution failed: {e}"));
                     let _ = self.mark_task_as_failed(task_id, &e.to_string()).await;
@@ -2593,10 +2592,9 @@ impl Engine {
             }
             let step_start_time = std::time::Instant::now();
 
-            let quiet_capture =
-                self.workflow_run_config.quiet
-                    && self.workflow_run_config.capture_stdout_in_quiet_mode
-                    && !self.structured_logger.is_jsonl();
+            let quiet_capture = self.workflow_run_config.quiet
+                && self.workflow_run_config.capture_stdout_in_quiet_mode
+                && !self.structured_logger.is_jsonl();
             let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
                 let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
                 (Some(log_tx), Some(log_persist_task))
@@ -2891,7 +2889,10 @@ impl Engine {
                         Ok(Some(pr_url)) => {
                             slog!(git_step_logger, info, "Pull request created: {}", pr_url);
                             let _ = self
-                                .append_task_log(task_id, format!("Pull request created: {}", pr_url))
+                                .append_task_log(
+                                    task_id,
+                                    format!("Pull request created: {}", pr_url),
+                                )
                                 .await;
                         }
                         Ok(None) => {
@@ -3271,9 +3272,7 @@ impl Engine {
                         })?;
                     rt.block_on(install_skill_executor.execute(request))
                         .map_err(|error| {
-                            Error::Runtime(format!(
-                                "Failed to execute install-skill step: {error}"
-                            ))
+                            Error::Runtime(format!("Failed to execute install-skill step: {error}"))
                         })
                 });
 
@@ -3378,11 +3377,12 @@ impl Engine {
                             if file_modified {
                                 if let Some(new_content) = new_content {
                                     // Use async file writing to avoid blocking the thread
-                                    let write_result = block_on_runtime_handle(&runtime_handle, async {
-                                        file_writer
-                                            .write_file(path.to_path_buf(), new_content)
-                                            .await
-                                    });
+                                    let write_result =
+                                        block_on_runtime_handle(&runtime_handle, async {
+                                            file_writer
+                                                .write_file(path.to_path_buf(), new_content)
+                                                .await
+                                        });
 
                                     if let Err(e) = write_result {
                                         slog!(
@@ -3530,7 +3530,12 @@ impl Engine {
                 .as_ref()
                 .and_then(|m| m.get("_meta_files"))
                 .and_then(butterflow_models::variable::value_to_string_vec)
-                .map(|files| files.into_iter().map(|file| target_path.join(file)).collect())
+                .map(|files| {
+                    files
+                        .into_iter()
+                        .map(|file| target_path.join(file))
+                        .collect()
+                })
         } else {
             None
         };
@@ -4119,14 +4124,15 @@ impl Engine {
                                         }
 
                                         // Use async file writing to avoid blocking the thread
-                                        let write_result = block_on_runtime_handle(&runtime_handle, async {
-                                            file_writer
-                                                .write_file(
-                                                    write_path.to_path_buf(),
-                                                    modified.content.clone(),
-                                                )
-                                                .await
-                                        });
+                                        let write_result =
+                                            block_on_runtime_handle(&runtime_handle, async {
+                                                file_writer
+                                                    .write_file(
+                                                        write_path.to_path_buf(),
+                                                        modified.content.clone(),
+                                                    )
+                                                    .await
+                                            });
 
                                         if let Err(e) = write_result {
                                             slog!(

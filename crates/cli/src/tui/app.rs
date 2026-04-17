@@ -14,8 +14,14 @@ pub enum Screen {
 
 #[derive(Clone, Debug)]
 pub enum ApprovalPrompt {
-    Shell { request_id: Uuid, command: String },
-    Capabilities { request_id: Uuid, modules: Vec<String> },
+    Shell {
+        request_id: Uuid,
+        command: String,
+    },
+    Capabilities {
+        request_id: Uuid,
+        modules: Vec<String>,
+    },
     AgentSelection {
         request_id: Uuid,
         options: Vec<(String, bool)>,
@@ -78,7 +84,12 @@ impl TuiState {
         let Some(run) = self.current_run.as_ref() else {
             return true;
         };
-        let Some(node) = run.workflow.nodes.iter().find(|node| node.id == task.node_id) else {
+        let Some(node) = run
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == task.node_id)
+        else {
             return true;
         };
 
@@ -99,10 +110,7 @@ impl TuiState {
     }
 
     pub fn visible_tasks(&self) -> Vec<&Task> {
-        self.tasks
-            .iter()
-            .filter(|task| !task.is_master)
-            .collect()
+        self.tasks.iter().filter(|task| !task.is_master).collect()
     }
 
     pub fn is_effectively_complete(&self) -> bool {
@@ -126,7 +134,10 @@ impl TuiState {
         };
 
         if self.is_effectively_complete()
-            && matches!(run.status, butterflow_models::WorkflowStatus::AwaitingTrigger)
+            && matches!(
+                run.status,
+                butterflow_models::WorkflowStatus::AwaitingTrigger
+            )
         {
             "Completed (install-skill pending)".to_string()
         } else {
@@ -314,7 +325,12 @@ impl TuiState {
         let base_name = self
             .current_run
             .as_ref()
-            .and_then(|run| run.workflow.nodes.iter().find(|node| node.id == task.node_id))
+            .and_then(|run| {
+                run.workflow
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == task.node_id)
+            })
             .map(|node| node.name.clone())
             .unwrap_or_else(|| task.node_id.clone());
 
@@ -329,7 +345,10 @@ impl TuiState {
         let matrix_values = task.matrix_values.as_ref()?;
 
         for preferred_key in ["name", "shardId", "task", "shard"] {
-            if let Some(value) = matrix_values.get(preferred_key).and_then(|value| value.as_str()) {
+            if let Some(value) = matrix_values
+                .get(preferred_key)
+                .and_then(|value| value.as_str())
+            {
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {
                     return Some(trimmed.to_string());
@@ -583,7 +602,10 @@ impl TuiState {
                 }
             }
             WorkflowEvent::TaskCreated { task, .. } => {
-                if let Some(existing) = self.tasks.iter_mut().find(|existing| existing.id == task.id)
+                if let Some(existing) = self
+                    .tasks
+                    .iter_mut()
+                    .find(|existing| existing.id == task.id)
                 {
                     *existing = task;
                 } else {
@@ -592,7 +614,10 @@ impl TuiState {
                 self.clamp_selected_task();
             }
             WorkflowEvent::TaskUpdated { task, .. } => {
-                if let Some(existing) = self.tasks.iter_mut().find(|existing| existing.id == task.id)
+                if let Some(existing) = self
+                    .tasks
+                    .iter_mut()
+                    .find(|existing| existing.id == task.id)
                 {
                     *existing = task;
                 } else {
@@ -621,7 +646,9 @@ impl TuiState {
                 );
             }
             WorkflowEvent::ShellApprovalRequested {
-                request_id, request, ..
+                request_id,
+                request,
+                ..
             } => {
                 self.approval = Some(ApprovalPrompt::Shell {
                     request_id,
@@ -635,7 +662,10 @@ impl TuiState {
             } => {
                 self.approval = Some(ApprovalPrompt::Capabilities {
                     request_id,
-                    modules: modules.into_iter().map(|module| format!("{module:?}")).collect(),
+                    modules: modules
+                        .into_iter()
+                        .map(|module| format!("{module:?}"))
+                        .collect(),
                 });
             }
             WorkflowEvent::AgentSelectionRequested {
@@ -652,7 +682,11 @@ impl TuiState {
                                 format!(
                                     "{}{}",
                                     option.label,
-                                    if option.is_available { "" } else { " (not installed)" }
+                                    if option.is_available {
+                                        ""
+                                    } else {
+                                        " (not installed)"
+                                    }
                                 ),
                                 option.is_available,
                             )
@@ -666,10 +700,12 @@ impl TuiState {
 
     pub fn approval_accept_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
-            ApprovalPrompt::Shell { request_id, .. } => Some(WorkflowCommand::RespondShellApproval {
-                request_id: *request_id,
-                approved: true,
-            }),
+            ApprovalPrompt::Shell { request_id, .. } => {
+                Some(WorkflowCommand::RespondShellApproval {
+                    request_id: *request_id,
+                    approved: true,
+                })
+            }
             ApprovalPrompt::Capabilities { request_id, .. } => {
                 Some(WorkflowCommand::RespondCapabilitiesApproval {
                     request_id: *request_id,
@@ -685,7 +721,8 @@ impl TuiState {
                     request_id: *request_id,
                     selection: if *available {
                         Some(
-                            label.split(" (")
+                            label
+                                .split(" (")
                                 .next()
                                 .unwrap_or(label)
                                 .to_ascii_lowercase()
@@ -701,10 +738,12 @@ impl TuiState {
 
     pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
-            ApprovalPrompt::Shell { request_id, .. } => Some(WorkflowCommand::RespondShellApproval {
-                request_id: *request_id,
-                approved: false,
-            }),
+            ApprovalPrompt::Shell { request_id, .. } => {
+                Some(WorkflowCommand::RespondShellApproval {
+                    request_id: *request_id,
+                    approved: false,
+                })
+            }
             ApprovalPrompt::Capabilities { request_id, .. } => {
                 Some(WorkflowCommand::RespondCapabilitiesApproval {
                     request_id: *request_id,
@@ -785,7 +824,9 @@ impl TuiState {
         });
 
         match (pr_url, branch_name) {
-            (Some(pr_url), Some(branch_name)) => Some(format!("Branch: {branch_name}  PR: {pr_url}")),
+            (Some(pr_url), Some(branch_name)) => {
+                Some(format!("Branch: {branch_name}  PR: {pr_url}"))
+            }
             (Some(pr_url), None) => Some(format!("PR: {pr_url}")),
             (None, _) => None,
         }
@@ -795,7 +836,9 @@ impl TuiState {
 #[cfg(test)]
 mod tests {
     use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
-    use butterflow_models::{node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
+    use butterflow_models::{
+        node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
+    };
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -871,7 +914,9 @@ mod tests {
             status: TaskStatus::Running,
             started_at: Some(Utc::now()),
             ended_at: None,
-            logs: vec!["Starting js-ast-grep file loop (explicit-files, target files: 10)".to_string()],
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 10)".to_string(),
+            ],
             master_task_id: None,
             matrix_values: None,
             is_master: false,
@@ -1200,7 +1245,10 @@ mod tests {
             error: None,
         };
 
-        assert_eq!(TuiState::default().task_progress_counts(&task), Some((2, 5)));
+        assert_eq!(
+            TuiState::default().task_progress_counts(&task),
+            Some((2, 5))
+        );
     }
 
     #[test]
@@ -1237,7 +1285,9 @@ mod tests {
             status: TaskStatus::Running,
             started_at: Some(Utc::now()),
             ended_at: None,
-            logs: vec!["Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string()],
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string(),
+            ],
             master_task_id: None,
             matrix_values: None,
             is_master: false,
@@ -1422,22 +1472,24 @@ mod tests {
     #[test]
     fn task_list_scroll_tracks_selection_window() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.tasks = (0..6)
-            .map(|index| Task {
-                id: Uuid::new_v4(),
-                workflow_run_id: run_id,
-                node_id: format!("node-{index}"),
-                status: TaskStatus::Running,
-                started_at: None,
-                ended_at: None,
-                logs: vec![],
-                master_task_id: None,
-                matrix_values: None,
-                is_master: false,
-                error: None,
-            })
-            .collect();
+        let mut state = TuiState {
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: None,
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                })
+                .collect(),
+            ..TuiState::default()
+        };
 
         state.sync_task_list_scroll(3);
         assert_eq!(state.task_list_scroll, 0);
@@ -1587,7 +1639,10 @@ mod tests {
         ];
         state.selected_task = 1;
 
-        assert_eq!(state.selected_task().map(|task| task.id), Some(blocked_task_id));
+        assert_eq!(
+            state.selected_task().map(|task| task.id),
+            Some(blocked_task_id)
+        );
         assert!(state.selected_task_trigger_command().is_none());
         assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
     }

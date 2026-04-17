@@ -33,6 +33,7 @@ impl From<&AgentOption> for AgentSelectionOption {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum WorkflowEvent {
     WorkflowStarted {
@@ -85,11 +86,19 @@ pub enum WorkflowEvent {
 
 #[derive(Clone, Debug)]
 pub enum WorkflowCommand {
-    TriggerTask { task_id: Uuid },
+    TriggerTask {
+        task_id: Uuid,
+    },
     TriggerAll,
     CancelWorkflow,
-    RespondShellApproval { request_id: Uuid, approved: bool },
-    RespondCapabilitiesApproval { request_id: Uuid, approved: bool },
+    RespondShellApproval {
+        request_id: Uuid,
+        approved: bool,
+    },
+    RespondCapabilitiesApproval {
+        request_id: Uuid,
+        approved: bool,
+    },
     RespondAgentSelection {
         request_id: Uuid,
         selection: Option<String>,
@@ -188,8 +197,9 @@ impl WorkflowSessionInteractor {
                 request: request.clone(),
                 at: Utc::now(),
             });
-            rx.recv()
-                .map_err(|error| anyhow::anyhow!("shell approval response channel closed: {error}"))?
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("shell approval response channel closed: {error}")
+            })?
         })
     }
 
@@ -260,8 +270,9 @@ impl WorkflowSessionInteractor {
                     at: Utc::now(),
                 });
             }
-            rx.recv()
-                .map_err(|error| anyhow::anyhow!("capability approval response channel closed: {error}"))?
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("capability approval response channel closed: {error}")
+            })?
         })
     }
 
@@ -290,12 +301,10 @@ async fn handle_command(
     command: WorkflowCommand,
 ) -> Result<()> {
     match command {
-        WorkflowCommand::TriggerTask { task_id } => {
-            engine
-                .resume_workflow(workflow_run_id, vec![task_id])
-                .await
-                .map_err(anyhow::Error::from)
-        }
+        WorkflowCommand::TriggerTask { task_id } => engine
+            .resume_workflow(workflow_run_id, vec![task_id])
+            .await
+            .map_err(anyhow::Error::from),
         WorkflowCommand::TriggerAll => {
             let _ = engine.trigger_all(workflow_run_id).await?;
             Ok(())
@@ -327,9 +336,7 @@ async fn handle_command(
                     .in_flight_by_key
                     .remove(&capability_request_key(&pending_request.modules));
                 if approved {
-                    capability_state
-                        .approved
-                        .extend(pending_request.modules);
+                    capability_state.approved.extend(pending_request.modules);
                 }
                 drop(capability_state);
                 for listener in pending_request.listeners {
@@ -406,13 +413,9 @@ impl WorkflowSession {
         let command_engine = engine.clone();
         let command_task = tokio::spawn(async move {
             while let Some(envelope) = command_rx.recv().await {
-                let result = handle_command(
-                    &command_engine,
-                    workflow_run_id,
-                    &pending,
-                    envelope.command,
-                )
-                .await;
+                let result =
+                    handle_command(&command_engine, workflow_run_id, &pending, envelope.command)
+                        .await;
                 if let Err(error) = &result {
                     log::error!("workflow session command failed: {error}");
                 }
@@ -532,7 +535,10 @@ impl WorkflowSessionHandle {
         let engine = self.engine.clone();
         let workflow_run_id = self.workflow_run_id;
         tokio::spawn(async move {
-            if let Err(error) = engine.resume_workflow(workflow_run_id, task_ids.clone()).await {
+            if let Err(error) = engine
+                .resume_workflow(workflow_run_id, task_ids.clone())
+                .await
+            {
                 log::error!(
                     "failed to trigger {} task(s) for workflow {}: {}",
                     task_ids.len(),
@@ -609,7 +615,8 @@ mod tests {
         let mut approval_rx = sender.subscribe();
         let mut idle_rx = sender.subscribe();
 
-        let requested: HashSet<LlrtSupportedModules> = [LlrtSupportedModules::Fs].into_iter().collect();
+        let requested: HashSet<LlrtSupportedModules> =
+            [LlrtSupportedModules::Fs].into_iter().collect();
         let config = CodemodExecutionConfig {
             pre_run_callback: None,
             progress_callback: Arc::new(None),
@@ -653,7 +660,9 @@ mod tests {
         callback(&config).expect("first approval should succeed");
         approval_thread.join().unwrap();
 
-        let first_event = idle_rx.try_recv().expect("first prompt event should be observable");
+        let first_event = idle_rx
+            .try_recv()
+            .expect("first prompt event should be observable");
         assert!(matches!(
             first_event,
             WorkflowEvent::CapabilitiesApprovalRequested { .. }
@@ -677,7 +686,8 @@ mod tests {
         let callback = interactor.capabilities_callback();
         let mut rx = sender.subscribe();
 
-        let requested: HashSet<LlrtSupportedModules> = [LlrtSupportedModules::Fs].into_iter().collect();
+        let requested: HashSet<LlrtSupportedModules> =
+            [LlrtSupportedModules::Fs].into_iter().collect();
         let config = CodemodExecutionConfig {
             pre_run_callback: None,
             progress_callback: Arc::new(None),
@@ -749,7 +759,8 @@ mod tests {
         let callback = interactor.capabilities_callback();
         let mut rx = sender.subscribe();
 
-        let requested: HashSet<LlrtSupportedModules> = [LlrtSupportedModules::Fs].into_iter().collect();
+        let requested: HashSet<LlrtSupportedModules> =
+            [LlrtSupportedModules::Fs].into_iter().collect();
         let config = CodemodExecutionConfig {
             pre_run_callback: None,
             progress_callback: Arc::new(None),
@@ -814,7 +825,8 @@ mod tests {
     #[tokio::test]
     async fn preapproved_capabilities_do_not_prompt_again() {
         let (sender, _) = broadcast::channel(16);
-        let approved: HashSet<LlrtSupportedModules> = [LlrtSupportedModules::Fs].into_iter().collect();
+        let approved: HashSet<LlrtSupportedModules> =
+            [LlrtSupportedModules::Fs].into_iter().collect();
         let pending = Arc::new(PendingApprovals::with_approved(approved.clone()));
         let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
         let callback = interactor.capabilities_callback();

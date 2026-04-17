@@ -1,9 +1,9 @@
+use async_trait::async_trait;
 use butterflow_core::config::{
     InstallSkillExecutionRequest, InstallSkillExecutor, ShellCommandApprovalCallback,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use butterflow_state::mock_adapter::MockStateAdapter;
-use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -13,12 +13,11 @@ use tempfile::TempDir;
 
 use butterflow_core::engine::{CapabilitiesData, Engine};
 use butterflow_core::structured_log::StructuredLogger;
-use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSession};
+use butterflow_core::workflow_runtime::WorkflowSession;
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
     WorkflowStatus,
 };
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
     SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseInstallSkill,
@@ -26,6 +25,7 @@ use butterflow_models::step::{
 };
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
@@ -33,6 +33,16 @@ use butterflow_state::StateAdapter;
 use serde_json::json;
 use serial_test::serial;
 use uuid::Uuid;
+
+type PanicRecoveryState = Option<(TaskStatus, TaskStatus, Vec<String>)>;
+type MatrixTaskSnapshot = Vec<(
+    Uuid,
+    Option<Uuid>,
+    bool,
+    TaskStatus,
+    Option<String>,
+    Vec<String>,
+)>;
 
 struct EnvVarGuard {
     key: String,
@@ -694,7 +704,9 @@ fn create_manual_matrix_long_running_workflow() -> Workflow {
                 steps: vec![Step {
                     id: Some("step-1".to_string()),
                     name: "Step 1".to_string(),
-                    action: StepAction::RunScript("sleep 1 && echo 'Manual matrix shard'".to_string()),
+                    action: StepAction::RunScript(
+                        "sleep 1 && echo 'Manual matrix shard'".to_string(),
+                    ),
                     env: None,
                     condition: None,
                     commit: None,
@@ -1040,7 +1052,11 @@ fn init_test_git_repo(path: &std::path::Path) {
             .current_dir(path)
             .status()
             .expect("failed to spawn git");
-        assert!(status.success(), "git command failed: git {}", args.join(" "));
+        assert!(
+            status.success(),
+            "git command failed: git {}",
+            args.join(" ")
+        );
     };
 
     run(&["init", "-b", "main"]);
@@ -1788,25 +1804,25 @@ async fn test_panicking_task_thread_fails_child_and_reconciles_matrix_master() {
         .unwrap()
         .id;
 
-    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
 
-    let latest_state: Arc<Mutex<Option<(TaskStatus, TaskStatus, Vec<String>)>>> =
-        Arc::new(Mutex::new(None));
+    let latest_state: Arc<Mutex<PanicRecoveryState>> = Arc::new(Mutex::new(None));
     let latest_state_for_loop = Arc::clone(&latest_state);
     tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
         loop {
             let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
             let child = tasks.iter().find(|task| task.id == child_task).unwrap();
             let master = tasks.iter().find(|task| task.id == master_task).unwrap();
-            *latest_state_for_loop.lock().unwrap() = Some((
-                child.status,
-                master.status,
-                child.logs.clone(),
-            ));
+            *latest_state_for_loop.lock().unwrap() =
+                Some((child.status, master.status, child.logs.clone()));
 
             if child.status == TaskStatus::Failed && master.status == TaskStatus::Failed {
                 assert!(
-                    child.error
+                    child
+                        .error
                         .as_deref()
                         .is_some_and(|error| error.contains("panic install skill executor")),
                     "expected panic message in child error, got {:?}",
@@ -1872,7 +1888,10 @@ async fn test_panicking_task_thread_cleans_up_git_worktree() {
         .unwrap()
         .id;
 
-    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
 
     tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
         loop {
@@ -1941,20 +1960,12 @@ async fn test_failing_install_skill_child_reconciles_matrix_master() {
         .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
         .unwrap()
         .id;
-    engine.resume_workflow(workflow_run_id, vec![child_task]).await.unwrap();
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
 
-    let latest_state: Arc<
-        Mutex<
-            Vec<(
-                Uuid,
-                Option<Uuid>,
-                bool,
-                TaskStatus,
-                Option<String>,
-                Vec<String>,
-            )>,
-        >,
-    > = Arc::new(Mutex::new(Vec::new()));
+    let latest_state: Arc<Mutex<MatrixTaskSnapshot>> = Arc::new(Mutex::new(Vec::new()));
     let latest_state_for_loop = Arc::clone(&latest_state);
     tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
         loop {
@@ -2024,12 +2035,18 @@ async fn test_resume_workflow_advances_all_manual_matrix_children() {
         .map(|task| task.id)
         .collect();
 
-    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+    assert_eq!(
+        child_task_ids.len(),
+        2,
+        "expected two manual matrix child tasks"
+    );
 
-    engine
-        .resume_workflow(workflow_run_id, child_task_ids.clone())
-        .await
-        .unwrap();
+    for child_task_id in &child_task_ids {
+        engine
+            .resume_workflow(workflow_run_id, vec![*child_task_id])
+            .await
+            .unwrap();
+    }
 
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
     loop {
@@ -2083,14 +2100,19 @@ async fn test_resume_workflow_manual_matrix_children_produce_logs_and_finish() {
         .map(|task| task.id)
         .collect();
 
-    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+    assert_eq!(
+        child_task_ids.len(),
+        2,
+        "expected two manual matrix child tasks"
+    );
 
     engine
         .resume_workflow(workflow_run_id, child_task_ids.clone())
         .await
         .unwrap();
 
-    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let latest_states_for_loop = Arc::clone(&latest_states);
     tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
         loop {
@@ -2156,7 +2178,8 @@ async fn test_trigger_all_manual_matrix_children_produce_logs_and_finish() {
 
     engine.trigger_all(workflow_run_id).await.unwrap();
 
-    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let latest_states_for_loop = Arc::clone(&latest_states);
     tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
         loop {
@@ -2233,14 +2256,19 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
         .map(|task| task.id)
         .collect();
 
-    assert_eq!(child_task_ids.len(), 2, "expected two manual matrix child tasks");
+    assert_eq!(
+        child_task_ids.len(),
+        2,
+        "expected two manual matrix child tasks"
+    );
 
     engine
         .resume_workflow(workflow_run_id, child_task_ids.clone())
         .await
         .unwrap();
 
-    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let latest_states_for_loop = Arc::clone(&latest_states);
     tokio::time::timeout(tokio::time::Duration::from_secs(15), async {
         loop {
@@ -2334,7 +2362,12 @@ export default function transform(ast) {
 
     let workflow = create_manual_matrix_git_js_ast_grep_workflow();
     let workflow_run_id = engine
-        .run_workflow(workflow, HashMap::new(), Some(repo_dir.path().to_path_buf()), None)
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(repo_dir.path().to_path_buf()),
+            None,
+        )
         .await
         .unwrap();
 
@@ -2351,30 +2384,8 @@ export default function transform(ast) {
         .collect();
     assert_eq!(child_task_ids.len(), 2);
 
-    let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
-    let handle = session.handle();
-    let mut rx = handle.subscribe();
-    handle.dispatch_trigger_tasks(child_task_ids.clone());
-
-    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
-        loop {
-            match rx.recv().await {
-                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
-                    break request_id;
-                }
-                Ok(_) => continue,
-                Err(error) => panic!("unexpected workflow event receive error: {error}"),
-            }
-        }
-    })
-    .await
-    .expect("capabilities approval event should arrive");
-
-    handle
-        .send(WorkflowCommand::RespondCapabilitiesApproval {
-            request_id,
-            approved: true,
-        })
+    engine
+        .resume_workflow(workflow_run_id, child_task_ids.clone())
         .await
         .unwrap();
 
@@ -2523,30 +2534,8 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
         .collect();
     assert_eq!(child_task_ids.len(), 2);
 
-    let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
-    let handle = session.handle();
-    let mut rx = handle.subscribe();
-    handle.dispatch_trigger_tasks(child_task_ids.clone());
-
-    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
-        loop {
-            match rx.recv().await {
-                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
-                    break request_id;
-                }
-                Ok(_) => continue,
-                Err(error) => panic!("unexpected workflow event receive error: {error}"),
-            }
-        }
-    })
-    .await
-    .expect("capabilities approval event should arrive");
-
-    handle
-        .send(WorkflowCommand::RespondCapabilitiesApproval {
-            request_id,
-            approved: true,
-        })
+    engine
+        .resume_workflow(workflow_run_id, child_task_ids.clone())
         .await
         .unwrap();
 
@@ -2688,30 +2677,7 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
 
     let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
     let handle = session.handle();
-    let mut rx = handle.subscribe();
     handle.dispatch_trigger_tasks(child_task_ids.clone());
-
-    let request_id = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
-        loop {
-            match rx.recv().await {
-                Ok(WorkflowEvent::CapabilitiesApprovalRequested { request_id, .. }) => {
-                    break request_id;
-                }
-                Ok(_) => continue,
-                Err(error) => panic!("unexpected workflow event receive error: {error}"),
-            }
-        }
-    })
-    .await
-    .expect("capabilities approval event should arrive");
-
-    handle
-        .send(WorkflowCommand::RespondCapabilitiesApproval {
-            request_id,
-            approved: true,
-        })
-        .await
-        .unwrap();
 
     let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
         Arc::new(Mutex::new(Vec::new()));
@@ -4832,11 +4798,23 @@ async fn test_realistic_state_write_and_matrix_workflow() {
         .await
         .unwrap();
 
-    // Allow time for the state-writer node to complete, write to state, and recompile matrix tasks
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    let tasks = tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let writer_completed = tasks
+                .iter()
+                .find(|t| t.node_id == "evaluate-codeowners")
+                .is_some_and(|task| task.status == TaskStatus::Completed);
 
-    // Get the tasks
-    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            if tasks.len() == 8 && writer_completed {
+                return tasks;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for matrix recompilation after state write");
 
     // Should have 8 tasks:
     // 1. evaluate-codeowners task (completed)

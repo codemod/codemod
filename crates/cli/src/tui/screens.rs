@@ -29,11 +29,19 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(size);
     let title_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(chunks[0]);
     let header = Paragraph::new("Workflow Runs").block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, title_chunks[1]);
@@ -45,11 +53,19 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
 
     let header_row_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(content_chunks[0]);
     let table_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(content_chunks[1]);
 
     let status_width = 16usize;
@@ -84,7 +100,11 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
         ),
         Span::raw("  "),
         Span::styled(
-            format!("{:>elapsed_width$}", "Elapsed", elapsed_width = elapsed_width),
+            format!(
+                "{:>elapsed_width$}",
+                "Elapsed",
+                elapsed_width = elapsed_width
+            ),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
@@ -108,9 +128,9 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
                 butterflow_models::WorkflowStatus::Running => Style::default()
                     .fg(Color::Rgb(255, 165, 0))
                     .add_modifier(Modifier::BOLD),
-                butterflow_models::WorkflowStatus::Failed => Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                butterflow_models::WorkflowStatus::Failed => {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                }
                 butterflow_models::WorkflowStatus::Completed => Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -129,7 +149,11 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
                     name_width = name_width
                 )),
                 Span::raw("  "),
-                Span::raw(format!("{:>elapsed_width$}", elapsed_text, elapsed_width = elapsed_width)),
+                Span::raw(format!(
+                    "{:>elapsed_width$}",
+                    elapsed_text,
+                    elapsed_width = elapsed_width
+                )),
             ]));
             if is_selected {
                 item.style(
@@ -152,13 +176,21 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
         .split(size);
 
     let header = if let Some(run) = &state.current_run {
         let header_row_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(chunks[0]);
         let status_style = match run.status {
             butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
@@ -167,9 +199,9 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
             butterflow_models::WorkflowStatus::Running => Style::default()
                 .fg(Color::Rgb(255, 165, 0))
                 .add_modifier(Modifier::BOLD),
-            butterflow_models::WorkflowStatus::Failed => Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            butterflow_models::WorkflowStatus::Failed => {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            }
             butterflow_models::WorkflowStatus::Completed => Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
@@ -202,11 +234,19 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
 
     let header_row_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(content_chunks[0]);
     let table_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(content_chunks[1]);
 
     let content_width = table_chunks[1].width.saturating_sub(2) as usize;
@@ -267,14 +307,22 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         ),
         Span::raw("  "),
         Span::styled(
-            format!("{:>elapsed_width$}", "Elapsed", elapsed_width = elapsed_width),
+            format!(
+                "{:>elapsed_width$}",
+                "Elapsed",
+                elapsed_width = elapsed_width
+            ),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
-            format!("{:<progress_width$}", "Progress", progress_width = progress_width),
+            format!(
+                "{:<progress_width$}",
+                "Progress",
+                progress_width = progress_width
+            ),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
@@ -304,9 +352,9 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 butterflow_models::TaskStatus::Running => Style::default()
                     .fg(Color::Rgb(255, 165, 0))
                     .add_modifier(Modifier::BOLD),
-                butterflow_models::TaskStatus::Failed => Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                butterflow_models::TaskStatus::Failed => {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                }
                 butterflow_models::TaskStatus::Completed => Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -314,15 +362,24 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
             };
 
             let item = ListItem::new(Line::from(vec![
-                Span::raw(format!("{prefix} {truncated_name:<step_width$}", step_width = step_width)),
+                Span::raw(format!(
+                    "{prefix} {truncated_name:<step_width$}",
+                    step_width = step_width
+                )),
                 Span::raw("  "),
                 Span::styled(
                     format!("{status:<status_width$}", status_width = status_width),
                     status_style,
                 ),
-                Span::raw(format!("  {elapsed:>elapsed_width$}", elapsed_width = elapsed_width)),
+                Span::raw(format!(
+                    "  {elapsed:>elapsed_width$}",
+                    elapsed_width = elapsed_width
+                )),
                 Span::styled(
-                    format!("  {progress_bar:<progress_width$}", progress_width = progress_width),
+                    format!(
+                        "  {progress_bar:<progress_width$}",
+                        progress_width = progress_width
+                    ),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
@@ -350,7 +407,11 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     if let Some(detail) = state.selected_task_completion_detail() {
         let detail_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(footer_chunks[0]);
         frame.render_widget(
             Paragraph::new(detail).style(Style::default().fg(Color::DarkGray)),
@@ -383,11 +444,7 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
     let logs = Paragraph::new(state.selected_task_log_text())
         .scroll((state.log_modal_scroll, 0))
         .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title),
-        );
+        .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(logs, chunks[0]);
     render_help_bar(frame, chunks[1], "↑/↓ scroll  g top  G bottom  q/esc close");
 }
@@ -411,13 +468,14 @@ fn render_help_bar(frame: &mut Frame<'_>, area: ratatui::layout::Rect, text: &st
             width: key_width,
             height: area.height,
         };
-        let key_widget = Paragraph::new(key).style(
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .alignment(Alignment::Center);
+        let key_widget = Paragraph::new(key)
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(Alignment::Center);
         frame.render_widget(key_widget, key_area);
         x += key_width + 1;
 
@@ -464,7 +522,9 @@ fn truncate_text(text: &str, max_width: usize) -> String {
 
 fn compact_status_text(status: butterflow_models::TaskStatus, max_width: usize) -> String {
     let candidates: &[&str] = match status {
-        butterflow_models::TaskStatus::AwaitingTrigger => &["Awaiting trigger", "Awaiting", "Await"],
+        butterflow_models::TaskStatus::AwaitingTrigger => {
+            &["Awaiting trigger", "Awaiting", "Await"]
+        }
         butterflow_models::TaskStatus::Running => &["Running", "Run"],
         butterflow_models::TaskStatus::Failed => &["Failed", "Fail"],
         butterflow_models::TaskStatus::Completed => &["Completed", "Done"],
@@ -521,16 +581,14 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
             )
         }
     };
-    let modal = Paragraph::new(body)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(Span::styled(
-                    "Approval",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                )),
-        );
+    let modal = Paragraph::new(body).wrap(Wrap { trim: false }).block(
+        Block::default().borders(Borders::ALL).title(Span::styled(
+            "Approval",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    );
     frame.render_widget(modal, area);
 }
 
@@ -558,7 +616,11 @@ mod tests {
             .collect()
     }
 
-    fn sample_run(name: &str, status: WorkflowStatus, started_at: chrono::DateTime<Utc>) -> WorkflowRun {
+    fn sample_run(
+        name: &str,
+        status: WorkflowStatus,
+        started_at: chrono::DateTime<Utc>,
+    ) -> WorkflowRun {
         WorkflowRun {
             id: Uuid::new_v4(),
             workflow: Workflow {
@@ -584,23 +646,30 @@ mod tests {
     fn render_runs_keeps_elapsed_column_aligned() {
         let now = Utc::now();
         let mut state = TuiState::default();
-        let mut first = sample_run("debarrel", WorkflowStatus::Completed, now - Duration::minutes(4));
+        let mut first = sample_run(
+            "debarrel",
+            WorkflowStatus::Completed,
+            now - Duration::minutes(4),
+        );
         first.ended_at = Some(first.started_at + Duration::minutes(4) + Duration::seconds(8));
-        let mut second =
-            sample_run("i18n-codemod", WorkflowStatus::Completed, now - Duration::minutes(13));
+        let mut second = sample_run(
+            "i18n-codemod",
+            WorkflowStatus::Completed,
+            now - Duration::minutes(13),
+        );
         second.ended_at = Some(second.started_at + Duration::minutes(13) + Duration::seconds(51));
         let second_elapsed = TuiState::workflow_elapsed_text(&second);
-        state.runs = vec![
-            first,
-            second,
-        ];
+        state.runs = vec![first, second];
 
         let lines = render_state(&state, 80, 12);
         let header = lines
             .iter()
             .find(|line| line.contains("Workflow") && line.contains("Elapsed"))
             .unwrap();
-        let row = lines.iter().find(|line| line.contains("i18n-codemod")).unwrap();
+        let row = lines
+            .iter()
+            .find(|line| line.contains("i18n-codemod"))
+            .unwrap();
 
         let header_elapsed = header.find("Elapsed").unwrap();
         let row_elapsed = row.find(&second_elapsed).unwrap();

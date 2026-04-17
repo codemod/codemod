@@ -6,8 +6,8 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use butterflow_core::execution::ProgressCallback;
 use butterflow_core::engine::Engine;
+use butterflow_core::execution::ProgressCallback;
 use butterflow_core::workflow_runtime::{
     publish_event, WorkflowCommand, WorkflowEvent, WorkflowSession, WorkflowSnapshot,
 };
@@ -42,7 +42,10 @@ impl Drop for TerminalGuard {
 }
 
 fn log_modal_viewport_height(terminal_height: u16) -> u16 {
-    terminal_height.saturating_mul(3).saturating_div(5).saturating_sub(2)
+    terminal_height
+        .saturating_mul(3)
+        .saturating_div(5)
+        .saturating_sub(2)
 }
 
 fn task_list_viewport_height(terminal_height: u16) -> usize {
@@ -82,10 +85,16 @@ fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCallback {
     }
 }
 
-pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: usize) -> Result<()> {
+pub async fn run_workflow_tui(
+    mut engine: Engine,
+    run_id: Option<Uuid>,
+    limit: usize,
+) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     engine.set_quiet(true);
-    engine.workflow_run_config_mut().capture_stdout_in_quiet_mode = false;
+    engine
+        .workflow_run_config_mut()
+        .capture_stdout_in_quiet_mode = false;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -149,19 +158,17 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
         if state.approval.is_some() {
             match key.code {
                 KeyCode::Char('y') => {
-                    if let (Some(session), Some(command)) = (
-                        session.as_ref(),
-                        state.approval_accept_command(),
-                    ) {
+                    if let (Some(session), Some(command)) =
+                        (session.as_ref(), state.approval_accept_command())
+                    {
                         spawn_command(session.handle(), command);
                     }
                     state.clear_approval();
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
-                    if let (Some(session), Some(command)) = (
-                        session.as_ref(),
-                        state.approval_reject_command(),
-                    ) {
+                    if let (Some(session), Some(command)) =
+                        (session.as_ref(), state.approval_reject_command())
+                    {
                         spawn_command(session.handle(), command);
                     }
                     state.clear_approval();
@@ -170,10 +177,9 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
                 KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                 KeyCode::Enter => {
                     if matches!(state.approval, Some(ApprovalPrompt::AgentSelection { .. })) {
-                        if let (Some(session), Some(command)) = (
-                            session.as_ref(),
-                            state.approval_accept_command(),
-                        ) {
+                        if let (Some(session), Some(command)) =
+                            (session.as_ref(), state.approval_accept_command())
+                        {
                             spawn_command(session.handle(), command);
                         }
                         state.clear_approval();
@@ -259,10 +265,9 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
                     }
                 }
                 KeyCode::Char('t') => {
-                    if let (Some(session), Some(command)) = (
-                        session.as_ref(),
-                        state.selected_task_trigger_command(),
-                    ) {
+                    if let (Some(session), Some(command)) =
+                        (session.as_ref(), state.selected_task_trigger_command())
+                    {
                         let WorkflowCommand::TriggerTask { task_id } = command else {
                             unreachable!("selected task trigger command must be TriggerTask");
                         };
@@ -294,7 +299,10 @@ pub async fn run_workflow_tui(mut engine: Engine, run_id: Option<Uuid>, limit: u
     Ok(())
 }
 
-fn spawn_command(handle: butterflow_core::workflow_runtime::WorkflowSessionHandle, command: WorkflowCommand) {
+fn spawn_command(
+    handle: butterflow_core::workflow_runtime::WorkflowSessionHandle,
+    command: WorkflowCommand,
+) {
     tokio::spawn(async move {
         let _ = handle.send(command).await;
     });
@@ -305,7 +313,9 @@ async fn attach_run(
     run_id: Uuid,
     state: &mut TuiState,
     session_slot: &mut Option<WorkflowSession>,
-    receiver_slot: &mut Option<tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>>,
+    receiver_slot: &mut Option<
+        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
+    >,
     snapshot_receiver_slot: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
     snapshot_task_slot: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<()> {

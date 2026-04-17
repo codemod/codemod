@@ -179,8 +179,7 @@ impl CodemodExecutionConfig {
 
                             (ctx.callback)(file_path, ctx.config);
 
-                            let current_count =
-                                ctx.processed_count.fetch_add(1, Ordering::Relaxed);
+                            let current_count = ctx.processed_count.fetch_add(1, Ordering::Relaxed);
 
                             if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
                                 (progress_cb.callback)(
@@ -368,7 +367,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("butterflow-exec-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("butterflow-exec-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

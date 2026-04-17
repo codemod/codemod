@@ -156,7 +156,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(std::sync::Arc::new(None));
-        engine.workflow_run_config_mut().capture_stdout_in_quiet_mode = false;
+        engine
+            .workflow_run_config_mut()
+            .capture_stdout_in_quiet_mode = false;
     }
     let (_, seconds) = run_workflow(&engine, config).await?;
 
