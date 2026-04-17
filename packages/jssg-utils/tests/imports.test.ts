@@ -591,6 +591,61 @@ function testAddImportAfterExisting() {
   assert(modIdx > otherIdx, "New import should be after existing import");
 }
 
+function testAddImportAfterExistingKeepsSeparateLines() {
+  const source = [
+    "import a from 'a';",
+    "import b from 'b';",
+    "import c from 'c';",
+    "console.log(a, b, c);",
+    "",
+  ].join("\n");
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "import a from 'a';",
+        "import b from 'b';",
+        "import c from 'c';",
+        "import foo from 'mod';",
+        "console.log(a, b, c);",
+        "",
+      ].join("\n"),
+    "New import should be inserted on its own line after existing imports",
+  );
+}
+
+function testAddImportAfterMixedImportsUsesLastSourcePosition() {
+  const source = ["const a = require('a');", "import b from 'b';", "console.log(a, b);", ""].join(
+    "\n",
+  );
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "const a = require('a');",
+        "import b from 'b';",
+        "import foo from 'mod';",
+        "console.log(a, b);",
+        "",
+      ].join("\n"),
+    "New import should be inserted after the last import by source position",
+  );
+}
+
 // ============================================================================
 // removeImport tests
 // ============================================================================
@@ -858,6 +913,8 @@ function run() {
   testAddImportSkipsExistingNamed();
   testAddImportMergesNamedSpecifiers();
   testAddImportAfterExisting();
+  testAddImportAfterExistingKeepsSeparateLines();
+  testAddImportAfterMixedImportsUsesLastSourcePosition();
 
   // removeImport tests
   testRemoveDefaultImportESM();
