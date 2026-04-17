@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.5
+
+### Patch Changes
+
+- 17ae1e3: Fix import statement placement issue
+
 ## 0.0.4
 
 ### Patch Changes
