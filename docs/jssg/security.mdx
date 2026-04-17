@@ -106,17 +106,17 @@ Use these exact strings in the `capabilities` array:
   </Step>
   <Step title="Use fs in your transform">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
+    import type { Codemod } from "codemod:ast-grep";
     import { readFileSync } from "fs";
     
-    const transform: Transform = (root) => {
+    const codemod: Codemod = (root) => {
       // Read a configuration file
       const config = JSON.parse(readFileSync("./config.json", "utf-8"));
       
       // ... use config in transformation
     };
     
-    export default transform;
+    export default codemod;
     ```
   </Step>
 </Steps>
@@ -132,9 +132,9 @@ Use these exact strings in the `capabilities` array:
   </Step>
   <Step title="Use fetch in your transform">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
+    import type { Codemod } from "codemod:ast-grep";
     
-    const transform: Transform = async (root) => {
+    const codemod: Codemod = async (root) => {
       // Fetch latest API definitions
       const response = await fetch("https://api.example.com/schema.json");
       const schema = await response.json();
@@ -142,7 +142,7 @@ Use these exact strings in the `capabilities` array:
       // ... use schema in transformation
     };
     
-    export default transform;
+    export default codemod;
     ```
 
     <Info>
@@ -162,10 +162,10 @@ Use these exact strings in the `capabilities` array:
   </Step>
   <Step title="Spawn processes in your transform">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
+    import type { Codemod } from "codemod:ast-grep";
     import { execSync } from "child_process";
     
-    const transform: Transform = (root) => {
+    const codemod: Codemod = (root) => {
       // Get current git branch
       const branch = execSync("git rev-parse --abbrev-ref HEAD", {
         encoding: "utf-8"
@@ -174,7 +174,7 @@ Use these exact strings in the `capabilities` array:
       // ... use branch info in transformation
     };
     
-    export default transform;
+    export default codemod;
     ```
 
     <Warning>

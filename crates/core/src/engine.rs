@@ -419,6 +419,26 @@ fn resolve_optional_glob_list(
     })
 }
 
+/// Look up `_meta_files` from matrix values or workflow state and return it as
+/// a list of file paths, if present. Matrix takes precedence over state.
+///
+/// This enables automatic scoping of ast-grep / js-ast-grep steps to the files
+/// produced by a preceding shard step
+fn auto_meta_files_include(
+    state: &HashMap<String, serde_json::Value>,
+    matrix_values: Option<&HashMap<String, serde_json::Value>>,
+) -> Option<Vec<String>> {
+    if let Some(files) = matrix_values
+        .and_then(|m| m.get("_meta_files"))
+        .and_then(butterflow_models::variable::value_to_string_vec)
+    {
+        return Some(files);
+    }
+    state
+        .get("_meta_files")
+        .and_then(butterflow_models::variable::value_to_string_vec)
+}
+
 /// Workflow engine
 pub struct Engine {
     /// State adapter for persisting workflow state
@@ -3128,7 +3148,8 @@ impl Engine {
                     state,
                     task.matrix_values.as_ref(),
                     task_expr_ctx,
-                )?;
+                )?
+                .or_else(|| auto_meta_files_include(state, task.matrix_values.as_ref()));
                 resolved_ast_grep.exclude = resolve_optional_glob_list(
                     &ast_grep.exclude,
                     params,
@@ -3495,14 +3516,8 @@ impl Engine {
             matrix_input.as_ref(),
             task_expr_ctx,
         )?
-        .or_else(|| {
-            // Auto-apply matrix._meta_files as the include list when no
-            // explicit include is configured or resolves to empty.
-            matrix_input
-                .as_ref()
-                .and_then(|m| m.get("_meta_files"))
-                .and_then(butterflow_models::variable::value_to_string_vec)
-        });
+        .or_else(|| auto_meta_files_include(resolved_state_ref, matrix_input.as_ref()));
+
         let resolved_exclude = resolve_optional_glob_list(
             &js_ast_grep.exclude,
             resolved_params_ref,

@@ -545,7 +545,12 @@ declare module "codemod:ast-grep" {
     dryRun?: boolean;
   };
 
-  export type Transform<T extends TypesMap> = (
+  /**
+   * @deprecated Use `Codemod` type instead. The name `Transform` is misleading as it implies the function must return a transformed string, but in fact it can also return null for detection purposes.
+   */
+  export type Transform<T extends TypesMap> = Codemod<T>;
+
+  export type Codemod<T extends TypesMap> = (
     root: SgRoot<T>,
     options: TransformOptions<T>,
   ) => Promise<string | null>;

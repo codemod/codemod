@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.5.2
+
+### Patch Changes
+
+- 19a39ca: Rename Transform type to Codemod
+
 ## 1.5.1
 
 ### Patch Changes
