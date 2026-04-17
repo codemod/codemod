@@ -975,16 +975,19 @@ export function addImport<T extends Language>(
   }
 
   // Find insertion position (after last import, or at file start)
-  const allImports = findAllImportStatements(program);
+  const allImports = findAllImportStatements(program).sort(
+    (a, b) => a.range().start.index - b.range().start.index,
+  );
   let insertPos = 0;
   let prefix = "";
 
   const lastImport = allImports[allImports.length - 1];
   if (lastImport) {
-    insertPos = lastImport.range().end.index;
-    // Check if there's a newline after the last import
     const programText = program.text();
-    if (programText[insertPos] !== "\n") {
+    const importEnd = lastImport.range().end.index;
+    insertPos = getStatementRangeWithNewline(lastImport, programText).end;
+
+    if (insertPos === importEnd) {
       prefix = "\n";
     }
   }
