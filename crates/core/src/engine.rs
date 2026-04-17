@@ -2870,6 +2870,9 @@ impl Engine {
                     match &push_and_pr_result {
                         Ok(Some(pr_url)) => {
                             slog!(git_step_logger, info, "Pull request created: {}", pr_url);
+                            let _ = self
+                                .append_task_log(task_id, format!("Pull request created: {}", pr_url))
+                                .await;
                         }
                         Ok(None) => {
                             slog!(git_step_logger, info, "Pull request created successfully");

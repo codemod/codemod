@@ -58,6 +58,14 @@ pub enum WorkflowEvent {
         line: String,
         at: DateTime<Utc>,
     },
+    TaskProgressUpdated {
+        workflow_run_id: Uuid,
+        task_id: Uuid,
+        processed_files: u64,
+        total_files: Option<u64>,
+        current_file: Option<String>,
+        at: DateTime<Utc>,
+    },
     ShellApprovalRequested {
         request_id: Uuid,
         request: ShellCommandExecutionRequest,

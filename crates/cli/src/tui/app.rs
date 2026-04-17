@@ -1,5 +1,7 @@
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
 use butterflow_models::{Task, TaskStatus, WorkflowRun};
+use chrono::Utc;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::tui::event::AppEvent;
@@ -22,23 +24,24 @@ pub enum ApprovalPrompt {
 }
 
 #[derive(Clone, Debug)]
-pub struct StatusBanner {
-    pub message: String,
-    pub is_error: bool,
-}
-
-#[derive(Clone, Debug)]
 pub struct TuiState {
     pub screen: Screen,
     pub runs: Vec<WorkflowRun>,
     pub selected_run: usize,
     pub current_run: Option<WorkflowRun>,
     pub tasks: Vec<Task>,
+    pub task_progress: HashMap<Uuid, TaskProgressView>,
     pub selected_task: usize,
+    pub task_list_scroll: usize,
     pub approval: Option<ApprovalPrompt>,
-    pub banner: Option<StatusBanner>,
     pub show_log_modal: bool,
     pub log_modal_scroll: u16,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaskProgressView {
+    pub processed_files: u64,
+    pub total_files: Option<u64>,
 }
 
 impl Default for TuiState {
@@ -49,9 +52,10 @@ impl Default for TuiState {
             selected_run: 0,
             current_run: None,
             tasks: Vec::new(),
+            task_progress: HashMap::new(),
             selected_task: 0,
+            task_list_scroll: 0,
             approval: None,
-            banner: None,
             show_log_modal: false,
             log_modal_scroll: 0,
         }
@@ -126,7 +130,66 @@ impl TuiState {
         {
             "Completed (install-skill pending)".to_string()
         } else {
-            format!("{:?}", run.status)
+            Self::workflow_status_text(run.status)
+        }
+    }
+
+    pub fn display_workflow_name(&self) -> String {
+        let Some(run) = self.current_run.as_ref() else {
+            return "Workflow".to_string();
+        };
+
+        Self::workflow_run_display_name(run)
+    }
+
+    pub fn display_target_path(&self) -> Option<String> {
+        self.current_run
+            .as_ref()
+            .and_then(|run| run.target_path.as_ref())
+            .map(|path| path.display().to_string())
+    }
+
+    pub fn workflow_status_text(status: butterflow_models::WorkflowStatus) -> String {
+        match status {
+            butterflow_models::WorkflowStatus::Pending => "Pending".to_string(),
+            butterflow_models::WorkflowStatus::Running => "Running".to_string(),
+            butterflow_models::WorkflowStatus::Completed => "Completed".to_string(),
+            butterflow_models::WorkflowStatus::Failed => "Failed".to_string(),
+            butterflow_models::WorkflowStatus::AwaitingTrigger => "Awaiting trigger".to_string(),
+            butterflow_models::WorkflowStatus::Canceled => "Canceled".to_string(),
+        }
+    }
+
+    pub fn workflow_run_display_name(run: &WorkflowRun) -> String {
+        if let Some(name) = run.name.as_deref() {
+            let trimmed = name.trim();
+            let lower = trimmed.to_ascii_lowercase();
+            if !trimmed.is_empty() && lower != "workflow.yaml" && lower != "workflow.yml" {
+                return trimmed.to_string();
+            }
+        }
+
+        run.bundle_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+            .or_else(|| run.name.clone())
+            .unwrap_or_else(|| "Workflow".to_string())
+    }
+
+    pub fn workflow_elapsed_text(run: &WorkflowRun) -> String {
+        let ended_at = run.ended_at.unwrap_or_else(Utc::now);
+        let duration = ended_at.signed_duration_since(run.started_at);
+        let total_seconds = duration.num_seconds().max(0);
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+
+        if hours > 0 {
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes:02}:{seconds:02}")
         }
     }
 
@@ -135,6 +198,40 @@ impl TuiState {
         if self.selected_task >= visible_len {
             self.selected_task = visible_len.saturating_sub(1);
         }
+        if visible_len == 0 {
+            self.task_list_scroll = 0;
+        } else if self.task_list_scroll >= visible_len {
+            self.task_list_scroll = visible_len.saturating_sub(1);
+        }
+    }
+
+    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) {
+        let visible_len = self.visible_tasks().len();
+        if visible_len == 0 || viewport_height == 0 {
+            self.task_list_scroll = 0;
+            return;
+        }
+
+        let max_scroll = visible_len.saturating_sub(viewport_height);
+        if self.selected_task < self.task_list_scroll {
+            self.task_list_scroll = self.selected_task;
+        } else if self.selected_task >= self.task_list_scroll.saturating_add(viewport_height) {
+            self.task_list_scroll = self
+                .selected_task
+                .saturating_add(1)
+                .saturating_sub(viewport_height);
+        }
+        self.task_list_scroll = self.task_list_scroll.min(max_scroll);
+    }
+
+    pub fn visible_task_window(&self, viewport_height: usize) -> Vec<&Task> {
+        let tasks = self.visible_tasks();
+        if viewport_height == 0 {
+            return Vec::new();
+        }
+        let start = self.task_list_scroll.min(tasks.len());
+        let end = start.saturating_add(viewport_height).min(tasks.len());
+        tasks[start..end].to_vec()
     }
 
     pub fn set_runs(&mut self, runs: Vec<WorkflowRun>) {
@@ -145,20 +242,41 @@ impl TuiState {
     }
 
     pub fn enter_run(&mut self, snapshot: WorkflowSnapshot) {
+        if let Some(existing) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.id == snapshot.workflow_run.id)
+        {
+            *existing = snapshot.workflow_run.clone();
+        } else {
+            self.runs.insert(0, snapshot.workflow_run.clone());
+        }
         self.screen = Screen::RunDetail;
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        self.task_progress.clear();
         self.selected_task = 0;
+        self.task_list_scroll = 0;
         self.approval = None;
-        self.banner = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
     }
 
     pub fn reconcile_snapshot(&mut self, snapshot: WorkflowSnapshot) {
         let selected_task_id = self.selected_task().map(|task| task.id);
+        if let Some(existing) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.id == snapshot.workflow_run.id)
+        {
+            *existing = snapshot.workflow_run.clone();
+        } else {
+            self.runs.insert(0, snapshot.workflow_run.clone());
+        }
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        self.task_progress
+            .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
         if let Some(selected_task_id) = selected_task_id {
             if let Some(index) = self
                 .visible_tasks()
@@ -176,9 +294,10 @@ impl TuiState {
         self.screen = Screen::Runs;
         self.current_run = None;
         self.tasks.clear();
+        self.task_progress.clear();
         self.selected_task = 0;
+        self.task_list_scroll = 0;
         self.approval = None;
-        self.banner = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
     }
@@ -189,6 +308,156 @@ impl TuiState {
 
     pub fn selected_task(&self) -> Option<&Task> {
         self.visible_tasks().get(self.selected_task).copied()
+    }
+
+    pub fn task_display_name(&self, task: &Task) -> String {
+        let base_name = self
+            .current_run
+            .as_ref()
+            .and_then(|run| run.workflow.nodes.iter().find(|node| node.id == task.node_id))
+            .map(|node| node.name.clone())
+            .unwrap_or_else(|| task.node_id.clone());
+
+        if let Some(shard_label) = self.task_matrix_label(task) {
+            format!("{base_name} · {shard_label}")
+        } else {
+            base_name
+        }
+    }
+
+    fn task_matrix_label(&self, task: &Task) -> Option<String> {
+        let matrix_values = task.matrix_values.as_ref()?;
+
+        for preferred_key in ["name", "shardId", "task", "shard"] {
+            if let Some(value) = matrix_values.get(preferred_key).and_then(|value| value.as_str()) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
+        let mut scalar_pairs = matrix_values
+            .iter()
+            .filter(|(key, _)| !key.starts_with("_meta"))
+            .filter_map(|(key, value)| {
+                let rendered = match value {
+                    serde_json::Value::String(value) => Some(value.clone()),
+                    serde_json::Value::Number(value) => Some(value.to_string()),
+                    serde_json::Value::Bool(value) => Some(value.to_string()),
+                    _ => None,
+                }?;
+                Some((key.clone(), rendered))
+            })
+            .collect::<Vec<_>>();
+
+        scalar_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        if scalar_pairs.is_empty() {
+            return None;
+        }
+
+        Some(
+            scalar_pairs
+                .into_iter()
+                .take(2)
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
+
+    pub fn task_elapsed_text(&self, task: &Task) -> String {
+        let Some(started_at) = task.started_at else {
+            return "-".to_string();
+        };
+
+        let ended_at = task.ended_at.unwrap_or_else(Utc::now);
+        let duration = ended_at.signed_duration_since(started_at);
+        let total_seconds = duration.num_seconds().max(0);
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+
+        if hours > 0 {
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes:02}:{seconds:02}")
+        }
+    }
+
+    pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
+        if let Some(progress) = self.task_progress.get(&task.id) {
+            if let Some(total) = progress.total_files {
+                let processed = if task.status == TaskStatus::Completed {
+                    total
+                } else {
+                    progress.processed_files.min(total)
+                };
+                return Some((processed as usize, total as usize));
+            }
+        }
+
+        let total = task.logs.iter().find_map(|line| {
+            let prefix = "Starting js-ast-grep file loop (";
+            let (_, rest) = line.split_once(prefix)?;
+            let marker = "target files: ";
+            let (_, count_text) = rest.split_once(marker)?;
+            let count_text = count_text.trim_end_matches(')').trim();
+            if count_text == "unknown" {
+                None
+            } else {
+                count_text.parse::<usize>().ok()
+            }
+        })?;
+
+        let processed = task
+            .logs
+            .iter()
+            .filter(|line| line.starts_with("Processing file: "))
+            .count();
+        let processed = if task.status == TaskStatus::Completed {
+            total
+        } else {
+            processed.min(total)
+        };
+        Some((processed, total))
+    }
+
+    pub fn task_progress_bar(&self, task: &Task, width: usize) -> Option<String> {
+        if width < 3 {
+            return None;
+        }
+
+        let (processed, total) = self.task_progress_counts(task)?;
+        if total == 0 {
+            return None;
+        }
+
+        let inner_width = width.saturating_sub(2);
+        let mut bar = String::with_capacity(width);
+        bar.push('[');
+        if task.status == TaskStatus::Completed {
+            for _ in 0..inner_width {
+                bar.push('=');
+            }
+        } else {
+            let mut filled = processed.saturating_mul(inner_width) / total;
+            if filled >= inner_width {
+                filled = inner_width.saturating_sub(1);
+            }
+
+            for index in 0..inner_width {
+                if index < filled {
+                    bar.push('=');
+                } else if index == filled {
+                    bar.push('>');
+                } else {
+                    bar.push(' ');
+                }
+            }
+        }
+        bar.push(']');
+        Some(bar)
     }
 
     pub fn selected_task_log_text(&self) -> String {
@@ -284,7 +553,6 @@ impl TuiState {
         match event {
             AppEvent::Workflow(workflow_event) => self.reduce_workflow_event(workflow_event),
             AppEvent::Snapshot(snapshot) => self.reconcile_snapshot(snapshot),
-            AppEvent::Banner(banner) => self.banner = Some(banner),
         }
     }
 
@@ -336,6 +604,21 @@ impl TuiState {
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.logs.push(line);
                 }
+            }
+            WorkflowEvent::TaskProgressUpdated {
+                task_id,
+                processed_files,
+                total_files,
+                current_file: _,
+                ..
+            } => {
+                self.task_progress.insert(
+                    task_id,
+                    TaskProgressView {
+                        processed_files,
+                        total_files,
+                    },
+                );
             }
             WorkflowEvent::ShellApprovalRequested {
                 request_id, request, ..
@@ -458,16 +741,65 @@ impl TuiState {
             .map(|task| task.id)
             .collect()
     }
+
+    pub fn task_help_text(&self) -> String {
+        let mut parts = vec!["Enter logs".to_string()];
+        if self.selected_task_trigger_command().is_some() {
+            parts.push("t trigger".to_string());
+        }
+        if !self.visible_awaiting_task_ids().is_empty() {
+            parts.push("T trigger-all".to_string());
+        }
+        parts.push("c cancel".to_string());
+        parts.push("esc back".to_string());
+        parts.push("q quit".to_string());
+        parts.join("  ")
+    }
+
+    pub fn selected_task_completion_detail(&self) -> Option<String> {
+        let task = self.selected_task()?;
+        if task.status != TaskStatus::Completed {
+            return None;
+        }
+
+        let pr_url = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Pull request created: ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
+
+        let branch_name = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Preparing git worktree for branch ")
+                .and_then(|value| value.split(" in ").next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    line.strip_prefix("Creating git worktree for branch ")
+                        .and_then(|value| value.split(" in ").next())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+        });
+
+        match (pr_url, branch_name) {
+            (Some(pr_url), Some(branch_name)) => Some(format!("Branch: {branch_name}  PR: {pr_url}")),
+            (Some(pr_url), None) => Some(format!("PR: {pr_url}")),
+            (None, _) => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use butterflow_core::workflow_runtime::WorkflowEvent;
-    use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
+    use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
+    use butterflow_models::{node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::Utc;
     use uuid::Uuid;
 
-    use super::{AppEvent, TuiState};
+    use super::{AppEvent, TaskProgressView, TuiState};
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
@@ -525,6 +857,37 @@ mod tests {
             at: Utc::now(),
         }));
         assert_eq!(state.tasks[0].logs, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn reducer_updates_task_progress_from_runtime_event() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec!["Starting js-ast-grep file loop (explicit-files, target files: 10)".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        state.reduce(AppEvent::Workflow(WorkflowEvent::TaskProgressUpdated {
+            workflow_run_id: run_id,
+            task_id,
+            processed_files: 6,
+            total_files: Some(10),
+            current_file: Some("src/example.ts".to_string()),
+            at: Utc::now(),
+        }));
+
+        assert_eq!(state.task_progress_counts(&state.tasks[0]), Some((6, 10)));
     }
 
     #[test]
@@ -707,6 +1070,300 @@ mod tests {
     }
 
     #[test]
+    fn display_run_status_spaces_awaiting_trigger() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::AwaitingTrigger,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+
+        assert_eq!(state.display_run_status(), "Awaiting trigger");
+    }
+
+    #[test]
+    fn display_workflow_name_prefers_bundle_dir_when_run_name_is_workflow_yaml() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: Some(std::path::PathBuf::from(
+                "/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel",
+            )),
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
+
+        assert_eq!(state.display_workflow_name(), "debarrel");
+    }
+
+    #[test]
+    fn workflow_elapsed_text_formats_running_run() {
+        let now = Utc::now();
+        let run = WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: now - chrono::Duration::seconds(65),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        };
+
+        assert!(matches!(
+            TuiState::workflow_elapsed_text(&run).as_str(),
+            "01:05" | "01:06"
+        ));
+    }
+
+    #[test]
+    fn workflow_elapsed_text_formats_completed_run() {
+        let started_at = Utc::now() - chrono::Duration::seconds(125);
+        let run = WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Completed,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at,
+            ended_at: Some(started_at + chrono::Duration::seconds(125)),
+            capabilities: None,
+            name: None,
+            target_path: None,
+        };
+
+        assert_eq!(TuiState::workflow_elapsed_text(&run), "02:05");
+    }
+
+    #[test]
+    fn task_progress_counts_parse_target_files_and_processed_files() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 5)".to_string(),
+                "Processing file: src/a.ts".to_string(),
+                "Processing file: src/b.ts".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(TuiState::default().task_progress_counts(&task), Some((2, 5)));
+    }
+
+    #[test]
+    fn task_progress_bar_fills_completed_task_to_total() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string(),
+                "Processing file: src/a.ts".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(
+            TuiState::default().task_progress_bar(&task, 4).as_deref(),
+            Some("[==]")
+        );
+    }
+
+    #[test]
+    fn task_progress_bar_does_not_render_full_for_running_task() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec!["Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 4,
+                total_files: Some(4),
+            },
+        );
+
+        assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[===>]"));
+    }
+
+    #[test]
+    fn enter_run_updates_existing_run_in_runs_list() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.runs.push(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
+
+        state.enter_run(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: Some(std::path::PathBuf::from("/tmp/debarrel")),
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: Some(std::path::PathBuf::from("/tmp/repo")),
+            },
+            tasks: vec![],
+        });
+
+        assert_eq!(state.runs.len(), 1);
+        assert_eq!(state.runs[0].status, WorkflowStatus::AwaitingTrigger);
+        assert_eq!(state.display_workflow_name(), "debarrel");
+    }
+
+    #[test]
+    fn reconcile_snapshot_updates_existing_run_in_runs_list() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        let initial_run = WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        };
+        state.runs.push(initial_run.clone());
+        state.current_run = Some(initial_run);
+
+        state.reconcile_snapshot(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            },
+            tasks: vec![],
+        });
+
+        assert_eq!(state.runs[0].status, WorkflowStatus::AwaitingTrigger);
+        assert_eq!(
+            state.current_run.as_ref().map(|run| run.status),
+            Some(WorkflowStatus::AwaitingTrigger)
+        );
+    }
+
+    #[test]
     fn open_log_modal_scrolls_to_bottom() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
@@ -760,5 +1417,414 @@ mod tests {
 
         state.scroll_logs_to_bottom(3);
         assert_eq!(state.log_modal_scroll, 3);
+    }
+
+    #[test]
+    fn task_list_scroll_tracks_selection_window() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks = (0..6)
+            .map(|index| Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: format!("node-{index}"),
+                status: TaskStatus::Running,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            })
+            .collect();
+
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 0);
+
+        state.selected_task = 3;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 1);
+
+        state.selected_task = 5;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 3);
+
+        state.selected_task = 1;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 1);
+    }
+
+    #[test]
+    fn task_help_text_hides_trigger_for_completed_task() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.task_help_text(),
+            "Enter logs  c cancel  esc back  q quit"
+        );
+    }
+
+    #[test]
+    fn task_help_text_shows_trigger_for_awaiting_task() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.task_help_text(),
+            "Enter logs  t trigger  T trigger-all  c cancel  esc back  q quit"
+        );
+    }
+
+    #[test]
+    fn selected_task_trigger_command_requires_dependencies() {
+        let run_id = Uuid::new_v4();
+        let dependency_task_id = Uuid::new_v4();
+        let blocked_task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![
+                    butterflow_models::Node {
+                        id: "install-skill".to_string(),
+                        name: "Install Skill".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    },
+                    butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply transforms".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec!["install-skill".to_string()],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    },
+                ],
+            },
+            status: WorkflowStatus::AwaitingTrigger,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.tasks = vec![
+            Task {
+                id: dependency_task_id,
+                workflow_run_id: run_id,
+                node_id: "install-skill".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+            Task {
+                id: blocked_task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+        ];
+        state.selected_task = 1;
+
+        assert_eq!(state.selected_task().map(|task| task.id), Some(blocked_task_id));
+        assert!(state.selected_task_trigger_command().is_none());
+        assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
+    }
+
+    #[test]
+    fn task_display_name_prefers_workflow_node_name() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Apply migration".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(state.task_display_name(&task), "Apply migration");
+    }
+
+    #[test]
+    fn task_display_name_appends_matrix_name_label() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Debarrel".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: Some(std::collections::HashMap::from([(
+                "name".to_string(),
+                serde_json::json!("unowned-10"),
+            )])),
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(state.task_display_name(&task), "Debarrel · unowned-10");
+    }
+
+    #[test]
+    fn task_display_name_falls_back_to_matrix_scalar_summary() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Run codemod".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: Some(std::collections::HashMap::from([
+                ("team".to_string(), serde_json::json!("frontend")),
+                ("kind".to_string(), serde_json::json!("ts")),
+                ("_meta_shard".to_string(), serde_json::json!(3)),
+            ])),
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(
+            state.task_display_name(&task),
+            "Run codemod · kind=ts, team=frontend"
+        );
+    }
+
+    #[test]
+    fn task_elapsed_text_is_dash_when_task_has_not_started() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(TuiState::default().task_elapsed_text(&task), "-");
+    }
+
+    #[test]
+    fn selected_task_completion_detail_shows_branch_and_pr_when_pr_exists() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Pull request created: https://github.com/example/repo/pull/42".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Branch: codemod-1234  PR: https://github.com/example/repo/pull/42")
+        );
+    }
+
+    #[test]
+    fn selected_task_completion_detail_hides_branch_when_no_pr_exists() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec!["Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(state.selected_task_completion_detail(), None);
     }
 }
