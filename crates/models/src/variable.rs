@@ -233,6 +233,42 @@ pub fn resolve_string_with_expression(
     Ok(result)
 }
 
+/// Resolve a `serde_json::Value` that is either a literal number or a string
+/// containing a `${{ }}` expression to a `usize`.
+///
+/// Examples:
+/// - `Value::Number(20)` → `Ok(20)`
+/// - `Value::String("${{ params.pr_size }}")` → resolves expression → `Ok(n)`
+pub fn resolve_usize_value(
+    value: &serde_json::Value,
+    params: &HashMap<String, Value>,
+    state: &HashMap<String, Value>,
+    matrix_values: Option<&HashMap<String, Value>>,
+    task_context: Option<&TaskExpressionContext>,
+) -> Result<usize> {
+    match value {
+        Value::Number(n) => n.as_u64().map(|v| v as usize).ok_or_else(|| {
+            Error::VariableResolution(format!("Expected positive integer, got {n}"))
+        }),
+        Value::String(s) => {
+            let resolved = resolve_string_with_expression(
+                s,
+                params,
+                state,
+                matrix_values,
+                None,
+                task_context,
+            )?;
+            resolved.parse::<usize>().map_err(|_| {
+                Error::VariableResolution(format!("Expected integer, got \"{resolved}\""))
+            })
+        }
+        other => Err(Error::VariableResolution(format!(
+            "Expected number or expression string, got {other}"
+        ))),
+    }
+}
+
 /// Resolve a list of strings that may contain `${{ }}` template expressions.
 ///
 /// Each element is resolved via [`resolve_string_with_expression`]. If an
@@ -1548,5 +1584,191 @@ mod tests {
         assert_eq!(value_to_string_vec(&json!("hello")), None);
         assert_eq!(value_to_string_vec(&json!(42)), None);
         assert_eq!(value_to_string_vec(&json!(true)), None);
+    }
+
+    // ── resolve_usize_value ─────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_usize_value_literal_number() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        assert_eq!(
+            resolve_usize_value(&json!(20), &params, &state, None, None).unwrap(),
+            20
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_from_params_expression() {
+        let mut params = HashMap::new();
+        params.insert("pr_size".to_string(), json!(30));
+        let state = HashMap::new();
+
+        assert_eq!(
+            resolve_usize_value(&json!("${{ params.pr_size }}"), &params, &state, None, None)
+                .unwrap(),
+            30
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_from_state() {
+        let params = HashMap::new();
+        let mut state = HashMap::new();
+        state.insert("shard_size".to_string(), json!(15));
+
+        assert_eq!(
+            resolve_usize_value(
+                &json!("${{ state.shard_size }}"),
+                &params,
+                &state,
+                None,
+                None
+            )
+            .unwrap(),
+            15
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_from_matrix() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let mut matrix = HashMap::new();
+        matrix.insert("batch_size".to_string(), json!(50));
+
+        assert_eq!(
+            resolve_usize_value(
+                &json!("${{ matrix.batch_size }}"),
+                &params,
+                &state,
+                Some(&matrix),
+                None
+            )
+            .unwrap(),
+            50
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_string_number_in_state() {
+        let params = HashMap::new();
+        let mut state = HashMap::new();
+        state.insert("count".to_string(), json!("25"));
+
+        assert_eq!(
+            resolve_usize_value(&json!("${{ state.count }}"), &params, &state, None, None).unwrap(),
+            25
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_errors_on_non_numeric_string() {
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), json!("hello"));
+        let state = HashMap::new();
+
+        assert!(
+            resolve_usize_value(&json!("${{ params.name }}"), &params, &state, None, None).is_err()
+        );
+    }
+
+    #[test]
+    fn test_resolve_usize_value_errors_on_negative() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        assert!(resolve_usize_value(&json!(-5), &params, &state, None, None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_usize_value_errors_on_bool() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        assert!(resolve_usize_value(&json!(true), &params, &state, None, None).is_err());
+    }
+
+    // ── evaluate_condition with boolean literals ─────────────────────────
+
+    #[test]
+    fn test_evaluate_condition_literal_true() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        assert!(evaluate_condition("true", &params, &state, None, None, None).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_condition_literal_false() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        assert!(!evaluate_condition("false", &params, &state, None, None, None).unwrap());
+    }
+
+    // ── task.* graceful fallback for missing env vars ────────────────────
+
+    #[test]
+    fn test_resolve_missing_task_var_returns_empty() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let task_ctx = TaskExpressionContext {
+            id: "test-id".to_string(),
+            signature: "abcd1234".to_string(),
+            extra: HashMap::new(),
+        };
+
+        let result = resolve_string_with_expression(
+            "Title: ${{ task.jira_title }}",
+            &params,
+            &state,
+            None,
+            None,
+            Some(&task_ctx),
+        )
+        .unwrap();
+        assert_eq!(result, "Title: ");
+    }
+
+    #[test]
+    fn test_resolve_present_task_var() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let mut extra = HashMap::new();
+        extra.insert("jira_title".to_string(), "Fix bug".to_string());
+        let task_ctx = TaskExpressionContext {
+            id: "test-id".to_string(),
+            signature: "abcd1234".to_string(),
+            extra,
+        };
+
+        let result = resolve_string_with_expression(
+            "Title: ${{ task.jira_title }}",
+            &params,
+            &state,
+            None,
+            None,
+            Some(&task_ctx),
+        )
+        .unwrap();
+        assert_eq!(result, "Title: Fix bug");
+    }
+
+    #[test]
+    fn test_evaluate_condition_missing_task_var_is_falsy() {
+        let params = HashMap::new();
+        let state = HashMap::new();
+        let task_ctx = TaskExpressionContext {
+            id: "test-id".to_string(),
+            signature: "abcd1234".to_string(),
+            extra: HashMap::new(),
+        };
+
+        assert!(!evaluate_condition(
+            "task.missing_var",
+            &params,
+            &state,
+            None,
+            None,
+            Some(&task_ctx)
+        )
+        .unwrap());
     }
 }

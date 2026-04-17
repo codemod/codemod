@@ -386,14 +386,17 @@ pub struct BuiltinShardMethod {
     /// Built-in method type
     pub r#type: BuiltinShardType,
 
-    /// Target number of files per shard
-    pub max_files_per_shard: usize,
+    /// Target number of files per shard.
+    /// Accepts a literal number or a `${{ }}` expression (e.g. `${{ params.pr_size }}`).
+    #[serde(deserialize_with = "deserialize_usize_or_expr")]
+    #[ts(as = "serde_json::Value")]
+    pub max_files_per_shard: serde_json::Value,
 
     /// Minimum shard size — trailing shards smaller than this are merged
     /// into the previous shard (optional)
-    #[serde(default)]
-    #[ts(optional, as = "Option<usize>")]
-    pub min_shard_size: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_option_usize_or_expr")]
+    #[ts(optional, as = "Option<serde_json::Value>")]
+    pub min_shard_size: Option<serde_json::Value>,
 }
 
 /// Type of built-in sharding method.
@@ -461,6 +464,25 @@ where
     }
 }
 
+/// Deserialize a value that is either a number or a string expression.
+/// Used for fields like `max_files_per_shard` that accept `20` or `${{ params.pr_size }}`.
+fn deserialize_usize_or_expr<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer)
+}
+
+/// Optional variant of [`deserialize_usize_or_expr`].
+fn deserialize_option_usize_or_expr<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<serde_json::Value>::deserialize(deserializer)
+}
+
 /// Configuration for automatic pull request creation at the end of a node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -482,4 +504,110 @@ pub struct PullRequestConfig {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub base: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_condition_deserializes_string() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: 'params.flag == "yes"'
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some(r#"params.flag == "yes""#.to_string()));
+    }
+
+    #[test]
+    fn test_condition_deserializes_bool_true() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: true
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some("true".to_string()));
+    }
+
+    #[test]
+    fn test_condition_deserializes_bool_false() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: false
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some("false".to_string()));
+    }
+
+    #[test]
+    fn test_condition_absent_is_none() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, None);
+    }
+
+    #[test]
+    fn test_max_files_per_shard_literal_number() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.max_files_per_shard, serde_json::json!(20));
+    }
+
+    #[test]
+    fn test_max_files_per_shard_expression_string() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: "${{ params.pr_size }}"
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            method.max_files_per_shard,
+            serde_json::json!("${{ params.pr_size }}")
+        );
+    }
+
+    #[test]
+    fn test_min_shard_size_absent_is_none() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.min_shard_size, None);
+    }
+
+    #[test]
+    fn test_min_shard_size_literal_number() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+            min_shard_size: 5
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.min_shard_size, Some(serde_json::json!(5)));
+    }
+
+    #[test]
+    fn test_min_shard_size_expression_string() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+            min_shard_size: "${{ params.min_size }}"
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            method.min_shard_size,
+            Some(serde_json::json!("${{ params.min_size }}"))
+        );
+    }
 }

@@ -51,9 +51,9 @@ use butterflow_models::step::{
     UseJSAstGrep,
 };
 use butterflow_models::{
-    evaluate_condition, resolve_string_list, resolve_string_with_expression, DiffOperation, Error,
-    FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff, TaskExpressionContext,
-    TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
+    evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
+    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff,
+    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -2735,7 +2735,8 @@ impl Engine {
                     info!("Skipping shard step in dry-run preview mode");
                     return Ok(());
                 }
-                self.execute_shard_step(shard_config, task, logger).await
+                self.execute_shard_step(shard_config, task, params, state, task_expr_ctx, logger)
+                    .await
             }
             StepAction::InstallSkill(install_skill) => {
                 if self.workflow_run_config.skip_install_skill_steps {
@@ -4345,10 +4346,14 @@ impl Engine {
     }
 
     /// Execute a shard step — evaluate file shards and write results to workflow state.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_shard_step(
         &self,
         shard_config: &butterflow_models::step::UseShard,
         task: &Task,
+        params: &HashMap<String, serde_json::Value>,
+        state: &HashMap<String, serde_json::Value>,
+        task_expr_ctx: Option<&TaskExpressionContext>,
         logger: &StructuredLogger,
     ) -> Result<()> {
         use crate::shard::evaluate_builtin_shards;
@@ -4381,13 +4386,41 @@ impl Engine {
         };
 
         let shards = match &shard_config.method {
-            ShardMethod::Builtin(_) => evaluate_builtin_shards(
-                shard_config,
-                &target_path,
-                eligible_files.as_deref(),
-                previous_shards.as_ref(),
-            )
-            .map_err(|e| Error::Runtime(format!("Shard evaluation failed: {e}")))?,
+            ShardMethod::Builtin(builtin) => {
+                // Resolve max_files_per_shard / min_shard_size expressions
+                // using the already-resolved params (with defaults applied).
+                let resolved_method = crate::shard::ResolvedBuiltinShardMethod {
+                    r#type: builtin.r#type,
+                    max_files_per_shard: resolve_usize_value(
+                        &builtin.max_files_per_shard,
+                        params,
+                        state,
+                        task.matrix_values.as_ref(),
+                        task_expr_ctx,
+                    )?,
+                    min_shard_size: builtin
+                        .min_shard_size
+                        .as_ref()
+                        .map(|v| {
+                            resolve_usize_value(
+                                v,
+                                params,
+                                state,
+                                task.matrix_values.as_ref(),
+                                task_expr_ctx,
+                            )
+                        })
+                        .transpose()?,
+                };
+                evaluate_builtin_shards(
+                    shard_config,
+                    &target_path,
+                    eligible_files.as_deref(),
+                    previous_shards.as_ref(),
+                    &resolved_method,
+                )
+                .map_err(|e| Error::Runtime(format!("Shard evaluation failed: {e}")))?
+            }
             ShardMethod::Function(func) => {
                 self.execute_custom_shard_function(
                     shard_config,
