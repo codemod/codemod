@@ -58,6 +58,9 @@ pub struct InstallSkillExecutionRequest {
     pub target_path: PathBuf,
     pub env: HashMap<String, String>,
     pub output_format: OutputFormat,
+    /// When set (e.g. workflow bundle root), install-skill may resolve the package from this tree
+    /// instead of the registry when `codemod.yaml` name matches the requested package.
+    pub bundle_path: Option<PathBuf>,
 }
 
 #[async_trait]

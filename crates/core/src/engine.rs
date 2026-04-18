@@ -2780,6 +2780,7 @@ impl Engine {
                         target_path: self.workflow_run_config.target_path.clone(),
                         env: prepared.env.clone(),
                         output_format: self.workflow_run_config.output_format,
+                        bundle_path: Some(self.workflow_run_config.bundle_path.clone()),
                     })
                     .await
                     .map_err(|error| {
