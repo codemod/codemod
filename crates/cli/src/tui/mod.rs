@@ -52,7 +52,7 @@ fn task_list_viewport_height(terminal_height: u16) -> usize {
     terminal_height.saturating_sub(5) as usize
 }
 
-fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCallback {
+pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCallback {
     ProgressCallback {
         callback: std::sync::Arc::new(Box::new(move |task_id, path, status, count, index| {
             let Ok(task_id) = Uuid::parse_str(task_id) else {
@@ -120,6 +120,84 @@ pub async fn run_workflow_tui(
         .await?;
     }
 
+    run_tui_loop(
+        &mut engine,
+        &mut terminal,
+        &mut state,
+        limit,
+        &mut session,
+        &mut receiver,
+        &mut snapshot_receiver,
+        &mut snapshot_task,
+        &mut ui_event_rx,
+    )
+    .await
+}
+
+pub async fn run_workflow_tui_with_session(
+    mut engine: Engine,
+    session: WorkflowSession,
+    limit: usize,
+) -> Result<()> {
+    let _guard = TerminalGuard::enter()?;
+    engine.set_quiet(true);
+    engine
+        .workflow_run_config_mut()
+        .capture_stdout_in_quiet_mode = false;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    let mut state = TuiState::default();
+    state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
+
+    let mut session = Some(session);
+    let mut receiver = None;
+    let mut snapshot_receiver: Option<mpsc::UnboundedReceiver<WorkflowSnapshot>> = None;
+    let mut snapshot_task: Option<tokio::task::JoinHandle<()>> = None;
+    let (_ui_event_tx, mut ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+
+    if let Some(session_ref) = session.as_ref() {
+        let run_id = session_ref.handle().workflow_run_id();
+        engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
+            run_id,
+        ))));
+        bind_session(
+            session_ref,
+            &mut state,
+            &mut receiver,
+            &mut snapshot_receiver,
+            &mut snapshot_task,
+        )
+        .await?;
+    }
+
+    run_tui_loop(
+        &mut engine,
+        &mut terminal,
+        &mut state,
+        limit,
+        &mut session,
+        &mut receiver,
+        &mut snapshot_receiver,
+        &mut snapshot_task,
+        &mut ui_event_rx,
+    )
+    .await
+}
+
+async fn run_tui_loop(
+    engine: &mut Engine,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut TuiState,
+    limit: usize,
+    session: &mut Option<WorkflowSession>,
+    receiver: &mut Option<
+        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
+    >,
+    snapshot_receiver: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
+    snapshot_task: &mut Option<tokio::task::JoinHandle<()>>,
+    ui_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+) -> Result<()> {
     loop {
         if let Some(rx) = receiver.as_mut() {
             while let Ok(event) = rx.try_recv() {
@@ -201,13 +279,13 @@ pub async fn run_workflow_tui(
                 KeyCode::Enter => {
                     if let Some(run_id) = state.selected_run_id() {
                         attach_run(
-                            &mut engine,
+                            engine,
                             run_id,
-                            &mut state,
-                            &mut session,
-                            &mut receiver,
-                            &mut snapshot_receiver,
-                            &mut snapshot_task,
+                            state,
+                            session,
+                            receiver,
+                            snapshot_receiver,
+                            snapshot_task,
                         )
                         .await?;
                     }
@@ -230,9 +308,9 @@ pub async fn run_workflow_tui(
                     if let Some(task) = snapshot_task.take() {
                         task.abort();
                     }
-                    receiver = None;
-                    snapshot_receiver = None;
-                    session = None;
+                    *receiver = None;
+                    *snapshot_receiver = None;
+                    *session = None;
                     state.leave_run();
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -268,10 +346,7 @@ pub async fn run_workflow_tui(
                     if let (Some(session), Some(command)) =
                         (session.as_ref(), state.selected_task_trigger_command())
                     {
-                        let WorkflowCommand::TriggerTask { task_id } = command else {
-                            unreachable!("selected task trigger command must be TriggerTask");
-                        };
-                        session.handle().dispatch_trigger_task(task_id);
+                        spawn_command(session.handle(), command);
                     }
                 }
                 KeyCode::Char('G') => {
@@ -283,12 +358,12 @@ pub async fn run_workflow_tui(
                 KeyCode::Char('T') => {
                     if let Some(session) = session.as_ref() {
                         let task_ids = state.visible_awaiting_task_ids();
-                        session.handle().dispatch_trigger_tasks(task_ids);
+                        spawn_command(session.handle(), WorkflowCommand::TriggerTasks { task_ids });
                     }
                 }
                 KeyCode::Char('c') => {
                     if let Some(session) = session.as_ref() {
-                        session.handle().dispatch_cancel_workflow();
+                        spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
                     }
                 }
                 _ => {}
@@ -322,10 +397,31 @@ async fn attach_run(
     if let Some(task) = snapshot_task_slot.take() {
         task.abort();
     }
+    let session = WorkflowSession::attach(engine.clone(), run_id);
     engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
         run_id,
     ))));
-    let session = WorkflowSession::attach(engine.clone(), run_id);
+    bind_session(
+        &session,
+        state,
+        receiver_slot,
+        snapshot_receiver_slot,
+        snapshot_task_slot,
+    )
+    .await?;
+    *session_slot = Some(session);
+    Ok(())
+}
+
+async fn bind_session(
+    session: &WorkflowSession,
+    state: &mut TuiState,
+    receiver_slot: &mut Option<
+        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
+    >,
+    snapshot_receiver_slot: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
+    snapshot_task_slot: &mut Option<tokio::task::JoinHandle<()>>,
+) -> Result<()> {
     let snapshot = session.handle().load_snapshot().await?;
     let receiver = session.handle().subscribe();
     let session_handle = session.handle();
@@ -348,7 +444,6 @@ async fn attach_run(
         }
     });
     state.enter_run(snapshot);
-    *session_slot = Some(session);
     *receiver_slot = Some(receiver);
     *snapshot_receiver_slot = Some(snapshot_rx);
     *snapshot_task_slot = Some(snapshot_task);

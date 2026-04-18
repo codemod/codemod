@@ -89,6 +89,9 @@ pub enum WorkflowCommand {
     TriggerTask {
         task_id: Uuid,
     },
+    TriggerTasks {
+        task_ids: Vec<Uuid>,
+    },
     TriggerAll,
     CancelWorkflow,
     RespondShellApproval {
@@ -305,6 +308,10 @@ async fn handle_command(
             .resume_workflow(workflow_run_id, vec![task_id])
             .await
             .map_err(anyhow::Error::from),
+        WorkflowCommand::TriggerTasks { task_ids } => engine
+            .resume_workflow(workflow_run_id, task_ids)
+            .await
+            .map_err(anyhow::Error::from),
         WorkflowCommand::TriggerAll => {
             let _ = engine.trigger_all(workflow_run_id).await?;
             Ok(())
@@ -402,9 +409,7 @@ impl WorkflowSession {
         let pending = Arc::new(PendingApprovals::with_approved(preapproved_capabilities));
         let interactor = WorkflowSessionInteractor::new(event_tx.clone(), Arc::clone(&pending));
         engine.set_quiet(true);
-        engine.set_progress_callback(Arc::new(None));
         let config = engine.workflow_run_config_mut();
-        config.capture_stdout_in_quiet_mode = false;
         config.capabilities_security_callback = Some(interactor.capabilities_callback());
         config.agent_selection_callback = Some(interactor.agent_callback());
         config.shell_command_approval_callback = Some(interactor.shell_callback());
@@ -442,16 +447,30 @@ impl WorkflowSession {
         bundle_path: Option<std::path::PathBuf>,
         capabilities: Option<&std::collections::HashSet<LlrtSupportedModules>>,
     ) -> Result<Self> {
-        let workflow_run_id = engine
-            .run_workflow(workflow, params, bundle_path, capabilities)
-            .await?;
+        Self::start_workflow_with_id(
+            engine,
+            Uuid::new_v4(),
+            workflow,
+            params,
+            bundle_path,
+            capabilities,
+        )
+        .await
+    }
+
+    pub async fn start_workflow_with_id(
+        engine: Engine,
+        workflow_run_id: Uuid,
+        workflow: crate::Workflow,
+        params: HashMap<String, serde_json::Value>,
+        bundle_path: Option<std::path::PathBuf>,
+        capabilities: Option<&std::collections::HashSet<LlrtSupportedModules>>,
+    ) -> Result<Self> {
         let session = Self::attach(engine, workflow_run_id);
-        if let Ok(workflow_run) = session.engine.get_workflow_run(workflow_run_id).await {
-            let _ = session.event_tx.send(WorkflowEvent::WorkflowStarted {
-                workflow_run,
-                at: Utc::now(),
-            });
-        }
+        session
+            .engine
+            .run_workflow_with_id(workflow_run_id, workflow, params, bundle_path, capabilities)
+            .await?;
         Ok(session)
     }
 
@@ -520,10 +539,14 @@ impl WorkflowSessionHandle {
     pub fn dispatch_trigger_task(&self, task_id: Uuid) {
         let engine = self.engine.clone();
         let workflow_run_id = self.workflow_run_id;
-        tokio::spawn(async move {
-            if let Err(error) = engine.resume_workflow(workflow_run_id, vec![task_id]).await {
-                log::error!("failed to trigger task {}: {}", task_id, error);
-            }
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to build runtime for workflow trigger");
+            runtime.block_on(async move {
+                if let Err(error) = engine.resume_workflow(workflow_run_id, vec![task_id]).await {
+                    log::error!("failed to trigger task {}: {}", task_id, error);
+                }
+            });
         });
     }
 
@@ -534,28 +557,36 @@ impl WorkflowSessionHandle {
 
         let engine = self.engine.clone();
         let workflow_run_id = self.workflow_run_id;
-        tokio::spawn(async move {
-            if let Err(error) = engine
-                .resume_workflow(workflow_run_id, task_ids.clone())
-                .await
-            {
-                log::error!(
-                    "failed to trigger {} task(s) for workflow {}: {}",
-                    task_ids.len(),
-                    workflow_run_id,
-                    error
-                );
-            }
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to build runtime for workflow triggers");
+            runtime.block_on(async move {
+                if let Err(error) = engine
+                    .resume_workflow(workflow_run_id, task_ids.clone())
+                    .await
+                {
+                    log::error!(
+                        "failed to trigger {} task(s) for workflow {}: {}",
+                        task_ids.len(),
+                        workflow_run_id,
+                        error
+                    );
+                }
+            });
         });
     }
 
     pub fn dispatch_cancel_workflow(&self) {
         let engine = self.engine.clone();
         let workflow_run_id = self.workflow_run_id;
-        tokio::spawn(async move {
-            if let Err(error) = engine.cancel_workflow(workflow_run_id).await {
-                log::error!("failed to cancel workflow {}: {}", workflow_run_id, error);
-            }
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to build runtime for workflow cancellation");
+            runtime.block_on(async move {
+                if let Err(error) = engine.cancel_workflow(workflow_run_id).await {
+                    log::error!("failed to cancel workflow {}: {}", workflow_run_id, error);
+                }
+            });
         });
     }
 

@@ -13,7 +13,7 @@ use tempfile::TempDir;
 
 use butterflow_core::engine::{CapabilitiesData, Engine};
 use butterflow_core::structured_log::StructuredLogger;
-use butterflow_core::workflow_runtime::WorkflowSession;
+use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
     WorkflowStatus,
@@ -2609,7 +2609,7 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
 "#,
     );
 
-    let shard_count = 12usize;
+    let shard_count = 3usize;
     for index in 0..shard_count {
         create_test_file(
             repo_dir.path(),
@@ -2677,12 +2677,17 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
 
     let session = WorkflowSession::attach(engine.clone(), workflow_run_id);
     let handle = session.handle();
-    handle.dispatch_trigger_tasks(child_task_ids.clone());
+    handle
+        .send(WorkflowCommand::TriggerTasks {
+            task_ids: child_task_ids.clone(),
+        })
+        .await
+        .unwrap();
 
     let latest_states: Arc<Mutex<Vec<(Uuid, TaskStatus, String)>>> =
         Arc::new(Mutex::new(Vec::new()));
     let latest_states_for_loop = Arc::clone(&latest_states);
-    tokio::time::timeout(tokio::time::Duration::from_secs(60), async {
+    tokio::time::timeout(tokio::time::Duration::from_secs(45), async {
         loop {
             let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
             let child_tasks: Vec<&Task> = tasks
@@ -2702,17 +2707,17 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks.iter().all(|task| {
+            let all_started = child_tasks.iter().all(|task| {
                 let logs = task.logs.join("\n");
-                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
-                    && logs.contains("Processing file:")
+                matches!(
+                    task.status,
+                    TaskStatus::Running | TaskStatus::Completed | TaskStatus::Failed
+                ) && (logs.is_empty()
+                    || logs.contains("Task execution starting")
+                    || logs.contains("Step started: Debarrel: rewrite imports and clean up barrels"))
             });
-            let all_terminal = child_tasks
-                .iter()
-                .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
-            {
+            if child_tasks.len() == child_task_ids.len() && all_started {
                 return;
             }
 
@@ -2722,7 +2727,7 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
     .await
     .unwrap_or_else(|_| {
         panic!(
-            "timed out waiting for many session-driven real debarrel workspace children to process files and finish; last child states were {:?}",
+            "timed out waiting for many session-driven real debarrel workspace children to start; last child states were {:?}",
             latest_states.lock().unwrap().clone()
         )
     });

@@ -7,9 +7,11 @@ use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
 use log::{error, info};
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::tui::run_workflow_tui;
+use crate::tui::{create_tui_progress_callback, run_workflow_tui_with_session};
+use butterflow_core::workflow_runtime::WorkflowSession;
 
 pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
     workflow.nodes.iter().any(|node| {
@@ -22,7 +24,7 @@ pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
 }
 
 /// Run a workflow with the given configuration
-pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
+pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
     // Parse workflow file
     let workflow = utils::parse_workflow_file(engine.get_workflow_file_path()).context(format!(
         "Failed to parse workflow file: {}",
@@ -33,8 +35,14 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
     let started = std::time::Instant::now();
 
     // Run workflow
-    let workflow_run_id = engine
-        .run_workflow(
+    let workflow_run_id = if auto_launch_tui {
+        let workflow_run_id = Uuid::new_v4();
+        engine.set_progress_callback(Arc::new(Some(create_tui_progress_callback(
+            workflow_run_id,
+        ))));
+        let session = WorkflowSession::start_workflow_with_id(
+            engine.clone(),
+            workflow_run_id,
             workflow,
             config.params,
             Some(config.bundle_path),
@@ -42,12 +50,24 @@ pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<
         )
         .await
         .context("Failed to run workflow")?;
+        println!("💥 Workflow started with ID: {workflow_run_id}");
+        run_workflow_tui_with_session(engine.clone(), session, 20).await?;
+        workflow_run_id
+    } else {
+        let workflow_run_id = engine
+            .run_workflow(
+                workflow,
+                config.params,
+                Some(config.bundle_path),
+                config.capabilities.as_ref(),
+            )
+            .await
+            .context("Failed to run workflow")?;
+        println!("💥 Workflow started with ID: {workflow_run_id}");
+        workflow_run_id
+    };
 
-    println!("💥 Workflow started with ID: {workflow_run_id}");
-
-    if auto_launch_tui {
-        run_workflow_tui(engine.clone(), Some(workflow_run_id), 20).await?;
-    } else if config.wait_for_completion {
+    if !auto_launch_tui && config.wait_for_completion {
         wait_for_workflow_completion(engine, workflow_run_id.to_string()).await?;
     }
 

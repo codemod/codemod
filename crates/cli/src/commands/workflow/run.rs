@@ -160,7 +160,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .workflow_run_config_mut()
             .capture_stdout_in_quiet_mode = false;
     }
-    let (_, seconds) = run_workflow(&engine, config).await?;
+    let (_, seconds) = run_workflow(&mut engine, config).await?;
 
     let duration_ms = started.elapsed().as_millis() as f64;
 

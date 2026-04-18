@@ -1391,10 +1391,21 @@ impl Engine {
         bundle_path: Option<PathBuf>,
         capabilities: Option<&HashSet<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
+        self.run_workflow_with_id(Uuid::new_v4(), workflow, params, bundle_path, capabilities)
+            .await
+    }
+
+    pub async fn run_workflow_with_id(
+        &self,
+        workflow_run_id: Uuid,
+        workflow: Workflow,
+        params: HashMap<String, serde_json::Value>,
+        bundle_path: Option<PathBuf>,
+        capabilities: Option<&HashSet<LlrtSupportedModules>>,
+    ) -> Result<Uuid> {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
         self.validate_codemod_dependencies(&workflow, &[]).await?;
 
-        let workflow_run_id = Uuid::new_v4();
         let workflow_run = WorkflowRun {
             id: workflow_run_id,
             workflow: workflow.clone(),

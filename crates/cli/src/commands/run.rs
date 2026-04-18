@@ -379,7 +379,7 @@ pub async fn handler(
         engine_config.flatten_matrix_tasks = true;
     }
 
-    let run_result = run_workflow(&engine, config).await;
+    let run_result = run_workflow(&mut engine, config).await;
 
     if let Err(e) = run_result {
         // Clean up cached pro codemod on failure too

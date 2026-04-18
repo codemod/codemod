@@ -77,13 +77,20 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
 }
 
 fn sanitize_path_component(value: &str) -> String {
-    value
+    let sanitized: String = value
         .chars()
         .map(|ch| match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => ch,
             _ => '-',
         })
-        .collect()
+        .collect();
+
+    let trimmed = sanitized.trim_start_matches('.');
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        "worktree".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub async fn repo_root(working_dir: &Path) -> Result<PathBuf> {
@@ -218,6 +225,30 @@ pub async fn checkout_branch(branch: &str, working_dir: &std::path::Path) -> Res
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_path_component, worktree_path};
+    use std::path::Path;
+
+    #[test]
+    fn sanitize_path_component_rewrites_dot_segments() {
+        assert_eq!(sanitize_path_component("."), "worktree");
+        assert_eq!(sanitize_path_component(".."), "worktree");
+        assert_eq!(sanitize_path_component("...hidden"), "hidden");
+        assert_eq!(sanitize_path_component("../branch"), "-branch");
+    }
+
+    #[test]
+    fn worktree_path_stays_within_container_for_dot_segments() {
+        let repo_root = Path::new("/tmp/example-repo");
+        let worktree = worktree_path(repo_root, "..", ".");
+        assert_eq!(
+            worktree,
+            Path::new("/tmp/example-repo.codemod-worktrees/worktree-worktree")
+        );
+    }
 }
 
 /// Returns `true` when the working tree has uncommitted changes
