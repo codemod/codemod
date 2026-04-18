@@ -44,6 +44,19 @@ type MatrixTaskSnapshot = Vec<(
     Vec<String>,
 )>;
 
+fn debarrel_bundle_path() -> Option<PathBuf> {
+    let configured = std::env::var("CODEMOD_TEST_DEBARREL_BUNDLE")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            Some(PathBuf::from(
+                "/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel",
+            ))
+        })?;
+
+    configured.exists().then_some(configured)
+}
+
 struct EnvVarGuard {
     key: String,
     original: Option<String>,
@@ -2498,13 +2511,10 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
         .status()
         .unwrap();
 
-    let bundle_path =
-        PathBuf::from("/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel");
-    assert!(
-        bundle_path.exists(),
-        "expected debarrel bundle at {}",
-        bundle_path.display()
-    );
+    let Some(bundle_path) = debarrel_bundle_path() else {
+        eprintln!("skipping external debarrel workspace test: bundle not available");
+        return;
+    };
 
     let state_adapter = Box::new(MockStateAdapter::new());
     let config = WorkflowRunConfig {
@@ -2639,13 +2649,10 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
         .status()
         .unwrap();
 
-    let bundle_path =
-        PathBuf::from("/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel");
-    assert!(
-        bundle_path.exists(),
-        "expected debarrel bundle at {}",
-        bundle_path.display()
-    );
+    let Some(bundle_path) = debarrel_bundle_path() else {
+        eprintln!("skipping external debarrel workspace test: bundle not available");
+        return;
+    };
 
     let state_adapter = Box::new(MockStateAdapter::new());
     let config = WorkflowRunConfig {

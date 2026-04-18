@@ -101,37 +101,14 @@ pub async fn run_workflow_tui(
     let mut state = TuiState::default();
     state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
 
-    let mut session: Option<WorkflowSession> = None;
-    let mut receiver = None;
-    let mut snapshot_receiver: Option<mpsc::UnboundedReceiver<WorkflowSnapshot>> = None;
-    let mut snapshot_task: Option<tokio::task::JoinHandle<()>> = None;
-    let (_ui_event_tx, mut ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let mut runtime = TuiRuntime::new(ui_event_rx);
 
     if let Some(run_id) = run_id {
-        attach_run(
-            &mut engine,
-            run_id,
-            &mut state,
-            &mut session,
-            &mut receiver,
-            &mut snapshot_receiver,
-            &mut snapshot_task,
-        )
-        .await?;
+        attach_run(&mut engine, run_id, &mut state, &mut runtime).await?;
     }
 
-    run_tui_loop(
-        &mut engine,
-        &mut terminal,
-        &mut state,
-        limit,
-        &mut session,
-        &mut receiver,
-        &mut snapshot_receiver,
-        &mut snapshot_task,
-        &mut ui_event_rx,
-    )
-    .await
+    run_tui_loop(&mut engine, &mut terminal, &mut state, limit, &mut runtime).await
 }
 
 pub async fn run_workflow_tui_with_session(
@@ -150,39 +127,36 @@ pub async fn run_workflow_tui_with_session(
     let mut state = TuiState::default();
     state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
 
-    let mut session = Some(session);
-    let mut receiver = None;
-    let mut snapshot_receiver: Option<mpsc::UnboundedReceiver<WorkflowSnapshot>> = None;
-    let mut snapshot_task: Option<tokio::task::JoinHandle<()>> = None;
-    let (_ui_event_tx, mut ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let mut runtime = TuiRuntime::new(ui_event_rx);
+    let run_id = session.handle().workflow_run_id();
+    engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
+        run_id,
+    ))));
+    bind_session(&session, &mut state, &mut runtime).await?;
+    runtime.session = Some(session);
 
-    if let Some(session_ref) = session.as_ref() {
-        let run_id = session_ref.handle().workflow_run_id();
-        engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
-            run_id,
-        ))));
-        bind_session(
-            session_ref,
-            &mut state,
-            &mut receiver,
-            &mut snapshot_receiver,
-            &mut snapshot_task,
-        )
-        .await?;
+    run_tui_loop(&mut engine, &mut terminal, &mut state, limit, &mut runtime).await
+}
+
+struct TuiRuntime {
+    session: Option<WorkflowSession>,
+    receiver: Option<tokio::sync::broadcast::Receiver<WorkflowEvent>>,
+    snapshot_receiver: Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
+    snapshot_task: Option<tokio::task::JoinHandle<()>>,
+    ui_event_rx: mpsc::UnboundedReceiver<AppEvent>,
+}
+
+impl TuiRuntime {
+    fn new(ui_event_rx: mpsc::UnboundedReceiver<AppEvent>) -> Self {
+        Self {
+            session: None,
+            receiver: None,
+            snapshot_receiver: None,
+            snapshot_task: None,
+            ui_event_rx,
+        }
     }
-
-    run_tui_loop(
-        &mut engine,
-        &mut terminal,
-        &mut state,
-        limit,
-        &mut session,
-        &mut receiver,
-        &mut snapshot_receiver,
-        &mut snapshot_task,
-        &mut ui_event_rx,
-    )
-    .await
 }
 
 async fn run_tui_loop(
@@ -190,28 +164,22 @@ async fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut TuiState,
     limit: usize,
-    session: &mut Option<WorkflowSession>,
-    receiver: &mut Option<
-        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
-    >,
-    snapshot_receiver: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
-    snapshot_task: &mut Option<tokio::task::JoinHandle<()>>,
-    ui_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+    runtime: &mut TuiRuntime,
 ) -> Result<()> {
     loop {
-        if let Some(rx) = receiver.as_mut() {
+        if let Some(rx) = runtime.receiver.as_mut() {
             while let Ok(event) = rx.try_recv() {
                 state.reduce(AppEvent::Workflow(event));
             }
         }
 
-        if let Some(rx) = snapshot_receiver.as_mut() {
+        if let Some(rx) = runtime.snapshot_receiver.as_mut() {
             while let Ok(snapshot) = rx.try_recv() {
                 state.reduce(AppEvent::Snapshot(snapshot));
             }
         }
 
-        while let Ok(event) = ui_event_rx.try_recv() {
+        while let Ok(event) = runtime.ui_event_rx.try_recv() {
             state.reduce(event);
         }
 
@@ -220,7 +188,7 @@ async fn run_tui_loop(
             state.sync_task_list_scroll(viewport_height);
         }
 
-        terminal.draw(|frame| screens::render(frame, &state))?;
+        terminal.draw(|frame| screens::render(frame, state))?;
 
         if !poll(Duration::from_millis(100))? {
             continue;
@@ -237,7 +205,7 @@ async fn run_tui_loop(
             match key.code {
                 KeyCode::Char('y') => {
                     if let (Some(session), Some(command)) =
-                        (session.as_ref(), state.approval_accept_command())
+                        (runtime.session.as_ref(), state.approval_accept_command())
                     {
                         spawn_command(session.handle(), command);
                     }
@@ -245,7 +213,7 @@ async fn run_tui_loop(
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
                     if let (Some(session), Some(command)) =
-                        (session.as_ref(), state.approval_reject_command())
+                        (runtime.session.as_ref(), state.approval_reject_command())
                     {
                         spawn_command(session.handle(), command);
                     }
@@ -256,7 +224,7 @@ async fn run_tui_loop(
                 KeyCode::Enter => {
                     if matches!(state.approval, Some(ApprovalPrompt::AgentSelection { .. })) {
                         if let (Some(session), Some(command)) =
-                            (session.as_ref(), state.approval_accept_command())
+                            (runtime.session.as_ref(), state.approval_accept_command())
                         {
                             spawn_command(session.handle(), command);
                         }
@@ -278,16 +246,7 @@ async fn run_tui_loop(
                 }
                 KeyCode::Enter => {
                     if let Some(run_id) = state.selected_run_id() {
-                        attach_run(
-                            engine,
-                            run_id,
-                            state,
-                            session,
-                            receiver,
-                            snapshot_receiver,
-                            snapshot_task,
-                        )
-                        .await?;
+                        attach_run(engine, run_id, state, runtime).await?;
                     }
                 }
                 _ => {}
@@ -305,12 +264,12 @@ async fn run_tui_loop(
                         state.close_log_modal();
                         continue;
                     }
-                    if let Some(task) = snapshot_task.take() {
+                    if let Some(task) = runtime.snapshot_task.take() {
                         task.abort();
                     }
-                    *receiver = None;
-                    *snapshot_receiver = None;
-                    *session = None;
+                    runtime.receiver = None;
+                    runtime.snapshot_receiver = None;
+                    runtime.session = None;
                     state.leave_run();
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -343,9 +302,10 @@ async fn run_tui_loop(
                     }
                 }
                 KeyCode::Char('t') => {
-                    if let (Some(session), Some(command)) =
-                        (session.as_ref(), state.selected_task_trigger_command())
-                    {
+                    if let (Some(session), Some(command)) = (
+                        runtime.session.as_ref(),
+                        state.selected_task_trigger_command(),
+                    ) {
                         spawn_command(session.handle(), command);
                     }
                 }
@@ -356,13 +316,13 @@ async fn run_tui_loop(
                     }
                 }
                 KeyCode::Char('T') => {
-                    if let Some(session) = session.as_ref() {
+                    if let Some(session) = runtime.session.as_ref() {
                         let task_ids = state.visible_awaiting_task_ids();
                         spawn_command(session.handle(), WorkflowCommand::TriggerTasks { task_ids });
                     }
                 }
                 KeyCode::Char('c') => {
-                    if let Some(session) = session.as_ref() {
+                    if let Some(session) = runtime.session.as_ref() {
                         spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
                     }
                 }
@@ -387,40 +347,24 @@ async fn attach_run(
     engine: &mut Engine,
     run_id: Uuid,
     state: &mut TuiState,
-    session_slot: &mut Option<WorkflowSession>,
-    receiver_slot: &mut Option<
-        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
-    >,
-    snapshot_receiver_slot: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
-    snapshot_task_slot: &mut Option<tokio::task::JoinHandle<()>>,
+    runtime: &mut TuiRuntime,
 ) -> Result<()> {
-    if let Some(task) = snapshot_task_slot.take() {
+    if let Some(task) = runtime.snapshot_task.take() {
         task.abort();
     }
     let session = WorkflowSession::attach(engine.clone(), run_id);
     engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
         run_id,
     ))));
-    bind_session(
-        &session,
-        state,
-        receiver_slot,
-        snapshot_receiver_slot,
-        snapshot_task_slot,
-    )
-    .await?;
-    *session_slot = Some(session);
+    bind_session(&session, state, runtime).await?;
+    runtime.session = Some(session);
     Ok(())
 }
 
 async fn bind_session(
     session: &WorkflowSession,
     state: &mut TuiState,
-    receiver_slot: &mut Option<
-        tokio::sync::broadcast::Receiver<butterflow_core::workflow_runtime::WorkflowEvent>,
-    >,
-    snapshot_receiver_slot: &mut Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
-    snapshot_task_slot: &mut Option<tokio::task::JoinHandle<()>>,
+    runtime: &mut TuiRuntime,
 ) -> Result<()> {
     let snapshot = session.handle().load_snapshot().await?;
     let receiver = session.handle().subscribe();
@@ -444,8 +388,8 @@ async fn bind_session(
         }
     });
     state.enter_run(snapshot);
-    *receiver_slot = Some(receiver);
-    *snapshot_receiver_slot = Some(snapshot_rx);
-    *snapshot_task_slot = Some(snapshot_task);
+    runtime.receiver = Some(receiver);
+    runtime.snapshot_receiver = Some(snapshot_rx);
+    runtime.snapshot_task = Some(snapshot_task);
     Ok(())
 }
