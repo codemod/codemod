@@ -52,6 +52,12 @@ pub type ShellCommandApprovalCallback =
     Arc<dyn Fn(&ShellCommandExecutionRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
 
 #[derive(Clone, Debug)]
+pub struct ManagedGitWorktree {
+    pub branch: String,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 pub struct InstallSkillExecutionRequest {
     pub install_skill: UseInstallSkill,
     pub no_interactive: bool,
@@ -103,10 +109,15 @@ pub struct WorkflowRunConfig {
     pub name: Option<String>,
     /// Suppress stdout/stderr output (used when TUI is active)
     pub quiet: bool,
+    /// When quiet is enabled, capture stdout into task logs instead of letting it hit the terminal.
+    /// TUI mode disables this so terminal rendering keeps control of stdout.
+    pub capture_stdout_in_quiet_mode: bool,
     /// Optional interactive approval callback for shell-command workflow steps
     pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
+    /// Optional per-task git worktree used for managed git execution.
+    pub managed_git_worktree: Option<ManagedGitWorktree>,
 }
 
 impl Default for WorkflowRunConfig {
@@ -135,8 +146,10 @@ impl Default for WorkflowRunConfig {
             output_format: OutputFormat::Text,
             name: None,
             quiet: false,
+            capture_stdout_in_quiet_mode: true,
             shell_command_approval_callback: None,
             install_skill_executor: None,
+            managed_git_worktree: None,
         }
     }
 }

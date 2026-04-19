@@ -1,1197 +1,1893 @@
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::sync::mpsc::SyncSender;
-
-use anyhow::Result;
-use butterflow_core::ai_handoff::AgentOption;
-use butterflow_core::config::ShellCommandExecutionRequest;
-use butterflow_models::{Task, TaskStatus, WorkflowRun, WorkflowStatus};
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::widgets::TableState;
+use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
+use butterflow_models::{Task, TaskStatus, WorkflowRun};
+use chrono::Utc;
+use std::collections::HashMap;
 use uuid::Uuid;
 
-use super::event::AppEvent;
-use super::screens::settings;
-use super::screens::StatusLine;
+use crate::tui::event::AppEvent;
 
-pub const USE_BUILT_IN_AGENT: &str = "__use_built_in__";
-
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum Screen {
-    RunList,
-    TaskList { workflow_run_id: Uuid },
-    Settings { workflow_run_id: Uuid },
+    Runs,
+    RunDetail,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionOverrides {
-    pub dry_run: bool,
-    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
-}
-
-impl SessionOverrides {
-    pub fn new(dry_run: bool, capabilities: Option<HashSet<LlrtSupportedModules>>) -> Self {
-        Self {
-            dry_run,
-            capabilities,
-        }
-    }
-
-    pub fn toggle_dry_run(&mut self) {
-        self.dry_run = !self.dry_run;
-    }
-
-    pub fn toggle_capability(&mut self, module: LlrtSupportedModules) {
-        match &mut self.capabilities {
-            Some(set) => {
-                if set.contains(&module) {
-                    set.remove(&module);
-                } else {
-                    set.insert(module);
-                }
-            }
-            None => {
-                let mut set = HashSet::new();
-                set.insert(module);
-                self.capabilities = Some(set);
-            }
-        }
-    }
-
-    pub fn seed_from_workflow_run(&mut self, workflow_run: &WorkflowRun) {
-        if self.capabilities.is_none() {
-            self.capabilities = workflow_run.capabilities.clone();
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogView {
-    pub task_id: Uuid,
-    pub node_id: String,
-    pub status: TaskStatus,
-    pub lines: Vec<String>,
-    pub error: Option<String>,
-}
-
-impl LogView {
-    pub fn from_task(task: &Task) -> Self {
-        Self {
-            task_id: task.id,
-            node_id: task.node_id.clone(),
-            status: task.status,
-            lines: task.logs.clone(),
-            error: task.error.clone(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct PendingShellApproval {
-    pub request: ShellCommandExecutionRequest,
-    response_tx: SyncSender<Result<bool>>,
-}
-
-impl PendingShellApproval {
-    pub fn new(
-        request: ShellCommandExecutionRequest,
-        response_tx: SyncSender<Result<bool>>,
-    ) -> Self {
-        Self {
-            request,
-            response_tx,
-        }
-    }
-
-    pub fn respond(self, approved: bool) {
-        if let Err(e) = self.response_tx.send(Ok(approved)) {
-            log::warn!("Failed to send shell approval response: {}", e);
-        }
-    }
-
-    pub fn fail(self, error: anyhow::Error) {
-        if let Err(e) = self.response_tx.send(Err(error)) {
-            log::warn!("Failed to send shell approval error: {}", e);
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct PendingCapabilityApproval {
-    pub modules: Vec<LlrtSupportedModules>,
-    response_tx: SyncSender<Result<()>>,
-}
-
-impl PendingCapabilityApproval {
-    pub fn new(modules: Vec<LlrtSupportedModules>, response_tx: SyncSender<Result<()>>) -> Self {
-        Self {
-            modules,
-            response_tx,
-        }
-    }
-
-    pub fn respond(self, approved: bool) {
-        let result = if approved {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Aborting due to capabilities warning"))
-        };
-        if let Err(e) = self.response_tx.send(result) {
-            log::warn!("Failed to send capability approval response: {}", e);
-        }
-    }
-
-    pub fn fail(self, error: anyhow::Error) {
-        if let Err(e) = self.response_tx.send(Err(error)) {
-            log::warn!("Failed to send capability approval error: {}", e);
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentSelectionItem {
-    pub canonical: String,
-    pub label: String,
-    pub is_available: bool,
-}
-
-impl AgentSelectionItem {
-    pub fn from_agent_option(agent: &AgentOption) -> Self {
-        Self {
-            canonical: agent.canonical.to_string(),
-            label: agent.label.to_string(),
-            is_available: agent.is_available(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct PendingAgentSelection {
-    pub options: Vec<AgentSelectionItem>,
-    response_tx: SyncSender<Result<Option<String>>>,
-}
-
-impl PendingAgentSelection {
-    pub fn new(
-        options: Vec<AgentSelectionItem>,
-        response_tx: SyncSender<Result<Option<String>>>,
-    ) -> Self {
-        Self {
-            options,
-            response_tx,
-        }
-    }
-
-    pub fn respond(self, selection: Option<String>) {
-        if let Err(e) = self.response_tx.send(Ok(selection)) {
-            log::warn!("Failed to send agent selection response: {}", e);
-        }
-    }
-
-    pub fn fail(self, error: anyhow::Error) {
-        if let Err(e) = self.response_tx.send(Err(error)) {
-            log::warn!("Failed to send agent selection error: {}", e);
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppEffect {
-    Refresh,
-    LoadLogs {
-        workflow_run_id: Uuid,
-        task_id: Uuid,
+#[derive(Clone, Debug)]
+pub enum ApprovalPrompt {
+    Shell {
+        request_id: Uuid,
+        command: String,
     },
-    TriggerTask {
-        workflow_run_id: Uuid,
-        task_id: Uuid,
+    Capabilities {
+        request_id: Uuid,
+        modules: Vec<String>,
     },
-    TriggerAll {
-        workflow_run_id: Uuid,
-    },
-    RetryTask {
-        workflow_run_id: Uuid,
-        task_id: Uuid,
-    },
-    CancelWorkflow {
-        workflow_run_id: Uuid,
+    AgentSelection {
+        request_id: Uuid,
+        options: Vec<(String, bool)>,
+        selected: usize,
     },
 }
 
-impl AppEffect {
-    pub fn should_refresh_after(self) -> bool {
+#[derive(Clone, Debug)]
+pub struct TuiState {
+    pub screen: Screen,
+    pub runs: Vec<WorkflowRun>,
+    pub selected_run: usize,
+    pub current_run: Option<WorkflowRun>,
+    pub tasks: Vec<Task>,
+    pub task_progress: HashMap<Uuid, TaskProgressView>,
+    pub selected_task: usize,
+    pub task_list_scroll: usize,
+    pub approval: Option<ApprovalPrompt>,
+    pub show_log_modal: bool,
+    pub log_modal_scroll: u16,
+    pub log_modal_notice: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaskProgressView {
+    pub processed_files: u64,
+    pub total_files: Option<u64>,
+}
+
+impl Default for TuiState {
+    fn default() -> Self {
+        Self {
+            screen: Screen::Runs,
+            runs: Vec::new(),
+            selected_run: 0,
+            current_run: None,
+            tasks: Vec::new(),
+            task_progress: HashMap::new(),
+            selected_task: 0,
+            task_list_scroll: 0,
+            approval: None,
+            show_log_modal: false,
+            log_modal_scroll: 0,
+            log_modal_notice: None,
+        }
+    }
+}
+
+impl TuiState {
+    fn is_terminal_task_status(status: TaskStatus) -> bool {
         matches!(
-            self,
-            AppEffect::TriggerTask { .. }
-                | AppEffect::TriggerAll { .. }
-                | AppEffect::RetryTask { .. }
-                | AppEffect::CancelWorkflow { .. }
+            status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
         )
     }
-}
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
-pub enum EffectResult {
-    Refreshed {
-        workflow_runs: Vec<WorkflowRun>,
-        current_workflow_run: Option<WorkflowRun>,
-        tasks: Vec<Task>,
-    },
-    LogsLoaded(Option<LogView>),
-    Status(StatusLine),
-    Noop,
-}
-
-pub struct App {
-    pub screen: Screen,
-    pub should_quit: bool,
-    pub workflow_runs: Vec<WorkflowRun>,
-    pub run_list_state: TableState,
-    pub current_workflow_run: Option<WorkflowRun>,
-    pub tasks: Vec<Task>,
-    pub task_list_state: TableState,
-    selected_task_id: Option<Uuid>,
-    pub settings_cursor: usize,
-    pub run_list_limit: usize,
-    pub status_line: Option<StatusLine>,
-    pub log_view: Option<LogView>,
-    pub log_scroll: u16,
-    pub log_follow: bool,
-    shell_approval: Option<PendingShellApproval>,
-    capability_approval: Option<PendingCapabilityApproval>,
-    agent_selection: Option<PendingAgentSelection>,
-    pub agent_selection_cursor: usize,
-    pub session_overrides: SessionOverrides,
-    base_overrides: SessionOverrides,
-    overrides_seeded_from_run: bool,
-    data_hash: u64,
-}
-
-impl App {
-    pub fn new(
-        dry_run: bool,
-        capabilities: Option<HashSet<LlrtSupportedModules>>,
-        limit: usize,
-    ) -> Self {
-        let mut run_list_state = TableState::default();
-        run_list_state.select(Some(0));
-        let base_overrides = SessionOverrides::new(dry_run, capabilities);
-
-        Self {
-            screen: Screen::RunList,
-            should_quit: false,
-            workflow_runs: Vec::new(),
-            run_list_state,
-            current_workflow_run: None,
-            tasks: Vec::new(),
-            task_list_state: TableState::default(),
-            selected_task_id: None,
-            settings_cursor: 0,
-            run_list_limit: limit,
-            status_line: None,
-            log_view: None,
-            log_scroll: 0,
-            log_follow: true,
-            shell_approval: None,
-            capability_approval: None,
-            agent_selection: None,
-            agent_selection_cursor: 0,
-            session_overrides: base_overrides.clone(),
-            base_overrides,
-            overrides_seeded_from_run: true,
-            data_hash: 0,
-        }
+    fn is_ignorable_pending_install_skill(task: &Task) -> bool {
+        task.node_id == "install-skill" && task.status == TaskStatus::AwaitingTrigger
     }
 
-    pub fn new_for_run(
-        dry_run: bool,
-        capabilities: Option<HashSet<LlrtSupportedModules>>,
-        workflow_run_id: Uuid,
-    ) -> Self {
-        let mut task_list_state = TableState::default();
-        task_list_state.select(Some(0));
-        let base_overrides = SessionOverrides::new(dry_run, capabilities);
-
-        Self {
-            screen: Screen::TaskList { workflow_run_id },
-            should_quit: false,
-            workflow_runs: Vec::new(),
-            run_list_state: TableState::default(),
-            current_workflow_run: None,
-            tasks: Vec::new(),
-            task_list_state,
-            selected_task_id: None,
-            settings_cursor: 0,
-            run_list_limit: 20,
-            status_line: None,
-            log_view: None,
-            log_scroll: 0,
-            log_follow: true,
-            shell_approval: None,
-            capability_approval: None,
-            agent_selection: None,
-            agent_selection_cursor: 0,
-            session_overrides: base_overrides.clone(),
-            base_overrides,
-            overrides_seeded_from_run: false,
-            data_hash: 0,
-        }
-    }
-
-    pub fn initial_effects(&self) -> Vec<AppEffect> {
-        vec![AppEffect::Refresh]
-    }
-
-    pub fn reduce(&mut self, event: AppEvent) -> Vec<AppEffect> {
-        match event {
-            AppEvent::Tick => vec![AppEffect::Refresh],
-            AppEvent::Resize(_, _) => Vec::new(),
-            AppEvent::Scroll(delta) => {
-                self.handle_scroll(delta);
-                Vec::new()
-            }
-            AppEvent::Mouse(mouse) => self.handle_mouse(mouse),
-            AppEvent::Key(key) => self.handle_key(key),
-        }
-    }
-
-    pub fn apply_effect_result(&mut self, result: EffectResult) -> bool {
-        match result {
-            EffectResult::Refreshed {
-                workflow_runs,
-                current_workflow_run,
-                mut tasks,
-            } => {
-                self.workflow_runs = workflow_runs;
-                self.current_workflow_run = current_workflow_run;
-                sort_tasks(&mut tasks);
-                self.tasks = tasks;
-                self.sync_task_selection();
-
-                if !self.overrides_seeded_from_run {
-                    if let Some(run) = &self.current_workflow_run {
-                        self.session_overrides.seed_from_workflow_run(run);
-                    }
-                    self.overrides_seeded_from_run = true;
-                }
-
-                self.sync_log_view();
-
-                let new_hash = self.compute_data_hash();
-                if new_hash == self.data_hash {
-                    return self.has_live_updates();
-                }
-                self.data_hash = new_hash;
-                true
-            }
-            EffectResult::LogsLoaded(log_view) => {
-                let changed = self.log_view != log_view;
-                self.log_view = log_view;
-                changed
-            }
-            EffectResult::Status(status_line) => {
-                let changed = self.status_line.as_ref() != Some(&status_line);
-                self.status_line = Some(status_line);
-                changed
-            }
-            EffectResult::Noop => false,
-        }
-    }
-
-    pub fn current_workflow_run_id(&self) -> Option<Uuid> {
-        match self.screen {
-            Screen::RunList => None,
-            Screen::TaskList { workflow_run_id } | Screen::Settings { workflow_run_id } => {
-                Some(workflow_run_id)
-            }
-        }
-    }
-
-    fn compute_data_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        hash_workflow_runs(&mut hasher, &self.workflow_runs);
-        hash_optional_workflow_run(&mut hasher, self.current_workflow_run.as_ref());
-        hash_tasks(&mut hasher, &self.tasks);
-        hash_status_line(&mut hasher, self.status_line.as_ref());
-        hash_log_view(&mut hasher, self.log_view.as_ref());
-        hasher.finish()
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        if self.shell_approval.is_some() {
-            return self.handle_shell_approval_key(key);
-        }
-        if self.capability_approval.is_some() {
-            return self.handle_capability_approval_key(key);
-        }
-        if self.agent_selection.is_some() {
-            return self.handle_agent_selection_key(key);
-        }
-
-        if key.code == KeyCode::Char('q')
-            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-        {
-            self.should_quit = true;
-            return Vec::new();
-        }
-
-        if self.log_view.is_some() {
-            return self.handle_log_view_key(key);
-        }
-
-        match self.screen.clone() {
-            Screen::RunList => self.handle_run_list_key(key),
-            Screen::TaskList { workflow_run_id } => self.handle_task_list_key(key, workflow_run_id),
-            Screen::Settings { workflow_run_id } => self.handle_settings_key(key, workflow_run_id),
-        }
-    }
-
-    fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppEffect> {
-        if self.shell_approval.is_some()
-            || self.capability_approval.is_some()
-            || self.agent_selection.is_some()
-        {
-            return Vec::new();
-        }
-
-        if self.log_view.is_some() {
-            return match mouse.kind {
-                MouseEventKind::ScrollDown => {
-                    self.scroll_log_view(3);
-                    Vec::new()
-                }
-                MouseEventKind::ScrollUp => {
-                    self.scroll_log_view(-3);
-                    Vec::new()
-                }
-                _ => Vec::new(),
-            };
-        }
-
-        match mouse.kind {
-            MouseEventKind::ScrollDown => match self.screen.clone() {
-                Screen::RunList => {
-                    self.move_run_list_cursor(1);
-                    Vec::new()
-                }
-                Screen::TaskList { .. } => {
-                    self.move_task_list_cursor(1);
-                    Vec::new()
-                }
-                Screen::Settings { .. } => {
-                    self.move_settings_cursor(1);
-                    Vec::new()
-                }
-            },
-            MouseEventKind::ScrollUp => match self.screen.clone() {
-                Screen::RunList => {
-                    self.move_run_list_cursor(-1);
-                    Vec::new()
-                }
-                Screen::TaskList { .. } => {
-                    self.move_task_list_cursor(-1);
-                    Vec::new()
-                }
-                Screen::Settings { .. } => {
-                    self.move_settings_cursor(-1);
-                    Vec::new()
-                }
-            },
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_scroll(&mut self, delta: i32) {
-        if self.shell_approval.is_some()
-            || self.capability_approval.is_some()
-            || self.agent_selection.is_some()
-        {
-            return;
-        }
-
-        if self.log_view.is_some() {
-            self.scroll_log_view(delta);
-            return;
-        }
-
-        match self.screen.clone() {
-            Screen::RunList => self.move_run_list_cursor(delta),
-            Screen::TaskList { .. } => self.move_task_list_cursor(delta),
-            Screen::Settings { .. } => self.move_settings_cursor(delta),
-        }
-    }
-
-    fn handle_log_view_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('l') => {
-                self.log_view = None;
-                self.log_scroll = 0;
-                self.log_follow = true;
-                Vec::new()
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_log_view(1);
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_log_view(-1);
-                Vec::new()
-            }
-            KeyCode::PageDown => {
-                self.scroll_log_view(10);
-                Vec::new()
-            }
-            KeyCode::PageUp => {
-                self.scroll_log_view(-10);
-                Vec::new()
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.log_scroll = 0;
-                self.log_follow = false;
-                Vec::new()
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                self.log_scroll = 0;
-                self.log_follow = true;
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_shell_approval_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.resolve_shell_approval(true, false);
-                Vec::new()
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                self.resolve_shell_approval(false, false);
-                Vec::new()
-            }
-            KeyCode::Char('q') | KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.resolve_shell_approval(false, true);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_capability_approval_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.resolve_capability_approval(true, false);
-                Vec::new()
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                self.resolve_capability_approval(false, false);
-                Vec::new()
-            }
-            KeyCode::Char('q') | KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.resolve_capability_approval(false, true);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_agent_selection_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        let option_count = self
-            .agent_selection
-            .as_ref()
-            .map(|selection| selection.options.len())
-            .unwrap_or(0);
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if option_count > 0 {
-                    self.agent_selection_cursor =
-                        (self.agent_selection_cursor + 1).min(option_count - 1);
-                }
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.agent_selection_cursor = self.agent_selection_cursor.saturating_sub(1);
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                let selected = self
-                    .agent_selection
-                    .as_ref()
-                    .and_then(|selection| selection.options.get(self.agent_selection_cursor))
-                    .map(|item| {
-                        if item.canonical == USE_BUILT_IN_AGENT {
-                            None
-                        } else {
-                            Some(item.canonical.clone())
-                        }
-                    })
-                    .unwrap_or(None);
-                self.resolve_agent_selection(selected, false);
-                Vec::new()
-            }
-            KeyCode::Esc => {
-                self.resolve_agent_selection(None, false);
-                Vec::new()
-            }
-            KeyCode::Char('q') | KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.resolve_agent_selection(None, true);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_run_list_key(&mut self, key: KeyEvent) -> Vec<AppEffect> {
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.move_run_list_cursor(1);
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.move_run_list_cursor(-1);
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                if let Some(idx) = self.run_list_state.selected() {
-                    if let Some(run) = self.workflow_runs.get(idx) {
-                        self.navigate_to_task_list(run.id);
-                        return vec![AppEffect::Refresh];
-                    }
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_task_list_key(&mut self, key: KeyEvent, workflow_run_id: Uuid) -> Vec<AppEffect> {
-        let visible_tasks = self.visible_tasks();
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.move_task_list_cursor(1);
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.move_task_list_cursor(-1);
-                Vec::new()
-            }
-            KeyCode::Enter | KeyCode::Char('l') => {
-                if let Some(idx) = self.task_list_state.selected() {
-                    if let Some(task) = visible_tasks.get(idx) {
-                        return vec![AppEffect::LoadLogs {
-                            workflow_run_id,
-                            task_id: task.id,
-                        }];
-                    }
-                }
-                Vec::new()
-            }
-            KeyCode::Char('t') => {
-                if let Some(idx) = self.task_list_state.selected() {
-                    if let Some(task) = visible_tasks.get(idx) {
-                        if task.status == TaskStatus::AwaitingTrigger {
-                            return vec![AppEffect::TriggerTask {
-                                workflow_run_id,
-                                task_id: task.id,
-                            }];
-                        }
-                    }
-                }
-                Vec::new()
-            }
-            KeyCode::Char('T') => vec![AppEffect::TriggerAll { workflow_run_id }],
-            KeyCode::Char('R') => {
-                if let Some(idx) = self.task_list_state.selected() {
-                    if let Some(task) = visible_tasks.get(idx) {
-                        if task.status == TaskStatus::Failed {
-                            return vec![AppEffect::RetryTask {
-                                workflow_run_id,
-                                task_id: task.id,
-                            }];
-                        }
-                    }
-                }
-                Vec::new()
-            }
-            KeyCode::Char('s') => {
-                self.screen = Screen::Settings { workflow_run_id };
-                self.settings_cursor = 0;
-                Vec::new()
-            }
-            KeyCode::Char('c') => {
-                let is_cancelable = self.current_workflow_run.as_ref().is_some_and(|run| {
-                    run.status == WorkflowStatus::Running
-                        || run.status == WorkflowStatus::AwaitingTrigger
-                });
-                if is_cancelable {
-                    vec![AppEffect::CancelWorkflow { workflow_run_id }]
-                } else {
-                    Vec::new()
-                }
-            }
-            KeyCode::Esc => {
-                self.navigate_to_run_list();
-                vec![AppEffect::Refresh]
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_settings_key(&mut self, key: KeyEvent, workflow_run_id: Uuid) -> Vec<AppEffect> {
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.move_settings_cursor(1);
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.move_settings_cursor(-1);
-                Vec::new()
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                match self.settings_cursor {
-                    0 => self.session_overrides.toggle_dry_run(),
-                    1 => self
-                        .session_overrides
-                        .toggle_capability(LlrtSupportedModules::Fs),
-                    2 => self
-                        .session_overrides
-                        .toggle_capability(LlrtSupportedModules::Fetch),
-                    3 => self
-                        .session_overrides
-                        .toggle_capability(LlrtSupportedModules::ChildProcess),
-                    _ => {}
-                }
-                self.status_line = None;
-                Vec::new()
-            }
-            KeyCode::Esc => {
-                self.screen = Screen::TaskList { workflow_run_id };
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn move_run_list_cursor(&mut self, delta: i32) {
-        let len = self.workflow_runs.len();
-        if len == 0 {
-            return;
-        }
-        let current = self.run_list_state.selected().unwrap_or(0);
-        let new = if delta > 0 {
-            (current + delta as usize).min(len - 1)
-        } else {
-            current.saturating_sub((-delta) as usize)
+    fn task_dependencies_satisfied(&self, task: &Task) -> bool {
+        let Some(run) = self.current_run.as_ref() else {
+            return true;
         };
-        self.run_list_state.select(Some(new));
-    }
-
-    fn move_settings_cursor(&mut self, delta: i32) {
-        let len = settings::settings_count();
-        if len == 0 {
-            self.settings_cursor = 0;
-            return;
-        }
-
-        if delta > 0 {
-            self.settings_cursor = (self.settings_cursor + delta as usize).min(len - 1);
-        } else {
-            self.settings_cursor = self.settings_cursor.saturating_sub((-delta) as usize);
-        }
-    }
-
-    fn move_task_list_cursor(&mut self, delta: i32) {
-        let visible_task_ids: Vec<Uuid> = self
-            .tasks
+        let Some(node) = run
+            .workflow
+            .nodes
             .iter()
-            .filter(|task| !task.is_master)
-            .map(|task| task.id)
-            .collect();
-        let len = visible_task_ids.len();
-        if len == 0 {
-            self.task_list_state.select(None);
-            self.selected_task_id = None;
-            return;
-        }
-        let current = self.task_list_state.selected().unwrap_or(0);
-        let new = if delta > 0 {
-            (current + delta as usize).min(len - 1)
-        } else {
-            current.saturating_sub((-delta) as usize)
-        };
-        self.task_list_state.select(Some(new));
-        self.selected_task_id = visible_task_ids.get(new).copied();
-    }
-
-    fn navigate_to_task_list(&mut self, workflow_run_id: Uuid) {
-        self.screen = Screen::TaskList { workflow_run_id };
-        self.task_list_state = TableState::default();
-        self.task_list_state.select(Some(0));
-        self.current_workflow_run = None;
-        self.tasks.clear();
-        self.selected_task_id = None;
-        self.log_view = None;
-        self.log_scroll = 0;
-        self.log_follow = true;
-        self.reject_shell_approval(None);
-        self.reject_capability_approval(None);
-        self.reject_agent_selection(None);
-        self.session_overrides = self.base_overrides.clone();
-        self.overrides_seeded_from_run = false;
-    }
-
-    fn navigate_to_run_list(&mut self) {
-        self.screen = Screen::RunList;
-        self.current_workflow_run = None;
-        self.tasks.clear();
-        self.task_list_state.select(None);
-        self.selected_task_id = None;
-        self.log_view = None;
-        self.log_scroll = 0;
-        self.log_follow = true;
-        self.reject_shell_approval(None);
-        self.reject_capability_approval(None);
-        self.reject_agent_selection(None);
-        self.session_overrides = self.base_overrides.clone();
-        self.overrides_seeded_from_run = true;
-    }
-
-    fn sync_log_view(&mut self) {
-        let Some(current_log_view) = self.log_view.as_ref() else {
-            return;
+            .find(|node| node.id == task.node_id)
+        else {
+            return true;
         };
 
-        if let Some(task) = self
-            .tasks
-            .iter()
-            .find(|task| task.id == current_log_view.task_id)
-        {
-            let previous_line_count = current_log_view.lines.len();
-            self.log_view = Some(LogView::from_task(task));
-            if self.log_follow {
-                self.log_scroll = 0;
-            } else if task.logs.len() < previous_line_count {
-                self.log_scroll = 0;
-                self.log_follow = true;
-            }
-        } else {
-            self.log_view = None;
-            self.log_scroll = 0;
-            self.log_follow = true;
-        }
+        node.depends_on.iter().all(|dependency_node_id| {
+            let mut dependency_tasks = self
+                .tasks
+                .iter()
+                .filter(|candidate| candidate.node_id == *dependency_node_id);
+
+            dependency_tasks.clone().next().is_none()
+                || dependency_tasks.all(|dependency_task| {
+                    matches!(
+                        dependency_task.status,
+                        TaskStatus::Completed | TaskStatus::WontDo
+                    )
+                })
+        })
     }
 
-    fn visible_tasks(&self) -> Vec<&Task> {
+    pub fn visible_tasks(&self) -> Vec<&Task> {
         self.tasks.iter().filter(|task| !task.is_master).collect()
     }
 
-    fn sync_task_selection(&mut self) {
-        let visible_task_ids: Vec<Uuid> = self
-            .tasks
-            .iter()
-            .filter(|task| !task.is_master)
-            .map(|task| task.id)
-            .collect();
+    pub fn is_effectively_complete(&self) -> bool {
+        let Some(run) = self.current_run.as_ref() else {
+            return false;
+        };
 
-        if visible_task_ids.is_empty() {
-            self.task_list_state.select(None);
-            self.selected_task_id = None;
+        if self.tasks.is_empty() {
+            return matches!(run.status, butterflow_models::WorkflowStatus::Completed);
+        }
+
+        self.tasks.iter().all(|task| {
+            Self::is_terminal_task_status(task.status)
+                || Self::is_ignorable_pending_install_skill(task)
+        })
+    }
+
+    pub fn display_run_status(&self) -> String {
+        let Some(run) = self.current_run.as_ref() else {
+            return "Unknown".to_string();
+        };
+
+        if self.is_effectively_complete()
+            && matches!(
+                run.status,
+                butterflow_models::WorkflowStatus::AwaitingTrigger
+            )
+        {
+            "Completed (install-skill pending)".to_string()
+        } else {
+            Self::workflow_status_text(run.status)
+        }
+    }
+
+    pub fn display_workflow_name(&self) -> String {
+        let Some(run) = self.current_run.as_ref() else {
+            return "Workflow".to_string();
+        };
+
+        Self::workflow_run_display_name(run)
+    }
+
+    pub fn display_target_path(&self) -> Option<String> {
+        self.current_run
+            .as_ref()
+            .and_then(|run| run.target_path.as_ref())
+            .map(|path| path.display().to_string())
+    }
+
+    pub fn workflow_status_text(status: butterflow_models::WorkflowStatus) -> String {
+        match status {
+            butterflow_models::WorkflowStatus::Pending => "Pending".to_string(),
+            butterflow_models::WorkflowStatus::Running => "Running".to_string(),
+            butterflow_models::WorkflowStatus::Completed => "Completed".to_string(),
+            butterflow_models::WorkflowStatus::Failed => "Failed".to_string(),
+            butterflow_models::WorkflowStatus::AwaitingTrigger => "Awaiting trigger".to_string(),
+            butterflow_models::WorkflowStatus::Canceled => "Canceled".to_string(),
+        }
+    }
+
+    pub fn workflow_run_display_name(run: &WorkflowRun) -> String {
+        if let Some(name) = run.name.as_deref() {
+            let trimmed = name.trim();
+            let lower = trimmed.to_ascii_lowercase();
+            if !trimmed.is_empty() && lower != "workflow.yaml" && lower != "workflow.yml" {
+                return trimmed.to_string();
+            }
+        }
+
+        run.bundle_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+            .or_else(|| run.name.clone())
+            .unwrap_or_else(|| "Workflow".to_string())
+    }
+
+    pub fn workflow_elapsed_text(run: &WorkflowRun) -> String {
+        let ended_at = run.ended_at.unwrap_or_else(Utc::now);
+        let duration = ended_at.signed_duration_since(run.started_at);
+        let total_seconds = duration.num_seconds().max(0);
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+
+        if hours > 0 {
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes:02}:{seconds:02}")
+        }
+    }
+
+    fn clamp_selected_task(&mut self) {
+        let visible_len = self.visible_tasks().len();
+        if self.selected_task >= visible_len {
+            self.selected_task = visible_len.saturating_sub(1);
+        }
+        if visible_len == 0 {
+            self.task_list_scroll = 0;
+        } else if self.task_list_scroll >= visible_len {
+            self.task_list_scroll = visible_len.saturating_sub(1);
+        }
+    }
+
+    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) {
+        let visible_len = self.visible_tasks().len();
+        if visible_len == 0 || viewport_height == 0 {
+            self.task_list_scroll = 0;
             return;
         }
 
-        let selected_idx = self
-            .selected_task_id
-            .and_then(|task_id| {
-                visible_task_ids
+        let max_scroll = visible_len.saturating_sub(viewport_height);
+        if self.selected_task < self.task_list_scroll {
+            self.task_list_scroll = self.selected_task;
+        } else if self.selected_task >= self.task_list_scroll.saturating_add(viewport_height) {
+            self.task_list_scroll = self
+                .selected_task
+                .saturating_add(1)
+                .saturating_sub(viewport_height);
+        }
+        self.task_list_scroll = self.task_list_scroll.min(max_scroll);
+    }
+
+    pub fn visible_task_window(&self, viewport_height: usize) -> Vec<&Task> {
+        let tasks = self.visible_tasks();
+        if viewport_height == 0 {
+            return Vec::new();
+        }
+        let start = self.task_list_scroll.min(tasks.len());
+        let end = start.saturating_add(viewport_height).min(tasks.len());
+        tasks[start..end].to_vec()
+    }
+
+    pub fn set_runs(&mut self, runs: Vec<WorkflowRun>) {
+        self.runs = runs;
+        if self.selected_run >= self.runs.len() {
+            self.selected_run = self.runs.len().saturating_sub(1);
+        }
+    }
+
+    pub fn enter_run(&mut self, snapshot: WorkflowSnapshot) {
+        if let Some(existing) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.id == snapshot.workflow_run.id)
+        {
+            *existing = snapshot.workflow_run.clone();
+        } else {
+            self.runs.insert(0, snapshot.workflow_run.clone());
+        }
+        self.screen = Screen::RunDetail;
+        self.current_run = Some(snapshot.workflow_run);
+        self.tasks = snapshot.tasks;
+        self.task_progress.clear();
+        self.selected_task = 0;
+        self.task_list_scroll = 0;
+        self.approval = None;
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
+    }
+
+    pub fn reconcile_snapshot(&mut self, snapshot: WorkflowSnapshot) {
+        let selected_task_id = self.selected_task().map(|task| task.id);
+        if let Some(existing) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.id == snapshot.workflow_run.id)
+        {
+            *existing = snapshot.workflow_run.clone();
+        } else {
+            self.runs.insert(0, snapshot.workflow_run.clone());
+        }
+        self.current_run = Some(snapshot.workflow_run);
+        self.tasks = snapshot.tasks;
+        self.task_progress
+            .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
+        if let Some(selected_task_id) = selected_task_id {
+            if let Some(index) = self
+                .visible_tasks()
+                .iter()
+                .position(|task| task.id == selected_task_id)
+            {
+                self.selected_task = index;
+                return;
+            }
+        }
+        self.clamp_selected_task();
+    }
+
+    pub fn leave_run(&mut self) {
+        self.screen = Screen::Runs;
+        self.current_run = None;
+        self.tasks.clear();
+        self.task_progress.clear();
+        self.selected_task = 0;
+        self.task_list_scroll = 0;
+        self.approval = None;
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
+    }
+
+    pub fn selected_run_id(&self) -> Option<Uuid> {
+        self.runs.get(self.selected_run).map(|run| run.id)
+    }
+
+    pub fn selected_task(&self) -> Option<&Task> {
+        self.visible_tasks().get(self.selected_task).copied()
+    }
+
+    pub fn task_display_name(&self, task: &Task) -> String {
+        let base_name = self
+            .current_run
+            .as_ref()
+            .and_then(|run| {
+                run.workflow
+                    .nodes
                     .iter()
-                    .position(|visible_id| *visible_id == task_id)
+                    .find(|node| node.id == task.node_id)
             })
-            .unwrap_or(0);
+            .map(|node| node.name.clone())
+            .unwrap_or_else(|| task.node_id.clone());
 
-        self.task_list_state.select(Some(selected_idx));
-        self.selected_task_id = visible_task_ids.get(selected_idx).copied();
+        if let Some(shard_label) = self.task_matrix_label(task) {
+            format!("{base_name} · {shard_label}")
+        } else {
+            base_name
+        }
     }
 
-    pub fn has_shell_approval(&self) -> bool {
-        self.shell_approval.is_some()
+    fn task_matrix_label(&self, task: &Task) -> Option<String> {
+        let matrix_values = task.matrix_values.as_ref()?;
+
+        for preferred_key in ["name", "shardId", "task", "shard"] {
+            if let Some(value) = matrix_values
+                .get(preferred_key)
+                .and_then(|value| value.as_str())
+            {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
+        let mut scalar_pairs = matrix_values
+            .iter()
+            .filter(|(key, _)| !key.starts_with("_meta"))
+            .filter_map(|(key, value)| {
+                let rendered = match value {
+                    serde_json::Value::String(value) => Some(value.clone()),
+                    serde_json::Value::Number(value) => Some(value.to_string()),
+                    serde_json::Value::Bool(value) => Some(value.to_string()),
+                    _ => None,
+                }?;
+                Some((key.clone(), rendered))
+            })
+            .collect::<Vec<_>>();
+
+        scalar_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        if scalar_pairs.is_empty() {
+            return None;
+        }
+
+        Some(
+            scalar_pairs
+                .into_iter()
+                .take(2)
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
     }
 
-    pub fn has_capability_approval(&self) -> bool {
-        self.capability_approval.is_some()
+    pub fn task_elapsed_text(&self, task: &Task) -> String {
+        let Some(started_at) = task.started_at else {
+            return "-".to_string();
+        };
+
+        let ended_at = task.ended_at.unwrap_or_else(Utc::now);
+        let duration = ended_at.signed_duration_since(started_at);
+        let total_seconds = duration.num_seconds().max(0);
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+
+        if hours > 0 {
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes:02}:{seconds:02}")
+        }
     }
 
-    pub fn has_agent_selection(&self) -> bool {
-        self.agent_selection.is_some()
+    pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
+        if let Some(progress) = self.task_progress.get(&task.id) {
+            if let Some(total) = progress.total_files {
+                let processed = if task.status == TaskStatus::Completed {
+                    total
+                } else {
+                    progress.processed_files.min(total)
+                };
+                return Some((processed as usize, total as usize));
+            }
+        }
+
+        let total = task.logs.iter().find_map(|line| {
+            let prefix = "Starting js-ast-grep file loop (";
+            let (_, rest) = line.split_once(prefix)?;
+            let marker = "target files: ";
+            let (_, count_text) = rest.split_once(marker)?;
+            let count_text = count_text.trim_end_matches(')').trim();
+            if count_text == "unknown" {
+                None
+            } else {
+                count_text.parse::<usize>().ok()
+            }
+        })?;
+
+        let processed = task
+            .logs
+            .iter()
+            .filter(|line| line.starts_with("Processing file: "))
+            .count();
+        let processed = if task.status == TaskStatus::Completed {
+            total
+        } else {
+            processed.min(total)
+        };
+        Some((processed, total))
     }
 
-    pub fn shell_approval_request(&self) -> Option<&ShellCommandExecutionRequest> {
-        self.shell_approval
-            .as_ref()
-            .map(|approval| &approval.request)
+    pub fn task_progress_bar(&self, task: &Task, width: usize) -> Option<String> {
+        if width < 3 {
+            return None;
+        }
+
+        let (processed, total) = self.task_progress_counts(task)?;
+        if total == 0 {
+            return None;
+        }
+
+        let inner_width = width.saturating_sub(2);
+        let mut bar = String::with_capacity(width);
+        bar.push('[');
+        if task.status == TaskStatus::Completed {
+            for _ in 0..inner_width {
+                bar.push('=');
+            }
+        } else {
+            let mut filled = processed.saturating_mul(inner_width) / total;
+            if filled >= inner_width {
+                filled = inner_width.saturating_sub(1);
+            }
+
+            for index in 0..inner_width {
+                if index < filled {
+                    bar.push('=');
+                } else if index == filled {
+                    bar.push('>');
+                } else {
+                    bar.push(' ');
+                }
+            }
+        }
+        bar.push(']');
+        Some(bar)
     }
 
-    pub fn present_shell_approval(&mut self, approval: PendingShellApproval) -> bool {
-        self.log_view = None;
-        self.log_scroll = 0;
-        self.log_follow = true;
-        self.shell_approval = Some(approval);
-        true
+    pub fn selected_task_log_text(&self) -> String {
+        self.selected_task()
+            .map(|task| {
+                if task.logs.is_empty() {
+                    "No logs yet".to_string()
+                } else {
+                    task.logs.join("\n")
+                }
+            })
+            .unwrap_or_else(|| "No task selected".to_string())
     }
 
-    pub fn capability_approval_modules(&self) -> Option<&[LlrtSupportedModules]> {
-        self.capability_approval
-            .as_ref()
-            .map(|approval| approval.modules.as_slice())
+    pub fn open_log_modal(&mut self, viewport_height: u16) {
+        if self.selected_task().is_none() {
+            return;
+        }
+        self.show_log_modal = true;
+        self.log_modal_notice = None;
+        self.scroll_logs_to_bottom(viewport_height);
     }
 
-    pub fn agent_selection_options(&self) -> Option<&[AgentSelectionItem]> {
-        self.agent_selection
-            .as_ref()
-            .map(|selection| selection.options.as_slice())
+    pub fn close_log_modal(&mut self) {
+        self.show_log_modal = false;
+        self.log_modal_scroll = 0;
+        self.log_modal_notice = None;
     }
 
-    pub fn present_capability_approval(&mut self, approval: PendingCapabilityApproval) -> bool {
-        self.log_view = None;
-        self.log_scroll = 0;
-        self.log_follow = true;
-        self.capability_approval = Some(approval);
-        true
+    pub fn set_log_modal_notice(&mut self, notice: impl Into<String>) {
+        self.log_modal_notice = Some(notice.into());
     }
 
-    pub fn present_agent_selection(&mut self, selection: PendingAgentSelection) -> bool {
-        self.log_view = None;
-        self.log_scroll = 0;
-        self.log_follow = true;
-        self.agent_selection_cursor = 0;
-        self.agent_selection = Some(selection);
-        true
+    pub fn log_modal_max_scroll(&self, viewport_height: u16) -> u16 {
+        let line_count = self.selected_task_log_text().lines().count();
+        line_count.saturating_sub(viewport_height as usize) as u16
     }
 
-    fn scroll_log_view(&mut self, delta: i32) {
-        if delta > 0 {
-            let abs_delta = delta.min(u16::MAX as i32) as u16;
-            self.log_scroll = self.log_scroll.saturating_add(abs_delta);
-            self.log_follow = false;
-        } else if delta < 0 {
-            let abs_delta = (-delta).min(u16::MAX as i32) as u16;
-            self.log_scroll = self.log_scroll.saturating_sub(abs_delta);
-            if self.log_scroll == 0 {
-                self.log_follow = true;
+    pub fn scroll_logs_up(&mut self, amount: u16) {
+        self.log_modal_scroll = self.log_modal_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_logs_down(&mut self, viewport_height: u16, amount: u16) {
+        self.log_modal_scroll = self
+            .log_modal_scroll
+            .saturating_add(amount)
+            .min(self.log_modal_max_scroll(viewport_height));
+    }
+
+    pub fn scroll_logs_to_top(&mut self) {
+        self.log_modal_scroll = 0;
+    }
+
+    pub fn scroll_logs_to_bottom(&mut self, viewport_height: u16) {
+        self.log_modal_scroll = self.log_modal_max_scroll(viewport_height);
+    }
+
+    pub fn move_up(&mut self) {
+        match self.screen {
+            Screen::Runs => {
+                self.selected_run = self.selected_run.saturating_sub(1);
+            }
+            Screen::RunDetail => {
+                if let Some(ApprovalPrompt::AgentSelection { selected, .. }) = &mut self.approval {
+                    *selected = selected.saturating_sub(1);
+                } else {
+                    self.selected_task = self.selected_task.saturating_sub(1);
+                }
             }
         }
     }
 
-    pub fn reject_shell_approval(&mut self, error: Option<anyhow::Error>) -> bool {
-        let Some(approval) = self.shell_approval.take() else {
-            return false;
-        };
+    pub fn move_down(&mut self) {
+        match self.screen {
+            Screen::Runs => {
+                if !self.runs.is_empty() {
+                    self.selected_run = (self.selected_run + 1).min(self.runs.len() - 1);
+                }
+            }
+            Screen::RunDetail => {
+                if let Some(ApprovalPrompt::AgentSelection {
+                    selected, options, ..
+                }) = &mut self.approval
+                {
+                    if !options.is_empty() {
+                        *selected = (*selected + 1).min(options.len() - 1);
+                    }
+                } else {
+                    let visible_len = self.visible_tasks().len();
+                    if visible_len > 0 {
+                        self.selected_task = (self.selected_task + 1).min(visible_len - 1);
+                    }
+                }
+            }
+        }
+    }
 
-        match error {
-            Some(error) => approval.fail(error),
-            None => approval.respond(false),
+    pub fn reduce(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Workflow(workflow_event) => self.reduce_workflow_event(workflow_event),
+            AppEvent::Snapshot(snapshot) => self.reconcile_snapshot(snapshot),
+        }
+    }
+
+    fn reduce_workflow_event(&mut self, event: WorkflowEvent) {
+        match event {
+            WorkflowEvent::WorkflowStarted { workflow_run, .. } => {
+                if let Some(run) = self.runs.iter_mut().find(|run| run.id == workflow_run.id) {
+                    *run = workflow_run.clone();
+                } else {
+                    self.runs.insert(0, workflow_run.clone());
+                }
+                if self.current_run.as_ref().map(|run| run.id) == Some(workflow_run.id) {
+                    self.current_run = Some(workflow_run);
+                }
+            }
+            WorkflowEvent::WorkflowStatusChanged {
+                workflow_run_id,
+                status,
+                ..
+            } => {
+                if let Some(run) = self.runs.iter_mut().find(|run| run.id == workflow_run_id) {
+                    run.status = status;
+                }
+                if let Some(run) = self.current_run.as_mut() {
+                    if run.id == workflow_run_id {
+                        run.status = status;
+                    }
+                }
+            }
+            WorkflowEvent::TaskCreated { task, .. } => {
+                if let Some(existing) = self
+                    .tasks
+                    .iter_mut()
+                    .find(|existing| existing.id == task.id)
+                {
+                    *existing = task;
+                } else {
+                    self.tasks.push(task);
+                }
+                self.clamp_selected_task();
+            }
+            WorkflowEvent::TaskUpdated { task, .. } => {
+                if let Some(existing) = self
+                    .tasks
+                    .iter_mut()
+                    .find(|existing| existing.id == task.id)
+                {
+                    *existing = task;
+                } else {
+                    self.tasks.push(task);
+                }
+                self.clamp_selected_task();
+            }
+            WorkflowEvent::TaskLogAppended { task_id, line, .. } => {
+                if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
+                    task.logs.push(line);
+                }
+            }
+            WorkflowEvent::TaskProgressUpdated {
+                task_id,
+                processed_files,
+                total_files,
+                current_file: _,
+                ..
+            } => {
+                self.task_progress.insert(
+                    task_id,
+                    TaskProgressView {
+                        processed_files,
+                        total_files,
+                    },
+                );
+            }
+            WorkflowEvent::ShellApprovalRequested {
+                request_id,
+                request,
+                ..
+            } => {
+                self.approval = Some(ApprovalPrompt::Shell {
+                    request_id,
+                    command: request.command,
+                });
+            }
+            WorkflowEvent::CapabilitiesApprovalRequested {
+                request_id,
+                modules,
+                ..
+            } => {
+                self.approval = Some(ApprovalPrompt::Capabilities {
+                    request_id,
+                    modules: modules
+                        .into_iter()
+                        .map(|module| format!("{module:?}"))
+                        .collect(),
+                });
+            }
+            WorkflowEvent::AgentSelectionRequested {
+                request_id,
+                options,
+                ..
+            } => {
+                self.approval = Some(ApprovalPrompt::AgentSelection {
+                    request_id,
+                    options: options
+                        .into_iter()
+                        .map(|option| {
+                            (
+                                format!(
+                                    "{}{}",
+                                    option.label,
+                                    if option.is_available {
+                                        ""
+                                    } else {
+                                        " (not installed)"
+                                    }
+                                ),
+                                option.is_available,
+                            )
+                        })
+                        .collect(),
+                    selected: 0,
+                });
+            }
+        }
+    }
+
+    pub fn approval_accept_command(&self) -> Option<WorkflowCommand> {
+        match self.approval.as_ref()? {
+            ApprovalPrompt::Shell { request_id, .. } => {
+                Some(WorkflowCommand::RespondShellApproval {
+                    request_id: *request_id,
+                    approved: true,
+                })
+            }
+            ApprovalPrompt::Capabilities { request_id, .. } => {
+                Some(WorkflowCommand::RespondCapabilitiesApproval {
+                    request_id: *request_id,
+                    approved: true,
+                })
+            }
+            ApprovalPrompt::AgentSelection {
+                request_id,
+                options,
+                selected,
+            } => options.get(*selected).map(|(label, available)| {
+                WorkflowCommand::RespondAgentSelection {
+                    request_id: *request_id,
+                    selection: if *available {
+                        Some(
+                            label
+                                .split(" (")
+                                .next()
+                                .unwrap_or(label)
+                                .to_ascii_lowercase()
+                                .replace(' ', "-"),
+                        )
+                    } else {
+                        None
+                    },
+                }
+            }),
+        }
+    }
+
+    pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
+        match self.approval.as_ref()? {
+            ApprovalPrompt::Shell { request_id, .. } => {
+                Some(WorkflowCommand::RespondShellApproval {
+                    request_id: *request_id,
+                    approved: false,
+                })
+            }
+            ApprovalPrompt::Capabilities { request_id, .. } => {
+                Some(WorkflowCommand::RespondCapabilitiesApproval {
+                    request_id: *request_id,
+                    approved: false,
+                })
+            }
+            ApprovalPrompt::AgentSelection { request_id, .. } => {
+                Some(WorkflowCommand::RespondAgentSelection {
+                    request_id: *request_id,
+                    selection: None,
+                })
+            }
+        }
+    }
+
+    pub fn clear_approval(&mut self) {
+        self.approval = None;
+    }
+
+    pub fn selected_task_trigger_command(&self) -> Option<WorkflowCommand> {
+        let task = self.selected_task()?;
+        if task.status == TaskStatus::AwaitingTrigger && self.task_dependencies_satisfied(task) {
+            Some(WorkflowCommand::TriggerTask { task_id: task.id })
+        } else {
+            None
+        }
+    }
+
+    pub fn visible_awaiting_task_ids(&self) -> Vec<Uuid> {
+        self.visible_tasks()
+            .into_iter()
+            .filter(|task| task.status == TaskStatus::AwaitingTrigger)
+            .filter(|task| self.task_dependencies_satisfied(task))
+            .map(|task| task.id)
+            .collect()
+    }
+
+    pub fn task_help_text(&self) -> String {
+        let mut parts = vec!["Enter logs".to_string()];
+        if self.selected_task_trigger_command().is_some() {
+            parts.push("t trigger".to_string());
+        }
+        if !self.visible_awaiting_task_ids().is_empty() {
+            parts.push("T trigger-all".to_string());
+        }
+        parts.push("c cancel".to_string());
+        parts.push("esc back".to_string());
+        parts.push("q quit".to_string());
+        parts.join("  ")
+    }
+
+    pub fn selected_task_completion_detail(&self) -> Option<String> {
+        let task = self.selected_task()?;
+        if task.status != TaskStatus::Completed {
+            return None;
         }
 
-        true
-    }
+        let pr_url = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Pull request created: ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
 
-    pub fn reject_capability_approval(&mut self, error: Option<anyhow::Error>) -> bool {
-        let Some(approval) = self.capability_approval.take() else {
-            return false;
-        };
+        let branch_name = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Preparing git worktree for branch ")
+                .and_then(|value| value.split(" in ").next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    line.strip_prefix("Creating git worktree for branch ")
+                        .and_then(|value| value.split(" in ").next())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+        });
 
-        match error {
-            Some(error) => approval.fail(error),
-            None => approval.respond(false),
+        match (pr_url, branch_name) {
+            (Some(pr_url), Some(branch_name)) => {
+                Some(format!("Branch: {branch_name}  PR: {pr_url}"))
+            }
+            (Some(pr_url), None) => Some(format!("PR: {pr_url}")),
+            (None, _) => None,
         }
+    }
+}
 
-        true
+#[cfg(test)]
+mod tests {
+    use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
+    use butterflow_models::{
+        node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
+    };
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::{AppEvent, TaskProgressView, TuiState};
+
+    #[test]
+    fn reducer_updates_run_status_from_runtime_event() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.runs.push(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Pending,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.reduce(AppEvent::Workflow(WorkflowEvent::WorkflowStatusChanged {
+            workflow_run_id: run_id,
+            status: WorkflowStatus::Running,
+            at: Utc::now(),
+        }));
+        assert_eq!(state.runs[0].status, WorkflowStatus::Running);
     }
 
-    pub fn reject_agent_selection(&mut self, error: Option<anyhow::Error>) -> bool {
-        let Some(selection) = self.agent_selection.take() else {
-            return false;
+    #[test]
+    fn reducer_updates_task_log_from_runtime_event() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+        state.reduce(AppEvent::Workflow(WorkflowEvent::TaskLogAppended {
+            workflow_run_id: run_id,
+            task_id,
+            line: "hello".to_string(),
+            at: Utc::now(),
+        }));
+        assert_eq!(state.tasks[0].logs, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn reducer_updates_task_progress_from_runtime_event() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 10)".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        state.reduce(AppEvent::Workflow(WorkflowEvent::TaskProgressUpdated {
+            workflow_run_id: run_id,
+            task_id,
+            processed_files: 6,
+            total_files: Some(10),
+            current_file: Some("src/example.ts".to_string()),
+            at: Utc::now(),
+        }));
+
+        assert_eq!(state.task_progress_counts(&state.tasks[0]), Some((6, 10)));
+    }
+
+    #[test]
+    fn visible_tasks_hide_master_tasks() {
+        let run_id = Uuid::new_v4();
+        let master_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: master_id,
+            workflow_run_id: run_id,
+            node_id: "matrix-node".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            is_master: true,
+            master_task_id: None,
+            matrix_values: None,
+            started_at: None,
+            ended_at: None,
+            error: None,
+            logs: vec![],
+        });
+        state.tasks.push(Task {
+            id: child_id,
+            workflow_run_id: run_id,
+            node_id: "matrix-node".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            is_master: false,
+            master_task_id: Some(master_id),
+            matrix_values: Some(Default::default()),
+            started_at: None,
+            ended_at: None,
+            error: None,
+            logs: vec![],
+        });
+
+        let visible = state.visible_tasks();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, child_id);
+    }
+
+    #[test]
+    fn display_run_status_treats_install_skill_as_effectively_complete() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::AwaitingTrigger,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.tasks = vec![
+            Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+            Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "install-skill".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+        ];
+
+        assert!(state.is_effectively_complete());
+        assert_eq!(
+            state.display_run_status(),
+            "Completed (install-skill pending)"
+        );
+    }
+
+    #[test]
+    fn display_run_status_does_not_ignore_running_install_skill() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.tasks = vec![Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        }];
+
+        assert!(!state.is_effectively_complete());
+        assert_eq!(state.display_run_status(), "Running");
+    }
+
+    #[test]
+    fn display_run_status_does_not_ignore_failed_install_skill() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Failed,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.tasks = vec![Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Failed,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: Some("boom".to_string()),
+        }];
+
+        assert!(state.is_effectively_complete());
+        assert_eq!(state.display_run_status(), "Failed");
+    }
+
+    #[test]
+    fn display_run_status_spaces_awaiting_trigger() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::AwaitingTrigger,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+
+        assert_eq!(state.display_run_status(), "Awaiting trigger");
+    }
+
+    #[test]
+    fn display_workflow_name_prefers_bundle_dir_when_run_name_is_workflow_yaml() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: Some(std::path::PathBuf::from(
+                "/Users/sahilmobaidin/Desktop/myprojects/useful-codemods/codemods/debarrel",
+            )),
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
+
+        assert_eq!(state.display_workflow_name(), "debarrel");
+    }
+
+    #[test]
+    fn workflow_elapsed_text_formats_running_run() {
+        let now = Utc::now();
+        let run = WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: now - chrono::Duration::seconds(65),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
         };
 
-        match error {
-            Some(error) => selection.fail(error),
-            None => selection.respond(None),
-        }
-
-        self.agent_selection_cursor = 0;
-        true
+        assert!(matches!(
+            TuiState::workflow_elapsed_text(&run).as_str(),
+            "01:05" | "01:06"
+        ));
     }
 
-    fn resolve_shell_approval(&mut self, approved: bool, quit_after: bool) {
-        let Some(approval) = self.shell_approval.take() else {
-            return;
+    #[test]
+    fn workflow_elapsed_text_formats_completed_run() {
+        let started_at = Utc::now() - chrono::Duration::seconds(125);
+        let run = WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Completed,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at,
+            ended_at: Some(started_at + chrono::Duration::seconds(125)),
+            capabilities: None,
+            name: None,
+            target_path: None,
         };
 
-        approval.respond(approved);
-        self.status_line = None;
-        self.should_quit = quit_after;
+        assert_eq!(TuiState::workflow_elapsed_text(&run), "02:05");
     }
 
-    fn resolve_capability_approval(&mut self, approved: bool, quit_after: bool) {
-        let Some(approval) = self.capability_approval.take() else {
-            return;
+    #[test]
+    fn task_progress_counts_parse_target_files_and_processed_files() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 5)".to_string(),
+                "Processing file: src/a.ts".to_string(),
+                "Processing file: src/b.ts".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
         };
 
-        approval.respond(approved);
-        self.status_line = None;
-        self.should_quit = quit_after;
+        assert_eq!(
+            TuiState::default().task_progress_counts(&task),
+            Some((2, 5))
+        );
     }
 
-    fn resolve_agent_selection(&mut self, selection: Option<String>, quit_after: bool) {
-        let Some(agent_selection) = self.agent_selection.take() else {
-            return;
+    #[test]
+    fn task_progress_bar_fills_completed_task_to_total() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string(),
+                "Processing file: src/a.ts".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
         };
 
-        agent_selection.respond(selection);
-        self.agent_selection_cursor = 0;
-        self.status_line = None;
-        self.should_quit = quit_after;
+        assert_eq!(
+            TuiState::default().task_progress_bar(&task, 4).as_deref(),
+            Some("[==]")
+        );
     }
 
-    pub fn has_live_updates(&self) -> bool {
-        self.current_workflow_run
-            .as_ref()
-            .is_some_and(|run| run.status == WorkflowStatus::Running)
-            || self
-                .workflow_runs
-                .iter()
-                .any(|run| run.status == WorkflowStatus::Running)
-            || self
-                .tasks
-                .iter()
-                .any(|task| task.status == TaskStatus::Running)
-            || self
-                .log_view
-                .as_ref()
-                .is_some_and(|log_view| log_view.status == TaskStatus::Running)
+    #[test]
+    fn task_progress_bar_does_not_render_full_for_running_task() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 4)".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 4,
+                total_files: Some(4),
+            },
+        );
+
+        assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[===>]"));
     }
-}
 
-fn sort_tasks(tasks: &mut [Task]) {
-    tasks.sort_by_key(task_sort_key);
-}
+    #[test]
+    fn enter_run_updates_existing_run_in_runs_list() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.runs.push(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
 
-fn hash_workflow_runs(hasher: &mut DefaultHasher, workflow_runs: &[WorkflowRun]) {
-    workflow_runs.len().hash(hasher);
-    for run in workflow_runs {
-        hash_workflow_run(hasher, run);
+        state.enter_run(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: Some(std::path::PathBuf::from("/tmp/debarrel")),
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: Some(std::path::PathBuf::from("/tmp/repo")),
+            },
+            tasks: vec![],
+        });
+
+        assert_eq!(state.runs.len(), 1);
+        assert_eq!(state.runs[0].status, WorkflowStatus::AwaitingTrigger);
+        assert_eq!(state.display_workflow_name(), "debarrel");
     }
-}
 
-fn hash_optional_workflow_run(hasher: &mut DefaultHasher, workflow_run: Option<&WorkflowRun>) {
-    workflow_run.is_some().hash(hasher);
-    if let Some(run) = workflow_run {
-        hash_workflow_run(hasher, run);
+    #[test]
+    fn reconcile_snapshot_updates_existing_run_in_runs_list() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        let initial_run = WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        };
+        state.runs.push(initial_run.clone());
+        state.current_run = Some(initial_run);
+
+        state.reconcile_snapshot(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            },
+            tasks: vec![],
+        });
+
+        assert_eq!(state.runs[0].status, WorkflowStatus::AwaitingTrigger);
+        assert_eq!(
+            state.current_run.as_ref().map(|run| run.status),
+            Some(WorkflowStatus::AwaitingTrigger)
+        );
     }
-}
 
-fn hash_workflow_run(hasher: &mut DefaultHasher, run: &WorkflowRun) {
-    run.id.hash(hasher);
-    run.name.hash(hasher);
-    run.target_path.hash(hasher);
-    run.bundle_path.hash(hasher);
-    hash_workflow_status(hasher, run.status);
-    run.started_at.timestamp_millis().hash(hasher);
-    run.ended_at
-        .map(|time| time.timestamp_millis())
-        .hash(hasher);
-}
+    #[test]
+    fn open_log_modal_scrolls_to_bottom() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: (0..10).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
 
-fn hash_tasks(hasher: &mut DefaultHasher, tasks: &[Task]) {
-    tasks.len().hash(hasher);
-    for task in tasks {
-        task.id.hash(hasher);
-        task.node_id.hash(hasher);
-        task.is_master.hash(hasher);
-        task.master_task_id.hash(hasher);
-        hash_task_status(hasher, task.status);
-        task.started_at
-            .map(|time| time.timestamp_millis())
-            .hash(hasher);
-        task.ended_at
-            .map(|time| time.timestamp_millis())
-            .hash(hasher);
-        task.error.hash(hasher);
-        matrix_sort_key(task).hash(hasher);
-        task.logs.len().hash(hasher);
-        task.logs.last().hash(hasher);
+        state.open_log_modal(4);
+
+        assert!(state.show_log_modal);
+        assert_eq!(state.log_modal_scroll, 6);
     }
-}
 
-fn hash_status_line(hasher: &mut DefaultHasher, status_line: Option<&StatusLine>) {
-    status_line.is_some().hash(hasher);
-    if let Some(status) = status_line {
-        status.message.hash(hasher);
+    #[test]
+    fn log_modal_scroll_clamps() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: (0..6).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        state.open_log_modal(3);
+        state.scroll_logs_up(10);
+        assert_eq!(state.log_modal_scroll, 0);
+
+        state.scroll_logs_down(3, 10);
+        assert_eq!(state.log_modal_scroll, 3);
+
+        state.scroll_logs_to_top();
+        assert_eq!(state.log_modal_scroll, 0);
+
+        state.scroll_logs_to_bottom(3);
+        assert_eq!(state.log_modal_scroll, 3);
     }
-}
 
-fn hash_log_view(hasher: &mut DefaultHasher, log_view: Option<&LogView>) {
-    log_view.is_some().hash(hasher);
-    if let Some(log_view) = log_view {
-        log_view.task_id.hash(hasher);
-        log_view.node_id.hash(hasher);
-        hash_task_status(hasher, log_view.status);
-        log_view.error.hash(hasher);
-        log_view.lines.len().hash(hasher);
-        log_view.lines.last().hash(hasher);
+    #[test]
+    fn task_list_scroll_tracks_selection_window() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: None,
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                })
+                .collect(),
+            ..TuiState::default()
+        };
+
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 0);
+
+        state.selected_task = 3;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 1);
+
+        state.selected_task = 5;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 3);
+
+        state.selected_task = 1;
+        state.sync_task_list_scroll(3);
+        assert_eq!(state.task_list_scroll, 1);
     }
-}
 
-fn hash_task_status(hasher: &mut DefaultHasher, status: TaskStatus) {
-    task_status_discriminant(status).hash(hasher);
-}
+    #[test]
+    fn task_help_text_hides_trigger_for_completed_task() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
 
-fn hash_workflow_status(hasher: &mut DefaultHasher, status: WorkflowStatus) {
-    workflow_status_discriminant(status).hash(hasher);
-}
-
-fn task_status_discriminant(status: TaskStatus) -> u8 {
-    match status {
-        TaskStatus::Pending => 0,
-        TaskStatus::Running => 1,
-        TaskStatus::Completed => 2,
-        TaskStatus::Failed => 3,
-        TaskStatus::AwaitingTrigger => 4,
-        TaskStatus::Blocked => 5,
-        TaskStatus::WontDo => 6,
+        assert_eq!(
+            state.task_help_text(),
+            "Enter logs  c cancel  esc back  q quit"
+        );
     }
-}
 
-fn workflow_status_discriminant(status: WorkflowStatus) -> u8 {
-    match status {
-        WorkflowStatus::Pending => 0,
-        WorkflowStatus::Running => 1,
-        WorkflowStatus::Completed => 2,
-        WorkflowStatus::Failed => 3,
-        WorkflowStatus::AwaitingTrigger => 4,
-        WorkflowStatus::Canceled => 5,
+    #[test]
+    fn task_help_text_shows_trigger_for_awaiting_task() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.task_help_text(),
+            "Enter logs  t trigger  T trigger-all  c cancel  esc back  q quit"
+        );
     }
-}
 
-fn task_sort_key(task: &Task) -> (String, String, Uuid) {
-    (task.node_id.clone(), matrix_sort_key(task), task.id)
-}
+    #[test]
+    fn selected_task_trigger_command_requires_dependencies() {
+        let run_id = Uuid::new_v4();
+        let dependency_task_id = Uuid::new_v4();
+        let blocked_task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![
+                    butterflow_models::Node {
+                        id: "install-skill".to_string(),
+                        name: "Install Skill".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    },
+                    butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply transforms".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec!["install-skill".to_string()],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    },
+                ],
+            },
+            status: WorkflowStatus::AwaitingTrigger,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        state.tasks = vec![
+            Task {
+                id: dependency_task_id,
+                workflow_run_id: run_id,
+                node_id: "install-skill".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+            Task {
+                id: blocked_task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            },
+        ];
+        state.selected_task = 1;
 
-fn matrix_sort_key(task: &Task) -> String {
-    task.matrix_values
-        .as_ref()
-        .and_then(|matrix_values| serde_json::to_value(matrix_values).ok())
-        .and_then(|value| serde_json_canonicalizer::to_vec(&value).ok())
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .unwrap_or_default()
+        assert_eq!(
+            state.selected_task().map(|task| task.id),
+            Some(blocked_task_id)
+        );
+        assert!(state.selected_task_trigger_command().is_none());
+        assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
+    }
+
+    #[test]
+    fn task_display_name_prefers_workflow_node_name() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Apply migration".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(state.task_display_name(&task), "Apply migration");
+    }
+
+    #[test]
+    fn task_display_name_appends_matrix_name_label() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Debarrel".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: Some(std::collections::HashMap::from([(
+                "name".to_string(),
+                serde_json::json!("unowned-10"),
+            )])),
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(state.task_display_name(&task), "Debarrel · unowned-10");
+    }
+
+    #[test]
+    fn task_display_name_falls_back_to_matrix_scalar_summary() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![butterflow_models::Node {
+                    id: "node".to_string(),
+                    name: "Run codemod".to_string(),
+                    description: None,
+                    r#type: NodeType::Automatic,
+                    depends_on: vec![],
+                    trigger: None,
+                    strategy: None,
+                    runtime: None,
+                    steps: vec![],
+                    env: Default::default(),
+                    branch_name: None,
+                    pull_request: None,
+                }],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        });
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: Some(std::collections::HashMap::from([
+                ("team".to_string(), serde_json::json!("frontend")),
+                ("kind".to_string(), serde_json::json!("ts")),
+                ("_meta_shard".to_string(), serde_json::json!(3)),
+            ])),
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(
+            state.task_display_name(&task),
+            "Run codemod · kind=ts, team=frontend"
+        );
+    }
+
+    #[test]
+    fn task_elapsed_text_is_dash_when_task_has_not_started() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "node".to_string(),
+            status: TaskStatus::Pending,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(TuiState::default().task_elapsed_text(&task), "-");
+    }
+
+    #[test]
+    fn selected_task_completion_detail_shows_branch_and_pr_when_pr_exists() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Pull request created: https://github.com/example/repo/pull/42".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Branch: codemod-1234  PR: https://github.com/example/repo/pull/42")
+        );
+    }
+
+    #[test]
+    fn selected_task_completion_detail_hides_branch_when_no_pr_exists() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec!["Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(state.selected_task_completion_detail(), None);
+    }
 }
