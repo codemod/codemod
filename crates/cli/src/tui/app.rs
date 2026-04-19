@@ -42,6 +42,7 @@ pub struct TuiState {
     pub approval: Option<ApprovalPrompt>,
     pub show_log_modal: bool,
     pub log_modal_scroll: u16,
+    pub log_modal_notice: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,6 +65,7 @@ impl Default for TuiState {
             approval: None,
             show_log_modal: false,
             log_modal_scroll: 0,
+            log_modal_notice: None,
         }
     }
 }
@@ -496,12 +498,18 @@ impl TuiState {
             return;
         }
         self.show_log_modal = true;
+        self.log_modal_notice = None;
         self.scroll_logs_to_bottom(viewport_height);
     }
 
     pub fn close_log_modal(&mut self) {
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
+        self.log_modal_notice = None;
+    }
+
+    pub fn set_log_modal_notice(&mut self, notice: impl Into<String>) {
+        self.log_modal_notice = Some(notice.into());
     }
 
     pub fn log_modal_max_scroll(&self, viewport_height: u16) -> u16 {
