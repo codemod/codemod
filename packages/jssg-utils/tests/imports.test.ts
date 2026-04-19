@@ -865,6 +865,347 @@ function testRemoveSideEffectImportOnlyMatchesSourceField() {
   assert(program.text() === src, "Source must be unchanged");
 }
 
+// ============================================================================
+// === removeImport edge cases ===
+// ============================================================================
+
+// --- Bug #1 regression: removing the only named specifier when a default
+// binding is also present must keep the default intact.
+function testRemoveNamed_LastNamed_KeepsDefault_ESM() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["bar"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Should strip only ", { bar }" and keep default "foo". Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Bug #2 regression: default + named, but remove the only named specifier
+// when there are multiple named siblings listed (still drops only the ones
+// that exist in this statement).
+function testRemoveNamed_LastNamed_KeepsDefault_MultipleSpecifiersArg() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  // Caller lists more specifiers than actually exist on the statement; must
+  // still not drop the default binding.
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar", "unrelated"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Default must survive when the caller over-lists specifiers. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Bug #2 regression (TypeScript parse path).
+function testRemoveNamed_LastNamed_KeepsDefault_TSX() {
+  const program = parseProgram("tsx", "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n");
+  const edit = removeImport(program, { type: "named", specifiers: ["bar"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `TSX: should strip only ", { bar }" and keep default "foo". Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Symmetric bug: removing the default binding when named specifiers are
+// also present must keep the named imports intact.
+function testRemoveDefault_KeepsNamed_ESM() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log(foo, bar);\n",
+    `Should strip only "foo, " and keep named import for bar. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Default + multiple named specifiers: removing default keeps all named.
+function testRemoveDefault_KeepsNamed_MultipleSpecifiers() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+    `Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Namespace-only statement: removeImport default must still return null
+// (nothing to remove, namespace alone shouldn't be deleted via default-type).
+function testRemoveDefault_NamespaceOnly_ReturnsNull() {
+  const src = "import * as ns from 'mod';\nconsole.log(ns);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit === null, "Default removal on namespace-only import must be null");
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+// --- Multi-specifier removal: listing every specifier that exists in the
+// statement removes the whole statement.
+function testRemoveNamed_AllSpecifiersListed_RemovesWholeStatement() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo, bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["foo", "bar"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "console.log(foo, bar);\n",
+    `All specifiers listed → statement removed. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Multi-line named imports: removing a middle specifier must not leave
+// dangling commas or blank lines, and must keep the other specifiers.
+function testRemoveNamed_MultiLine_RemoveMiddle() {
+  const src = "import {\n  foo,\n  bar,\n  baz,\n} from 'mod';\nconsole.log(foo, bar, baz);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "named", specifiers: ["bar"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes(",,"), `Should not produce double commas: ${JSON.stringify(result)}`);
+  const importPortion = result.slice(0, result.indexOf("from 'mod'") + "from 'mod';".length);
+  assert(
+    !/\bbar\b/.test(importPortion),
+    `bar must be gone from import. Got: ${JSON.stringify(importPortion)}`,
+  );
+  assert(/\bfoo\b/.test(importPortion) && /\bbaz\b/.test(importPortion), "foo and baz must remain");
+  assert(result.includes("from 'mod'"), "Must still reference module");
+}
+
+// --- Multi-line named imports: removing the last specifier keeps earlier
+// trailing-comma formatting clean.
+function testRemoveNamed_MultiLine_RemoveLast() {
+  const src = "import {\n  foo,\n  bar,\n  baz,\n} from 'mod';\nconsole.log(foo, bar, baz);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "named", specifiers: ["baz"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes(",,"), "No double commas");
+  const importPortion = result.slice(0, result.indexOf("from 'mod'") + "from 'mod';".length);
+  assert(
+    !/\bbaz\b/.test(importPortion),
+    `baz must be gone from the import. Got: ${JSON.stringify(importPortion)}`,
+  );
+  assert(/\bfoo\b/.test(importPortion) && /\bbar\b/.test(importPortion), "foo and bar must remain");
+}
+
+// --- `import { foo as bar }` + remove named 'foo' → match by original name,
+// statement removed because it's the only specifier.
+function testRemoveNamed_MatchesByOriginalName_StatementRemoved() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo as bar } from 'mod';\nconsole.log(bar);\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["foo"], from: "mod" });
+  assert(edit !== null, "Should match by original name");
+  const result = program.commitEdits([edit!]);
+  assert(
+    !result.includes("import"),
+    `Whole statement should be removed: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- `import { foo as bar }` + remove named 'bar' → alias is not a specifier
+// name, so nothing matches, returns null.
+function testRemoveNamed_AliasNotMatched_ReturnsNull() {
+  const src = "import { foo as bar } from 'mod';\nconsole.log(bar);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "named", specifiers: ["bar"], from: "mod" });
+  assert(edit === null, "Alias name must not match — original name is the specifier");
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+// --- CJS destructured: remove one of two destructured specifiers.
+function testRemoveNamed_CJS_Destructured_RemoveOne() {
+  const program = parseProgram(
+    "javascript",
+    "const { a, b } = require('mod');\nconsole.log(a, b);\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["a"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    /const\s*\{\s*b\s*\}\s*=\s*require\('mod'\);/.test(result),
+    `Should leave { b } = require('mod'). Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- CJS destructured: removing the only remaining specifier drops the
+// whole declaration.
+function testRemoveNamed_CJS_Destructured_RemoveLast() {
+  const program = parseProgram("javascript", "const { a } = require('mod');\nconsole.log(a);\n");
+  const edit = removeImport(program, { type: "named", specifiers: ["a"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Whole declaration should be gone");
+}
+
+// --- CJS pair pattern: removing by original key removes the whole statement
+// when it's the only specifier.
+function testRemoveNamed_CJS_PairPattern_RemoveByOriginal() {
+  const program = parseProgram(
+    "javascript",
+    "const { a: aa } = require('mod');\nconsole.log(aa);\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["a"], from: "mod" });
+  assert(edit !== null, "Should match pair_pattern by original key");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Whole declaration should be gone");
+}
+
+// --- Re-exports (pin behavior: all variants return null since removeImport
+// operates on import-like statements only).
+function testRemoveNamed_ExportFrom_ReturnsNull() {
+  const src = "export { foo } from 'mod';\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "named", specifiers: ["foo"], from: "mod" });
+  assert(edit === null, "export { foo } from 'mod' is not removable via removeImport");
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+function testRemoveDefault_ExportStar_ReturnsNull() {
+  const src = "export * from 'mod';\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit === null, "export * from 'mod' is not a default import");
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+function testRemoveNamespace_ExportNamespace_ReturnsNull() {
+  const src = "export * as ns from 'mod';\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "namespace", from: "mod" });
+  assert(edit === null, "export * as ns from 'mod' is not a namespace import");
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+// --- CRLF line endings: removal must stay consistent and not leave dangling
+// \r characters.
+function testRemoveDefault_CRLF() {
+  const src = "import foo from 'mod';\r\nconsole.log(foo);\r\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "console.log(foo);\r\n",
+    `CRLF source should collapse cleanly. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+function testRemoveNamed_CRLF_KeepsDefault() {
+  const src = "import foo, { bar } from 'mod';\r\nconsole.log(foo, bar);\r\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, { type: "named", specifiers: ["bar"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\r\nconsole.log(foo, bar);\r\n",
+    `CRLF + default preserved. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- removeSideEffectForms: trailing comment on same line must not be
+// removed along with the side-effect import.
+function testRemoveSideEffectImport_TrailingComment_NotRemoved() {
+  const src = "import 'mod'; // keep me\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("import 'mod'"), "The import must be gone");
+  assert(
+    result.includes("// keep me"),
+    `Trailing comment must survive. Got: ${JSON.stringify(result)}`,
+  );
+}
+
+// --- Two side-effect imports of same module: only one edit returned.
+function testRemoveSideEffectImport_TwoCopies_OnlyOneEdit() {
+  const src = "import 'mod';\nimport 'mod';\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "First call should return an edit");
+  const afterFirst = program.commitEdits([edit!]);
+  assert(
+    (afterFirst.match(/import 'mod';/g) || []).length === 1,
+    "Only one of the two side-effect imports should be removed on first call",
+  );
+  // Subsequent call on a fresh parse removes the next.
+  const program2 = parseProgram("javascript", afterFirst);
+  const edit2 = removeImport(program2, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit2 !== null, "Second call should remove the remaining one");
+  const afterSecond = program2.commitEdits([edit2!]);
+  assert(!afterSecond.includes("import 'mod'"), "Both copies should now be gone");
+}
+
+// --- TS type-only import: removing the only type specifier removes the
+// entire `import type` statement.
+function testRemoveNamed_TSTypeOnly_StatementRemoved() {
+  const program = parseProgram("typescript", "import type { X } from 'mod';\ntype Y = X;\n");
+  const edit = removeImport(program, { type: "named", specifiers: ["X"], from: "mod" });
+  assert(edit !== null, "Should return an edit for `import type { X }`");
+  const result = program.commitEdits([edit!]);
+  assert(
+    !result.includes("import type"),
+    `Whole statement should be removed. Got: ${JSON.stringify(result)}`,
+  );
+  assert(result.includes("type Y"), "Unrelated code kept");
+}
+
+// --- TS inline type specifier: removing one keeps the other; the `type`
+// keyword on the removed specifier goes away with it.
+function testRemoveNamed_TSInlineType_Other_Remains() {
+  const program = parseProgram("typescript", "import { type X, y } from 'mod';\nconsole.log(y);\n");
+  const edit = removeImport(program, { type: "named", specifiers: ["X"], from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    /import\s*\{\s*y\s*\}\s*from\s*'mod'/.test(result),
+    `Should leave import { y } from 'mod'. Got: ${JSON.stringify(result)}`,
+  );
+  assert(!result.includes("type X"), "Removed inline type specifier must be gone");
+}
+
 function run() {
   // getAllImports tests
   testReturnsEmptyArrayWhenNoImports();
@@ -933,6 +1274,31 @@ function run() {
   testRemoveBareRequireParenthesizedLiteralStillRemoved();
   testRemoveSideEffectImportWithFlag();
   testRemoveSideEffectImportOnlyMatchesSourceField();
+
+  // removeImport edge cases
+  testRemoveNamed_LastNamed_KeepsDefault_ESM();
+  testRemoveNamed_LastNamed_KeepsDefault_MultipleSpecifiersArg();
+  testRemoveNamed_LastNamed_KeepsDefault_TSX();
+  testRemoveDefault_KeepsNamed_ESM();
+  testRemoveDefault_KeepsNamed_MultipleSpecifiers();
+  testRemoveDefault_NamespaceOnly_ReturnsNull();
+  testRemoveNamed_AllSpecifiersListed_RemovesWholeStatement();
+  testRemoveNamed_MultiLine_RemoveMiddle();
+  testRemoveNamed_MultiLine_RemoveLast();
+  testRemoveNamed_MatchesByOriginalName_StatementRemoved();
+  testRemoveNamed_AliasNotMatched_ReturnsNull();
+  testRemoveNamed_CJS_Destructured_RemoveOne();
+  testRemoveNamed_CJS_Destructured_RemoveLast();
+  testRemoveNamed_CJS_PairPattern_RemoveByOriginal();
+  testRemoveNamed_ExportFrom_ReturnsNull();
+  testRemoveDefault_ExportStar_ReturnsNull();
+  testRemoveNamespace_ExportNamespace_ReturnsNull();
+  testRemoveDefault_CRLF();
+  testRemoveNamed_CRLF_KeepsDefault();
+  testRemoveSideEffectImport_TrailingComment_NotRemoved();
+  testRemoveSideEffectImport_TwoCopies_OnlyOneEdit();
+  testRemoveNamed_TSTypeOnly_StatementRemoved();
+  testRemoveNamed_TSInlineType_Other_Remains();
 
   console.log("imports.test.ts: all assertions passed");
 }

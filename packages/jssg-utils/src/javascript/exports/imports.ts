@@ -775,6 +775,65 @@ function getStatementRangeWithNewline<T extends Language>(
 }
 
 /**
+ * For an ESM `import_statement` that contains a `named_imports` subtree, return
+ * the range of `, { ... }` so it can be spliced out while preserving any
+ * sibling default or namespace binding. Returns null if there is no
+ * `named_imports` child.
+ */
+function getNamedImportsSpliceRange<T extends Language>(
+  importStmt: SgNode<T>,
+  programText: string,
+): { start: number; end: number } | null {
+  const tsStmt = importStmt as unknown as SgNode<TS>;
+  const namedImports = tsStmt.find({ rule: { kind: "named_imports" } });
+  if (!namedImports) return null;
+
+  const range = namedImports.range();
+  let start = range.start.index;
+  const end = range.end.index;
+
+  // Walk back over whitespace to find the comma that joins the default /
+  // namespace binding to the named imports chunk. If there is one, include
+  // it so the resulting statement keeps clean spacing.
+  let i = start - 1;
+  while (i >= 0 && /\s/.test(programText[i] ?? "")) i--;
+  if (i >= 0 && programText[i] === ",") {
+    start = i;
+  }
+
+  return { start, end };
+}
+
+/**
+ * For an ESM `import_statement` that combines a default binding with named
+ * imports, return the range covering the default identifier plus its trailing
+ * `,` / whitespace so only the default is removed.
+ */
+function getDefaultBindingSpliceRange<T extends Language>(
+  importStmt: SgNode<T>,
+  programText: string,
+): { start: number; end: number } | null {
+  const tsStmt = importStmt as unknown as SgNode<TS>;
+  const importClause = tsStmt.find({ rule: { kind: "import_clause" } });
+  if (!importClause) return null;
+
+  const defaultId = importClause.children().find((c) => c.kind() === "identifier");
+  if (!defaultId) return null;
+
+  const range = defaultId.range();
+  const start = range.start.index;
+  let end = range.end.index;
+
+  while (end < programText.length && /\s/.test(programText[end] ?? "")) end++;
+  if (end < programText.length && programText[end] === ",") {
+    end++;
+    while (end < programText.length && /\s/.test(programText[end] ?? "")) end++;
+  }
+
+  return { start, end };
+}
+
+/**
  * Find the range of a specifier including comma/whitespace for clean removal.
  */
 function getSpecifierRangeWithSeparator<T extends Language>(
@@ -1170,6 +1229,21 @@ export function removeImport<T extends Language>(
         }) ?? null;
 
       if (!statement) return null;
+
+      // ESM statements that combine `import default, { named } from 'mod'`
+      // must only drop the default identifier — the named imports survive.
+      const tsStmt = statement as unknown as SgNode<TS>;
+      if (tsStmt.kind() === "import_statement") {
+        const importClause = tsStmt.find({ rule: { kind: "import_clause" } });
+        const hasNamedImports = importClause?.find({ rule: { kind: "named_imports" } }) != null;
+        if (hasNamedImports) {
+          const splice = getDefaultBindingSpliceRange(statement, programText);
+          if (splice) {
+            return { startPos: splice.start, endPos: splice.end, insertedText: "" };
+          }
+        }
+      }
+
       const { start, end } = getStatementRangeWithNewline(statement, programText);
       return { startPos: start, endPos: end, insertedText: "" };
     }
@@ -1212,8 +1286,25 @@ export function removeImport<T extends Language>(
 
       const specifierCount = countSpecifiersInStatement(found.statement);
 
-      // If this is the last specifier, remove the entire statement
+      // If this is the last specifier, remove the entire statement — EXCEPT
+      // when the ESM statement also carries a default or namespace binding,
+      // in which case only the ", { ... }" chunk is removed so the sibling
+      // binding is preserved.
       if (specifierCount <= options.specifiers.length) {
+        const tsStmt = found.statement as unknown as SgNode<TS>;
+        if (tsStmt.kind() === "import_statement") {
+          const importClause = tsStmt.find({ rule: { kind: "import_clause" } });
+          const hasDefault =
+            importClause?.children().some((c) => c.kind() === "identifier") ?? false;
+          const hasNamespace = importClause?.find({ rule: { kind: "namespace_import" } }) != null;
+          if (hasDefault || hasNamespace) {
+            const splice = getNamedImportsSpliceRange(found.statement, programText);
+            if (splice) {
+              return { startPos: splice.start, endPos: splice.end, insertedText: "" };
+            }
+          }
+        }
+
         const { start, end } = getStatementRangeWithNewline(found.statement, programText);
         return { startPos: start, endPos: end, insertedText: "" };
       }
