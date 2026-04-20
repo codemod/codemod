@@ -225,9 +225,10 @@ jobs:
             }
 
             function parsePatchRightLines(patch) {
-              const lines = new Set();
+              const changedLines = new Set();
+              const reviewableLines = new Set();
               if (!patch) {
-                return lines;
+                return { changedLines, reviewableLines };
               }
 
               let rightLine = 0;
@@ -243,13 +244,14 @@ jobs:
                 }
 
                 if (row.startsWith("+")) {
-                  lines.add(rightLine);
+                  changedLines.add(rightLine);
+                  reviewableLines.add(rightLine);
                   rightLine += 1;
                   continue;
                 }
 
                 if (row.startsWith(" ")) {
-                  lines.add(rightLine);
+                  reviewableLines.add(rightLine);
                   rightLine += 1;
                   continue;
                 }
@@ -259,7 +261,7 @@ jobs:
                 }
               }
 
-              return lines;
+              return { changedLines, reviewableLines };
             }
 
             function findingKey(finding) {
@@ -310,7 +312,7 @@ jobs:
               per_page: 100,
             });
 
-            const linesByFile = new Map(
+            const lineMapsByFile = new Map(
               files.map((file) => [file.filename, parsePatchRightLines(file.patch)])
             );
 
@@ -320,7 +322,7 @@ jobs:
                 if (!finding.path || !Number.isFinite(finding.line) || finding.line < 1) {
                   return false;
                 }
-                return linesByFile.get(finding.path)?.has(finding.line) ?? false;
+                return lineMapsByFile.get(finding.path)?.reviewableLines.has(finding.line) ?? false;
               });
 
             const existingInlineComments = new Map();
