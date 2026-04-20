@@ -3357,7 +3357,7 @@ impl Engine {
                     install_skill: install_skill.clone(),
                     no_interactive: self.workflow_run_config.no_interactive,
                     quiet: self.workflow_run_config.quiet,
-                    bundle_path: Some(self.workflow_run_config.bundle_path.clone()),
+                    bundle_path: bundle_path.clone(),
                     target_path: self.workflow_run_config.target_path.clone(),
                     env: prepared.env.clone(),
                     output_format: self.workflow_run_config.output_format,

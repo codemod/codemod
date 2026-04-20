@@ -1,9 +1,9 @@
 use crate::commands::harness_adapter::{
     install_package_skill_bundle_with_runtime, install_restart_hint,
     package_skill_install_requires_force_with_runtime, resolve_adapter_with_runtime,
-    runtime_paths_for_execution, upsert_skill_discovery_guides_with_runtime, Harness,
-    HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill, OutputFormat,
-    SkillPackageInstallSpec,
+    runtime_paths_for_execution, skill_root_hint_for_scope,
+    upsert_skill_discovery_guides_with_runtime, Harness, HarnessAdapterError, InstallRequest,
+    InstallScope, InstalledSkill, OutputFormat, SkillPackageInstallSpec,
 };
 use crate::commands::output::{format_output_path, prompt_for_overwrite_confirmation};
 use crate::engine::create_registry_client_with_env;
@@ -512,14 +512,8 @@ fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
 }
 
 fn user_scope_label(harness: Harness) -> String {
-    let path = match harness {
-        Harness::Claude | Harness::Auto => "~/.claude/skills",
-        Harness::Codex => "~/.codex/skills",
-        Harness::Cursor => "~/.cursor/skills",
-        Harness::Opencode => "~/.config/opencode/skill",
-        Harness::Goose => "~/.config/goose/skills",
-        Harness::Antigravity => "~/.config/antigravity/skills",
-    };
+    let path = skill_root_hint_for_scope(harness, InstallScope::User)
+        .unwrap_or_else(|_| "~/.claude/skills".to_string());
     format!("user ({path})")
 }
 
@@ -1417,6 +1411,19 @@ nodes:
         assert_eq!(options[0].label, "project");
         assert_eq!(options[1].scope, InstallScope::User);
         assert_eq!(options[1].label, "user (~/.config/goose/skills)");
+    }
+
+    #[test]
+    fn user_scope_labels_match_install_roots_for_supported_harnesses() {
+        assert_eq!(user_scope_label(Harness::Codex), "user (~/.agents/skills)");
+        assert_eq!(
+            user_scope_label(Harness::Opencode),
+            "user (~/.opencode/skills)"
+        );
+        assert_eq!(
+            user_scope_label(Harness::Antigravity),
+            "user (~/.gemini/antigravity/skills)"
+        );
     }
 
     #[test]

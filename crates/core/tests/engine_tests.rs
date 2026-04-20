@@ -2080,9 +2080,10 @@ async fn test_failing_install_skill_child_reconciles_matrix_master() {
 async fn test_install_skill_executor_receives_workflow_bundle_path() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let bundle_dir = TempDir::new().unwrap();
+    let config_bundle_dir = TempDir::new().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let config = WorkflowRunConfig {
-        bundle_path: bundle_dir.path().to_path_buf(),
+        bundle_path: config_bundle_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "installed".to_string(),
@@ -2093,7 +2094,12 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
 
     let workflow = create_manual_matrix_install_skill_workflow();
     let workflow_run_id = engine
-        .run_workflow(workflow, HashMap::new(), None, None)
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(bundle_dir.path().to_path_buf()),
+            None,
+        )
         .await
         .unwrap();
 

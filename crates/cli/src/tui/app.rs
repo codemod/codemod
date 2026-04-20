@@ -1,5 +1,5 @@
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
-use butterflow_models::{Task, TaskStatus, WorkflowRun};
+use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -85,7 +85,6 @@ impl Default for TuiState {
 
 impl TuiState {
     const LOG_MODAL_NOTICE_TTL: Duration = Duration::from_secs(2);
-    const INSTALL_SKILL_NODE_ID: &'static str = "install-skill";
 
     fn is_terminal_task_status(status: TaskStatus) -> bool {
         matches!(
@@ -94,8 +93,25 @@ impl TuiState {
         )
     }
 
-    fn is_ignorable_pending_install_skill(task: &Task) -> bool {
-        task.node_id == Self::INSTALL_SKILL_NODE_ID && task.status == TaskStatus::AwaitingTrigger
+    fn is_install_skill_task(&self, task: &Task) -> bool {
+        self.current_run
+            .as_ref()
+            .and_then(|run| {
+                run.workflow
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == task.node_id)
+            })
+            .map(|node| {
+                node.steps
+                    .iter()
+                    .any(|step| matches!(step.action, StepAction::InstallSkill(_)))
+            })
+            .unwrap_or_else(|| task.node_id == "install-skill")
+    }
+
+    fn is_ignorable_pending_install_skill(&self, task: &Task) -> bool {
+        self.is_install_skill_task(task) && task.status == TaskStatus::AwaitingTrigger
     }
 
     fn is_individually_triggerable_task(&self, task: &Task) -> bool {
@@ -103,7 +119,7 @@ impl TuiState {
     }
 
     fn is_bulk_triggerable_task(&self, task: &Task) -> bool {
-        self.is_individually_triggerable_task(task) && task.node_id != Self::INSTALL_SKILL_NODE_ID
+        self.is_individually_triggerable_task(task) && !self.is_install_skill_task(task)
     }
 
     fn task_dependencies_satisfied(&self, task: &Task) -> bool {
@@ -150,7 +166,7 @@ impl TuiState {
 
         self.tasks.iter().all(|task| {
             Self::is_terminal_task_status(task.status)
-                || Self::is_ignorable_pending_install_skill(task)
+                || self.is_ignorable_pending_install_skill(task)
         })
     }
 
@@ -941,7 +957,9 @@ impl TuiState {
 mod tests {
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
-        node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
+        node::NodeType,
+        step::{Step, StepAction, UseInstallSkill},
+        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
     use std::time::Duration;
@@ -1819,11 +1837,72 @@ mod tests {
         let install_skill_task_id = Uuid::new_v4();
         let normal_task_id = Uuid::new_v4();
         let state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![
+                        butterflow_models::Node {
+                            id: "node2".to_string(),
+                            name: "Install Skill".to_string(),
+                            description: None,
+                            r#type: NodeType::Manual,
+                            depends_on: vec![],
+                            trigger: None,
+                            strategy: None,
+                            runtime: None,
+                            steps: vec![Step {
+                                id: Some("install-skill-step".to_string()),
+                                name: "Install debarrel skill".to_string(),
+                                action: StepAction::InstallSkill(UseInstallSkill {
+                                    package: "debarrel".to_string(),
+                                    path: None,
+                                    harness: None,
+                                    scope: None,
+                                    force: None,
+                                }),
+                                env: None,
+                                condition: None,
+                                commit: None,
+                            }],
+                            env: Default::default(),
+                            branch_name: None,
+                            pull_request: None,
+                        },
+                        butterflow_models::Node {
+                            id: "apply-transforms".to_string(),
+                            name: "Apply transforms".to_string(),
+                            description: None,
+                            r#type: NodeType::Manual,
+                            depends_on: vec![],
+                            trigger: None,
+                            strategy: None,
+                            runtime: None,
+                            steps: vec![],
+                            env: Default::default(),
+                            branch_name: None,
+                            pull_request: None,
+                        },
+                    ],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
             tasks: vec![
                 Task {
                     id: install_skill_task_id,
                     workflow_run_id: run_id,
-                    node_id: "install-skill".to_string(),
+                    node_id: "node2".to_string(),
                     status: TaskStatus::AwaitingTrigger,
                     started_at: None,
                     ended_at: None,
