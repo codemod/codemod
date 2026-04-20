@@ -598,17 +598,15 @@ impl TuiState {
             Screen::Runs => {
                 self.selected_run = self.selected_run.saturating_sub(1);
             }
-            Screen::RunDetail => {
-                match &mut self.approval {
-                    Some(ApprovalPrompt::AgentSelection { selected, .. })
-                    | Some(ApprovalPrompt::Selection { selected, .. }) => {
-                        *selected = selected.saturating_sub(1);
-                    }
-                    _ => {
-                        self.selected_task = self.selected_task.saturating_sub(1);
-                    }
+            Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::AgentSelection { selected, .. })
+                | Some(ApprovalPrompt::Selection { selected, .. }) => {
+                    *selected = selected.saturating_sub(1);
                 }
-            }
+                _ => {
+                    self.selected_task = self.selected_task.saturating_sub(1);
+                }
+            },
         }
     }
 
@@ -619,30 +617,28 @@ impl TuiState {
                     self.selected_run = (self.selected_run + 1).min(self.runs.len() - 1);
                 }
             }
-            Screen::RunDetail => {
-                match &mut self.approval {
-                    Some(ApprovalPrompt::AgentSelection {
-                        selected, options, ..
-                    }) => {
-                        if !options.is_empty() {
-                            *selected = (*selected + 1).min(options.len() - 1);
-                        }
-                    }
-                    Some(ApprovalPrompt::Selection {
-                        selected, options, ..
-                    }) => {
-                        if !options.is_empty() {
-                            *selected = (*selected + 1).min(options.len() - 1);
-                        }
-                    }
-                    _ => {
-                        let visible_len = self.visible_tasks().len();
-                        if visible_len > 0 {
-                            self.selected_task = (self.selected_task + 1).min(visible_len - 1);
-                        }
+            Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::AgentSelection {
+                    selected, options, ..
+                }) => {
+                    if !options.is_empty() {
+                        *selected = (*selected + 1).min(options.len() - 1);
                     }
                 }
-            }
+                Some(ApprovalPrompt::Selection {
+                    selected, options, ..
+                }) => {
+                    if !options.is_empty() {
+                        *selected = (*selected + 1).min(options.len() - 1);
+                    }
+                }
+                _ => {
+                    let visible_len = self.visible_tasks().len();
+                    if visible_len > 0 {
+                        self.selected_task = (self.selected_task + 1).min(visible_len - 1);
+                    }
+                }
+            },
         }
     }
 
@@ -774,9 +770,7 @@ impl TuiState {
                 });
             }
             WorkflowEvent::SelectionRequested {
-                request_id,
-                prompt,
-                ..
+                request_id, prompt, ..
             } => {
                 self.approval = Some(ApprovalPrompt::Selection {
                     request_id,
@@ -832,10 +826,12 @@ impl TuiState {
                 options,
                 selected,
                 ..
-            } => options.get(*selected).map(|(value, _)| WorkflowCommand::RespondSelection {
-                request_id: *request_id,
-                selection: Some(value.clone()),
-            }),
+            } => options
+                .get(*selected)
+                .map(|(value, _)| WorkflowCommand::RespondSelection {
+                    request_id: *request_id,
+                    selection: Some(value.clone()),
+                }),
         }
     }
 
@@ -859,13 +855,12 @@ impl TuiState {
                     selection: None,
                 })
             }
-            ApprovalPrompt::Selection {
-                request_id,
-                ..
-            } => Some(WorkflowCommand::RespondSelection {
-                request_id: *request_id,
-                selection: None,
-            }),
+            ApprovalPrompt::Selection { request_id, .. } => {
+                Some(WorkflowCommand::RespondSelection {
+                    request_id: *request_id,
+                    selection: None,
+                })
+            }
         }
     }
 
@@ -944,12 +939,12 @@ impl TuiState {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
         node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
+    use std::time::Duration;
     use uuid::Uuid;
 
     use super::{AppEvent, TaskProgressView, TuiState};
