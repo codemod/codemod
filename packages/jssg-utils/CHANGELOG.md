@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.6
+
+### Patch Changes
+
+- 0de89a6: Fix removeImport to preserve default and namespace imports after removing all specifiers
+
 ## 0.0.5
 
 ### Patch Changes
