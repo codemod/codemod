@@ -320,11 +320,10 @@ impl WorkflowSessionInteractor {
                 prompt: prompt.clone(),
                 at: Utc::now(),
             });
-            rx.recv().map_err(|error| {
-                anyhow::anyhow!("selection response channel closed: {error}")
-            })?
-            .ok_or_else(|| DeferredInteractionError::new("selection prompt canceled").into())
-            .map(Some)
+            rx.recv()
+                .map_err(|error| anyhow::anyhow!("selection response channel closed: {error}"))?
+                .ok_or_else(|| DeferredInteractionError::new("selection prompt canceled").into())
+                .map(Some)
         })
     }
 }
