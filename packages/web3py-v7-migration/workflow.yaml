@@ -1,0 +1,11 @@
+version: "1.0"
+name: "web3py-v7-migration"
+nodes:
+  - id: "web3py-v7-migration-node"
+    name: "web3py-v7-migration-node"
+    steps:
+      - name: "execute-libcst-transform"
+        codemod:
+          name: "web3py-v7-migration"
+          engine: "libcst"
+          source: "src/index.py"

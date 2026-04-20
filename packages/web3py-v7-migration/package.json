@@ -1,0 +1,14 @@
+{
+  "name": "web3py-v7-migration",
+  "version": "0.1.0",
+  "description": "AST-powered migration engine for Web3.py v7. Safely refactors camelCase parameters, middleware architecture, and exception handling with zero false-positives.",
+  "type": "module",
+  "scripts": {
+    "test": "npx codemod@latest jssg test -l typescript ./scripts/codemod.ts",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@codemod.com/jssg-types": "latest",
+    "typescript": "latest"
+  }
+}
