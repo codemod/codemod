@@ -72,6 +72,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          repository: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
           ref: ${{ needs.resolve-pr.outputs.head_sha }}
           fetch-depth: 1
 
@@ -79,10 +80,10 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+          BASE_REPOSITORY: ${{ github.repository }}
         run: |
-          git fetch --no-tags origin \
-            "$PR_BASE_SHA" \
-            "$PR_HEAD_SHA"
+          git fetch --no-tags origin "$PR_HEAD_SHA"
+          git fetch --no-tags "https://github.com/$BASE_REPOSITORY" "$PR_BASE_SHA"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -123,7 +124,9 @@ jobs:
           openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
           responses-api-endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
           model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+          effort: medium
           sandbox: workspace-write
+          output-schema-file: .github/codex/review-output-schema.json
           prompt: |
             You are reviewing PR #${{ needs.resolve-pr.outputs.pr_number }} for ${{ github.repository }}.
 
@@ -145,16 +148,21 @@ jobs:
 
             Ignore style-only nits.
 
+            Return JSON that matches the provided schema.
+            Only include actionable findings.
+            When possible, anchor findings to the changed file and the line number on the PR head version.
+            If you cannot confidently anchor a finding, use an empty string for `path` and `0` for `line`.
+
             Pull request title:
             ${{ needs.resolve-pr.outputs.title }}
 
             Pull request body:
             ${{ needs.resolve-pr.outputs.body }}
 
-            Return concise review findings in markdown. If there are no material findings, say exactly: No material findings.
-
   post-review:
-    needs: codex-review
+    needs:
+      - resolve-pr
+      - codex-review
     if: ${{ needs.codex-review.result == 'success' && needs.codex-review.outputs.final_message != '' }}
     runs-on: ubuntu-latest
     permissions:
@@ -165,19 +173,228 @@ jobs:
         uses: actions/github-script@v7
         env:
           CODEX_FINAL_MESSAGE: ${{ needs.codex-review.outputs.final_message }}
-          PR_NUMBER: ${{ needs.codex-review.outputs.pr_number }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
         with:
           github-token: ${{ github.token }}
           script: |
-            const body = [
-              "## Codex Review",
-              "",
-              process.env.CODEX_FINAL_MESSAGE.trim(),
-            ].join("\n");
+            const crypto = require("node:crypto");
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(process.env.PR_NUMBER),
-              body,
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = Number(process.env.PR_NUMBER);
+            const commit_id = process.env.PR_HEAD_SHA;
+            const summaryMarker = "<!-- codex-review-summary -->";
+            const severityOrder = { high: 0, medium: 1, low: 2 };
+
+            function normalizeSeverity(value) {
+              const normalized = String(value || "").toLowerCase();
+              return ["high", "medium", "low"].includes(normalized) ? normalized : "medium";
+            }
+
+            function parseReview(raw) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === "object") {
+                  return parsed;
+                }
+              } catch {}
+              return { summary: raw.trim(), findings: [] };
+            }
+
+            function parsePatchRightLines(patch) {
+              const lines = new Set();
+              if (!patch) {
+                return lines;
+              }
+
+              let rightLine = 0;
+              for (const row of patch.split("\n")) {
+                const match = row.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+                if (match) {
+                  rightLine = Number(match[1]);
+                  continue;
+                }
+
+                if (row.startsWith("+++ ") || row.startsWith("--- ")) {
+                  continue;
+                }
+
+                if (row.startsWith("+")) {
+                  lines.add(rightLine);
+                  rightLine += 1;
+                  continue;
+                }
+
+                if (row.startsWith(" ")) {
+                  lines.add(rightLine);
+                  rightLine += 1;
+                  continue;
+                }
+
+                if (row.startsWith("-") || row.startsWith("\\")) {
+                  continue;
+                }
+              }
+
+              return lines;
+            }
+
+            function findingKey(finding) {
+              return crypto
+                .createHash("sha256")
+                .update([
+                  finding.path,
+                  String(finding.line),
+                  finding.severity,
+                  finding.title,
+                  finding.body,
+                ].join("\n"))
+                .digest("hex")
+                .slice(0, 16);
+            }
+
+            const review = parseReview(process.env.CODEX_FINAL_MESSAGE || "");
+            const findings = Array.isArray(review.findings) ? review.findings : [];
+            const normalizedFindings = findings
+              .filter((finding) => finding && typeof finding === "object")
+              .map((finding) => ({
+                title: String(finding.title || "").trim(),
+                body: String(finding.body || "").trim(),
+                path: String(finding.path || "").trim(),
+                line: Number(finding.line || 0),
+                severity: normalizeSeverity(finding.severity),
+              }))
+              .filter((finding) => finding.title && finding.body)
+              .sort((a, b) => {
+                const severityDelta = severityOrder[a.severity] - severityOrder[b.severity];
+                if (severityDelta !== 0) {
+                  return severityDelta;
+                }
+                return `${a.path}:${a.line}:${a.title}`.localeCompare(`${b.path}:${b.line}:${b.title}`);
+              });
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
             });
+
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const linesByFile = new Map(
+              files.map((file) => [file.filename, parsePatchRightLines(file.patch)])
+            );
+
+            const anchoredFindings = normalizedFindings
+              .map((finding) => ({ ...finding, key: findingKey(finding) }))
+              .filter((finding) => {
+                if (!finding.path || !Number.isFinite(finding.line) || finding.line < 1) {
+                  return false;
+                }
+                return linesByFile.get(finding.path)?.has(finding.line) ?? false;
+              });
+
+            const existingInlineComments = new Map();
+            for (const comment of reviewComments) {
+              if (comment.user?.login !== "github-actions[bot]") {
+                continue;
+              }
+              const match = comment.body?.match(/<!-- codex-inline:([0-9a-f]+) -->/);
+              if (match) {
+                existingInlineComments.set(match[1], comment);
+              }
+            }
+
+            const anchoredKeys = new Set(anchoredFindings.map((finding) => finding.key));
+
+            for (const [key, comment] of existingInlineComments) {
+              if (!anchoredKeys.has(key)) {
+                await github.rest.pulls.deleteReviewComment({
+                  owner,
+                  repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            for (const finding of anchoredFindings) {
+              if (existingInlineComments.has(finding.key)) {
+                continue;
+              }
+
+              const commentBody = [
+                `**[${finding.severity.toUpperCase()}] ${finding.title}**`,
+                "",
+                finding.body,
+                "",
+                `<!-- codex-inline:${finding.key} -->`,
+              ].join("\n");
+
+              await github.rest.pulls.createReviewComment({
+                owner,
+                repo,
+                pull_number,
+                commit_id,
+                path: finding.path,
+                line: finding.line,
+                side: "RIGHT",
+                body: commentBody,
+              });
+            }
+
+            const summary = String(review.summary || "").trim() || "No material findings.";
+            const summaryLines = [summaryMarker, "## Codex Review", "", summary];
+
+            if (normalizedFindings.length > 0) {
+              summaryLines.push("", "### Findings");
+              for (const finding of normalizedFindings) {
+                const location = finding.path && finding.line > 0
+                  ? ` \`${finding.path}:${finding.line}\``
+                  : finding.path
+                    ? ` \`${finding.path}\``
+                    : "";
+                summaryLines.push(
+                  `- **[${finding.severity.toUpperCase()}]**${location} ${finding.title}`
+                );
+              }
+            }
+
+            const summaryBody = summaryLines.join("\n");
+
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            });
+
+            const existingSummary = [...issueComments]
+              .reverse()
+              .find(
+                (comment) =>
+                  comment.user?.login === "github-actions[bot]" &&
+                  comment.body?.includes(summaryMarker)
+              );
+
+            if (existingSummary) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingSummary.id,
+                body: summaryBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pull_number,
+                body: summaryBody,
+              });
+            }
