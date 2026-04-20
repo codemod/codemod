@@ -1,0 +1,20 @@
+schema_version: "1.0"
+
+name: "web3py-v7-migration"
+version: "0.1.0"
+description: "AST-powered migration engine for Web3.py v7. Safely refactors camelCase parameters, middleware architecture, and exception handling with zero false-positives."
+author: "R4nd0m r4nd0m0721@outlook.com"
+license: "Apache 2.0"
+workflow: "workflow.yaml"
+repository: "https://github.com/rawetrip/web3py-v7-transmuter"
+
+targets:
+  languages: ["python"]
+
+keywords: ["transformation", "migration"]
+
+registry:
+  access: "public"
+  visibility: "public"
+
+capabilities: []
