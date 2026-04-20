@@ -13,7 +13,6 @@ fn log_modal_copy_hint() -> &'static str {
         "ctrl+c copy"
     }
 }
-
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
     if let Some(approval) = &state.approval {
         frame.render_widget(Clear, frame.area());

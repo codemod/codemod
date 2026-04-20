@@ -58,20 +58,11 @@
       "type": "object",
       "properties": {
         "max_files_per_shard": {
-          "description": "Target number of files per shard",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
+          "description": "Target number of files per shard.\nAccepts a literal number or a `${{ }}` expression (e.g. `${{ params.pr_size }}`)."
         },
         "min_shard_size": {
           "description": "Minimum shard size — trailing shards smaller than this are merged\ninto the previous shard (optional)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "default": null,
-          "minimum": 0
+          "default": null
         },
         "type": {
           "description": "Built-in method type",

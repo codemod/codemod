@@ -79,7 +79,6 @@ impl Default for TuiState {
 
 impl TuiState {
     const LOG_MODAL_NOTICE_TTL: Duration = Duration::from_secs(2);
-
     fn is_terminal_task_status(status: TaskStatus) -> bool {
         matches!(
             status,
@@ -559,7 +558,6 @@ impl TuiState {
             .saturating_add(amount)
             .min(self.log_modal_max_scroll(viewport_height));
     }
-
     pub fn scroll_logs_to_top(&mut self) {
         self.log_modal_scroll = 0;
     }
@@ -876,7 +874,6 @@ impl TuiState {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
     use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
         node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,

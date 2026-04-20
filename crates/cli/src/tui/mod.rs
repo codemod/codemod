@@ -196,7 +196,6 @@ async fn run_tui_loop(
         }
 
         state.clear_expired_log_modal_notice();
-
         if matches!(state.screen, Screen::RunDetail) {
             let viewport_height = task_list_viewport_height(terminal.size()?.height);
             state.sync_task_list_scroll(viewport_height);
