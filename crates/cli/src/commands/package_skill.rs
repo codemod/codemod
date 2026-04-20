@@ -18,11 +18,15 @@ use crate::utils::skill_layout::{
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use async_trait::async_trait;
-use butterflow_core::config::{InstallSkillExecutionRequest, InstallSkillExecutor};
+use butterflow_core::config::{
+    DeferredInteractionError, InstallSkillExecutionRequest, InstallSkillExecutor,
+    SelectionPrompt, SelectionPromptCallback, SelectionPromptOption,
+};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::structured_log::OutputFormat as WorkflowOutputFormat;
 use butterflow_models::step::{InstallSkillHarness, InstallSkillScope};
 use codemod_telemetry::send_event::BaseEvent;
+use inquire::Select;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -35,18 +39,21 @@ use tabled::{Table, Tabled};
 #[cfg(test)]
 use crate::utils::skill_layout::SKILL_FILE_NAME;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PackageSkillInstallRequest {
     pub package_id: String,
     pub configured_path: Option<String>,
     pub harness: Harness,
     pub scope: InstallScope,
+    pub scope_was_explicit: bool,
     pub force: bool,
     pub no_interactive: bool,
     pub format: OutputFormat,
     pub emit_output: bool,
+    pub package_dir_hint: Option<PathBuf>,
     pub working_directory: Option<PathBuf>,
     pub environment: Option<HashMap<String, String>>,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
 }
 
 #[derive(Serialize)]
@@ -102,18 +109,23 @@ struct CliInstallSkillExecutor {
 #[async_trait]
 impl InstallSkillExecutor for CliInstallSkillExecutor {
     async fn execute(&self, request: InstallSkillExecutionRequest) -> Result<String> {
-        let (format, emit_output) = workflow_install_output_behavior(request.output_format);
+        let (format, emit_output) =
+            workflow_install_output_behavior(request.output_format, request.quiet);
+        let scope = request.install_skill.scope.clone();
         let install_request = PackageSkillInstallRequest {
             package_id: request.install_skill.package,
             configured_path: request.install_skill.path,
             harness: harness_from_step(request.install_skill.harness),
-            scope: scope_from_step(request.install_skill.scope),
+            scope: scope_from_step(scope.clone()),
+            scope_was_explicit: scope.is_some(),
             force: request.install_skill.force.unwrap_or(false),
             no_interactive: request.no_interactive,
             format,
             emit_output,
+            package_dir_hint: request.bundle_path,
             working_directory: Some(request.target_path),
             environment: Some(request.env),
+            selection_prompt_callback: request.selection_prompt_callback,
         };
 
         install_package_skill(&install_request, &self.telemetry).await
@@ -146,12 +158,15 @@ pub async fn install_from_run_request(
         configured_path: None,
         harness: Harness::Auto,
         scope: InstallScope::Project,
+        scope_was_explicit: false,
         force: false,
         no_interactive,
         format: OutputFormat::Logs,
         emit_output: true,
+        package_dir_hint: None,
         working_directory: target_path,
         environment: None,
+        selection_prompt_callback: None,
     };
     install_package_skill(&request, telemetry).await
 }
@@ -165,7 +180,12 @@ pub async fn install_package_skill(
         && std::io::stdout().is_terminal();
     let execution = execute_install_package_skill(request, interactive)
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(|error| match error {
+            HarnessAdapterError::Deferred(message) => {
+                anyhow::Error::new(DeferredInteractionError::new(message))
+            }
+            other => anyhow::Error::from(other),
+        })?;
     if request.emit_output {
         emit_install_output(&execution.rendered_output);
     }
@@ -181,10 +201,27 @@ async fn execute_install_package_skill(
         request.working_directory.as_deref(),
         request.environment.as_ref(),
     )?;
-    let resolved_adapter = resolve_adapter_with_runtime(request.harness, &runtime_paths)?;
+    let selected_harness = resolve_requested_harness(
+        request.harness,
+        interactive,
+        request
+            .working_directory
+            .as_deref()
+            .unwrap_or_else(|| Path::new(".")),
+        request.selection_prompt_callback.as_ref(),
+    )?;
+    let selected_scope = resolve_requested_scope(
+        request.scope,
+        request.scope_was_explicit,
+        selected_harness,
+        interactive,
+        request.selection_prompt_callback.as_ref(),
+    )?;
+    let resolved_adapter = resolve_adapter_with_runtime(selected_harness, &runtime_paths)?;
     let (package, mut package_warnings) = resolve_skill_package_for_install(
         &request.package_id,
         request.configured_path.as_deref(),
+        request.package_dir_hint.as_deref(),
         request.environment.as_ref(),
     )
     .await?;
@@ -193,7 +230,7 @@ async fn execute_install_package_skill(
     if interactive && !force {
         let overwrite_required = package_skill_install_requires_force_with_runtime(
             resolved_adapter.harness,
-            request.scope,
+            selected_scope,
             &package,
             &runtime_paths,
         )?;
@@ -206,7 +243,7 @@ async fn execute_install_package_skill(
         resolved_adapter.harness,
         &package,
         &InstallRequest {
-            scope: request.scope,
+            scope: selected_scope,
             force,
         },
         &runtime_paths,
@@ -217,7 +254,7 @@ async fn execute_install_package_skill(
     warnings.append(&mut package_warnings);
     match upsert_skill_discovery_guides_with_runtime(
         resolved_adapter.harness,
-        request.scope,
+        selected_scope,
         &runtime_paths,
     ) {
         Ok(updated_files) if !updated_files.is_empty() => notes.push(format!(
@@ -239,7 +276,7 @@ async fn execute_install_package_skill(
     let output = build_install_output(
         &package_id,
         resolved_adapter.harness,
-        request.scope,
+        selected_scope,
         installed,
         notes,
         warnings,
@@ -251,9 +288,9 @@ async fn execute_install_package_skill(
     Ok(PackageSkillInstallExecution {
         rendered_output,
         telemetry_input: PackageSkillInstallTelemetryInput {
-            requested_harness: request.harness,
+            requested_harness: selected_harness,
             resolved_harness: resolved_adapter.harness,
-            scope: request.scope,
+            scope: selected_scope,
             force,
             format: request.format,
             package_id,
@@ -287,9 +324,209 @@ fn scope_from_step(scope: Option<InstallSkillScope>) -> InstallScope {
     }
 }
 
-fn workflow_install_output_behavior(output_format: WorkflowOutputFormat) -> (OutputFormat, bool) {
+#[derive(Clone)]
+struct HarnessPromptOption {
+    harness: Harness,
+    label: &'static str,
+}
+
+impl std::fmt::Display for HarnessPromptOption {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label)
+    }
+}
+
+#[derive(Clone)]
+struct ScopePromptOption {
+    scope: InstallScope,
+    label: String,
+}
+
+impl std::fmt::Display for ScopePromptOption {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+fn resolve_requested_harness(
+    harness: Harness,
+    interactive: bool,
+    cwd: &Path,
+    selection_prompt_callback: Option<&SelectionPromptCallback>,
+) -> std::result::Result<Harness, HarnessAdapterError> {
+    if harness != Harness::Auto || !interactive {
+        return Ok(harness);
+    }
+
+    let options = harness_prompt_options();
+    let starting_cursor = detect_interactive_harness(cwd)
+        .and_then(|detected| options.iter().position(|option| option.harness == detected))
+        .unwrap_or(0);
+
+    if let Some(callback) = selection_prompt_callback {
+        let selected = callback(SelectionPrompt {
+            title: "Choose harness".to_string(),
+            options: options
+                .iter()
+                .map(|option| SelectionPromptOption {
+                    value: option.label.to_string(),
+                    label: option.label.to_string(),
+                })
+                .collect(),
+            default_index: starting_cursor,
+        })
+        .map_err(|error| {
+            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>() {
+                HarnessAdapterError::Deferred(deferred.message().to_string())
+            } else {
+                HarnessAdapterError::InstallFailed(error.to_string())
+            }
+        })?;
+
+        return options
+            .iter()
+            .find(|option| Some(option.label) == selected.as_deref())
+            .map(|option| option.harness)
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "interactive harness selection was canceled".to_string(),
+                )
+            });
+    }
+
+    Select::new("Choose harness:", options)
+        .with_starting_cursor(starting_cursor)
+        .prompt()
+        .map(|option| option.harness)
+        .map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "interactive harness prompt failed: {error}"
+            ))
+        })
+}
+
+fn resolve_requested_scope(
+    scope: InstallScope,
+    scope_was_explicit: bool,
+    harness: Harness,
+    interactive: bool,
+    selection_prompt_callback: Option<&SelectionPromptCallback>,
+) -> std::result::Result<InstallScope, HarnessAdapterError> {
+    if scope_was_explicit || !interactive {
+        return Ok(scope);
+    }
+
+    let (options, starting_cursor) = scope_prompt_options(harness);
+    if let Some(callback) = selection_prompt_callback {
+        let selected = callback(SelectionPrompt {
+            title: "Choose install scope".to_string(),
+            options: options
+                .iter()
+                .map(|option| SelectionPromptOption {
+                    value: option.scope.as_str().to_string(),
+                    label: option.label.clone(),
+                })
+                .collect(),
+            default_index: starting_cursor,
+        })
+        .map_err(|error| {
+            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>() {
+                HarnessAdapterError::Deferred(deferred.message().to_string())
+            } else {
+                HarnessAdapterError::InstallFailed(error.to_string())
+            }
+        })?;
+
+        return options
+            .iter()
+            .find(|option| Some(option.scope.as_str()) == selected.as_deref())
+            .map(|option| option.scope)
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "interactive scope selection was canceled".to_string(),
+                )
+            });
+    }
+
+    Select::new("Choose install scope:", options)
+        .with_starting_cursor(starting_cursor)
+        .prompt()
+        .map(|option| option.scope)
+        .map_err(|error| {
+            HarnessAdapterError::InstallFailed(format!(
+                "interactive scope prompt failed: {error}"
+            ))
+        })
+}
+
+fn harness_prompt_options() -> Vec<HarnessPromptOption> {
+    vec![
+        HarnessPromptOption {
+            harness: Harness::Claude,
+            label: "claude",
+        },
+        HarnessPromptOption {
+            harness: Harness::Goose,
+            label: "goose",
+        },
+        HarnessPromptOption {
+            harness: Harness::Opencode,
+            label: "opencode",
+        },
+        HarnessPromptOption {
+            harness: Harness::Cursor,
+            label: "cursor",
+        },
+        HarnessPromptOption {
+            harness: Harness::Codex,
+            label: "codex",
+        },
+        HarnessPromptOption {
+            harness: Harness::Antigravity,
+            label: "antigravity",
+        },
+    ]
+}
+
+fn detect_interactive_harness(cwd: &Path) -> Option<Harness> {
+    let runtime_paths = runtime_paths_for_execution(Some(cwd), None).ok()?;
+    Some(resolve_adapter_with_runtime(Harness::Auto, &runtime_paths).ok()?.harness)
+}
+
+fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
+    (
+        vec![
+            ScopePromptOption {
+                scope: InstallScope::Project,
+                label: "project".to_string(),
+            },
+            ScopePromptOption {
+                scope: InstallScope::User,
+                label: user_scope_label(harness),
+            },
+        ],
+        0,
+    )
+}
+
+fn user_scope_label(harness: Harness) -> String {
+    let path = match harness {
+        Harness::Claude | Harness::Auto => "~/.claude/skills",
+        Harness::Codex => "~/.codex/skills",
+        Harness::Cursor => "~/.cursor/skills",
+        Harness::Opencode => "~/.config/opencode/skill",
+        Harness::Goose => "~/.config/goose/skills",
+        Harness::Antigravity => "~/.config/antigravity/skills",
+    };
+    format!("user ({path})")
+}
+
+fn workflow_install_output_behavior(
+    output_format: WorkflowOutputFormat,
+    quiet: bool,
+) -> (OutputFormat, bool) {
     match output_format {
-        WorkflowOutputFormat::Text => (OutputFormat::Logs, true),
+        WorkflowOutputFormat::Text => (OutputFormat::Logs, !quiet),
         WorkflowOutputFormat::Jsonl => (OutputFormat::Logs, false),
     }
 }
@@ -493,9 +730,15 @@ fn render_install_output_table(output: &PackageSkillInstallOutput) -> String {
 async fn resolve_skill_package_for_install(
     package_id: &str,
     configured_path: Option<&str>,
+    package_dir_hint: Option<&Path>,
     environment: Option<&HashMap<String, String>>,
 ) -> std::result::Result<(SkillPackageInstallSpec, Vec<String>), HarnessAdapterError> {
-    let resolved_package = resolve_skill_package(package_id, configured_path, environment).await?;
+    let resolved_package = if let Some(package_dir) = package_dir_hint {
+        resolve_skill_package_from_local_bundle(package_id, configured_path, package_dir)?
+            .unwrap_or(resolve_skill_package(package_id, configured_path, environment).await?)
+    } else {
+        resolve_skill_package(package_id, configured_path, environment).await?
+    };
     if !resolved_package.behavior_shape.includes_skill() {
         return Err(HarnessAdapterError::SkillPackageInstallFailed(
             unsupported_skill_install_error(
@@ -530,6 +773,49 @@ async fn resolve_skill_package_for_install(
         },
         warnings,
     ))
+}
+
+fn resolve_skill_package_from_local_bundle(
+    package_id: &str,
+    configured_path: Option<&str>,
+    package_dir: &Path,
+) -> std::result::Result<Option<ResolvedSkillPackage>, HarnessAdapterError> {
+    let manifest_path = package_dir.join("codemod.yaml");
+    let Some(manifest) = read_package_manifest(&manifest_path) else {
+        return Ok(None);
+    };
+
+    if !manifest_matches_package_id(&manifest, package_id) {
+        return Ok(None);
+    }
+
+    let candidate = resolve_skill_install_candidate(
+        package_dir,
+        Some(&manifest),
+        &manifest.name,
+        configured_path,
+        package_id,
+    )?;
+    let expected_skill_file = candidate.path;
+    let has_explicit_skill_path = candidate.explicit;
+    let skill_source_dir = if expected_skill_file.is_file() {
+        expected_skill_file.parent().map(Path::to_path_buf)
+    } else if !has_explicit_skill_path {
+        find_authored_skill_dir(package_dir, Some(&manifest.name))
+    } else {
+        None
+    };
+    let behavior_shape = detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&manifest));
+
+    Ok(Some(ResolvedSkillPackage {
+        id: manifest_package_id(&manifest),
+        version: manifest.version.clone(),
+        description: manifest.description.clone(),
+        package_dir: package_dir.to_path_buf(),
+        expected_skill_file,
+        skill_source_dir,
+        behavior_shape,
+    }))
 }
 
 #[derive(Debug)]
@@ -657,6 +943,20 @@ fn read_package_manifest(manifest_path: &std::path::Path) -> Option<CodemodManif
     serde_yaml::from_str(&manifest_content).ok()
 }
 
+fn manifest_package_id(manifest: &CodemodManifest) -> String {
+    format_registry_id(
+        &manifest
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.scope.clone()),
+        &manifest.name,
+    )
+}
+
+fn manifest_matches_package_id(manifest: &CodemodManifest, package_id: &str) -> bool {
+    package_id == manifest.name || package_id == manifest_package_id(manifest)
+}
+
 fn format_registry_id(scope: &Option<String>, name: &str) -> String {
     match scope {
         Some(scope_name) => {
@@ -750,6 +1050,78 @@ mod tests {
 
         let unscoped_id = format_registry_id(&None, "jest-to-vitest");
         assert_eq!(unscoped_id, "jest-to-vitest");
+    }
+
+    #[test]
+    fn manifest_package_id_uses_registry_scope_when_present() {
+        let mut manifest = manifest_with("workflow.yaml");
+        manifest.registry = Some(crate::utils::manifest::RegistryConfig {
+            access: None,
+            scope: Some("codemod".to_string()),
+            visibility: None,
+        });
+
+        assert_eq!(manifest_package_id(&manifest), "@codemod/example");
+    }
+
+    #[test]
+    fn resolve_skill_package_from_local_bundle_prefers_matching_bundle() {
+        let temp_dir = tempdir().unwrap();
+        let package_dir = temp_dir.path();
+        fs::create_dir_all(package_dir.join("agents/skill/debarrel")).unwrap();
+        fs::write(
+            package_dir.join("codemod.yaml"),
+            r#"
+schema_version: "1.0"
+name: "debarrel"
+version: "0.4.0"
+description: "Debarrel JS/TS codebases."
+author: "Codemod"
+workflow: "workflow.yaml"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            package_dir.join("agents/skill/debarrel/SKILL.md"),
+            "---\nname: debarrel\ndescription: Debarrel\nallowed-tools: Read, Edit\n---\ncodemod-compatibility: skill-package-v1\ncodemod-skill-version: 0.1.0\n",
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_skill_package_from_local_bundle("debarrel", Some("./agents/skill/debarrel/SKILL.md"), package_dir)
+                .unwrap()
+                .expect("expected local bundle resolution");
+
+        assert_eq!(resolved.id, "debarrel");
+        assert_eq!(resolved.version, "0.4.0");
+        assert_eq!(resolved.package_dir, package_dir);
+        assert_eq!(
+            resolved.skill_source_dir.as_deref(),
+            Some(package_dir.join("agents/skill/debarrel").as_path())
+        );
+    }
+
+    #[test]
+    fn resolve_skill_package_from_local_bundle_ignores_non_matching_package() {
+        let temp_dir = tempdir().unwrap();
+        let package_dir = temp_dir.path();
+        fs::write(
+            package_dir.join("codemod.yaml"),
+            r#"
+schema_version: "1.0"
+name: "different-package"
+version: "0.1.0"
+description: "Different package."
+author: "Codemod"
+workflow: "workflow.yaml"
+"#,
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_skill_package_from_local_bundle("debarrel", Some("./agents/skill/debarrel/SKILL.md"), package_dir)
+                .unwrap();
+        assert!(resolved.is_none());
     }
 
     #[test]
@@ -972,16 +1344,82 @@ nodes:
     #[test]
     fn workflow_install_output_behavior_emits_logs_for_text_runs() {
         assert_eq!(
-            workflow_install_output_behavior(WorkflowOutputFormat::Text),
+            workflow_install_output_behavior(WorkflowOutputFormat::Text, false),
             (OutputFormat::Logs, true)
+        );
+    }
+
+    #[test]
+    fn workflow_install_output_behavior_suppresses_stdout_for_quiet_text_runs() {
+        assert_eq!(
+            workflow_install_output_behavior(WorkflowOutputFormat::Text, true),
+            (OutputFormat::Logs, false)
         );
     }
 
     #[test]
     fn workflow_install_output_behavior_suppresses_stdout_for_jsonl_runs() {
         assert_eq!(
-            workflow_install_output_behavior(WorkflowOutputFormat::Jsonl),
+            workflow_install_output_behavior(WorkflowOutputFormat::Jsonl, false),
             (OutputFormat::Logs, false)
         );
+    }
+
+    #[test]
+    fn resolve_requested_harness_uses_selection_callback_when_interactive() {
+        let callback: SelectionPromptCallback = Arc::new(|prompt| {
+            assert_eq!(prompt.title, "Choose harness");
+            Ok(Some("codex".to_string()))
+        });
+
+        let harness = resolve_requested_harness(Harness::Auto, true, Path::new("."), Some(&callback))
+            .expect("harness should resolve from callback");
+
+        assert_eq!(harness, Harness::Codex);
+    }
+
+    #[test]
+    fn resolve_requested_scope_uses_selection_callback_when_interactive() {
+        let callback: SelectionPromptCallback = Arc::new(|prompt| {
+            assert_eq!(prompt.title, "Choose install scope");
+            Ok(Some("user".to_string()))
+        });
+
+        let scope = resolve_requested_scope(
+            InstallScope::Project,
+            false,
+            Harness::Claude,
+            true,
+            Some(&callback),
+        )
+        .expect("scope should resolve from callback");
+
+        assert_eq!(scope, InstallScope::User);
+    }
+
+    #[test]
+    fn scope_prompt_options_for_goose_match_standard_order_and_skill_paths() {
+        let (options, starting_cursor) = scope_prompt_options(Harness::Goose);
+
+        assert_eq!(starting_cursor, 0);
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].scope, InstallScope::Project);
+        assert_eq!(options[0].label, "project");
+        assert_eq!(options[1].scope, InstallScope::User);
+        assert_eq!(options[1].label, "user (~/.config/goose/skills)");
+    }
+
+    #[test]
+    fn resolve_requested_harness_returns_deferred_when_selection_is_canceled() {
+        let callback: SelectionPromptCallback =
+            Arc::new(|_| Err(DeferredInteractionError::new("selection prompt canceled").into()));
+
+        let error = resolve_requested_harness(Harness::Auto, true, Path::new("."), Some(&callback))
+            .expect_err("cancel should defer the task");
+
+        assert!(matches!(
+            error,
+            HarnessAdapterError::Deferred(message) if message == "selection prompt canceled"
+        ));
     }
 }

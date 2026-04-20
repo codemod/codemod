@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use butterflow_core::config::{
-    InstallSkillExecutionRequest, InstallSkillExecutor, ShellCommandApprovalCallback,
-    ShellCommandExecutionRequest, WorkflowRunConfig,
+    DeferredInteractionError, InstallSkillExecutionRequest, InstallSkillExecutor,
+    ShellCommandApprovalCallback, ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use butterflow_state::mock_adapter::MockStateAdapter;
 use std::collections::HashMap;
@@ -664,6 +664,27 @@ fn create_manual_matrix_install_skill_workflow() -> Workflow {
     workflow
 }
 
+fn create_manual_install_skill_workflow() -> Workflow {
+    let mut workflow = create_manual_trigger_workflow();
+    if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
+        node.steps = vec![Step {
+            id: Some("install-skill-step".to_string()),
+            name: "Install Skill".to_string(),
+            action: StepAction::InstallSkill(UseInstallSkill {
+                package: "@codemod/test-skill".to_string(),
+                path: None,
+                harness: None,
+                scope: None,
+                force: None,
+            }),
+            env: None,
+            condition: None,
+            commit: None,
+        }];
+    }
+    workflow
+}
+
 fn create_manual_matrix_install_skill_git_workflow() -> Workflow {
     let mut workflow = create_manual_matrix_install_skill_workflow();
     if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
@@ -687,6 +708,37 @@ struct FailingInstallSkillExecutor;
 impl InstallSkillExecutor for FailingInstallSkillExecutor {
     async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
         Err(anyhow::anyhow!("failing install skill executor"))
+    }
+}
+
+struct DeferredThenSuccessInstallSkillExecutor {
+    attempts: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl InstallSkillExecutor for DeferredThenSuccessInstallSkillExecutor {
+    async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        let mut attempts = self.attempts.lock().unwrap();
+        *attempts += 1;
+        if *attempts == 1 {
+            Err(DeferredInteractionError::new("selection prompt canceled").into())
+        } else {
+            Ok("installed".to_string())
+        }
+    }
+}
+
+
+struct RecordingInstallSkillExecutor {
+    requests: Arc<Mutex<Vec<InstallSkillExecutionRequest>>>,
+    output: String,
+}
+
+#[async_trait]
+impl InstallSkillExecutor for RecordingInstallSkillExecutor {
+    async fn execute(&self, request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        self.requests.lock().unwrap().push(request);
+        Ok(self.output.clone())
     }
 }
 
@@ -2065,6 +2117,352 @@ async fn test_failing_install_skill_child_reconciles_matrix_master() {
             latest_state.lock().unwrap().clone()
         )
     });
+}
+
+#[tokio::test]
+async fn test_install_skill_executor_receives_workflow_bundle_path() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let bundle_dir = TempDir::new().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        bundle_path: bundle_dir.path().to_path_buf(),
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "installed".to_string(),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            if requests.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill executor should be invoked");
+
+    let recorded = requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].bundle_path.as_deref(), Some(bundle_dir.path()));
+}
+
+#[tokio::test]
+async fn test_quiet_install_skill_request_stays_interactive() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "installed".to_string(),
+        })),
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            if requests.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill executor should be invoked");
+
+    let recorded = requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert!(recorded[0].quiet);
+    assert!(!recorded[0].no_interactive);
+}
+
+#[tokio::test]
+async fn test_deferred_single_install_skill_can_be_retriggered() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let attempts = Arc::new(Mutex::new(0usize));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
+            attempts: Arc::clone(&attempts),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task_id = tasks.iter().find(|task| task.node_id == "node2").unwrap().id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![task_id])
+        .await
+        .unwrap();
+
+    type DeferredTaskSnapshot =
+        Vec<(String, TaskStatus, Option<chrono::DateTime<chrono::Utc>>, Vec<String>)>;
+    let latest_state: Arc<Mutex<DeferredTaskSnapshot>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            *latest_state_for_loop.lock().unwrap() = tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.node_id.clone(),
+                        task.status,
+                        task.started_at,
+                        task.logs.clone(),
+                    )
+                })
+                .collect();
+            let task = tasks.iter().find(|task| task.id == task_id).unwrap();
+            if task.status == TaskStatus::AwaitingTrigger && task.started_at.is_none() {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "single install-skill task should return to awaiting trigger after defer; attempts={} latest state={:?}",
+            *attempts.lock().unwrap(),
+            latest_state.lock().unwrap().clone()
+        )
+    });
+
+    engine
+        .resume_workflow(workflow_run_id, vec![task_id])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let task = tasks.iter().find(|task| task.id == task_id).unwrap();
+            if task.status == TaskStatus::Completed {
+                assert!(
+                    task.logs.iter().any(|line| line.contains("installed")),
+                    "expected successful install output in task logs, got {:?}",
+                    task.logs
+                );
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("single install-skill task should complete after retrigger");
+
+    assert_eq!(*attempts.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let attempts = Arc::new(Mutex::new(0usize));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
+            attempts: Arc::clone(&attempts),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    type MatrixDeferredSnapshot =
+        Vec<(uuid::Uuid, bool, TaskStatus, Option<chrono::DateTime<chrono::Utc>>, Vec<String>)>;
+    let latest_state: Arc<Mutex<MatrixDeferredSnapshot>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            *latest_state_for_loop.lock().unwrap() = tasks
+                .iter()
+                .filter(|task| task.node_id == "node2")
+                .map(|task| {
+                    (
+                        task.id,
+                        task.is_master,
+                        task.status,
+                        task.started_at,
+                        task.logs.clone(),
+                    )
+                })
+                .collect();
+            let task = tasks.iter().find(|task| task.id == child_task).unwrap();
+            if task.status == TaskStatus::AwaitingTrigger && task.started_at.is_none() {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "matrix triggered child should return to awaiting trigger after defer; attempts={} latest state={:?}",
+            *attempts.lock().unwrap(),
+            latest_state.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+async fn test_install_skill_success_output_is_appended_to_task_logs() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "Installed package skill `debarrel` for `claude` (project)".to_string(),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child = tasks.iter().find(|task| task.id == child_task).unwrap();
+            if child.status == TaskStatus::Completed {
+                assert!(
+                    child.logs.iter().any(|line| line.contains("Installed package skill `debarrel`")),
+                    "expected install output in child logs, got {:?}",
+                    child.logs
+                );
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill task should complete");
 }
 
 #[tokio::test]
