@@ -20,8 +20,9 @@ use crate::ai_handoff::{
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
 use crate::config::{
-    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, ManagedGitWorktree,
-    ShellCommandExecutionRequest, WorkflowRunConfig,
+    CapabilitiesSecurityCallback, DeferredInteractionError, DryRunChange,
+    InstallSkillExecutionRequest, ManagedGitWorktree, ShellCommandExecutionRequest,
+    WorkflowRunConfig,
 };
 use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
@@ -1076,6 +1077,18 @@ impl Engine {
                             debug!("Task {} completed successfully", task_id);
                             cleanup_guard.mark_sent();
                         }
+                        Ok(Err(Error::Deferred(message))) => {
+                            let _ = engine
+                                .append_task_log(
+                                    task_id,
+                                    format!(
+                                        "Task returned to awaiting trigger: {message}"
+                                    ),
+                                )
+                                .await;
+                            let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
+                            cleanup_guard.mark_sent();
+                        }
                         Ok(Err(e)) => {
                             let needs_fallback_failure_mark = match engine
                                 .state_adapter
@@ -1086,7 +1099,10 @@ impl Engine {
                             {
                                 Ok(current_task) => !matches!(
                                     current_task.status,
-                                    TaskStatus::Failed | TaskStatus::Completed | TaskStatus::WontDo
+                                    TaskStatus::Failed
+                                        | TaskStatus::Completed
+                                        | TaskStatus::WontDo
+                                        | TaskStatus::AwaitingTrigger
                                 ),
                                 Err(_) => true,
                             };
@@ -1204,7 +1220,61 @@ impl Engine {
             .await?;
         self.emit_task_updated(task_id).await;
 
-        if let Ok(task) = self.state_adapter.lock().await.get_task(task_id).await {
+        let task_result = {
+            let adapter = self.state_adapter.lock().await;
+            adapter.get_task(task_id).await
+        };
+        if let Ok(task) = task_result {
+            self.update_parent_matrix_master_for_task(&task).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn mark_task_as_awaiting_trigger(&self, task_id: Uuid) -> Result<()> {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
+            },
+        );
+        fields.insert(
+            "ended_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        fields.insert(
+            "started_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        fields.insert(
+            "error".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        let task_diff = TaskDiff { task_id, fields };
+
+        self.state_adapter
+            .lock()
+            .await
+            .apply_task_diff(&task_diff)
+            .await?;
+        self.emit_task_updated(task_id).await;
+
+        let task_result = {
+            let adapter = self.state_adapter.lock().await;
+            adapter.get_task(task_id).await
+        };
+        if let Ok(task) = task_result {
             self.update_parent_matrix_master_for_task(&task).await?;
         }
 
@@ -2314,6 +2384,21 @@ impl Engine {
                         )))
                     });
                 if let Err(e) = execution_result {
+                    let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
+                    if current_task.status == TaskStatus::AwaitingTrigger {
+                        continue;
+                    }
+                    if let Error::Deferred(message) = &e {
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Task returned to awaiting trigger: {message}"),
+                            )
+                            .await;
+                        let _ = self.mark_task_as_awaiting_trigger(task_id).await;
+                        continue;
+                    }
+
                     self.emit_error(format!("Task execution failed: {e}"));
                     let _ = self.mark_task_as_failed(task_id, &e.to_string()).await;
                 }
@@ -2739,6 +2824,10 @@ impl Engine {
                             }
                         }
                     }
+                }
+                Err(Error::Deferred(message)) => {
+                    step_logger.step_end("deferred", step_start_time.elapsed().as_millis() as u64);
+                    return Err(Error::Deferred(message));
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
@@ -3267,45 +3356,39 @@ impl Engine {
                 let request = InstallSkillExecutionRequest {
                     install_skill: install_skill.clone(),
                     no_interactive: self.workflow_run_config.no_interactive
-                        || self.workflow_run_config.quiet,
+                        ,
+                    quiet: self.workflow_run_config.quiet,
+                    bundle_path: Some(self.workflow_run_config.bundle_path.clone()),
                     target_path: self.workflow_run_config.target_path.clone(),
                     env: prepared.env.clone(),
                     output_format: self.workflow_run_config.output_format,
+                    selection_prompt_callback: self
+                        .workflow_run_config
+                        .selection_prompt_callback
+                        .clone(),
                 };
-                let install_skill_executor = Arc::clone(install_skill_executor);
-                let install_thread = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|error| {
+                let output = install_skill_executor
+                    .execute(request)
+                    .await
+                    .map_err(|error| {
+                        if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>() {
+                            Error::Deferred(deferred.message().to_string())
+                        } else {
                             Error::Runtime(format!(
-                                "Failed to build install-skill runtime: {error}"
+                                "Failed to execute install-skill step: {error}"
                             ))
-                        })?;
-                    rt.block_on(install_skill_executor.execute(request))
-                        .map_err(|error| {
-                            Error::Runtime(format!("Failed to execute install-skill step: {error}"))
-                        })
-                });
+                        }
+                    });
 
-                let output = match install_thread.join() {
-                    Ok(result) => result,
-                    Err(panic_payload) => {
-                        let panic_message = panic_payload_message(panic_payload.as_ref());
-                        let _ = self
-                            .append_task_log(
-                                task.id,
-                                format!(
-                                    "Install-skill wrapper: helper thread panicked: {panic_message}"
-                                ),
-                            )
-                            .await;
-                        Err(Error::Runtime(format!(
-                            "install-skill step panicked: {panic_message}"
-                        )))
-                    }
-                }?;
+                let output = match output {
+                    Ok(output) => output,
+                    Err(Error::Deferred(message)) => return Err(Error::Deferred(message)),
+                    Err(error) => return Err(error),
+                };
 
+                for line in output.lines().map(str::trim_end).filter(|line| !line.is_empty()) {
+                    let _ = self.append_task_log(task.id, line.to_string()).await;
+                }
                 log_step_output(logger, &output);
                 self.finalize_step_execution(task, output, prepared).await
             }
