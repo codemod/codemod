@@ -72,18 +72,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: refs/pull/${{ needs.resolve-pr.outputs.pr_number }}/merge
-          fetch-depth: 0
+          ref: ${{ needs.resolve-pr.outputs.head_sha }}
+          fetch-depth: 1
 
-      - name: Pre-fetch base and head refs for the PR
+      - name: Fetch immutable PR SHAs
         env:
           PR_BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
-          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
         run: |
           git fetch --no-tags origin \
             "$PR_BASE_SHA" \
-            "+refs/pull/$PR_NUMBER/head"
+            "$PR_HEAD_SHA"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
