@@ -1,0 +1,184 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review manually
+        required: true
+        type: number
+
+jobs:
+  resolve-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
+      is_draft: ${{ steps.resolve.outputs.is_draft }}
+      title: ${{ steps.resolve.outputs.title }}
+      body: ${{ steps.resolve.outputs.body }}
+    steps:
+      - name: Resolve pull request context
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let pr;
+
+            if (context.eventName === "pull_request") {
+              pr = context.payload.pull_request;
+            } else {
+              const prNumber = Number(core.getInput("pr_number", { required: true }));
+              const { data } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              pr = data;
+            }
+
+            core.setOutput("pr_number", String(pr.number));
+            core.setOutput("base_sha", pr.base.sha);
+            core.setOutput("head_sha", pr.head.sha);
+            core.setOutput("head_repo_full_name", pr.head.repo.full_name);
+            core.setOutput("is_draft", String(Boolean(pr.draft)));
+            core.setOutput("title", pr.title ?? "");
+            core.setOutput("body", pr.body ?? "");
+
+  codex-review:
+    needs: resolve-pr
+    if: ${{ github.event_name == 'workflow_dispatch' || (!fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ needs.resolve-pr.outputs.pr_number }}/merge
+          fetch-depth: 0
+
+      - name: Pre-fetch base and head refs for the PR
+        env:
+          PR_BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+        run: |
+          git fetch --no-tags origin \
+            "$PR_BASE_SHA" \
+            "+refs/pull/$PR_NUMBER/head"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.19.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Azure OpenAI configuration
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_RESPONSES_ENDPOINT: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          AZURE_OPENAI_CODEX_MODEL: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+        run: |
+          missing=()
+
+          [ -n "$AZURE_OPENAI_API_KEY" ] || missing+=("secret AZURE_OPENAI_API_KEY")
+          [ -n "$AZURE_OPENAI_RESPONSES_ENDPOINT" ] || missing+=("secret AZURE_OPENAI_RESPONSES_ENDPOINT")
+          [ -n "$AZURE_OPENAI_CODEX_MODEL" ] || missing+=("variable AZURE_OPENAI_CODEX_MODEL")
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'Missing required Codex Azure configuration:\n' >&2
+            printf ' - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Run Codex review
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+          sandbox: workspace-write
+          prompt: |
+            You are reviewing PR #${{ needs.resolve-pr.outputs.pr_number }} for ${{ github.repository }}.
+
+            Review ONLY the changes introduced by this pull request.
+
+            Base SHA: ${{ needs.resolve-pr.outputs.base_sha }}
+            Head SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+
+            Use these refs to inspect the patch:
+              git log --oneline ${{ needs.resolve-pr.outputs.base_sha }}...${{ needs.resolve-pr.outputs.head_sha }}
+              git diff --stat ${{ needs.resolve-pr.outputs.base_sha }}...${{ needs.resolve-pr.outputs.head_sha }}
+              git diff ${{ needs.resolve-pr.outputs.base_sha }}...${{ needs.resolve-pr.outputs.head_sha }}
+
+            Focus on:
+            - correctness bugs
+            - behavioral regressions
+            - missing tests or missing edge-case coverage
+            - security issues
+
+            Ignore style-only nits.
+
+            Pull request title:
+            ${{ needs.resolve-pr.outputs.title }}
+
+            Pull request body:
+            ${{ needs.resolve-pr.outputs.body }}
+
+            Return concise review findings in markdown. If there are no material findings, say exactly: No material findings.
+
+  post-review:
+    needs: codex-review
+    if: ${{ needs.codex-review.result == 'success' && needs.codex-review.outputs.final_message != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Post Codex review comment
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.codex-review.outputs.final_message }}
+          PR_NUMBER: ${{ needs.codex-review.outputs.pr_number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const body = [
+              "## Codex Review",
+              "",
+              process.env.CODEX_FINAL_MESSAGE.trim(),
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });
