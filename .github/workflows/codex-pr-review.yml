@@ -64,7 +64,7 @@ jobs:
 
   codex-review:
     needs: resolve-pr
-    if: ${{ github.event_name == 'workflow_dispatch' || (!fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository) }}
+    if: ${{ !fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
