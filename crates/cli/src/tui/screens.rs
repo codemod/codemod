@@ -619,7 +619,7 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{log_modal_copy_hint, render};
     use crate::tui::app::{Screen, TaskProgressView, TuiState};
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
@@ -760,5 +760,50 @@ mod tests {
         assert!(task_row.contains('['));
         assert!(task_row.contains('>'));
         assert!(task_row.contains(']'));
+    }
+
+    #[test]
+    fn log_modal_copy_hint_matches_platform() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(log_modal_copy_hint(), "ctrl+c/cmd+c copy");
+        } else {
+            assert_eq!(log_modal_copy_hint(), "ctrl+c copy");
+        }
+    }
+
+    #[test]
+    fn render_log_modal_places_notice_below_help_bar() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: (0..8).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+        state.open_log_modal(6);
+        state.set_log_modal_notice("Copied full log to clipboard");
+
+        let lines = render_state(&state, 100, 20);
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("copy") && line.contains("close"))
+            .unwrap();
+        let notice_line = lines
+            .iter()
+            .position(|line| line.contains("Copied full log to clipboard"))
+            .unwrap();
+
+        assert!(notice_line > hint_line);
     }
 }
