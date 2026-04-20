@@ -14,6 +14,8 @@ codemod-skill-version: 1.0.0
 
 Use this skill to orchestrate migration execution.
 
+This is the built-in Codemod core skill profile. Authored package skills installed via workflow `install-skill` use `codemod-compatibility: skill-package-v1` instead of `mcs-v1`.
+
 Trigger this skill when the user asks to:
 - migrate from one framework/library/tooling stack to another
 - upgrade or update a framework, SDK, package, plugin, compiler, or toolchain

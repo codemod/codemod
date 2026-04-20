@@ -225,7 +225,21 @@ async fn run_tui_loop(
                     }
                     state.clear_approval();
                 }
-                KeyCode::Char('n') | KeyCode::Esc => {
+                KeyCode::Char('n')
+                    if !matches!(
+                        state.approval,
+                        Some(ApprovalPrompt::AgentSelection { .. })
+                            | Some(ApprovalPrompt::Selection { .. })
+                    ) =>
+                {
+                    if let (Some(session), Some(command)) =
+                        (runtime.session.as_ref(), state.approval_reject_command())
+                    {
+                        spawn_command(session.handle(), command);
+                    }
+                    state.clear_approval();
+                }
+                KeyCode::Esc => {
                     if let (Some(session), Some(command)) =
                         (runtime.session.as_ref(), state.approval_reject_command())
                     {
@@ -236,7 +250,11 @@ async fn run_tui_loop(
                 KeyCode::Up | KeyCode::Char('k') => state.move_up(),
                 KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                 KeyCode::Enter => {
-                    if matches!(state.approval, Some(ApprovalPrompt::AgentSelection { .. })) {
+                    if matches!(
+                        state.approval,
+                        Some(ApprovalPrompt::AgentSelection { .. })
+                            | Some(ApprovalPrompt::Selection { .. })
+                    ) {
                         if let (Some(session), Some(command)) =
                             (runtime.session.as_ref(), state.approval_accept_command())
                         {
