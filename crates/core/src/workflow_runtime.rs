@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::ai_handoff::AgentOption;
 use crate::config::{
-    AgentSelectionCallback, CapabilitiesSecurityCallback, ShellCommandApprovalCallback,
+    AgentSelectionCallback, CapabilitiesSecurityCallback, DeferredInteractionError,
+    SelectionPrompt, SelectionPromptCallback, ShellCommandApprovalCallback,
     ShellCommandExecutionRequest,
 };
 use crate::engine::Engine;
@@ -82,6 +83,11 @@ pub enum WorkflowEvent {
         options: Vec<AgentSelectionOption>,
         at: DateTime<Utc>,
     },
+    SelectionRequested {
+        request_id: Uuid,
+        prompt: SelectionPrompt,
+        at: DateTime<Utc>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +109,10 @@ pub enum WorkflowCommand {
         approved: bool,
     },
     RespondAgentSelection {
+        request_id: Uuid,
+        selection: Option<String>,
+    },
+    RespondSelection {
         request_id: Uuid,
         selection: Option<String>,
     },
@@ -150,6 +160,7 @@ struct PendingApprovals {
     shell: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     capabilities: Mutex<CapabilityApprovalState>,
     agent: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
+    selection: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
 }
 
 impl PendingApprovals {
@@ -162,6 +173,7 @@ impl PendingApprovals {
                 in_flight_by_key: HashMap::new(),
             }),
             agent: Mutex::new(HashMap::new()),
+            selection: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -295,6 +307,26 @@ impl WorkflowSessionInteractor {
             rx.recv().ok().flatten()
         })
     }
+
+    fn selection_callback(&self) -> SelectionPromptCallback {
+        let sender = self.sender.clone();
+        let pending = Arc::clone(&self.pending);
+        Arc::new(move |prompt| {
+            let request_id = Uuid::new_v4();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            pending.selection.lock().unwrap().insert(request_id, tx);
+            let _ = sender.send(WorkflowEvent::SelectionRequested {
+                request_id,
+                prompt: prompt.clone(),
+                at: Utc::now(),
+            });
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("selection response channel closed: {error}")
+            })?
+            .ok_or_else(|| DeferredInteractionError::new("selection prompt canceled").into())
+            .map(Some)
+        })
+    }
 }
 
 async fn handle_command(
@@ -365,6 +397,15 @@ async fn handle_command(
             }
             Ok(())
         }
+        WorkflowCommand::RespondSelection {
+            request_id,
+            selection,
+        } => {
+            if let Some(tx) = pending.selection.lock().unwrap().remove(&request_id) {
+                let _ = tx.send(selection);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -412,6 +453,7 @@ impl WorkflowSession {
         let config = engine.workflow_run_config_mut();
         config.capabilities_security_callback = Some(interactor.capabilities_callback());
         config.agent_selection_callback = Some(interactor.agent_callback());
+        config.selection_prompt_callback = Some(interactor.selection_callback());
         config.shell_command_approval_callback = Some(interactor.shell_callback());
 
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<SessionCommandEnvelope>();

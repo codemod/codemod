@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Step execution error: {0}")]
     StepExecution(String),
 
+    #[error("Deferred interaction: {0}")]
+    Deferred(String),
+
     #[error("Other error: {0}")]
     Other(String),
 
