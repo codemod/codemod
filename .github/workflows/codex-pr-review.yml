@@ -17,27 +17,68 @@ on:
         type: number
 
 jobs:
+  resolve-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
+      is_draft: ${{ steps.resolve.outputs.is_draft }}
+    steps:
+      - name: Resolve pull request context
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let pr;
+
+            if (context.eventName === "pull_request") {
+              pr = context.payload.pull_request;
+            } else {
+              const prNumber = Number(context.payload.inputs?.pr_number);
+              if (!Number.isFinite(prNumber)) {
+                core.setFailed("workflow_dispatch requires a numeric pr_number input");
+                return;
+              }
+              const { data } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              pr = data;
+            }
+
+            core.setOutput("pr_number", String(pr.number));
+            core.setOutput("head_repo_full_name", pr.head.repo.full_name);
+            core.setOutput("is_draft", String(Boolean(pr.draft)));
+
   codex-review:
+    needs: resolve-pr
+    if: ${{ !fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       issues: write
-    uses: codemod/codex-review-action/.github/workflows/review.yml@main
-    with:
-      pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
-      codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
-      node_version: "24"
-      pnpm_version: "10.19.0"
-      install_command: pnpm install --frozen-lockfile
-      working_directory: .
-      codex_effort: medium
-      sandbox: workspace-write
-      review_focus: |
-        Focus on:
-        - correctness bugs
-        - behavioral regressions
-        - missing tests or missing edge-case coverage
-        - security issues
-    secrets:
-      azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-      azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+    steps:
+      - uses: codemod/codex-review-action@613ed5d62b2f717f30cee9f25a2698f489c46de7
+        with:
+          github_token: ${{ github.token }}
+          pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
+          codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+          azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          node_version: "24"
+          pnpm_version: "10.19.0"
+          install_command: pnpm install --frozen-lockfile
+          working_directory: .
+          codex_effort: medium
+          sandbox: workspace-write
+          review_focus: |
+            Focus on:
+            - correctness bugs
+            - behavioral regressions
+            - missing tests or missing edge-case coverage
+            - security issues
