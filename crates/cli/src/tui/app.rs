@@ -2,6 +2,7 @@ use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, Workflow
 use butterflow_models::{Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::tui::event::AppEvent;
@@ -30,6 +31,12 @@ pub enum ApprovalPrompt {
 }
 
 #[derive(Clone, Debug)]
+pub struct LogModalNotice {
+    pub message: String,
+    pub expires_at: Instant,
+}
+
+#[derive(Clone, Debug)]
 pub struct TuiState {
     pub screen: Screen,
     pub runs: Vec<WorkflowRun>,
@@ -42,7 +49,7 @@ pub struct TuiState {
     pub approval: Option<ApprovalPrompt>,
     pub show_log_modal: bool,
     pub log_modal_scroll: u16,
-    pub log_modal_notice: Option<String>,
+    pub log_modal_notice: Option<LogModalNotice>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,6 +78,8 @@ impl Default for TuiState {
 }
 
 impl TuiState {
+    const LOG_MODAL_NOTICE_TTL: Duration = Duration::from_secs(2);
+
     fn is_terminal_task_status(status: TaskStatus) -> bool {
         matches!(
             status,
@@ -509,7 +518,30 @@ impl TuiState {
     }
 
     pub fn set_log_modal_notice(&mut self, notice: impl Into<String>) {
-        self.log_modal_notice = Some(notice.into());
+        self.set_log_modal_notice_for(notice, Self::LOG_MODAL_NOTICE_TTL);
+    }
+
+    fn set_log_modal_notice_for(&mut self, notice: impl Into<String>, ttl: Duration) {
+        self.log_modal_notice = Some(LogModalNotice {
+            message: notice.into(),
+            expires_at: Instant::now() + ttl,
+        });
+    }
+
+    pub fn clear_expired_log_modal_notice(&mut self) {
+        if self
+            .log_modal_notice
+            .as_ref()
+            .is_some_and(|notice| Instant::now() >= notice.expires_at)
+        {
+            self.log_modal_notice = None;
+        }
+    }
+
+    pub fn log_modal_notice_text(&self) -> Option<&str> {
+        self.log_modal_notice
+            .as_ref()
+            .map(|notice| notice.message.as_str())
     }
 
     pub fn log_modal_max_scroll(&self, viewport_height: u16) -> u16 {
@@ -843,6 +875,8 @@ impl TuiState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
         node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
@@ -1475,6 +1509,16 @@ mod tests {
 
         state.scroll_logs_to_bottom(3);
         assert_eq!(state.log_modal_scroll, 3);
+    }
+
+    #[test]
+    fn log_modal_notice_expires() {
+        let mut state = TuiState::default();
+        state.set_log_modal_notice_for("Copied full log to clipboard", Duration::ZERO);
+
+        state.clear_expired_log_modal_notice();
+
+        assert!(state.log_modal_notice_text().is_none());
     }
 
     #[test]
