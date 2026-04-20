@@ -6,6 +6,14 @@ use ratatui::Frame;
 
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
 
+fn log_modal_copy_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "ctrl+c/cmd+c copy"
+    } else {
+        "ctrl+c copy"
+    }
+}
+
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
     if let Some(approval) = &state.approval {
         frame.render_widget(Clear, frame.area());
@@ -450,19 +458,20 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(logs, chunks[0]);
-    let notice = state
-        .log_modal_notice
-        .as_deref()
-        .unwrap_or("Press Ctrl+C to copy the full log (Cmd+C if your terminal forwards it)");
-    frame.render_widget(
-        Paragraph::new(notice).style(Style::default().fg(Color::DarkGray)),
-        chunks[1],
-    );
     render_help_bar(
         frame,
-        chunks[2],
-        "↑/↓ scroll  g top  G bottom  ctrl+c copy  q/esc close",
+        chunks[1],
+        &format!(
+            "↑/↓ scroll  g top  G bottom  {}  q/esc close",
+            log_modal_copy_hint()
+        ),
     );
+    if let Some(notice) = state.log_modal_notice_text() {
+        frame.render_widget(
+            Paragraph::new(notice).style(Style::default().fg(Color::DarkGray)),
+            chunks[2],
+        );
+    }
 }
 
 fn render_help_bar(frame: &mut Frame<'_>, area: ratatui::layout::Rect, text: &str) {
