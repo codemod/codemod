@@ -21,8 +21,8 @@ use crate::ai_handoff::{
 };
 use crate::config::{
     CapabilitiesSecurityCallback, DeferredInteractionError, DryRunChange,
-    InstallSkillExecutionRequest, ManagedGitWorktree, ShellCommandExecutionRequest,
-    WorkflowRunConfig,
+    InstallSkillExecutionRequest, InstallSkillExecutor, ManagedGitWorktree,
+    ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
@@ -125,6 +125,29 @@ where
     } else {
         handle.block_on(future)
     }
+}
+
+async fn execute_install_skill_in_isolated_runtime(
+    executor: Arc<dyn InstallSkillExecutor>,
+    request: InstallSkillExecutionRequest,
+) -> std::result::Result<String, anyhow::Error> {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to build install-skill runtime");
+        rt.block_on(executor.execute(request))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        if error.is_panic() {
+            std::panic::resume_unwind(error.into_panic());
+        }
+        Err(anyhow::anyhow!(
+            "install-skill executor task failed to join: {error}"
+        ))
+    })
 }
 
 struct PreparedStepExecution {
@@ -3350,6 +3373,7 @@ impl Engine {
                             .to_string(),
                     ));
                 };
+                let install_skill_executor = Arc::clone(install_skill_executor);
 
                 let prepared =
                     self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
@@ -3366,16 +3390,19 @@ impl Engine {
                         .selection_prompt_callback
                         .clone(),
                 };
-                let output = install_skill_executor
-                    .execute(request)
-                    .await
-                    .map_err(|error| {
-                        if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>() {
-                            Error::Deferred(deferred.message().to_string())
-                        } else {
-                            Error::Runtime(format!("Failed to execute install-skill step: {error}"))
-                        }
-                    });
+                let output =
+                    execute_install_skill_in_isolated_runtime(install_skill_executor, request)
+                        .await
+                        .map_err(|error| {
+                            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>()
+                            {
+                                Error::Deferred(deferred.message().to_string())
+                            } else {
+                                Error::Runtime(format!(
+                                    "Failed to execute install-skill step: {error}"
+                                ))
+                            }
+                        });
 
                 let output = match output {
                     Ok(output) => output,
@@ -5922,6 +5949,12 @@ impl Clone for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
+    };
+    use anyhow::Result as AnyhowResult;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -6041,6 +6074,89 @@ mod tests {
         let unit = snapshot.active_units.get("src/example.ts").unwrap();
         assert_eq!(unit.phase, StepPhase::Output);
         assert!(unit.last_progress_at > before);
+    }
+
+    struct PromptingInstallSkillExecutor;
+
+    #[async_trait::async_trait]
+    impl InstallSkillExecutor for PromptingInstallSkillExecutor {
+        async fn execute(&self, request: InstallSkillExecutionRequest) -> AnyhowResult<String> {
+            let callback = request
+                .selection_prompt_callback
+                .as_ref()
+                .expect("selection callback should be configured");
+            let selection = callback(SelectionPrompt {
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    SelectionPromptOption {
+                        value: "project".to_string(),
+                        label: "project".to_string(),
+                    },
+                    SelectionPromptOption {
+                        value: "user".to_string(),
+                        label: "user".to_string(),
+                    },
+                ],
+                default_index: 0,
+            })?
+            .expect("selection should be provided");
+
+            Ok(format!("installed {selection}"))
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_skill_isolated_runtime_unblocks_current_thread_prompt_flow() {
+        let (selection_tx, mut selection_rx) =
+            mpsc::unbounded_channel::<std::sync::mpsc::SyncSender<Option<String>>>();
+        let callback = Arc::new(move |_prompt: SelectionPrompt| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            selection_tx
+                .send(tx)
+                .expect("selection request should reach the test task");
+            rx.recv()
+                .map_err(|error| anyhow::anyhow!("selection response channel closed: {error}"))
+        });
+        let request = InstallSkillExecutionRequest {
+            install_skill: butterflow_models::step::UseInstallSkill {
+                package: "debarrel".to_string(),
+                path: None,
+                harness: None,
+                scope: None,
+                force: None,
+            },
+            no_interactive: false,
+            quiet: true,
+            bundle_path: None,
+            target_path: PathBuf::from("."),
+            env: HashMap::new(),
+            output_format: crate::structured_log::OutputFormat::Text,
+            selection_prompt_callback: Some(callback),
+        };
+
+        let execution = tokio::spawn(async move {
+            execute_install_skill_in_isolated_runtime(
+                Arc::new(PromptingInstallSkillExecutor),
+                request,
+            )
+            .await
+        });
+
+        let responder = tokio::time::timeout(Duration::from_secs(5), selection_rx.recv())
+            .await
+            .expect("selection request should be emitted")
+            .expect("selection responder should be provided");
+        responder
+            .send(Some("user".to_string()))
+            .expect("selection response should be delivered");
+
+        let output = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("isolated install-skill execution should finish")
+            .expect("join handle should complete")
+            .expect("install-skill execution should succeed");
+
+        assert_eq!(output, "installed user");
     }
 
     #[test]
