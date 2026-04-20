@@ -1415,11 +1415,17 @@ nodes:
 
     #[test]
     fn user_scope_labels_match_install_roots_for_supported_harnesses() {
+        assert_eq!(user_scope_label(Harness::Claude), "user (~/.claude/skills)");
+        assert_eq!(
+            user_scope_label(Harness::Goose),
+            "user (~/.config/goose/skills)"
+        );
         assert_eq!(user_scope_label(Harness::Codex), "user (~/.agents/skills)");
         assert_eq!(
             user_scope_label(Harness::Opencode),
             "user (~/.opencode/skills)"
         );
+        assert_eq!(user_scope_label(Harness::Cursor), "user (~/.cursor/skills)");
         assert_eq!(
             user_scope_label(Harness::Antigravity),
             "user (~/.gemini/antigravity/skills)"
