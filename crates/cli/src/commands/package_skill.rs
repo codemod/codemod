@@ -19,8 +19,8 @@ use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::Result;
 use async_trait::async_trait;
 use butterflow_core::config::{
-    DeferredInteractionError, InstallSkillExecutionRequest, InstallSkillExecutor,
-    SelectionPrompt, SelectionPromptCallback, SelectionPromptOption,
+    DeferredInteractionError, InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt,
+    SelectionPromptCallback, SelectionPromptOption,
 };
 use butterflow_core::registry::RegistryError;
 use butterflow_core::structured_log::OutputFormat as WorkflowOutputFormat;
@@ -453,9 +453,7 @@ fn resolve_requested_scope(
         .prompt()
         .map(|option| option.scope)
         .map_err(|error| {
-            HarnessAdapterError::InstallFailed(format!(
-                "interactive scope prompt failed: {error}"
-            ))
+            HarnessAdapterError::InstallFailed(format!("interactive scope prompt failed: {error}"))
         })
 }
 
@@ -490,7 +488,11 @@ fn harness_prompt_options() -> Vec<HarnessPromptOption> {
 
 fn detect_interactive_harness(cwd: &Path) -> Option<Harness> {
     let runtime_paths = runtime_paths_for_execution(Some(cwd), None).ok()?;
-    Some(resolve_adapter_with_runtime(Harness::Auto, &runtime_paths).ok()?.harness)
+    Some(
+        resolve_adapter_with_runtime(Harness::Auto, &runtime_paths)
+            .ok()?
+            .harness,
+    )
 }
 
 fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
@@ -805,7 +807,8 @@ fn resolve_skill_package_from_local_bundle(
     } else {
         None
     };
-    let behavior_shape = detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&manifest));
+    let behavior_shape =
+        detect_package_behavior_shape_with_manifest_hint(package_dir, Some(&manifest));
 
     Ok(Some(ResolvedSkillPackage {
         id: manifest_package_id(&manifest),
@@ -1087,10 +1090,13 @@ workflow: "workflow.yaml"
         )
         .unwrap();
 
-        let resolved =
-            resolve_skill_package_from_local_bundle("debarrel", Some("./agents/skill/debarrel/SKILL.md"), package_dir)
-                .unwrap()
-                .expect("expected local bundle resolution");
+        let resolved = resolve_skill_package_from_local_bundle(
+            "debarrel",
+            Some("./agents/skill/debarrel/SKILL.md"),
+            package_dir,
+        )
+        .unwrap()
+        .expect("expected local bundle resolution");
 
         assert_eq!(resolved.id, "debarrel");
         assert_eq!(resolved.version, "0.4.0");
@@ -1118,9 +1124,12 @@ workflow: "workflow.yaml"
         )
         .unwrap();
 
-        let resolved =
-            resolve_skill_package_from_local_bundle("debarrel", Some("./agents/skill/debarrel/SKILL.md"), package_dir)
-                .unwrap();
+        let resolved = resolve_skill_package_from_local_bundle(
+            "debarrel",
+            Some("./agents/skill/debarrel/SKILL.md"),
+            package_dir,
+        )
+        .unwrap();
         assert!(resolved.is_none());
     }
 
@@ -1372,8 +1381,9 @@ nodes:
             Ok(Some("codex".to_string()))
         });
 
-        let harness = resolve_requested_harness(Harness::Auto, true, Path::new("."), Some(&callback))
-            .expect("harness should resolve from callback");
+        let harness =
+            resolve_requested_harness(Harness::Auto, true, Path::new("."), Some(&callback))
+                .expect("harness should resolve from callback");
 
         assert_eq!(harness, Harness::Codex);
     }

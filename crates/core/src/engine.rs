@@ -3413,8 +3413,7 @@ impl Engine {
                     self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
                 let request = InstallSkillExecutionRequest {
                     install_skill: install_skill.clone(),
-                    no_interactive: self.workflow_run_config.no_interactive
-                        ,
+                    no_interactive: self.workflow_run_config.no_interactive,
                     quiet: self.workflow_run_config.quiet,
                     bundle_path: Some(self.workflow_run_config.bundle_path.clone()),
                     target_path: self.workflow_run_config.target_path.clone(),
@@ -3432,9 +3431,7 @@ impl Engine {
                         if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>() {
                             Error::Deferred(deferred.message().to_string())
                         } else {
-                            Error::Runtime(format!(
-                                "Failed to execute install-skill step: {error}"
-                            ))
+                            Error::Runtime(format!("Failed to execute install-skill step: {error}"))
                         }
                     });
 
@@ -3444,7 +3441,11 @@ impl Engine {
                     Err(error) => return Err(error),
                 };
 
-                for line in output.lines().map(str::trim_end).filter(|line| !line.is_empty()) {
+                for line in output
+                    .lines()
+                    .map(str::trim_end)
+                    .filter(|line| !line.is_empty())
+                {
                     let _ = self.append_task_log(task.id, line.to_string()).await;
                 }
                 log_step_output(logger, &output);
