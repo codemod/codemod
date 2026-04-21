@@ -217,12 +217,7 @@ pub async fn handler(
             }
         }
 
-        let dry_run = if resolved_package.dry_run_only {
-            true
-        } else {
-            args.dry_run
-        };
-        (resolved_package, dry_run)
+        (resolved_package, true)
     } else {
         (resolved_package, args.dry_run)
     };
