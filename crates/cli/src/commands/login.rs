@@ -21,16 +21,6 @@ pub struct Command {
     api_key: Option<String>,
 }
 
-impl Command {
-    pub fn new() -> Self {
-        Self {
-            registry: None,
-            scope: None,
-            api_key: None,
-        }
-    }
-}
-
 async fn validate_api_key_and_get_user_info(registry_url: &str, api_key: &str) -> Result<UserInfo> {
     let client = Client::new();
     let user_info_url = format!("{registry_url}/api/auth/oauth2/userinfo");
