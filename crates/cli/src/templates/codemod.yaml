@@ -9,6 +9,7 @@ workflow: "workflow.yaml"
 {repository}
 
 targets:
+  # Keep this aligned with the files matched in workflow.yaml.
   languages: ["{language}"]
 
 keywords: ["transformation", "migration"]

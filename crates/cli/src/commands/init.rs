@@ -889,6 +889,10 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
         }
         .replace("{language}", &config.language)
+        .replace(
+            "{include_patterns}",
+            &default_include_patterns(&config.language),
+        )
     };
 
     if config.package_behavior == PackageBehavior::WorkflowAndSkill {
@@ -901,6 +905,36 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
     fs::write(project_path.join("workflow.yaml"), workflow_content)?;
     Ok(())
+}
+
+fn default_include_patterns(language: &str) -> String {
+    let patterns: &[&str] = match language {
+        "javascript" => &["**/*.{js,jsx}"],
+        "typescript" => &["**/*.{ts,tsx}"],
+        "python" => &["**/*.py"],
+        "rust" => &["**/*.rs"],
+        "go" => &["**/*.go"],
+        "java" => &["**/*.java"],
+        "html" => &["**/*.html"],
+        "css" => &["**/*.css"],
+        "kotlin" => &["**/*.kt"],
+        "angular" => &["**/*.html"],
+        "csharp" => &["**/*.cs"],
+        "cpp" => &["**/*.{cpp,cc,cxx,hpp,hh,hxx}"],
+        "c" => &["**/*.{c,h}"],
+        "php" => &["**/*.php"],
+        "ruby" => &["**/*.rb"],
+        "elixir" => &["**/*.{ex,exs}"],
+        "json" => &["**/*.json"],
+        "yaml" => &["**/*.{yaml,yml}"],
+        _ => &["**/*"],
+    };
+
+    patterns
+        .iter()
+        .map(|pattern| format!("            - \"{pattern}\""))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<()> {
@@ -1330,6 +1364,15 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
     fs::write(project_path.join("README.md"), readme_content)?;
     Ok(())
+}
+
+fn package_manager_test_command(package_manager: Option<&str>) -> String {
+    match package_manager {
+        Some("pnpm") => "pnpm test".to_string(),
+        Some("yarn") => "yarn test".to_string(),
+        Some("bun") => "bun test".to_string(),
+        _ => "npm test".to_string(),
+    }
 }
 
 fn create_github_action(project_path: &Path, workspace: bool) -> Result<()> {
@@ -1887,7 +1930,7 @@ mod tests {
             package_behavior: PackageBehavior::WorkflowOnly,
             language: "typescript".to_string(),
             private: false,
-            package_manager: Some("npm".to_string()),
+            package_manager: Some("pnpm".to_string()),
             git_repository_url: None,
             github_action: false,
             workspace: false,
@@ -1898,6 +1941,7 @@ mod tests {
 
         assert!(manifest.contains("workflow: \"workflow.yaml\""));
         assert!(manifest.contains("capabilities: []"));
+        assert!(manifest.contains("Keep this aligned with the files matched in workflow.yaml."));
     }
 
     #[test]
@@ -2021,6 +2065,71 @@ mod tests {
         create_workspace_project(&workspace_path, &config).unwrap();
 
         assert!(!workspace_path.join("README.md").exists());
+    }
+
+    #[test]
+    fn create_project_uses_updated_readme_and_workflow_defaults() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("workflow-project");
+
+        let config = ProjectConfig {
+            name: "workflow-project".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+        assert!(readme
+            .contains("Document the exact migration this codemod performs before publishing."));
+        assert!(readme.contains("pnpm test"));
+        assert!(readme.contains("codemod workflow validate -w workflow.yaml"));
+        assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));
+
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("base_path: \".\""));
+        assert!(workflow.contains("include:"));
+        assert!(workflow.contains("\"**/*.{ts,tsx}\""));
+        assert!(workflow.contains("\"**/node_modules/**\""));
+
+        let gitignore = fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("*.tgz\n"));
+        assert!(!gitignore.contains("*.tgz "));
+    }
+
+    #[test]
+    fn default_include_patterns_match_language_family() {
+        assert_eq!(
+            default_include_patterns("typescript"),
+            "            - \"**/*.{ts,tsx}\""
+        );
+        assert_eq!(
+            default_include_patterns("javascript"),
+            "            - \"**/*.{js,jsx}\""
+        );
+        assert_eq!(
+            default_include_patterns("yaml"),
+            "            - \"**/*.{yaml,yml}\""
+        );
+    }
+
+    #[test]
+    fn package_manager_test_command_matches_package_manager() {
+        assert_eq!(package_manager_test_command(Some("pnpm")), "pnpm test");
+        assert_eq!(package_manager_test_command(Some("yarn")), "yarn test");
+        assert_eq!(package_manager_test_command(Some("bun")), "bun test");
+        assert_eq!(package_manager_test_command(Some("npm")), "npm test");
+        assert_eq!(package_manager_test_command(None), "npm test");
     }
 
     #[test]

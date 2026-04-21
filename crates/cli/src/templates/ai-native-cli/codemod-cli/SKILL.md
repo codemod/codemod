@@ -48,7 +48,12 @@ When the user:
 - After the package exists, replace the starter transform, README, and starter fixtures before doing optional work.
 - Define positive, negative, and edge fixtures before deep implementation work.
 - Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn version numbers by default, but do not leave stale package metadata behind after a rename or material package-surface change.
+- Keep the requested migration aligned across every artifact: transform logic, fixtures, `workflow.yaml`, `codemod.yaml`, README, and package metadata must all describe the same codemod.
+- Replace scaffold boilerplate before finishing. Do not leave generic README text, placeholder fixture intent, or mismatched usage descriptions in place.
+- Use explicit workflow `base_path`, `include`, and `exclude` globs that match the actual target file types and keep `codemod.yaml` `targets.languages` aligned with that scope.
 - Preserve the scaffold-selected package manager in `package.json` scripts and package-local README/development commands. Infer it from the scaffold choice, lockfile, or existing package metadata; do not rewrite `yarn`/`pnpm`/`bun` packages to `npx`/`npm` unless the user explicitly asked.
+- Preserve repository-local package and lockfile conventions. In existing monorepos, do not introduce ad hoc dependency ranges or unrelated lockfile churn.
+- Treat fixture quality as a release gate. Cover realistic positive cases, edge cases, preserve/no-op cases, and negative cases where similar code must stay unchanged.
 - Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
 - For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.
 - Leave missing package author metadata to the CLI defaults/publish-time auth fallback unless the user supplied an explicit author.

@@ -35,3 +35,16 @@ Use this file only for the extra agent guidance that public docs should not carr
 - After a registry miss, run `codemod init` immediately. In headless/non-interactive flows, use `codemod init <path> --no-interactive` and pass only user- or task-provided flags. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; rely on the simplified CLI defaults and publish-time auth-derived author fallback.
 - Use `validate_codemod_package` before stopping.
 - Do not create commits or push branches unless the user explicitly asked for git operations.
+
+## Review-derived quality gates
+
+- Keep the requested migration aligned across every artifact: transform logic, fixtures, `workflow.yaml`, `codemod.yaml`, README, and package metadata must all describe the same codemod.
+- Replace scaffold boilerplate before finishing. Do not leave generic README text, placeholder fixture intent, or mismatched usage descriptions in place.
+- Match the actual target surface in workflow metadata:
+  - Use explicit `base_path`, `include`, and `exclude` globs.
+  - Keep `codemod.yaml` `targets.languages` aligned with the files the codemod truly supports.
+  - If the codemod targets JSX/TSX, Vue SFCs, JSON, YAML, or other non-plain-JS inputs, the workflow and fixtures must use those file types instead of generic `.js` examples.
+- Preserve repository package-manager and lockfile conventions when working inside an existing monorepo. Do not introduce ad hoc dependency ranges or unrelated lockfile churn.
+- Treat fixture quality as a release gate. Cover realistic positive cases, edge cases, preserve/no-op cases, and negative cases where similar code must stay unchanged.
+- When a codemod makes no changes for a file, prefer returning `null` instead of rewriting the full source unchanged.
+- Before finishing, do a consistency pass for trailing whitespace, README command correctness, workflow command correctness, and other avoidable review noise.
