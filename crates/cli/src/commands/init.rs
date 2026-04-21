@@ -1966,8 +1966,6 @@ mod tests {
 
         assert!(!workspace_path.join("README.md").exists());
     }
-
-    #[test]
     fn package_behavior_flags_map_skill_modes() {
         assert_eq!(
             package_behavior_from_flags(false, false).unwrap(),
