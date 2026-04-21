@@ -6461,6 +6461,12 @@ fn create_conditional_workflow() -> Workflow {
     }
 }
 
+fn create_wrapped_conditional_workflow() -> Workflow {
+    let mut workflow = create_conditional_workflow();
+    workflow.nodes[0].steps[1].condition = Some("${{ params.my_cond }}".to_string());
+    workflow
+}
+
 // Helper function to create a workflow with non-existent variable references
 fn create_nonexistent_variable_workflow() -> Workflow {
     Workflow {
@@ -6605,6 +6611,76 @@ async fn test_workflow_condition_with_params_false() {
         let log_output = conditional_task.logs.join("\n");
         assert!(log_output.contains("This step always runs"));
         // The conditional step should NOT have run
+        assert!(!log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_wrapped_params_true() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_wrapped_conditional_workflow();
+
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(true));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, params, None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        assert!(log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_wrapped_params_false() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_wrapped_conditional_workflow();
+
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(false));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, params, None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
         assert!(!log_output.contains("This step runs conditionally"));
     }
 }
