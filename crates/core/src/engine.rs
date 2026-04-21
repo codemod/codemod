@@ -330,44 +330,54 @@ async fn await_js_ast_grep_execution_task(
         std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>,
     >,
     idle_timed_out: Arc<AtomicBool>,
+    idle_notify: Arc<Notify>,
     idle_failure_message: Arc<std::sync::Mutex<Option<String>>>,
     progress_state: Arc<std::sync::Mutex<StepProgressState>>,
     idle_timeout: Duration,
     relative_path: &str,
 ) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>> {
     let mut execution_task = std::pin::pin!(execution_task);
-    loop {
-        if idle_timed_out.load(Ordering::Acquire) {
-            execution_task.as_mut().abort();
-            let _ = execution_task.await;
-            let message = idle_failure_message
-                .lock()
-                .ok()
-                .and_then(|message| message.clone())
-                .unwrap_or_else(|| {
-                    let snapshot = progress_state.lock().ok();
-                    snapshot
-                        .as_deref()
-                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "No progress observed for {}s while processing {}",
-                                idle_timeout.as_secs(),
-                                relative_path
-                            )
-                        })
-                });
-            return Err(Error::Runtime(message));
+    let idle_signal = async {
+        let notified = idle_notify.notified();
+        tokio::pin!(notified);
+        // Register the waker before checking the flag to avoid a missed wakeup
+        // if the watchdog flips the flag between the load and the await.
+        notified.as_mut().enable();
+        if !idle_timed_out.load(Ordering::Acquire) {
+            notified.await;
         }
+    };
+    tokio::pin!(idle_signal);
 
-        if execution_task.as_ref().is_finished() {
-            return execution_task
-                .await
+    tokio::select! {
+        biased;
+        result = &mut execution_task => {
+            return result
                 .map_err(|e| Error::StepExecution(format!("Codemod execution join failed: {e}")));
         }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        _ = &mut idle_signal => {}
     }
+
+    execution_task.as_mut().abort();
+    let _ = execution_task.await;
+    let message = idle_failure_message
+        .lock()
+        .ok()
+        .and_then(|message| message.clone())
+        .unwrap_or_else(|| {
+            let snapshot = progress_state.lock().ok();
+            snapshot
+                .as_deref()
+                .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
+                .unwrap_or_else(|| {
+                    format!(
+                        "No progress observed for {}s while processing {}",
+                        idle_timeout.as_secs(),
+                        relative_path
+                    )
+                })
+        });
+    Err(Error::Runtime(message))
 }
 
 fn log_step_output(logger: &StructuredLogger, output: &str) {
@@ -3691,6 +3701,7 @@ impl Engine {
         let idle_timeout = js_ast_grep_idle_timeout();
         let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
         let idle_timed_out = Arc::new(AtomicBool::new(false));
+        let idle_notify = Arc::new(Notify::new());
         let watchdog_done = Arc::new(AtomicBool::new(false));
         let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let has_selector = selector_config.is_some();
@@ -3706,6 +3717,7 @@ impl Engine {
         let progress_state_for_closure = Arc::clone(&progress_state);
         let progress_state_for_watchdog = Arc::clone(&progress_state);
         let idle_timed_out_for_watchdog = Arc::clone(&idle_timed_out);
+        let idle_notify_for_watchdog = Arc::clone(&idle_notify);
         let watchdog_done_for_watchdog = Arc::clone(&watchdog_done);
         let idle_failure_message_for_watchdog = Arc::clone(&idle_failure_message);
         let state_adapter_for_watchdog = Arc::clone(&self.state_adapter);
@@ -3749,6 +3761,7 @@ impl Engine {
                         if let Ok(mut slot) = idle_failure_message_for_watchdog.lock() {
                             *slot = Some(message.clone());
                         }
+                        idle_notify_for_watchdog.notify_waiters();
 
                         if let Some(task_id) = task_log_task_id {
                             let mut adapter = state_adapter_for_watchdog.lock().await;
@@ -3774,6 +3787,7 @@ impl Engine {
 
         // Execute the codemod on each file using the config's multi-threading
         let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
+        let idle_notify_for_closure = Arc::clone(&idle_notify);
         let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
         let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
@@ -4011,6 +4025,7 @@ impl Engine {
                     let shared_state_context_owned = shared_state_context_clone.clone();
                     let target_path_owned = target_path.clone();
                     let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
+                    let idle_notify = Arc::clone(&idle_notify_for_closure);
                     let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
 
                     local
@@ -4041,6 +4056,7 @@ impl Engine {
                             await_js_ast_grep_execution_task(
                                 execution_task,
                                 idle_timed_out,
+                                idle_notify,
                                 idle_failure_message,
                                 progress_state_for_execution,
                                 idle_timeout,
@@ -5838,6 +5854,7 @@ impl Clone for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -5863,6 +5880,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
         let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
         assert_eq!(
@@ -5895,6 +5913,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn managed_git_mode_is_enabled_for_local_pull_request_nodes() {
         let _guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let node = Node {
@@ -6007,16 +6026,19 @@ mod tests {
             StepPhase::ExecutionStarted,
         );
         let idle_timed_out = Arc::new(AtomicBool::new(false));
+        let idle_notify = Arc::new(Notify::new());
         let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
 
         let local = tokio::task::LocalSet::new();
         let idle_timed_out_for_task = Arc::clone(&idle_timed_out);
+        let idle_notify_for_task = Arc::clone(&idle_notify);
         let idle_failure_message_for_task = Arc::clone(&idle_failure_message);
         let progress_state_for_task = Arc::clone(&progress_state);
         let result = local
             .run_until(async move {
                 let trigger = tokio::spawn({
                     let idle_timed_out = Arc::clone(&idle_timed_out_for_task);
+                    let idle_notify = Arc::clone(&idle_notify_for_task);
                     let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
                     async move {
                         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -6027,6 +6049,7 @@ mod tests {
                                     .to_string(),
                             );
                         }
+                        idle_notify.notify_waiters();
                     }
                 });
 
@@ -6043,6 +6066,7 @@ mod tests {
                 let result = await_js_ast_grep_execution_task(
                     execution_task,
                     idle_timed_out_for_task,
+                    idle_notify_for_task,
                     idle_failure_message_for_task,
                     progress_state_for_task,
                     Duration::from_secs(1),
