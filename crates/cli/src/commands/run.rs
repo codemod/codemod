@@ -196,17 +196,25 @@ pub async fn handler(
     // how to unlock applying changes + advanced insights.
     let (resolved_package, dry_run) = if resolved_package.dry_run_only {
         if !args.dry_run && !args.no_interactive {
-            println!(
-                "{}",
-                style(
-                    "This is a Pro codemod. Preview changes and insights for free with no login or code sharing. \
-                     Applying changes and advanced insights requires a Pro plan and signing in. \
-                     Learn more: codemod.com/contact."
-                )
-                .yellow()
-            );
-            println!("{}", style("Press any key to proceed.").dim());
-            wait_for_any_key();
+            let notice = style(
+                "This is a Pro codemod. Preview changes and insights for free with no login or code sharing. \
+                 Applying changes and advanced insights requires a Pro plan and signing in. \
+                 Learn more: codemod.com/contact."
+            )
+            .yellow();
+
+            // Only block for a keypress when both stdin and stdout are attached
+            // to a terminal. Otherwise the notice (or the "press any key" line)
+            // would be hidden from the user — e.g. `codemod run <pro> > out.txt`
+            // would silently hang. In that case, route the notice to stderr so
+            // it stays visible and proceed straight into dry-run.
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                println!("{notice}");
+                println!("{}", style("Press any key to proceed.").dim());
+                wait_for_any_key();
+            } else {
+                eprintln!("{notice}");
+            }
         }
 
         let dry_run = if resolved_package.dry_run_only {
@@ -458,13 +466,15 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
     )
 }
 
-/// Block until the user presses any key. Falls back to a no-op when stdin
-/// isn't a terminal (e.g. piped input) or when raw mode can't be enabled.
+/// Block until the user presses any key. Falls back to a no-op when either
+/// stdin or stdout isn't a terminal (e.g. piped input or redirected output)
+/// or when raw mode can't be enabled. Callers must ensure any prompt they want
+/// the user to read has already been printed to a stream the user can see.
 fn wait_for_any_key() {
     use crossterm::event::{read, Event, KeyEventKind};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-    if !io::stdin().is_terminal() {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return;
     }
     if enable_raw_mode().is_err() {
