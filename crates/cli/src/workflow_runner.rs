@@ -69,7 +69,12 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
     };
 
     if !auto_launch_tui && config.wait_for_completion {
-        wait_for_workflow_completion(engine, workflow_run_id.to_string()).await?;
+        wait_for_workflow_completion(
+            engine,
+            workflow_run_id.to_string(),
+            config.no_interactive,
+        )
+        .await?;
     }
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
@@ -79,7 +84,11 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
 }
 
 /// Wait for workflow to complete or pause
-pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: String) -> Result<()> {
+pub async fn wait_for_workflow_completion(
+    engine: &Engine,
+    workflow_run_id: String,
+    emit_heartbeat: bool,
+) -> Result<()> {
     let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
     let wait_started = Instant::now();
     let mut last_heartbeat = Instant::now();
@@ -143,7 +152,7 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
                 break;
             }
             WorkflowStatus::Running => {
-                if last_heartbeat.elapsed() >= Duration::from_secs(15) {
+                if emit_heartbeat && last_heartbeat.elapsed() >= Duration::from_secs(15) {
                     let tasks = engine
                         .get_tasks(workflow_run_uuid)
                         .await
