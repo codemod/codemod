@@ -753,6 +753,76 @@ function countSpecifiersInStatement<T extends Language>(statement: SgNode<T>): n
 }
 
 /**
+ * Count how many of the requested specifier names are actually present in the
+ * given import statement. Used to decide whether a named-removal strips every
+ * specifier in the statement (so the clause can go) or just some of them.
+ */
+function countMatchingSpecifiers<T extends Language>(
+  statement: SgNode<T>,
+  specifierNames: readonly string[],
+): number {
+  const tsStmt = statement as unknown as SgNode<TS>;
+  const wanted = new Set(specifierNames);
+  let count = 0;
+
+  if (tsStmt.kind() === "import_statement") {
+    for (const spec of tsStmt.findAll({ rule: { kind: "import_specifier" } })) {
+      const nameNode = spec.field("name");
+      if (nameNode && wanted.has(nameNode.text())) count++;
+    }
+    return count;
+  }
+
+  const objectPattern = tsStmt.find({ rule: { kind: "object_pattern" } });
+  if (!objectPattern) return 0;
+
+  for (const shorthand of objectPattern.findAll({
+    rule: { kind: "shorthand_property_identifier_pattern" },
+  })) {
+    if (wanted.has(shorthand.text())) count++;
+  }
+  for (const pair of objectPattern.findAll({ rule: { kind: "pair_pattern" } })) {
+    const key = pair.field("key");
+    if (key && wanted.has(key.text())) count++;
+  }
+  return count;
+}
+
+/**
+ * Parts of an ESM `import_clause`. An import_statement can pair a default
+ * binding with either a `named_imports` or a `namespace_import`, and removing
+ * one half of such a mixed clause must leave the other half intact.
+ */
+type ImportClauseParts = {
+  defaultIdent: SgNode<TS> | null;
+  namespaceImport: SgNode<TS> | null;
+  namedImports: SgNode<TS> | null;
+};
+
+function analyzeImportClause<T extends Language>(importStmt: SgNode<T>): ImportClauseParts {
+  const tsStmt = importStmt as unknown as SgNode<TS>;
+  const parts: ImportClauseParts = {
+    defaultIdent: null,
+    namespaceImport: null,
+    namedImports: null,
+  };
+  const clause = tsStmt.find({ rule: { kind: "import_clause" } });
+  if (!clause) return parts;
+
+  for (const child of clause.children()) {
+    const k = child.kind();
+    if (k === "identifier" && !parts.defaultIdent) {
+      parts.defaultIdent = child as SgNode<TS>;
+    } else if (k === "namespace_import") {
+      parts.namespaceImport = child as SgNode<TS>;
+    } else if (k === "named_imports") {
+      parts.namedImports = child as SgNode<TS>;
+    }
+  }
+  return parts;
+}
+
+/**
  * Find the full range of a statement including one trailing line ending, if present.
  * Handles CRLF, LF, and legacy lone CR so removal edits stay consistent across platforms.
  */
@@ -1170,6 +1240,22 @@ export function removeImport<T extends Language>(
         }) ?? null;
 
       if (!statement) return null;
+
+      // If the default is paired with a named or namespace clause in the same
+      // import_statement, strip only the default (and the following comma) so
+      // the sibling binding survives.
+      if ((statement as unknown as SgNode<TS>).kind() === "import_statement") {
+        const parts = analyzeImportClause(statement);
+        const sibling = parts.namedImports ?? parts.namespaceImport;
+        if (parts.defaultIdent && sibling) {
+          return {
+            startPos: parts.defaultIdent.range().start.index,
+            endPos: sibling.range().start.index,
+            insertedText: "",
+          };
+        }
+      }
+
       const { start, end } = getStatementRangeWithNewline(statement, programText);
       return { startPos: start, endPos: end, insertedText: "" };
     }
@@ -1186,22 +1272,48 @@ export function removeImport<T extends Language>(
   }
 
   if (options.type === "namespace") {
-    const existing = getImport(program, { type: "default", from: options.from });
-    if (!existing || !existing.isNamespace) return null;
+    // Locate the namespace_import directly by source. Going through getImport
+    // would miss mixed statements like `import foo, * as ns from 'mod'`,
+    // where the default match wins over the namespace fallback.
+    const tsProgram = program as unknown as SgNode<TS, "program">;
+    const namespaceImport = tsProgram.find({
+      rule: {
+        kind: "namespace_import",
+        inside: {
+          stopBy: "end",
+          kind: "import_statement",
+          has: {
+            field: "source",
+            has: {
+              kind: "string_fragment",
+              regex: stringToExactRegexString(options.from),
+            },
+          },
+        },
+      },
+    });
+    if (!namespaceImport) return null;
 
     const statement =
-      allStatements.find((stmt) => {
-        const tsStmt = stmt as unknown as SgNode<TS>;
-        return tsStmt.has({
-          rule: {
-            kind: "namespace_import",
-            has: { kind: "identifier", regex: stringToExactRegexString(existing.alias) },
-          },
-        });
-      }) ?? null;
-
+      (namespaceImport.ancestors().find((a) => a.kind() === "import_statement") as
+        | SgNode<TS>
+        | undefined) ?? null;
     if (!statement) return null;
-    const { start, end } = getStatementRangeWithNewline(statement, programText);
+
+    const parts = analyzeImportClause(statement);
+    if (parts.defaultIdent && parts.namespaceImport) {
+      // Mixed: strip ', * as ns' keeping the default binding.
+      return {
+        startPos: parts.defaultIdent.range().end.index,
+        endPos: parts.namespaceImport.range().end.index,
+        insertedText: "",
+      };
+    }
+
+    const { start, end } = getStatementRangeWithNewline(
+      statement as unknown as SgNode<Language>,
+      programText,
+    );
     return { startPos: start, endPos: end, insertedText: "" };
   }
 
@@ -1211,9 +1323,26 @@ export function removeImport<T extends Language>(
       if (!found) continue;
 
       const specifierCount = countSpecifiersInStatement(found.statement);
+      const matchingCount = countMatchingSpecifiers(found.statement, options.specifiers);
 
-      // If this is the last specifier, remove the entire statement
-      if (specifierCount <= options.specifiers.length) {
+      // When every named specifier in this statement is being removed we can
+      // drop the clause. Compare against the count of matches actually present,
+      // not `options.specifiers.length` — the caller may pass names that don't
+      // exist in this statement.
+      if (matchingCount >= specifierCount) {
+        // If the statement also carries a default binding, strip only the
+        // `, { ... }` portion so the default survives.
+        if ((found.statement as unknown as SgNode<TS>).kind() === "import_statement") {
+          const parts = analyzeImportClause(found.statement);
+          if (parts.defaultIdent && parts.namedImports) {
+            return {
+              startPos: parts.defaultIdent.range().end.index,
+              endPos: parts.namedImports.range().end.index,
+              insertedText: "",
+            };
+          }
+        }
+
         const { start, end } = getStatementRangeWithNewline(found.statement, programText);
         return { startPos: start, endPos: end, insertedText: "" };
       }
