@@ -15,6 +15,7 @@ pub use sandbox::engine::codemod_lang::CodemodLang;
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::engine::{
     execute_codemod_sync, CodemodOutput, ExecutionResult, InMemoryExecutionOptions,
+    ProcessSandbox,
 };
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::resolvers::{InMemoryLoader, InMemoryResolver};

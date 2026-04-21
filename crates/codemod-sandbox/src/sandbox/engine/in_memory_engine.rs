@@ -16,6 +16,7 @@ use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
 use std::collections::HashMap;
@@ -35,6 +36,15 @@ const DEFAULT_MAX_STACK_SIZE: usize = 4 * 1024 * 1024;
 
 /// SHA256 hash type (32 bytes)
 pub type Sha256Hash = [u8; 32];
+
+/// Sandboxed values for the QuickJS `process` global.
+#[derive(Clone, Debug, Default)]
+pub struct ProcessSandbox {
+    /// Values exposed on `process.env`.
+    pub env: HashMap<String, String>,
+    /// Value returned by `process.cwd()`.
+    pub cwd: String,
+}
 
 /// In-memory execution options for executing a codemod on a pre-parsed AST
 pub struct InMemoryExecutionOptions<'a, R> {
@@ -67,6 +77,13 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub timeout_ms: Option<u64>,
     /// Memory limit in bytes (default: 64 MB)
     pub memory_limit: Option<usize>,
+    /// Optional sandboxed values for the `process` global.
+    ///
+    /// When `Some`, the llrt `process` module is omitted from the runtime and
+    /// a minimal stub exposing only `env` and `cwd()` is installed instead.
+    /// When `None`, the host-derived defaults from llrt_modules remain in
+    /// place.
+    pub process_sandbox: Option<ProcessSandbox>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -142,7 +159,14 @@ where
     // Use the pre-parsed AST from options (allows AST caching)
     let ast_grep = options.ast;
 
-    let module_builder = LlrtModuleBuilder::build();
+    // When the caller asks for a process sandbox, omit the llrt `process`
+    // module so the host env, cwd, argv, exit, setuid, etc. are never attached
+    // in the first place; we install a restricted stub below instead.
+    let module_builder = if options.process_sandbox.is_some() {
+        LlrtModuleBuilder::build_with_exclusions(&[LlrtSupportedModules::Process])
+    } else {
+        LlrtModuleBuilder::build()
+    };
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 
@@ -176,6 +200,7 @@ where
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
     let shared_state_context = options.shared_state_context.clone();
+    let process_sandbox = options.process_sandbox.clone();
 
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
@@ -201,6 +226,30 @@ where
                 message: format!("Failed to attach global modules: {e}"),
             },
         })?;
+
+        if let Some(sandbox) = process_sandbox {
+            let env_json = serde_json::to_string(&sandbox.env).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to serialize process.env sandbox: {e}"),
+                },
+            })?;
+            let cwd_json = serde_json::to_string(&sandbox.cwd).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to serialize process.cwd sandbox: {e}"),
+                },
+            })?;
+            // The llrt `process` module was excluded from the module builder
+            // above, so `globalThis.process` is currently undefined. Install a
+            // minimal stub that exposes only the sandboxed `env` and `cwd`.
+            let script = format!(
+                "globalThis.process = {{ env: {env_json}, cwd: function() {{ return {cwd_json}; }} }};"
+            );
+            ctx.eval::<(), _>(script).catch(&ctx).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to install process sandbox stub: {e}"),
+                },
+            })?;
+        }
 
         let execution = async {
             let module = Module::declare(ctx.clone(), "__codemod_entry.js", js_code)
@@ -385,6 +434,7 @@ export default function transform(root) {
             shared_state_context: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
+            process_sandbox: None,
         });
 
         match result {
@@ -442,6 +492,7 @@ export default function transform(root) {
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
+            process_sandbox: None,
         });
 
         match result {
@@ -449,6 +500,77 @@ export default function transform(root) {
                 ExecutionResult::Modified(modified) => {
                     assert!(modified.content.contains("logger.log('Hello, world!')"));
                     assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_process_sandbox_overrides_env_and_cwd() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        // Codemod emits cwd, env keys, the sorted list of `process` keys, and
+        // whether a few dangerous llrt-provided properties are absent. When
+        // sandboxed, only `env` + `cwd` should survive; `exit`, `argv`,
+        // `platform` etc. should be undefined since the llrt process module
+        // is no longer attached.
+        let codemod_content = r#"
+export default function transform(root) {
+  const envKeys = Object.keys(process.env).sort().join(",");
+  const processKeys = Object.keys(process).sort().join(",");
+  const stripped = [
+    typeof process.exit,
+    typeof process.argv,
+    typeof process.platform,
+    typeof process.versions,
+  ].join(",");
+  return `cwd=${process.cwd()};env=${envKeys};keys=${processKeys};stripped=${stripped}`;
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("sandbox_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        // Seed a host env var that must not leak into process.env.
+        std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let sandbox = ProcessSandbox {
+            env: HashMap::new(),
+            cwd: "/app/".to_string(),
+        };
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: Some(sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(
+                        modified.content,
+                        "cwd=/app/;env=;keys=cwd,env;stripped=undefined,undefined,undefined,undefined",
+                    );
                 }
                 other => panic!("Expected modified result, got: {:?}", other),
             },
