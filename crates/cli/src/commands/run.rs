@@ -192,61 +192,29 @@ pub async fn handler(
     };
 
     // Auto-force dry-run for non-pro users accessing pro codemods.
-    // Offer login first — if user logs in with a pro account, re-resolve
-    // the package so they get full access.
+    // Show an informational notice explaining what free preview covers and
+    // how to unlock applying changes + advanced insights.
     let (resolved_package, dry_run) = if resolved_package.dry_run_only {
-        let mut resolved = resolved_package;
-        let mut logged_in = false;
-
         if !args.dry_run && !args.no_interactive {
             println!(
                 "{}",
-                style("This is a pro codemod. You can preview changes, but applying them requires a Pro plan.").yellow()
+                style(
+                    "This is a Pro codemod. Preview changes and insights for free with no login or code sharing. \
+                     Applying changes and advanced insights requires a Pro plan and signing in. \
+                     Learn more: codemod.com/contact."
+                )
+                .yellow()
             );
-            let should_login = Confirm::new("Would you like to login now?")
-                .with_default(true)
-                .prompt()
-                .unwrap_or(false);
-
-            if should_login {
-                let login_args = crate::commands::login::Command::new();
-                if let Err(e) = crate::commands::login::handler(&login_args).await {
-                    eprintln!("{}", style(format!("Login failed: {e}")).red());
-                } else {
-                    // Re-resolve to check if user now has pro access
-                    let new_client = create_registry_client(args.registry.clone())?;
-                    match new_client
-                        .resolve_package(&args.package, Some(&registry_url), true, None)
-                        .await
-                    {
-                        Ok(new_resolved) => {
-                            resolved = new_resolved;
-                            logged_in = true;
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "{}",
-                                style(format!("Failed to re-resolve package: {e}")).red()
-                            );
-                        }
-                    }
-                }
-            }
+            println!("{}", style("Press any key to proceed.").dim());
+            wait_for_any_key();
         }
 
-        if resolved.dry_run_only && !logged_in && !args.dry_run {
-            println!(
-                "{}",
-                style("Running in dry-run mode (preview only).").yellow()
-            );
-        }
-
-        let dry_run = if resolved.dry_run_only {
+        let dry_run = if resolved_package.dry_run_only {
             true
         } else {
             args.dry_run
         };
-        (resolved, dry_run)
+        (resolved_package, dry_run)
     } else {
         (resolved_package, args.dry_run)
     };
@@ -488,6 +456,28 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
         "Legacy codemod command failed with exit code: {:?}",
         exit_code
     )
+}
+
+/// Block until the user presses any key. Falls back to a no-op when stdin
+/// isn't a terminal (e.g. piped input) or when raw mode can't be enabled.
+fn wait_for_any_key() {
+    use crossterm::event::{read, Event, KeyEventKind};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+    if !io::stdin().is_terminal() {
+        return;
+    }
+    if enable_raw_mode().is_err() {
+        return;
+    }
+    loop {
+        match read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    let _ = disable_raw_mode();
 }
 
 fn load_codemod_manifest(codemod_config_path: &Path) -> Result<Option<CodemodManifest>> {
