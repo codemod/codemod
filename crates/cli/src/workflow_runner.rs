@@ -69,12 +69,8 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
     };
 
     if !auto_launch_tui && config.wait_for_completion {
-        wait_for_workflow_completion(
-            engine,
-            workflow_run_id.to_string(),
-            config.no_interactive,
-        )
-        .await?;
+        wait_for_workflow_completion(engine, workflow_run_id.to_string(), config.no_interactive)
+            .await?;
     }
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
