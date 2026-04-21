@@ -132,12 +132,12 @@ struct PreparedStepExecution {
     state_input_path: PathBuf,
 }
 
-const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StepPhase {
+pub enum StepPhase {
     Starting,
     FileQueued,
     FileLoaded,
@@ -163,9 +163,9 @@ impl std::fmt::Display for StepPhase {
 }
 
 #[derive(Debug)]
-struct UnitProgressState {
-    last_progress_at: Instant,
-    phase: StepPhase,
+pub struct UnitProgressState {
+    pub last_progress_at: Instant,
+    pub phase: StepPhase,
 }
 
 impl UnitProgressState {
@@ -179,15 +179,21 @@ impl UnitProgressState {
 }
 
 #[derive(Debug)]
-struct StepProgressState {
-    global_last_progress_at: Instant,
-    global_phase: StepPhase,
-    active_units: HashMap<String, UnitProgressState>,
-    output_active_units: HashSet<String>,
+pub struct StepProgressState {
+    pub global_last_progress_at: Instant,
+    pub global_phase: StepPhase,
+    pub active_units: HashMap<String, UnitProgressState>,
+    pub output_active_units: HashSet<String>,
+}
+
+impl Default for StepProgressState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StepProgressState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             global_last_progress_at: Instant::now(),
             global_phase: StepPhase::Starting,
@@ -197,7 +203,7 @@ impl StepProgressState {
     }
 }
 
-fn js_ast_grep_idle_timeout() -> Duration {
+pub fn js_ast_grep_idle_timeout() -> Duration {
     let override_ms = std::env::var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -205,7 +211,7 @@ fn js_ast_grep_idle_timeout() -> Duration {
     Duration::from_millis(override_ms.unwrap_or(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT))
 }
 
-fn select_shard_scan_eligible_files(
+pub fn select_shard_scan_eligible_files(
     modified_files: Vec<String>,
     selector_matched_files: Vec<String>,
 ) -> Vec<String> {
@@ -216,11 +222,11 @@ fn select_shard_scan_eligible_files(
     }
 }
 
-fn should_manage_git_for_node(node: &Node) -> bool {
+pub fn should_manage_git_for_node(node: &Node) -> bool {
     crate::git_ops::is_cloud_mode() || node.pull_request.is_some() || node.branch_name.is_some()
 }
 
-fn record_unit_progress(
+pub fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -241,7 +247,7 @@ fn record_unit_progress(
     }
 }
 
-fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
+pub fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     if let Ok(mut state) = state.lock() {
         let now = Instant::now();
         state.global_last_progress_at = now;
@@ -257,7 +263,7 @@ fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     }
 }
 
-fn finish_unit_progress(
+pub fn finish_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -270,7 +276,7 @@ fn finish_unit_progress(
     }
 }
 
-fn build_js_ast_grep_idle_timeout_message(
+pub fn build_js_ast_grep_idle_timeout_message(
     state: &StepProgressState,
     idle_timeout: Duration,
 ) -> String {
@@ -325,49 +331,59 @@ fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
     message
 }
 
-async fn await_js_ast_grep_execution_task(
+pub async fn await_js_ast_grep_execution_task(
     execution_task: tokio::task::JoinHandle<
         std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>,
     >,
     idle_timed_out: Arc<AtomicBool>,
+    idle_notify: Arc<Notify>,
     idle_failure_message: Arc<std::sync::Mutex<Option<String>>>,
     progress_state: Arc<std::sync::Mutex<StepProgressState>>,
     idle_timeout: Duration,
     relative_path: &str,
 ) -> Result<std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>> {
     let mut execution_task = std::pin::pin!(execution_task);
-    loop {
-        if idle_timed_out.load(Ordering::Acquire) {
-            execution_task.as_mut().abort();
-            let _ = execution_task.await;
-            let message = idle_failure_message
-                .lock()
-                .ok()
-                .and_then(|message| message.clone())
-                .unwrap_or_else(|| {
-                    let snapshot = progress_state.lock().ok();
-                    snapshot
-                        .as_deref()
-                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "No progress observed for {}s while processing {}",
-                                idle_timeout.as_secs(),
-                                relative_path
-                            )
-                        })
-                });
-            return Err(Error::Runtime(message));
+    let idle_signal = async {
+        let notified = idle_notify.notified();
+        tokio::pin!(notified);
+        // Register the waker before checking the flag to avoid a missed wakeup
+        // if the watchdog flips the flag between the load and the await.
+        notified.as_mut().enable();
+        if !idle_timed_out.load(Ordering::Acquire) {
+            notified.await;
         }
+    };
+    tokio::pin!(idle_signal);
 
-        if execution_task.as_ref().is_finished() {
-            return execution_task
-                .await
+    tokio::select! {
+        biased;
+        result = &mut execution_task => {
+            return result
                 .map_err(|e| Error::StepExecution(format!("Codemod execution join failed: {e}")));
         }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        _ = &mut idle_signal => {}
     }
+
+    execution_task.as_mut().abort();
+    let _ = execution_task.await;
+    let message = idle_failure_message
+        .lock()
+        .ok()
+        .and_then(|message| message.clone())
+        .unwrap_or_else(|| {
+            let snapshot = progress_state.lock().ok();
+            snapshot
+                .as_deref()
+                .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
+                .unwrap_or_else(|| {
+                    format!(
+                        "No progress observed for {}s while processing {}",
+                        idle_timeout.as_secs(),
+                        relative_path
+                    )
+                })
+        });
+    Err(Error::Runtime(message))
 }
 
 fn log_step_output(logger: &StructuredLogger, output: &str) {
@@ -3691,6 +3707,7 @@ impl Engine {
         let idle_timeout = js_ast_grep_idle_timeout();
         let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
         let idle_timed_out = Arc::new(AtomicBool::new(false));
+        let idle_notify = Arc::new(Notify::new());
         let watchdog_done = Arc::new(AtomicBool::new(false));
         let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let has_selector = selector_config.is_some();
@@ -3706,6 +3723,7 @@ impl Engine {
         let progress_state_for_closure = Arc::clone(&progress_state);
         let progress_state_for_watchdog = Arc::clone(&progress_state);
         let idle_timed_out_for_watchdog = Arc::clone(&idle_timed_out);
+        let idle_notify_for_watchdog = Arc::clone(&idle_notify);
         let watchdog_done_for_watchdog = Arc::clone(&watchdog_done);
         let idle_failure_message_for_watchdog = Arc::clone(&idle_failure_message);
         let state_adapter_for_watchdog = Arc::clone(&self.state_adapter);
@@ -3749,6 +3767,7 @@ impl Engine {
                         if let Ok(mut slot) = idle_failure_message_for_watchdog.lock() {
                             *slot = Some(message.clone());
                         }
+                        idle_notify_for_watchdog.notify_waiters();
 
                         if let Some(task_id) = task_log_task_id {
                             let mut adapter = state_adapter_for_watchdog.lock().await;
@@ -3774,6 +3793,7 @@ impl Engine {
 
         // Execute the codemod on each file using the config's multi-threading
         let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
+        let idle_notify_for_closure = Arc::clone(&idle_notify);
         let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
         let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
@@ -4011,6 +4031,7 @@ impl Engine {
                     let shared_state_context_owned = shared_state_context_clone.clone();
                     let target_path_owned = target_path.clone();
                     let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
+                    let idle_notify = Arc::clone(&idle_notify_for_closure);
                     let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
 
                     local
@@ -4041,6 +4062,7 @@ impl Engine {
                             await_js_ast_grep_execution_task(
                                 execution_task,
                                 idle_timed_out,
+                                idle_notify,
                                 idle_failure_message,
                                 progress_state_for_execution,
                                 idle_timeout,
@@ -5832,231 +5854,5 @@ impl Clone for Engine {
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn unset(key: &'static str) -> Self {
-            let original = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(original) = &self.original {
-                std::env::set_var(self.key, original);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
-    #[test]
-    fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
-        let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
-        assert_eq!(
-            js_ast_grep_idle_timeout(),
-            Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
-        );
-
-        std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
-        assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
-    }
-
-    #[test]
-    fn shard_scan_falls_back_to_selector_matches_when_dry_run_finds_no_edits() {
-        let eligible = select_shard_scan_eligible_files(
-            Vec::new(),
-            vec!["src/a.ts".to_string(), "src/b.ts".to_string()],
-        );
-
-        assert_eq!(eligible, vec!["src/a.ts", "src/b.ts"]);
-    }
-
-    #[test]
-    fn shard_scan_prefers_modified_files_when_available() {
-        let eligible = select_shard_scan_eligible_files(
-            vec!["src/changed.ts".to_string()],
-            vec!["src/selector-only.ts".to_string()],
-        );
-
-        assert_eq!(eligible, vec!["src/changed.ts"]);
-    }
-
-    #[test]
-    fn managed_git_mode_is_enabled_for_local_pull_request_nodes() {
-        let _guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
-        let node = Node {
-            id: "apply-transforms".to_string(),
-            name: "Apply AST Transformations".to_string(),
-            description: None,
-            r#type: butterflow_models::node::NodeType::Automatic,
-            depends_on: vec![],
-            trigger: None,
-            strategy: None,
-            runtime: None,
-            steps: vec![],
-            env: HashMap::new(),
-            branch_name: None,
-            pull_request: Some(butterflow_models::step::PullRequestConfig {
-                title: "PR".to_string(),
-                body: None,
-                draft: Some(true),
-                base: None,
-            }),
-        };
-
-        assert!(should_manage_git_for_node(&node));
-    }
-
-    #[test]
-    fn record_unit_progress_updates_global_and_active_units() {
-        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        let before = state.lock().unwrap().global_last_progress_at;
-
-        std::thread::sleep(Duration::from_millis(5));
-        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
-
-        let snapshot = state.lock().unwrap();
-        assert_eq!(snapshot.global_phase, StepPhase::ExecutionStarted);
-        assert!(snapshot.global_last_progress_at > before);
-        let unit = snapshot.active_units.get("src/example.ts").unwrap();
-        assert_eq!(unit.phase, StepPhase::ExecutionStarted);
-        assert!(unit.last_progress_at > before);
-        assert!(snapshot.output_active_units.contains("src/example.ts"));
-    }
-
-    #[test]
-    fn record_output_progress_refreshes_executing_units() {
-        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
-        let before = state
-            .lock()
-            .unwrap()
-            .active_units
-            .get("src/example.ts")
-            .unwrap()
-            .last_progress_at;
-
-        std::thread::sleep(Duration::from_millis(5));
-        record_output_progress(&state);
-
-        let snapshot = state.lock().unwrap();
-        assert_eq!(snapshot.global_phase, StepPhase::Output);
-        let unit = snapshot.active_units.get("src/example.ts").unwrap();
-        assert_eq!(unit.phase, StepPhase::Output);
-        assert!(unit.last_progress_at > before);
-    }
-
-    #[test]
-    fn finish_unit_progress_removes_active_unit() {
-        let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
-        finish_unit_progress(&state, "src/example.ts", StepPhase::ExecutionFinished);
-
-        let snapshot = state.lock().unwrap();
-        assert_eq!(snapshot.global_phase, StepPhase::ExecutionFinished);
-        assert!(!snapshot.active_units.contains_key("src/example.ts"));
-        assert!(!snapshot.output_active_units.contains("src/example.ts"));
-    }
-
-    #[test]
-    fn build_idle_timeout_message_uses_stalest_active_unit() {
-        let now = Instant::now();
-        let mut state = StepProgressState::new();
-        state.global_last_progress_at = now - Duration::from_secs(90);
-        state.global_phase = StepPhase::Output;
-        state.active_units.insert(
-            "src/fresh.ts".to_string(),
-            UnitProgressState {
-                last_progress_at: now - Duration::from_secs(10),
-                phase: StepPhase::Output,
-            },
-        );
-        state.active_units.insert(
-            "src/stale.ts".to_string(),
-            UnitProgressState {
-                last_progress_at: now - Duration::from_secs(75),
-                phase: StepPhase::ExecutionStarted,
-            },
-        );
-
-        let message = build_js_ast_grep_idle_timeout_message(&state, Duration::from_secs(60));
-        assert!(message.contains("src/stale.ts"));
-        assert!(message.contains("execution started"));
-        assert!(message.contains("active units: 2"));
-    }
-
-    #[tokio::test]
-    async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
-        let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        record_unit_progress(
-            &progress_state,
-            "src/stalled.ts",
-            StepPhase::ExecutionStarted,
-        );
-        let idle_timed_out = Arc::new(AtomicBool::new(false));
-        let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
-
-        let local = tokio::task::LocalSet::new();
-        let idle_timed_out_for_task = Arc::clone(&idle_timed_out);
-        let idle_failure_message_for_task = Arc::clone(&idle_failure_message);
-        let progress_state_for_task = Arc::clone(&progress_state);
-        let result = local
-            .run_until(async move {
-                let trigger = tokio::spawn({
-                    let idle_timed_out = Arc::clone(&idle_timed_out_for_task);
-                    let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
-                    async move {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        idle_timed_out.store(true, Ordering::Release);
-                        if let Ok(mut message) = idle_failure_message.lock() {
-                            *message = Some(
-                                "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                });
-
-                let execution_task = tokio::task::spawn_local(async move {
-                    futures_util::future::pending::<
-                        std::result::Result<
-                            CodemodOutput,
-                            codemod_sandbox::sandbox::errors::ExecutionError,
-                        >,
-                    >()
-                    .await
-                });
-
-                let result = await_js_ast_grep_execution_task(
-                    execution_task,
-                    idle_timed_out_for_task,
-                    idle_failure_message_for_task,
-                    progress_state_for_task,
-                    Duration::from_secs(1),
-                    "src/stalled.ts",
-                )
-                .await;
-                trigger.await.unwrap();
-                result
-            })
-            .await;
-
-        let error = result.expect_err("pending execution should time out");
-        let message = error.to_string();
-        assert!(message.contains("No progress observed"));
-        assert!(message.contains("src/stalled.ts"));
     }
 }
