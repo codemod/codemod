@@ -5974,6 +5974,7 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
+    use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -6001,6 +6002,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
         let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
         assert_eq!(
@@ -6033,6 +6035,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn managed_git_mode_is_enabled_for_local_pull_request_nodes() {
         let _guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let node = Node {
@@ -6252,6 +6255,7 @@ mod tests {
                                     .to_string(),
                             );
                         }
+                        idle_notify.notify_waiters();
                     }
                 });
 
