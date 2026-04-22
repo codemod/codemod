@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.8.0] - 2026-04-22
+
+### 🚀 Features
+
+- *(cli)* Replace Pro codemod login prompt with free-preview notice (#2107)
+- Sandboxed file system module (#2110)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.8.0 (#2111)
+
 ## [codemod-cli@1.7.16] - 2026-04-21
 
 ### 🚀 Features
