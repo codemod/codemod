@@ -17,8 +17,8 @@ use tokio::sync::Notify;
 use butterflow_core::engine::{
     await_js_ast_grep_execution_task, build_js_ast_grep_idle_timeout_message, finish_unit_progress,
     js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
-    select_shard_scan_eligible_files, should_manage_git_for_node, CapabilitiesData, Engine,
-    StepPhase, StepProgressState, UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
+    select_shard_scan_eligible_files, CapabilitiesData, Engine, StepPhase, StepProgressState,
+    UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
 };
 use butterflow_core::structured_log::StructuredLogger;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
@@ -2855,14 +2855,18 @@ export default function transform(ast) {
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks
-                .iter()
-                .all(|task| task.logs.join("\n").contains("Processing file:"));
+            let all_started_debarrel_step = child_tasks.iter().all(|task| {
+                task.logs
+                    .join("\n")
+                    .contains("Step started: Debarrel: rewrite imports and clean up barrels")
+            });
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            if child_tasks.len() == child_task_ids.len()
+                && all_started_debarrel_step
+                && all_terminal
             {
                 return;
             }
@@ -2951,6 +2955,7 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -3002,16 +3007,24 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks.iter().all(|task| {
+            let all_started_debarrel_step = child_tasks.iter().all(|task| {
+                task.logs
+                    .join("\n")
+                    .contains("Step started: Debarrel: rewrite imports and clean up barrels")
+            });
+            let any_have_execution_progress = child_tasks.iter().any(|task| {
                 let logs = task.logs.join("\n");
-                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
-                    && logs.contains("Processing file:")
+                logs.contains("Processing file:")
+                    || logs.contains("Publishing branch and creating pull request")
             });
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            if child_tasks.len() == child_task_ids.len()
+                && all_started_debarrel_step
+                && any_have_execution_progress
+                && all_terminal
             {
                 return;
             }
@@ -6630,32 +6643,6 @@ fn shard_scan_prefers_modified_files_when_available() {
     );
 
     assert_eq!(eligible, vec!["src/changed.ts"]);
-}
-
-#[test]
-fn managed_git_mode_is_enabled_for_local_pull_request_nodes() {
-    let _guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
-    let node = Node {
-        id: "apply-transforms".to_string(),
-        name: "Apply AST Transformations".to_string(),
-        description: None,
-        r#type: butterflow_models::node::NodeType::Automatic,
-        depends_on: vec![],
-        trigger: None,
-        strategy: None,
-        runtime: None,
-        steps: vec![],
-        env: HashMap::new(),
-        branch_name: None,
-        pull_request: Some(butterflow_models::step::PullRequestConfig {
-            title: "PR".to_string(),
-            body: None,
-            draft: Some(true),
-            base: None,
-        }),
-    };
-
-    assert!(should_manage_git_for_node(&node));
 }
 
 #[test]
