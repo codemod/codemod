@@ -291,12 +291,88 @@ jobs:
             local timeout_secs=$((CODEMOD_TUI_PERF_AUTO_EXIT_SECS + 20))
             mkdir -p "${outdir}"
             log_phase "tui-scenario start name=${name} run_id=${run_id} timeout=${timeout_secs}s"
-            if ! (
-              cd "${worktree}"
-              XDG_DATA_HOME="${state_home}" \
-                timeout "${timeout_secs}" \
-                script -q -e -c "\"${codemod_bin}\" workflow tui --id ${run_id}" /dev/null
-            ) >"${output}" 2>&1; then
+            if ! WORKTREE="${worktree}" \
+              STATE_HOME="${state_home}" \
+              CODEMOD_BIN="${codemod_bin}" \
+              RUN_ID="${run_id}" \
+              OUTPUT_PATH="${output}" \
+              TIMEOUT_SECS="${timeout_secs}" \
+              python3 - <<'PY'; then
+              import os
+              import pty
+              import select
+              import signal
+              import subprocess
+              import sys
+              import time
+
+              worktree = os.environ["WORKTREE"]
+              state_home = os.environ["STATE_HOME"]
+              codemod_bin = os.environ["CODEMOD_BIN"]
+              run_id = os.environ["RUN_ID"]
+              output_path = os.environ["OUTPUT_PATH"]
+              timeout_secs = int(os.environ["TIMEOUT_SECS"])
+
+              master_fd, slave_fd = pty.openpty()
+              env = os.environ.copy()
+              env["XDG_DATA_HOME"] = state_home
+
+              proc = subprocess.Popen(
+                  [codemod_bin, "workflow", "tui", "--id", run_id],
+                  cwd=worktree,
+                  env=env,
+                  stdin=slave_fd,
+                  stdout=slave_fd,
+                  stderr=slave_fd,
+                  close_fds=True,
+              )
+              os.close(slave_fd)
+
+              deadline = time.monotonic() + timeout_secs
+              timed_out = False
+
+              with open(output_path, "wb") as output_file:
+                  while True:
+                      if proc.poll() is not None:
+                          break
+                      if time.monotonic() >= deadline:
+                          timed_out = True
+                          proc.send_signal(signal.SIGTERM)
+                          try:
+                              proc.wait(timeout=5)
+                          except subprocess.TimeoutExpired:
+                              proc.kill()
+                              proc.wait()
+                          break
+
+                      ready, _, _ = select.select([master_fd], [], [], 0.2)
+                      if master_fd in ready:
+                          try:
+                              chunk = os.read(master_fd, 65536)
+                          except OSError:
+                              chunk = b""
+                          if chunk:
+                              output_file.write(chunk)
+                              output_file.flush()
+
+                  while True:
+                      try:
+                          chunk = os.read(master_fd, 65536)
+                      except OSError:
+                          break
+                      if not chunk:
+                          break
+                      output_file.write(chunk)
+
+              os.close(master_fd)
+
+              if timed_out:
+                  print(f"TUI scenario exceeded timeout of {timeout_secs}s", file=sys.stderr)
+                  sys.exit(124)
+
+              sys.exit(proc.returncode or 0)
+              PY
+            then
               echo "tui scenario command failed for ${name} run ${run_id}" >&2
               cat "${output}" >&2 || true
               return 1
