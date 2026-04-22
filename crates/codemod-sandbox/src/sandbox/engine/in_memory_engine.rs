@@ -1152,4 +1152,117 @@ export default function transform(root) {
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }
+
+    /// Two successive "batches", each with its own fresh `FsSandbox` and
+    /// `RecordingFetcher`, must each observe exactly one fetch for the
+    /// shared file — i.e. the curated fs does not hold any state across
+    /// executions (no static/global caches that would survive and hide a
+    /// leaked allocation).
+    #[test]
+    fn test_fs_sandbox_no_cross_batch_cache_leak() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const a = fs.readFileSync("/app/shared/env.ts", "utf-8");
+  const b = fs.readFileSync("/app/shared/env.ts", "utf-8");
+  return `a=${a};b=${b}`;
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("leak_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let resolver_path = temp_dir.path().to_path_buf();
+        let ast_for_batch = || {
+            let content = "const x = 1;";
+            (content, AstGrep::new(content, js_lang()))
+        };
+
+        // First batch.
+        let root_a = build_memory_fs_with_files(&[("/app/main.ts", "const x = 1;")]);
+        let fetcher_a = Arc::new(RecordingFetcher::new(&[(
+            "/app/shared/env.ts",
+            "export const ENV = 'a';",
+        )]));
+        let (content_a, ast_a) = ast_for_batch();
+        execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast: ast_a,
+            original_sha256: Some(compute_sha256(content_a)),
+            resolver: Some(Arc::new(
+                OxcResolver::new(resolver_path.clone(), None).unwrap(),
+            )),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(FsSandbox {
+                target_dir: "/app".to_string(),
+                root: root_a,
+                fetcher: Some(fetcher_a.clone()),
+            }),
+        })
+        .expect("first batch should succeed");
+        assert_eq!(
+            fetcher_a.call_count(),
+            1,
+            "first batch should hit the fetcher exactly once"
+        );
+
+        // Second batch with a freshly built sandbox. The new fetcher must
+        // be consulted — nothing from batch 1's VFS or cache may survive.
+        let root_b = build_memory_fs_with_files(&[("/app/main.ts", "const x = 1;")]);
+        let fetcher_b = Arc::new(RecordingFetcher::new(&[(
+            "/app/shared/env.ts",
+            "export const ENV = 'b';",
+        )]));
+        let (content_b, ast_b) = ast_for_batch();
+        let out_b = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast: ast_b,
+            original_sha256: Some(compute_sha256(content_b)),
+            resolver: Some(Arc::new(OxcResolver::new(resolver_path, None).unwrap())),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(FsSandbox {
+                target_dir: "/app".to_string(),
+                root: root_b,
+                fetcher: Some(fetcher_b.clone()),
+            }),
+        })
+        .expect("second batch should succeed");
+        assert_eq!(
+            fetcher_b.call_count(),
+            1,
+            "second batch must re-fetch — no cross-batch cache leak"
+        );
+        match out_b.primary {
+            ExecutionResult::Modified(m) => {
+                assert_eq!(
+                    m.content, "a=export const ENV = 'b';;b=export const ENV = 'b';",
+                    "second batch should see batch-B's content, not leaked batch-A content",
+                );
+            }
+            other => panic!("expected modified, got {other:?}"),
+        }
+    }
 }

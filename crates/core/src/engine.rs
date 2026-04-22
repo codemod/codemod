@@ -8,6 +8,7 @@ use std::fs::File;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +27,7 @@ use crate::config::{
 use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
+use crate::periodic::spawn_periodic;
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
@@ -477,6 +479,11 @@ pub struct Engine {
 
     /// Optional per-task heartbeat callbacks invoked when captured output arrives.
     output_heartbeat_callbacks: Arc<std::sync::Mutex<HashMap<Uuid, ProgressHeartbeatCallback>>>,
+
+    /// In-process cancel signals for steps that support cooperative cancellation
+    /// (today: the js-ast-grep file loop). `cancel_workflow` flips every entry
+    /// so the step can short-circuit without polling the state backend.
+    step_cancel_signals: Arc<std::sync::Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -700,6 +707,7 @@ impl Engine {
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger: StructuredLogger::default(),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -719,6 +727,7 @@ impl Engine {
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -745,6 +754,7 @@ impl Engine {
             task_completion_notify: Arc::new(Notify::new()),
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1316,6 +1326,29 @@ impl Engine {
         }
     }
 
+    fn register_step_cancel_signal(&self, task_id: Uuid, signal: Arc<AtomicBool>) {
+        if let Ok(mut signals) = self.step_cancel_signals.lock() {
+            signals.insert(task_id, signal);
+        }
+    }
+
+    fn unregister_step_cancel_signal(&self, task_id: Uuid) {
+        if let Ok(mut signals) = self.step_cancel_signals.lock() {
+            signals.remove(&task_id);
+        }
+    }
+
+    /// Flip every registered step cancel signal. Called by `cancel_workflow`
+    /// so in-flight cooperative steps (e.g. js-ast-grep) short-circuit without
+    /// polling the state backend.
+    fn signal_step_cancellation(&self) {
+        if let Ok(signals) = self.step_cancel_signals.lock() {
+            for signal in signals.values() {
+                signal.store(true, Ordering::Release);
+            }
+        }
+    }
+
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
         if let Some(master_task_id) = task.master_task_id {
             self.update_matrix_master_status(master_task_id).await?;
@@ -1732,6 +1765,11 @@ impl Engine {
                 "Workflow run {workflow_run_id} is not running or awaiting triggers"
             )));
         }
+
+        // Flip in-process cancel signals first so cooperative steps (the
+        // js-ast-grep file loop) stop taking new work before we spend time
+        // writing cancellation state.
+        self.signal_step_cancellation();
 
         // Get all tasks
         let tasks = self
@@ -3722,7 +3760,6 @@ impl Engine {
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let logger_for_deferred = logger.clone();
         let deferred_deletions_clone = Arc::clone(&deferred_deletions);
-        let workflow_run_id_for_cancel = workflow_run_id;
         let canceled_flag_for_closure = Arc::clone(&canceled_during_execution);
         let progress_state_for_closure = Arc::clone(&progress_state);
         let progress_state_for_watchdog = Arc::clone(&progress_state);
@@ -3742,21 +3779,18 @@ impl Engine {
             );
         }
 
-        let watchdog_task = {
-            tokio::spawn(async move {
-                loop {
-                    if watchdog_done_for_watchdog.load(Ordering::Acquire) {
-                        break;
-                    }
-
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-
-                    if watchdog_done_for_watchdog.load(Ordering::Acquire) {
-                        break;
-                    }
-
+        let watchdog_task = spawn_periodic(
+            Duration::from_secs(1),
+            Arc::clone(&watchdog_done_for_watchdog),
+            move || {
+                let progress_state = Arc::clone(&progress_state_for_watchdog);
+                let idle_timed_out = Arc::clone(&idle_timed_out_for_watchdog);
+                let idle_failure_message = Arc::clone(&idle_failure_message_for_watchdog);
+                let idle_notify = Arc::clone(&idle_notify_for_watchdog);
+                let state_adapter = Arc::clone(&state_adapter_for_watchdog);
+                async move {
                     let timed_out_message = {
-                        let state = progress_state_for_watchdog
+                        let state = progress_state
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         if state.global_last_progress_at.elapsed() > idle_timeout {
@@ -3766,34 +3800,43 @@ impl Engine {
                         }
                     };
 
-                    if let Some(message) = timed_out_message {
-                        idle_timed_out_for_watchdog.store(true, Ordering::Release);
-                        if let Ok(mut slot) = idle_failure_message_for_watchdog.lock() {
-                            *slot = Some(message.clone());
-                        }
-                        idle_notify_for_watchdog.notify_waiters();
+                    let Some(message) = timed_out_message else {
+                        return ControlFlow::Continue(());
+                    };
 
-                        if let Some(task_id) = task_log_task_id {
-                            let mut adapter = state_adapter_for_watchdog.lock().await;
-                            if let Ok(mut task) = adapter.get_task(task_id).await {
-                                task.logs.push(message.clone());
-                                let _ = adapter.save_task(&task).await;
-                                publish_event(
-                                    task.workflow_run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: task.workflow_run_id,
-                                        task_id,
-                                        line: message,
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                        }
-                        break;
+                    idle_timed_out.store(true, Ordering::Release);
+                    if let Ok(mut slot) = idle_failure_message.lock() {
+                        *slot = Some(message.clone());
                     }
+                    idle_notify.notify_waiters();
+
+                    if let Some(task_id) = task_log_task_id {
+                        let mut adapter = state_adapter.lock().await;
+                        if let Ok(mut task) = adapter.get_task(task_id).await {
+                            task.logs.push(message.clone());
+                            let _ = adapter.save_task(&task).await;
+                            publish_event(
+                                task.workflow_run_id,
+                                WorkflowEvent::TaskLogAppended {
+                                    workflow_run_id: task.workflow_run_id,
+                                    task_id,
+                                    line: message,
+                                    at: Utc::now(),
+                                },
+                            );
+                        }
+                    }
+                    ControlFlow::Break(())
                 }
-            })
-        };
+            },
+        );
+
+        // Register an in-process cancel signal for this step so cancel_workflow
+        // can flip `canceled_during_execution` directly (TUI path). CLI/cloud
+        // cancellation goes through SIGTERM and doesn't need this hook.
+        if let Some(task_id) = task_log_task_id {
+            self.register_step_cancel_signal(task_id, Arc::clone(&canceled_during_execution));
+        }
 
         // Execute the codemod on each file using the config's multi-threading
         let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
@@ -3852,32 +3895,6 @@ impl Engine {
                     || idle_timed_out_for_closure.load(Ordering::Acquire)
                 {
                     return;
-                }
-
-                if let (Some(task_id), Some(run_id)) =
-                    (task_log_task_id, workflow_run_id_for_cancel)
-                {
-                    let state_adapter = Arc::clone(&state_adapter);
-                    let was_canceled = block_on_runtime_handle(&runtime_handle, async move {
-                        let adapter = state_adapter.lock().await;
-                        let workflow_canceled = adapter
-                            .get_workflow_run(run_id)
-                            .await
-                            .ok()
-                            .is_some_and(|run| run.status == WorkflowStatus::Canceled);
-                        if workflow_canceled {
-                            return true;
-                        }
-                        adapter.get_task(task_id).await.ok().is_some_and(|task| {
-                            task.status == TaskStatus::Failed
-                                && task.error.as_deref() == Some("Canceled by user")
-                        })
-                    });
-
-                    if was_canceled {
-                        canceled_flag_for_closure.store(true, Ordering::Release);
-                        return;
-                    }
                 }
 
                 // Only process files
@@ -4077,35 +4094,13 @@ impl Engine {
                         .await
                 });
 
-                if let (Some(task_id), Some(run_id)) =
-                    (task_log_task_id, workflow_run_id_for_cancel)
-                {
-                    let state_adapter = Arc::clone(&state_adapter);
-                    let was_canceled = block_on_runtime_handle(&runtime_handle, async move {
-                        let adapter = state_adapter.lock().await;
-                        let workflow_canceled = adapter
-                            .get_workflow_run(run_id)
-                            .await
-                            .ok()
-                            .is_some_and(|run| run.status == WorkflowStatus::Canceled);
-                        if workflow_canceled {
-                            return true;
-                        }
-                        adapter.get_task(task_id).await.ok().is_some_and(|task| {
-                            task.status == TaskStatus::Failed
-                                && task.error.as_deref() == Some("Canceled by user")
-                        })
-                    });
-
-                    if was_canceled {
-                        canceled_flag_for_closure.store(true, Ordering::Release);
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &relative_path,
-                            StepPhase::ExecutionErrored,
-                        );
-                        return;
-                    }
+                if canceled_flag_for_closure.load(Ordering::Acquire) {
+                    finish_unit_progress(
+                        &progress_state_for_closure,
+                        &relative_path,
+                        StepPhase::ExecutionErrored,
+                    );
+                    return;
                 }
 
                 match execution_result {
@@ -4408,6 +4403,7 @@ impl Engine {
         let _ = watchdog_task.await;
         if let Some(task_id) = task_log_task_id {
             self.unregister_output_heartbeat(task_id);
+            self.unregister_step_cancel_signal(task_id);
         }
 
         if idle_timed_out.load(Ordering::Acquire) {
@@ -5858,6 +5854,7 @@ impl Clone for Engine {
             task_completion_notify: Arc::clone(&self.task_completion_notify),
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
+            step_cancel_signals: Arc::clone(&self.step_cancel_signals),
         }
     }
 }
