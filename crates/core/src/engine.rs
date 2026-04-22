@@ -929,10 +929,12 @@ impl Engine {
                                 .iter()
                                 .find(|node| node.id == task.node_id)
                             {
-                                if should_manage_git_for_node(
-                                    node,
-                                    engine.workflow_run_config.enable_managed_git,
-                                ) {
+                                if engine.workflow_run_config.enable_worktrees
+                                    && should_manage_git_for_node(
+                                        node,
+                                        engine.workflow_run_config.enable_managed_git,
+                                    )
+                                {
                                     let ctx =
                                         crate::git_ops::build_task_expression_context(&task.id.to_string());
                                     let configured_branch =
