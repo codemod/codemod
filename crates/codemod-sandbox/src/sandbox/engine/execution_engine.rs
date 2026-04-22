@@ -1,4 +1,5 @@
 use super::codemod_lang::CodemodLang;
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
@@ -201,6 +202,10 @@ where
     // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
 
+    // Track whether the caller opted into llrt's real-disk fs capability
+    // so we know whether to install the curated fs below instead.
+    let mut fs_capability_enabled = false;
+
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
@@ -211,6 +216,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -219,6 +225,17 @@ where
             }
         }
     }
+
+    // Install the curated `fs` when the caller gave us a target directory
+    // and didn't explicitly opt into the unrestricted llrt fs.
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
     // Add AstGrepModule
@@ -236,6 +253,13 @@ where
     // Add RuntimeModule (progress/failure hooks)
     built_in_resolver = built_in_resolver.add_name("codemod:runtime");
     built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -322,6 +346,16 @@ where
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
             },
         })?;
+
+        if let Some(target_dir) = curated_fs_target.clone() {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -622,6 +656,12 @@ pub struct ShardFunctionOptions<'a, R> {
     /// Optional capabilities to gate module access (fetch, fs, child_process).
     /// When `None`, no extra modules are enabled.
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    /// Directory the curated `fs` module is constrained to. When `Some`
+    /// and the caller hasn't opted into the llrt `Fs` capability, the
+    /// shard function's `import "fs"` resolves to the curated fs backed
+    /// by `vfs::PhysicalFS` at disk root `/`, prefix-checked against this
+    /// path.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Execute a shard function with QuickJS and return the result as JSON.
@@ -655,6 +695,7 @@ where
         },
     })?;
 
+    let mut fs_capability_enabled = false;
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
         for capability in capabilities {
@@ -664,6 +705,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -672,6 +714,14 @@ where
             }
         }
     }
+
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
 
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
@@ -687,6 +737,13 @@ where
 
     built_in_resolver = built_in_resolver.add_name("codemod:runtime");
     built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -722,6 +779,16 @@ where
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
             },
         })?;
+
+        if let Some(target_dir) = curated_fs_target.clone() {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -1508,6 +1575,7 @@ export default function shard(input) {
                 "state": {}
             }),
             capabilities: None,
+            target_directory: None,
         };
 
         let result = execute_shard_function_with_quickjs(options).await;

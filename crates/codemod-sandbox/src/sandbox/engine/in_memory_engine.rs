@@ -1,4 +1,5 @@
 use super::codemod_lang::CodemodLang;
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
 use super::execution_engine::{CodemodOutput, ExecutionResult};
 use super::quickjs_adapters::QuickJSResolver;
 use super::transform_helpers::{
@@ -24,6 +25,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use vfs::VfsPath;
 
 /// Default execution timeout in milliseconds (180s)
 const DEFAULT_TIMEOUT_MS: u64 = 180000;
@@ -44,6 +46,27 @@ pub struct ProcessSandbox {
     pub env: HashMap<String, String>,
     /// Value returned by `process.cwd()`.
     pub cwd: String,
+}
+
+/// Curated filesystem sandbox. When attached to
+/// [`InMemoryExecutionOptions::fs_sandbox`], the codemod's `fs` import is
+/// backed by `root` and constrained to paths beneath `target_dir`.
+///
+/// When the caller instead opts the codemod into the `Fs` llrt capability,
+/// llrt's real-disk fs is used and this option is ignored.
+#[derive(Clone)]
+pub struct FsSandbox {
+    /// Absolute prefix that the codemod is allowed to read/write. Paths that
+    /// normalize outside this prefix are rejected with `EACCES`.
+    pub target_dir: String,
+    /// Backing VFS. For pg_ast_grep this is a pre-populated `MemoryFS`; for
+    /// CLI runs it would be a `PhysicalFS` rooted at `/`.
+    pub root: VfsPath,
+    /// Optional fallback consulted on VFS miss. Typically used by
+    /// pg_ast_grep to lazily pull sibling files from Postgres so a read of
+    /// a shared config that isn't pre-loaded in the per-file MemoryFS
+    /// succeeds instead of returning `ENOENT`.
+    pub fetcher: Option<Arc<dyn FileFetcher>>,
 }
 
 /// In-memory execution options for executing a codemod on a pre-parsed AST
@@ -84,6 +107,14 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// When `None`, the host-derived defaults from llrt_modules remain in
     /// place.
     pub process_sandbox: Option<ProcessSandbox>,
+    /// Optional curated filesystem sandbox.
+    ///
+    /// When `Some`, a curated `fs` / `fs/promises` module backed by the
+    /// provided `VfsPath` is registered and constrained to `target_dir`.
+    /// When `None`, no fs module is provided (codemods that `import "fs"`
+    /// will fail to resolve unless the caller separately enables the llrt
+    /// `Fs` capability).
+    pub fs_sandbox: Option<FsSandbox>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -179,6 +210,16 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
 
+    // Register the curated fs module as `fs` / `fs/promises` when the caller
+    // asked for a curated sandbox. The config is installed into userdata
+    // below so the module can find it on first import.
+    if options.fs_sandbox.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
+
     let in_memory_resolver = QuickJSResolver::new(Arc::clone(&resolver_arc));
     let noop_loader = InMemoryLoader::new(Arc::clone(&resolver_arc));
 
@@ -201,6 +242,7 @@ where
     let metrics_context = options.metrics_context.clone();
     let shared_state_context = options.shared_state_context.clone();
     let process_sandbox = options.process_sandbox.clone();
+    let fs_sandbox = options.fs_sandbox.clone();
 
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
@@ -220,6 +262,20 @@ where
                 message: format!("Failed to store SharedStateContext: {:?}", e),
             },
         })?;
+
+        // Install the curated fs config before the codemod module evaluates
+        // so its first `import "fs"` resolves against the right root.
+        if let Some(sandbox) = fs_sandbox {
+            let mut cfg = CuratedFsConfig::new(sandbox.target_dir, sandbox.root);
+            if let Some(fetcher) = sandbox.fetcher {
+                cfg = cfg.with_fetcher(fetcher);
+            }
+            ctx.store_userdata(cfg).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                },
+            })?;
+        }
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -435,6 +491,7 @@ export default function transform(root) {
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
             process_sandbox: None,
+            fs_sandbox: None,
         });
 
         match result {
@@ -493,6 +550,7 @@ export default function transform(root) {
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
+            fs_sandbox: None,
         });
 
         match result {
@@ -562,6 +620,7 @@ export default function transform(root) {
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: Some(sandbox),
+            fs_sandbox: None,
         });
 
         match result {
@@ -571,6 +630,445 @@ export default function transform(root) {
                         modified.content,
                         "cwd=/app/;env=;keys=cwd,env;stripped=undefined,undefined,undefined,undefined",
                     );
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    /// Build a MemoryFS-backed sandbox that contains the target file plus a
+    /// sibling the codemod can try to read/write. Returns the VfsPath root.
+    fn build_memory_fs_with_files(files: &[(&str, &str)]) -> vfs::VfsPath {
+        let root: vfs::VfsPath = vfs::MemoryFS::new().into();
+        for (path, content) in files {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                let p = parent.to_string_lossy();
+                if !p.is_empty() {
+                    let parent_vfs = root.join(p.trim_start_matches('/')).unwrap();
+                    let _ = parent_vfs.create_dir_all();
+                }
+            }
+            let file = root.join(path.trim_start_matches('/')).unwrap();
+            let mut w = file.create_file().unwrap();
+            use std::io::Write;
+            w.write_all(content.as_bytes()).unwrap();
+        }
+        root
+    }
+
+    /// Curated fs must expose allowed files to the sandbox while rejecting
+    /// paths that escape `target_dir`.
+    #[test]
+    fn test_fs_sandbox_allows_read_and_rejects_escape() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        // Codemod emits a summary of fs behaviour:
+        //   (1) successful read of a sibling inside target_dir
+        //   (2) error `.code` when reading outside target_dir
+        //   (3) error `.code` when reading a missing file inside target_dir
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const ok = fs.readFileSync("/app/sibling.ts", "utf-8");
+  let escape = "none";
+  try {
+    fs.readFileSync("/etc/passwd", "utf-8");
+  } catch (e) {
+    escape = e.code;
+  }
+  let missing = "none";
+  try {
+    fs.readFileSync("/app/missing.ts", "utf-8");
+  } catch (e) {
+    missing = e.code;
+  }
+  return `ok=${ok};escape=${escape};missing=${missing}`;
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("fs_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let root = build_memory_fs_with_files(&[
+            ("/app/main.ts", "const x = 1;"),
+            ("/app/sibling.ts", "export const y = 2;"),
+        ]);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root: root.clone(),
+            fetcher: None,
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(
+                        modified.content,
+                        "ok=export const y = 2;;escape=EACCES;missing=ENOENT",
+                    );
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    /// Mirror pg_ast_grep's batch flow: run the same fs-using codemod across
+    /// many files sequentially (one tokio runtime + one QuickJS runtime per
+    /// file, just like execute_codemod_sync on each Rayon worker). If the fs
+    /// sandbox path leaves behind poisoned global state (panic handler,
+    /// tokio internals, rquickjs userdata bookkeeping), later files fail
+    /// even though the first-file tests above pass.
+    #[test]
+    fn test_fs_sandbox_batch_like_pg_ast_grep() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const content = fs.readFileSync(root.filename(), "utf-8");
+  return content + "\n// touched";
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("batch_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let files: Vec<(String, String)> = (0..16)
+            .map(|i| {
+                (
+                    format!("/app/src/file_{i}.ts"),
+                    format!("export const v{i} = {i};"),
+                )
+            })
+            .collect();
+
+        let mut modified = 0usize;
+        for (idx, (path, content)) in files.iter().enumerate() {
+            let root = build_memory_fs_with_files(&[(path.as_str(), content.as_str())]);
+            let fs_sandbox = FsSandbox {
+                target_dir: "/app".to_string(),
+                root,
+                fetcher: None,
+            };
+            let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+            let ast = AstGrep::new(content.as_str(), js_lang());
+            let out = execute_codemod_sync(InMemoryExecutionOptions {
+                codemod_source: codemod_content,
+                language: js_lang(),
+                ast,
+                original_sha256: Some(compute_sha256(content)),
+                resolver: Some(resolver),
+                selector_config: None,
+                params: None,
+                matrix_values: None,
+                file_path: Some(path.as_str()),
+                semantic_provider: None,
+                metrics_context: None,
+                shared_state_context: None,
+                timeout_ms: None,
+                memory_limit: None,
+                process_sandbox: None,
+                fs_sandbox: Some(fs_sandbox),
+            })
+            .unwrap_or_else(|e| panic!("iteration {idx} failed: {e:?}"));
+            match out.primary {
+                ExecutionResult::Modified(m) => {
+                    assert!(
+                        m.content.ends_with("// touched"),
+                        "iteration {idx} produced unexpected content: {:?}",
+                        m.content
+                    );
+                    modified += 1;
+                }
+                other => panic!("iteration {idx} expected modified, got {other:?}"),
+            }
+        }
+        assert_eq!(modified, files.len());
+    }
+
+    /// `writeFileSync` inside target_dir must land in the backing VFS and be
+    /// visible to subsequent reads; writes outside target_dir must fail.
+    #[test]
+    fn test_fs_sandbox_write_round_trip() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  fs.writeFileSync("/app/out.ts", "export const z = 3;", "utf-8");
+  const back = fs.readFileSync("/app/out.ts", "utf-8");
+  let denied = "none";
+  try {
+    fs.writeFileSync("/tmp/escape.ts", "leaked", "utf-8");
+  } catch (e) {
+    denied = e.code;
+  }
+  return `back=${back};denied=${denied}`;
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("fs_write_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let root = build_memory_fs_with_files(&[("/app/main.ts", "const x = 1;")]);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root: root.clone(),
+            fetcher: None,
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(modified.content, "back=export const z = 3;;denied=EACCES",);
+                    // Verify the write actually landed in the MemoryFS (not
+                    // just a runtime illusion) by reading through the VFS.
+                    let written = root.join("app/out.ts").unwrap();
+                    let mut buf = String::new();
+                    use std::io::Read;
+                    written
+                        .open_file()
+                        .unwrap()
+                        .read_to_string(&mut buf)
+                        .unwrap();
+                    assert_eq!(buf, "export const z = 3;");
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    /// Hand-crafted fetcher that records every call for test assertions.
+    /// Returns Some(bytes) for keys in the preloaded map, None otherwise.
+    struct RecordingFetcher {
+        files: std::collections::HashMap<String, Vec<u8>>,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingFetcher {
+        fn new(entries: &[(&str, &str)]) -> Self {
+            let files = entries
+                .iter()
+                .map(|(p, c)| (p.to_string(), c.as_bytes().to_vec()))
+                .collect();
+            Self {
+                files,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl crate::sandbox::engine::curated_fs::FileFetcher for RecordingFetcher {
+        fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+            self.calls.lock().unwrap().push(path.to_string());
+            Ok(self.files.get(path).cloned())
+        }
+    }
+
+    /// When a readFileSync misses the VFS, the configured fetcher should
+    /// fill it in, and subsequent reads of the same path should hit the
+    /// VFS cache (the fetcher is called once even across repeated reads).
+    #[test]
+    fn test_fs_sandbox_fetcher_fills_missing_and_caches() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const first = fs.readFileSync("/app/shared/env.ts", "utf-8");
+  const second = fs.readFileSync("/app/shared/env.ts", "utf-8");
+  return `first=${first};second=${second}`;
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("fetcher_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        // Only the target file is pre-seeded; env.ts comes from the fetcher.
+        let root = build_memory_fs_with_files(&[("/app/main.ts", "const x = 1;")]);
+        let fetcher = Arc::new(RecordingFetcher::new(&[(
+            "/app/shared/env.ts",
+            "export const ENV = 'prod';",
+        )]));
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root: root.clone(),
+            fetcher: Some(fetcher.clone()),
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(
+                        modified.content,
+                        "first=export const ENV = 'prod';;second=export const ENV = 'prod';",
+                    );
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+        // Fetcher called exactly once — second read served from the VFS
+        // after the first read wrote the bytes back.
+        assert_eq!(fetcher.call_count(), 1, "fetcher should be called once");
+    }
+
+    /// A fetcher returning `Ok(None)` must surface as `ENOENT`; returning
+    /// `Err` must surface as `EIO`.
+    #[test]
+    fn test_fs_sandbox_fetcher_none_is_enoent_err_is_eio() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  let missing = "none";
+  try {
+    fs.readFileSync("/app/shared/missing.ts", "utf-8");
+  } catch (e) {
+    missing = e.code;
+  }
+  let failing = "none";
+  try {
+    fs.readFileSync("/app/shared/boom.ts", "utf-8");
+  } catch (e) {
+    failing = e.code;
+  }
+  return `missing=${missing};failing=${failing}`;
+}
+        "#
+        .trim();
+
+        fs::write(
+            temp_dir.path().join("fetcher_err_codemod.js"),
+            codemod_content,
+        )
+        .expect("Failed to write codemod file");
+
+        struct FailingFetcher;
+        impl crate::sandbox::engine::curated_fs::FileFetcher for FailingFetcher {
+            fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+                if path.ends_with("/boom.ts") {
+                    Err("storage unavailable".to_string())
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        let root = build_memory_fs_with_files(&[("/app/main.ts", "const x = 1;")]);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root,
+            fetcher: Some(Arc::new(FailingFetcher)),
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(modified.content, "missing=ENOENT;failing=EIO");
                 }
                 other => panic!("Expected modified result, got: {:?}", other),
             },

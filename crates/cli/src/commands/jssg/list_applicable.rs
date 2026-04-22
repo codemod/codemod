@@ -99,6 +99,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         language: args.language.parse().unwrap(),
         resolver: resolver.clone(),
         capabilities: config.capabilities.clone(),
+        target_directory: None,
     })
     .await?;
     let combined_scan: Option<Arc<CombinedScan<CodemodLang>>> = selector_config

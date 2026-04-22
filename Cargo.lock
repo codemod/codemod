@@ -1189,6 +1189,7 @@ dependencies = [
  "thiserror 2.0.16",
  "tokio",
  "tree-sitter-loader",
+ "vfs",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-tree-sitter-sg",
