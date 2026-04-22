@@ -3743,7 +3743,6 @@ impl Engine {
         let logger = logger.clone();
         let modified_files_collector_clone = modified_files_collector.clone();
         let selector_matched_files_collector_clone = selector_matched_files_collector.clone();
-        let state_adapter = Arc::clone(&self.state_adapter);
         let target_path_for_logs = target_path.clone();
         let canceled_during_execution = Arc::new(AtomicBool::new(false));
         let idle_timeout = js_ast_grep_idle_timeout();
@@ -3869,25 +3868,16 @@ impl Engine {
         let execute_result = config
             .execute(move |file_path, config| {
                 if !first_file_dispatch_logged.swap(true, Ordering::AcqRel) {
-                    if let Some(task_id) = task_log_task_id {
-                        let state_adapter = Arc::clone(&state_adapter);
-                        block_on_runtime_handle(&runtime_handle, async move {
-                            let mut adapter = state_adapter.lock().await;
-                            if let Ok(mut task) = adapter.get_task(task_id).await {
-                                let message = "First file dispatch entered".to_string();
-                                task.logs.push(message.clone());
-                                let _ = adapter.save_task(&task).await;
-                                publish_event(
-                                    task.workflow_run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: task.workflow_run_id,
-                                        task_id,
-                                        line: message,
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                        });
+                    if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
+                        publish_event(
+                            run_id,
+                            WorkflowEvent::TaskLogAppended {
+                                workflow_run_id: run_id,
+                                task_id,
+                                line: "First file dispatch entered".to_string(),
+                                at: Utc::now(),
+                            },
+                        );
                     }
                 }
 
@@ -3913,25 +3903,16 @@ impl Engine {
                     StepPhase::FileQueued,
                 );
 
-                if let Some(task_id) = task_log_task_id {
-                    let state_adapter = Arc::clone(&state_adapter);
-                    let progress_message = format!("Processing file: {relative_path}");
-                    block_on_runtime_handle(&runtime_handle, async move {
-                        let mut adapter = state_adapter.lock().await;
-                        if let Ok(mut task) = adapter.get_task(task_id).await {
-                            task.logs.push(progress_message.clone());
-                            let _ = adapter.save_task(&task).await;
-                            publish_event(
-                                task.workflow_run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: task.workflow_run_id,
-                                    task_id,
-                                    line: progress_message,
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                    });
+                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
+                    publish_event(
+                        run_id,
+                        WorkflowEvent::TaskLogAppended {
+                            workflow_run_id: run_id,
+                            task_id,
+                            line: format!("Processing file: {relative_path}"),
+                            at: Utc::now(),
+                        },
+                    );
                 }
 
                 // Read file content synchronously
@@ -3973,10 +3954,9 @@ impl Engine {
                 let current_runtime_unit = Arc::new(std::sync::Mutex::new(relative_path.clone()));
                 let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
                 let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
-                let state_adapter_for_runtime_events = Arc::clone(&state_adapter);
-                let runtime_handle_for_runtime_events = runtime_handle.clone();
                 let relative_path_for_runtime_events = relative_path.clone();
                 let runtime_event_task_id = task_log_task_id;
+                let runtime_event_run_id = workflow_run_id;
                 let runtime_event_callback: RuntimeEventCallback =
                     Arc::new(move |event| match event.kind {
                         RuntimeEventKind::SetCurrentUnit => {
@@ -4012,28 +3992,20 @@ impl Engine {
                                 &runtime_unit,
                                 StepPhase::Output,
                             );
-                            if let (Some(task_id), Some(message)) =
-                                (runtime_event_task_id, format_runtime_event_log(&event))
-                            {
-                                let state_adapter = Arc::clone(&state_adapter_for_runtime_events);
-                                std::mem::drop(runtime_handle_for_runtime_events.spawn(
-                                    async move {
-                                        let mut adapter = state_adapter.lock().await;
-                                        if let Ok(mut task) = adapter.get_task(task_id).await {
-                                            task.logs.push(message.clone());
-                                            let _ = adapter.save_task(&task).await;
-                                            publish_event(
-                                                task.workflow_run_id,
-                                                WorkflowEvent::TaskLogAppended {
-                                                    workflow_run_id: task.workflow_run_id,
-                                                    task_id,
-                                                    line: message,
-                                                    at: Utc::now(),
-                                                },
-                                            );
-                                        }
+                            if let (Some(task_id), Some(run_id), Some(message)) = (
+                                runtime_event_task_id,
+                                runtime_event_run_id,
+                                format_runtime_event_log(&event),
+                            ) {
+                                publish_event(
+                                    run_id,
+                                    WorkflowEvent::TaskLogAppended {
+                                        workflow_run_id: run_id,
+                                        task_id,
+                                        line: message,
+                                        at: Utc::now(),
                                     },
-                                ));
+                                );
                             }
                         }
                     });
@@ -4283,25 +4255,18 @@ impl Engine {
                         );
                         if let SandboxExecutionError::RuntimeHook { source } = &e {
                             let message = format_runtime_failure_message(source);
-                            if let Some(task_id) = task_log_task_id {
-                                let state_adapter = Arc::clone(&state_adapter);
-                                let message_for_log = message.clone();
-                                block_on_runtime_handle(&runtime_handle, async move {
-                                    let mut adapter = state_adapter.lock().await;
-                                    if let Ok(mut task) = adapter.get_task(task_id).await {
-                                        task.logs.push(message_for_log.clone());
-                                        let _ = adapter.save_task(&task).await;
-                                        publish_event(
-                                            task.workflow_run_id,
-                                            WorkflowEvent::TaskLogAppended {
-                                                workflow_run_id: task.workflow_run_id,
-                                                task_id,
-                                                line: message_for_log,
-                                                at: Utc::now(),
-                                            },
-                                        );
-                                    }
-                                });
+                            if let (Some(task_id), Some(run_id)) =
+                                (task_log_task_id, workflow_run_id)
+                            {
+                                publish_event(
+                                    run_id,
+                                    WorkflowEvent::TaskLogAppended {
+                                        workflow_run_id: run_id,
+                                        task_id,
+                                        line: message.clone(),
+                                        at: Utc::now(),
+                                    },
+                                );
                             }
                             canceled_flag_for_closure.store(true, Ordering::Release);
                             if let Ok(mut runtime_failure_message) =
@@ -4319,25 +4284,16 @@ impl Engine {
                             relative_path,
                             e
                         );
-                        if let Some(task_id) = task_log_task_id {
-                            let state_adapter = Arc::clone(&state_adapter);
-                            let message = format!("Failed to process {relative_path}: {e}");
-                            block_on_runtime_handle(&runtime_handle, async move {
-                                let mut adapter = state_adapter.lock().await;
-                                if let Ok(mut task) = adapter.get_task(task_id).await {
-                                    task.logs.push(message.clone());
-                                    let _ = adapter.save_task(&task).await;
-                                    publish_event(
-                                        task.workflow_run_id,
-                                        WorkflowEvent::TaskLogAppended {
-                                            workflow_run_id: task.workflow_run_id,
-                                            task_id,
-                                            line: message,
-                                            at: Utc::now(),
-                                        },
-                                    );
-                                }
-                            });
+                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
+                            publish_event(
+                                run_id,
+                                WorkflowEvent::TaskLogAppended {
+                                    workflow_run_id: run_id,
+                                    task_id,
+                                    line: format!("Failed to process {relative_path}: {e}"),
+                                    at: Utc::now(),
+                                },
+                            );
                         }
                         self.execution_stats
                             .files_with_errors
@@ -4360,25 +4316,16 @@ impl Engine {
                             relative_path,
                             e
                         );
-                        if let Some(task_id) = task_log_task_id {
-                            let state_adapter = Arc::clone(&state_adapter);
-                            let message = format!("Failed to process {relative_path}: {e}");
-                            block_on_runtime_handle(&runtime_handle, async move {
-                                let mut adapter = state_adapter.lock().await;
-                                if let Ok(mut task) = adapter.get_task(task_id).await {
-                                    task.logs.push(message.clone());
-                                    let _ = adapter.save_task(&task).await;
-                                    publish_event(
-                                        task.workflow_run_id,
-                                        WorkflowEvent::TaskLogAppended {
-                                            workflow_run_id: task.workflow_run_id,
-                                            task_id,
-                                            line: message,
-                                            at: Utc::now(),
-                                        },
-                                    );
-                                }
-                            });
+                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
+                            publish_event(
+                                run_id,
+                                WorkflowEvent::TaskLogAppended {
+                                    workflow_run_id: run_id,
+                                    task_id,
+                                    line: format!("Failed to process {relative_path}: {e}"),
+                                    at: Utc::now(),
+                                },
+                            );
                         }
                         self.execution_stats
                             .files_with_errors
