@@ -589,9 +589,7 @@ fn format_publish_forbidden_error(manifest: &CodemodManifest, error_text: &str) 
         );
     }
 
-    format!(
-        "Access denied. You may not have permission to publish to this package. If this is a new unscoped package, the package name may already be taken or may require trusted publisher configuration."
-    )
+    "Access denied. You may not have permission to publish to this package. If this is a new unscoped package, the package name may already be taken or may require trusted publisher configuration.".to_string()
 }
 
 fn ensure_sentence(message: String) -> String {
