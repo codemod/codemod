@@ -549,6 +549,8 @@ jobs:
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          RESOLVED_BASELINE_REF: ${{ github.event.pull_request.base.sha || '' }}
+          RESOLVED_CANDIDATE_REF: ${{ github.event.pull_request.head.sha || '' }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -559,9 +561,30 @@ jobs:
             const pull_number = Number(process.env.PR_NUMBER || fs.readFileSync("perf-results/pr-number.txt", "utf8").trim());
             const summaryMarker = "<!-- codemod:tui-perf -->";
             const comparisonBody = fs.readFileSync("perf-results/comparison.md", "utf8").trim();
+            const baselineRef = fs.readFileSync("perf-results/resolved-baseline-ref.txt", "utf8").trim();
+            const candidateRef = fs.readFileSync("perf-results/resolved-candidate-ref.txt", "utf8").trim();
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const trackedTests = [
+              "`should_redraw_is_false_for_static_idle_ui_without_changes`",
+              "`draw_counter_counts_only_initial_draw_for_static_idle_screen`",
+              "`draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events`",
+              "`draw_counter_counts_deadline_tick_for_running_screen`",
+              "`reduce_workflow_receiver_requests_snapshot_after_receiver_lag`",
+              "`await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay`",
+              "`await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal`",
+            ];
             const summaryBody = [
               summaryMarker,
               "## TUI Perf Comparison",
+              "",
+              `- Workflow run: ${runUrl}`,
+              `- Baseline ref: \`${baselineRef}\``,
+              `- Candidate ref: \`${candidateRef}\``,
+              `- Updated at: ${new Date().toISOString()}`,
+              "",
+              "### Tracked Perf Regressions",
+              "",
+              ...trackedTests.map((testName) => `- ${testName}`),
               "",
               comparisonBody,
             ].join("\n");
