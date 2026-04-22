@@ -107,6 +107,7 @@ jobs:
           WORKTREE_ROOT="$(mktemp -d)"
           BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
           CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
+          SHARED_TARGET_DIR="${WORKTREE_ROOT}/shared-target"
 
           cleanup() {
             git worktree remove --force "${BASELINE_WORKTREE}" >/dev/null 2>&1 || true
@@ -313,7 +314,7 @@ jobs:
             state_home="${suite_root}/xdg-data"
             workflow_root="${suite_root}/workflows"
             target_root="${suite_root}/targets"
-            target_dir="${suite_root}/target"
+            target_dir="${SHARED_TARGET_DIR}"
             codemod_bin="${target_dir}/debug/codemod"
 
             mkdir -p "${outdir}"
@@ -322,7 +323,7 @@ jobs:
 
             (
               cd "${worktree}"
-              CARGO_TARGET_DIR="${target_dir}" cargo build -p codemod
+              CARGO_TARGET_DIR="${target_dir}" cargo build -q -p codemod --bin codemod
             ) >"${outdir}/build.log" 2>&1
             if [ ! -x "${codemod_bin}" ]; then
               echo "failed to build codemod binary for ${ref}" >&2
