@@ -568,7 +568,7 @@ Interactive defaults:
 - directory: name-derived package directory when `[PATH]` is omitted
 - agent skill behavior: included by default for workflow packages
 - description: `Codemod package for <name>`
-- author: logged-in user as `username <email>` when available; otherwise omitted
+- author: `Author <author@example.com>`
 - license: `MIT`
 - package manager: `npm`
 - GitHub Actions publishing workflow: disabled
@@ -635,9 +635,9 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 </ResponseField>
 
 <ResponseField name="--author <AUTHOR>" type="string">
-  Author name and email.
+  Author name and email stored in `codemod.yaml` package metadata.
 
-  Defaults to the logged-in user as `username <email>` when available. Otherwise omitted.
+  Defaults to `Author <author@example.com>`.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
@@ -729,7 +729,7 @@ npx codemod publish [PATH]
 
 <Info>
   Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Package Structure](/package-structure#package-metadata-codemod-yaml) for configuration options.
-  If `author` is omitted locally, `codemod publish` resolves it from the authenticated user before upload.
+  If `author` is missing or still the placeholder value, `codemod publish` warns and can replace the uploaded package's `codemod.yaml` author metadata with values inferred from the authenticated user. This does not affect the Registry Publisher shown in Codemod Registry, which always reflects the logged-in publishing account.
 </Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">

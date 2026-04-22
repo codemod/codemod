@@ -1,4 +1,6 @@
-use crate::utils::manifest::CodemodManifest;
+use crate::utils::manifest::{
+    is_placeholder_author, normalize_author, CodemodManifest, PLACEHOLDER_AUTHOR,
+};
 use crate::utils::package_validation::{
     detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape,
@@ -10,13 +12,16 @@ use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
 use console::style;
+use inquire::Confirm;
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
 use serde::Deserialize;
+use serde_json::Value;
 use serde_yaml;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -94,12 +99,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let config = storage.load_config()?;
     let registry_url = config.default_registry.clone();
     let auth_source = resolve_publish_auth_source(&storage, &registry_url)?;
-    let inferred_author = if manifest_needs_inferred_author(&manifest) {
-        auth_source.inferred_author(&registry_url).await?
-    } else {
-        None
-    };
-    let effective_manifest = resolve_effective_manifest(manifest, inferred_author)?;
+    let resolved_author = resolve_publish_author(&manifest, &auth_source, &registry_url).await?;
+    let effective_manifest = resolve_effective_manifest(manifest, resolved_author)?;
 
     // Validate package structure and get JS files to bundle
     let js_files_to_bundle = validate_package_structure(&package_path, &effective_manifest)?;
@@ -165,26 +166,127 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     Ok(())
 }
 
-fn normalize_manifest_author(author: Option<String>) -> Option<String> {
-    author
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn should_prompt_for_placeholder_author_replacement() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
-fn manifest_needs_inferred_author(manifest: &CodemodManifest) -> bool {
-    normalize_manifest_author(manifest.author.clone()).is_none()
+async fn resolve_publish_author(
+    manifest: &CodemodManifest,
+    auth_source: &PublishAuthSource,
+    registry_url: &str,
+) -> Result<Option<String>> {
+    let manifest_author = normalize_author(manifest.author.clone());
+    let author_needs_resolution =
+        manifest_author.is_none() || is_placeholder_author(manifest_author.as_deref());
+
+    if !author_needs_resolution {
+        return Ok(manifest_author);
+    }
+
+    println!(
+        "{}",
+        publish_author_resolution_warning(manifest_author.as_deref())
+    );
+
+    let inferred_author = normalize_author(auth_source.inferred_author(registry_url).await?);
+    let Some(inferred_author) = inferred_author else {
+        println!(
+            "{}",
+            publish_author_resolution_fallback(manifest_author.as_deref())
+        );
+        return Ok(manifest_author);
+    };
+
+    if should_prompt_for_placeholder_author_replacement() {
+        let replace_author = Confirm::new(&publish_author_resolution_prompt(
+            manifest_author.as_deref(),
+            &inferred_author,
+        ))
+        .with_default(true)
+        .with_help_message(
+            "Only updates uploaded codemod.yaml. Registry Publisher stays the logged-in account.",
+        )
+        .prompt()?;
+
+        if !replace_author {
+            println!(
+                "{}",
+                publish_author_resolution_declined_message(manifest_author.as_deref())
+            );
+            return Ok(manifest_author);
+        }
+    } else {
+        println!(
+            "{} Using authenticated user {} for uploaded codemod.yaml author metadata.",
+            style("!").yellow().bold(),
+            style(&inferred_author).cyan()
+        );
+    }
+
+    Ok(Some(inferred_author))
+}
+
+fn publish_author_resolution_warning(author: Option<&str>) -> String {
+    if author.is_none() {
+        format!(
+            "{} codemod.yaml author is missing.",
+            style("!").yellow().bold()
+        )
+    } else {
+        format!(
+            "{} codemod.yaml author is still the placeholder: {}.",
+            style("!").yellow().bold(),
+            style(PLACEHOLDER_AUTHOR).yellow()
+        )
+    }
+}
+
+fn publish_author_resolution_prompt(author: Option<&str>, inferred_author: &str) -> String {
+    if author.is_none() {
+        format!("Use '{inferred_author}' as the uploaded package author for this publish?")
+    } else {
+        format!("Replace the placeholder with '{inferred_author}' for this publish?")
+    }
+}
+
+fn publish_author_resolution_fallback(author: Option<&str>) -> String {
+    if author.is_none() {
+        format!(
+            "{} Unable to infer author metadata from the authenticated user. Update codemod.yaml or run 'npx codemod@latest login' before publishing.",
+            style("!").yellow().bold()
+        )
+    } else {
+        format!(
+            "{} Continuing with the placeholder author in codemod.yaml. Update it before publishing again.",
+            style("!").yellow().bold()
+        )
+    }
+}
+
+fn publish_author_resolution_declined_message(author: Option<&str>) -> String {
+    if author.is_none() {
+        format!(
+            "{} Publish cannot continue without an author in codemod.yaml. Update it or accept the suggested value.",
+            style("!").yellow().bold()
+        )
+    } else {
+        format!(
+            "{} Continuing with the placeholder author in codemod.yaml. Update it to avoid publishing placeholder metadata.",
+            style("!").yellow().bold()
+        )
+    }
 }
 
 fn resolve_effective_manifest(
     mut manifest: CodemodManifest,
-    inferred_author: Option<String>,
+    resolved_author: Option<String>,
 ) -> Result<CodemodManifest> {
-    manifest.author = normalize_manifest_author(manifest.author)
-        .or_else(|| normalize_manifest_author(inferred_author));
+    manifest.author =
+        normalize_author(manifest.author).or_else(|| normalize_author(resolved_author));
 
     if manifest.author.is_none() {
         return Err(anyhow!(
-            "Package author is missing. Run 'npx codemod@latest login' to infer the current user, or set 'author' explicitly in codemod.yaml."
+            "Package author metadata is missing. Run 'npx codemod@latest login' to infer codemod.yaml author metadata from the authenticated user, or set 'author' explicitly in codemod.yaml. The Registry Publisher remains the logged-in publishing account."
         ));
     }
 
@@ -558,11 +660,15 @@ async fn upload_package(
         let error_text = response.text().await.unwrap_or_default();
 
         if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow!("Version {} already exists.", manifest.version));
+            return Err(anyhow!(format_publish_conflict_error(
+                manifest,
+                &error_text
+            )));
         } else if status == reqwest::StatusCode::FORBIDDEN {
-            return Err(anyhow!(
-                "Access denied. You may not have permission to publish to this package."
-            ));
+            return Err(anyhow!(format_publish_forbidden_error(
+                manifest,
+                &error_text
+            )));
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
                 "Authentication failed. Please run 'npx codemod@latest login' again."
@@ -574,6 +680,74 @@ async fn upload_package(
 
     let publish_response: PublishResponse = response.json().await?;
     Ok(publish_response)
+}
+
+fn format_publish_conflict_error(manifest: &CodemodManifest, error_text: &str) -> String {
+    let backend_message = extract_backend_error_message(error_text);
+    if !backend_message.is_empty() {
+        return format!(
+            "Access denied. The registry refused this publish because {}",
+            ensure_sentence(backend_message)
+        );
+    }
+
+    format!(
+        "Access denied. The registry refused this publish because version {} already exists for package '{}'.",
+        manifest.version, manifest.name
+    )
+}
+
+fn format_publish_forbidden_error(manifest: &CodemodManifest, error_text: &str) -> String {
+    let backend_message = extract_backend_error_message(error_text);
+    if is_publish_name_taken_error(&backend_message) {
+        return format!(
+            "Access denied. The registry refused this publish because package name '{}' is already taken. Choose a different package name or publish under a scope you own.",
+            manifest.name
+        );
+    }
+
+    if !backend_message.is_empty() {
+        return format!(
+            "Access denied. You may not have permission to publish to this package. Backend message: {}",
+            backend_message
+        );
+    }
+
+    format!(
+        "Access denied. You may not have permission to publish to this package. If this is a new unscoped package, the package name may already be taken or may require trusted publisher configuration."
+    )
+}
+
+fn ensure_sentence(message: String) -> String {
+    let trimmed = message.trim().trim_end_matches('.');
+    format!("{trimmed}.")
+}
+
+fn extract_backend_error_message(error_text: &str) -> String {
+    let trimmed = error_text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = value.get("message").and_then(Value::as_str) {
+            return message.trim().to_string();
+        }
+        if let Some(error) = value.get("error").and_then(Value::as_str) {
+            return error.trim().to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn is_publish_name_taken_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("already taken")
+        || normalized.contains("already been taken")
+        || normalized.contains("name is taken")
+        || normalized.contains("package name already exists")
+        || normalized.contains("package already exists")
 }
 
 fn calculate_package_size(package_path: &Path) -> Result<u64> {
@@ -777,15 +951,25 @@ codemod-skill-version: 0.1.0
     #[test]
     fn manifest_author_inference_is_needed_only_when_missing_or_blank() {
         let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        assert!(!manifest_needs_inferred_author(&manifest));
+        assert!(!is_placeholder_author(manifest.author.as_deref()));
 
         let mut blank_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
         blank_author_manifest.author = Some("  ".to_string());
-        assert!(manifest_needs_inferred_author(&blank_author_manifest));
+        assert_eq!(normalize_author(blank_author_manifest.author), None);
 
         let mut missing_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
         missing_author_manifest.author = None;
-        assert!(manifest_needs_inferred_author(&missing_author_manifest));
+        assert_eq!(normalize_author(missing_author_manifest.author), None);
+    }
+
+    #[test]
+    fn placeholder_author_is_detected_even_with_whitespace() {
+        assert!(is_placeholder_author(Some(PLACEHOLDER_AUTHOR)));
+        assert!(is_placeholder_author(Some(
+            "  Author <author@example.com>  "
+        )));
+        assert!(is_placeholder_author(Some("alice <author@example.com>")));
+        assert!(!is_placeholder_author(Some("alice <alice@example.com>")));
     }
 
     #[test]
@@ -796,6 +980,85 @@ codemod-skill-version: 0.1.0
         );
         assert_eq!(normalize_env_auth_token(Some("  \n".to_string())), None);
         assert_eq!(normalize_env_auth_token(None), None);
+    }
+
+    #[test]
+    fn forbidden_publish_error_surfaces_taken_name() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "my-codemod");
+
+        let message = format_publish_forbidden_error(
+            &manifest,
+            r#"{"error":"Forbidden","message":"Package name is already taken"}"#,
+        );
+
+        assert!(message.starts_with("Access denied."));
+        assert!(message.contains("package name 'my-codemod' is already taken"));
+    }
+
+    #[test]
+    fn conflict_publish_error_uses_access_denied_framing() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "my-codemod");
+
+        let message = format_publish_conflict_error(
+            &manifest,
+            r#"{"error":"Conflict","message":"Version 0.1.0 already exists"}"#,
+        );
+
+        assert!(message.starts_with("Access denied."));
+        assert!(message.contains("Version 0.1.0 already exists."));
+    }
+
+    #[test]
+    fn forbidden_publish_error_includes_backend_message_when_available() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+
+        let message = format_publish_forbidden_error(
+            &manifest,
+            r#"{"error":"Forbidden","message":"Only organization owners may publish here"}"#,
+        );
+
+        assert!(message.contains("Backend message: Only organization owners may publish here"));
+    }
+
+    #[test]
+    fn extract_backend_error_message_reads_json_message() {
+        assert_eq!(
+            extract_backend_error_message(
+                r#"{"error":"Forbidden","message":"Package name is already taken"}"#
+            ),
+            "Package name is already taken"
+        );
+        assert_eq!(
+            extract_backend_error_message("plain text error"),
+            "plain text error"
+        );
+        assert_eq!(extract_backend_error_message("   "), "");
+    }
+
+    #[test]
+    fn missing_author_uses_missing_author_warning_and_prompt_copy() {
+        assert!(publish_author_resolution_warning(None).contains("codemod.yaml author is missing"));
+        assert!(
+            publish_author_resolution_prompt(None, "alice <alice@example.com>")
+                .contains("Use 'alice <alice@example.com>' as the uploaded package author")
+        );
+        assert!(publish_author_resolution_declined_message(None)
+            .contains("Publish cannot continue without an author in codemod.yaml"));
+    }
+
+    #[test]
+    fn placeholder_author_uses_placeholder_warning_and_prompt_copy() {
+        assert!(publish_author_resolution_warning(Some(PLACEHOLDER_AUTHOR))
+            .contains("codemod.yaml author is still the placeholder"));
+        assert!(publish_author_resolution_prompt(
+            Some(PLACEHOLDER_AUTHOR),
+            "alice <alice@example.com>"
+        )
+        .contains("Replace the placeholder with 'alice <alice@example.com>'"));
+        assert!(
+            publish_author_resolution_declined_message(Some(PLACEHOLDER_AUTHOR))
+                .contains("Continuing with the placeholder author in codemod.yaml")
+        );
     }
 
     #[test]

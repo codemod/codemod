@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 
 use crate::auth::types::UserInfo;
-use crate::auth::TokenStorage;
 
 pub(crate) async fn fetch_user_info_with_bearer_token(
     registry_url: &str,
@@ -31,15 +30,6 @@ pub(crate) async fn fetch_user_info_with_bearer_token(
         .map_err(|e| anyhow!("Failed to parse user information: {}", e))?;
 
     Ok(user_info)
-}
-
-pub(crate) fn load_stored_user_for_registry(
-    storage: &TokenStorage,
-    registry_url: &str,
-) -> Result<Option<UserInfo>> {
-    Ok(storage
-        .get_auth_for_registry(registry_url)?
-        .map(|stored_auth| stored_auth.user))
 }
 
 pub(crate) fn format_author_from_user_info(user: &UserInfo) -> Option<String> {

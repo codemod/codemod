@@ -1,5 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const PLACEHOLDER_AUTHOR: &str = "Author <author@example.com>";
+pub(crate) const PLACEHOLDER_AUTHOR_EMAIL: &str = "author@example.com";
+
+pub(crate) fn normalize_author(author: Option<String>) -> Option<String> {
+    author
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn is_placeholder_author(author: Option<&str>) -> bool {
+    author.is_some_and(|value| value.contains(PLACEHOLDER_AUTHOR_EMAIL))
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct CodemodManifest {
     pub(crate) schema_version: String,

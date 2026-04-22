@@ -1,4 +1,4 @@
-use crate::auth::{format_author_from_user_info, load_stored_user_for_registry, TokenStorage};
+use crate::utils::manifest::PLACEHOLDER_AUTHOR;
 use crate::utils::skill_layout::{
     expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
 };
@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use console::{style, Emoji};
 use inquire::{Confirm, InquireError, Select, Text};
-use log::{debug, info};
+use log::info;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -117,7 +117,7 @@ impl PackageBehavior {
 struct ProjectConfig {
     name: String,
     description: String,
-    author: Option<String>,
+    author: String,
     license: String,
     project_type: ProjectType,
     package_behavior: PackageBehavior,
@@ -331,7 +331,7 @@ pub fn handler(args: &Command) -> Result<()> {
             name: project_name,
             description: args.description.clone().unwrap_or(default_description),
             author: normalize_optional_string(args.author.clone())
-                .or_else(resolve_default_author_from_active_registry),
+                .unwrap_or_else(|| PLACEHOLDER_AUTHOR.to_string()),
             license: args.license.clone().unwrap_or_else(|| "MIT".to_string()),
             project_type,
             package_behavior,
@@ -476,33 +476,6 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn default_author_for_registry(storage: &TokenStorage, registry_url: &str) -> Option<String> {
-    load_stored_user_for_registry(storage, registry_url)
-        .ok()
-        .flatten()
-        .and_then(|user| format_author_from_user_info(&user))
-}
-
-fn resolve_default_author_from_active_registry() -> Option<String> {
-    let storage = match TokenStorage::new() {
-        Ok(storage) => storage,
-        Err(error) => {
-            debug!("Failed to initialize token storage while resolving default author: {error}");
-            return None;
-        }
-    };
-
-    let config = match storage.load_config() {
-        Ok(config) => config,
-        Err(error) => {
-            debug!("Failed to load CLI config while resolving default author: {error}");
-            return None;
-        }
-    };
-
-    default_author_for_registry(&storage, &config.default_registry)
-}
-
 fn ensure_project_path_ready(project_path: &Path, force: bool, no_interactive: bool) -> Result<()> {
     if !project_path.exists() || force {
         return Ok(());
@@ -622,11 +595,8 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         default_description_for(&name)
     };
 
-    let author = if let Some(author) = normalize_optional_string(args.author.clone()) {
-        Some(author)
-    } else {
-        resolve_default_author_from_active_registry()
-    };
+    let author = normalize_optional_string(args.author.clone())
+        .unwrap_or_else(|| PLACEHOLDER_AUTHOR.to_string());
 
     let license = args.license.clone().unwrap_or_else(|| "MIT".to_string());
 
@@ -722,7 +692,7 @@ fn review_options(project_path: &Path, config: &ProjectConfig) -> Vec<String> {
         format!("Private package: {}", yes_no(config.private)),
         format!("Monorepo workspace: {}", yes_no(config.workspace)),
         format!("Description: {}", config.description),
-        format!("Author: {}", optional_display(config.author.as_deref())),
+        format!("Author: {}", config.author),
         format!("License: {}", config.license),
         format!(
             "Package manager: {}",
@@ -813,11 +783,7 @@ fn review_project_before_scaffold(
                 Ok(())
             }
             "Author" => {
-                config.author = prompt_optional_text(
-                    "Author:",
-                    config.author.as_deref(),
-                    "Leave empty to omit the author field.",
-                )?;
+                config.author = prompt_author(&config.author)?;
                 Ok(())
             }
             "License" => {
@@ -863,20 +829,24 @@ fn review_project_before_scaffold(
     }
 }
 
-fn prompt_optional_text(
-    message: &str,
-    default: Option<&str>,
-    help_message: &str,
-) -> Result<Option<String>> {
-    let prompt = if let Some(default) = default {
-        Text::new(message)
-            .with_default(default)
-            .with_help_message(help_message)
-    } else {
-        Text::new(message).with_help_message(help_message)
-    };
-
-    Ok(normalize_optional_string(Some(prompt.prompt()?)))
+fn prompt_author(default: &str) -> Result<String> {
+    Ok(Text::new("Author:")
+        .with_default(default)
+        .with_help_message(
+            "Use `Name <email>` format for codemod.yaml metadata. During publish, the placeholder can be replaced from your authenticated user for the uploaded package only. Registry Publisher still reflects the logged-in publishing account.",
+        )
+        .with_validator(|input: &str| {
+            if input.trim().is_empty() {
+                Ok(inquire::validator::Validation::Invalid(
+                    "Author is required. Update the placeholder or keep it until publish.".into(),
+                ))
+            } else {
+                Ok(inquire::validator::Validation::Valid)
+            }
+        })
+        .prompt()?
+        .trim()
+        .to_string())
 }
 
 fn prompt_codemod_name(default_name: &str) -> Result<String> {
@@ -1107,14 +1077,7 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let manifest_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
-        .replace(
-            "{author_block}",
-            &config
-                .author
-                .as_ref()
-                .map(|author| format!("author: \"{author}\""))
-                .unwrap_or_default(),
-        )
+        .replace("{author_block}", &format!("author: \"{}\"", config.author))
         .replace("{license}", &config.license)
         .replace("{language}", &config.language)
         .replace(
@@ -2052,7 +2015,7 @@ mod tests {
         ProjectConfig {
             name: "@codemod/sample-skill".to_string(),
             description: "Sample skill package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::SkillOnly,
@@ -2147,7 +2110,7 @@ mod tests {
         let config = ProjectConfig {
             name: "workflow-project".to_string(),
             description: "Workflow package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::Hybrid,
             package_behavior: PackageBehavior::WorkflowOnly,
@@ -2174,7 +2137,7 @@ mod tests {
         let config = ProjectConfig {
             name: "@codemod/hybrid-project".to_string(),
             description: "Hybrid package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowAndSkill,
@@ -2213,7 +2176,7 @@ mod tests {
         let config = ProjectConfig {
             name: "yarn-project".to_string(),
             description: "Yarn workflow package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowOnly,
@@ -2236,15 +2199,15 @@ mod tests {
     }
 
     #[test]
-    fn create_manifest_omits_author_when_not_provided() {
+    fn create_manifest_includes_placeholder_author() {
         let temp_dir = tempdir().unwrap();
-        let project_path = temp_dir.path().join("authorless-project");
+        let project_path = temp_dir.path().join("placeholder-author-project");
         fs::create_dir_all(&project_path).unwrap();
 
         let config = ProjectConfig {
-            name: "authorless-project".to_string(),
+            name: "placeholder-author-project".to_string(),
             description: "Workflow package".to_string(),
-            author: None,
+            author: PLACEHOLDER_AUTHOR.to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowOnly,
@@ -2260,38 +2223,8 @@ mod tests {
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
 
-        assert!(!manifest.contains("author:"));
-        assert_eq!(parsed_manifest.author, None);
-    }
-
-    #[test]
-    fn default_author_for_registry_uses_stored_auth_user() {
-        let temp_dir = tempdir().unwrap();
-        let storage = TokenStorage::with_config_dir(temp_dir.path().join("config")).unwrap();
-        let registry_url = "https://registry.example.com";
-        storage
-            .save_auth(&crate::auth::storage::StoredAuth {
-                tokens: crate::auth::types::AuthTokens {
-                    access_token: "token".to_string(),
-                    refresh_token: None,
-                    expires_at: None,
-                    scope: vec!["publish".to_string()],
-                    token_type: "Bearer".to_string(),
-                },
-                user: crate::auth::types::UserInfo {
-                    id: "user-1".to_string(),
-                    username: "alice".to_string(),
-                    email: "alice@example.com".to_string(),
-                    organizations: None,
-                },
-                registry: registry_url.to_string(),
-            })
-            .unwrap();
-
-        assert_eq!(
-            default_author_for_registry(&storage, registry_url),
-            Some("alice <alice@example.com>".to_string())
-        );
+        assert!(manifest.contains("author: \"Author <author@example.com>\""));
+        assert_eq!(parsed_manifest.author, Some(PLACEHOLDER_AUTHOR.to_string()));
     }
 
     #[test]
@@ -2329,7 +2262,7 @@ mod tests {
         let config = ProjectConfig {
             name: "sample-workflow-skill".to_string(),
             description: "Workflow + skill package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowAndSkill,
@@ -2358,7 +2291,7 @@ mod tests {
         let config = ProjectConfig {
             name: "workflow-only".to_string(),
             description: "Workflow package".to_string(),
-            author: Some("Codemod Team <team@codemod.com>".to_string()),
+            author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowOnly,
