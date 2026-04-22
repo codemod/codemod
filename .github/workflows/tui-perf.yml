@@ -196,12 +196,13 @@ jobs:
             local workflow="$3"
             local target="$4"
             local output_file="$5"
+            local codemod_bin="$6"
 
             mkdir -p "$(dirname "${output_file}")"
             if ! (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
-                cargo run -p codemod -- workflow run \
+                "${codemod_bin}" workflow run \
                   --workflow "${workflow}" \
                   --target "${target}" \
                   --allow-child-process \
@@ -228,12 +229,13 @@ jobs:
             local workflow="$3"
             local target="$4"
             local output_file="$5"
+            local codemod_bin="$6"
 
             mkdir -p "$(dirname "${output_file}")"
             (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
-                cargo run -p codemod -- workflow run \
+                "${codemod_bin}" workflow run \
                   --workflow "${workflow}" \
                   --target "${target}" \
                   --allow-child-process \
@@ -246,13 +248,14 @@ jobs:
             local worktree="$1"
             local state_home="$2"
             local run_id="${3:-}"
+            local codemod_bin="$4"
             if [ -z "${run_id}" ]; then
               return 0
             fi
             (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
-                cargo run -p codemod -- workflow cancel --id "${run_id}"
+                "${codemod_bin}" workflow cancel --id "${run_id}"
             ) >/dev/null 2>&1 || true
           }
 
@@ -262,12 +265,13 @@ jobs:
             local outdir="$3"
             local name="$4"
             local run_id="$5"
+            local codemod_bin="$6"
             local output="${outdir}/${name}.log"
             mkdir -p "${outdir}"
             (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
-                script -q -e -c "cargo run -p codemod -- workflow tui --id ${run_id}" /dev/null
+                script -q -e -c "\"${codemod_bin}\" workflow tui --id ${run_id}" /dev/null
             ) >"${output}" 2>&1
             if ! grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"; then
               echo "missing TUI perf counters for ${name} run ${run_id}" >&2
@@ -287,75 +291,92 @@ jobs:
               local suite_root
               local state_home
               local workflow_root
-              local target_root
-              local completed_run_id=""
-              local awaiting_run_id=""
-              local active_run_id=""
-              local active_pid=""
+            local target_root
+            local target_dir
+            local codemod_bin
+            local completed_run_id=""
+            local awaiting_run_id=""
+            local active_run_id=""
+            local active_pid=""
 
-              suite_root="$(mktemp -d)"
-              state_home="${suite_root}/xdg-data"
-              workflow_root="${suite_root}/workflows"
-              target_root="${suite_root}/targets"
+            suite_root="$(mktemp -d)"
+            state_home="${suite_root}/xdg-data"
+            workflow_root="${suite_root}/workflows"
+            target_root="${suite_root}/targets"
+            target_dir="${suite_root}/target"
+            codemod_bin="${target_dir}/debug/codemod"
 
-              mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
-              write_workflow_fixtures "${workflow_root}"
+            mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
+            write_workflow_fixtures "${workflow_root}"
 
-              cleanup_suite() {
-                cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}"
-                cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}"
-                if [ -n "${active_pid:-}" ]; then
-                  wait "${active_pid}" >/dev/null 2>&1 || true
-                fi
-                rm -rf "${suite_root}"
-              }
+            (
+              cd "${worktree}"
+              CARGO_TARGET_DIR="${target_dir}" cargo build -p codemod
+            ) >"${outdir}/build.log" 2>&1
+            if [ ! -x "${codemod_bin}" ]; then
+              echo "failed to build codemod binary for ${ref}" >&2
+              cat "${outdir}/build.log" >&2 || true
+              return 1
+            fi
+
+            cleanup_suite() {
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}" "${codemod_bin}"
+              if [ -n "${active_pid:-}" ]; then
+                wait "${active_pid}" >/dev/null 2>&1 || true
+              fi
+              rm -rf "${suite_root}"
+            }
 
               trap cleanup_suite EXIT
 
               completed_run_id="$(
                 run_workflow_and_capture_id \
-                  "${worktree}" \
-                  "${state_home}" \
-                  "${workflow_root}/completed.yaml" \
-                  "${target_root}/completed" \
-                  "${outdir}/completed-run-command.log"
-              )"
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/completed.yaml" \
+                "${target_root}/completed" \
+                "${outdir}/completed-run-command.log" \
+                "${codemod_bin}"
+            )"
 
               awaiting_run_id="$(
                 run_workflow_and_capture_id \
-                  "${worktree}" \
-                  "${state_home}" \
-                  "${workflow_root}/awaiting.yaml" \
-                  "${target_root}/awaiting" \
-                  "${outdir}/awaiting-run-command.log"
-              )"
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/awaiting.yaml" \
+                "${target_root}/awaiting" \
+                "${outdir}/awaiting-run-command.log" \
+                "${codemod_bin}"
+            )"
 
               active_pid="$(
                 start_active_workflow \
-                  "${worktree}" \
-                  "${state_home}" \
-                  "${workflow_root}/active.yaml" \
-                  "${target_root}/active" \
-                  "${outdir}/active-run-command.log"
-              )"
-              active_run_id="$(wait_for_run_id "${outdir}/active-run-command.log")"
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/active.yaml" \
+                "${target_root}/active" \
+                "${outdir}/active-run-command.log" \
+                "${codemod_bin}"
+            )"
+            active_run_id="$(wait_for_run_id "${outdir}/active-run-command.log")"
 
               {
                 echo "ref=${ref}"
                 echo "completed_run_id=${completed_run_id}"
               } >"${outdir}/summary.txt"
-              run_scenario "${worktree}" "${state_home}" "${outdir}" completed "${completed_run_id}"
-              {
-                echo
-                echo "awaiting_trigger_run_id=${awaiting_run_id}"
-              } >>"${outdir}/summary.txt"
-              run_scenario "${worktree}" "${state_home}" "${outdir}" awaiting_trigger "${awaiting_run_id}"
-              {
-                echo
-                echo "active_run_id=${active_run_id}"
-              } >>"${outdir}/summary.txt"
-              run_scenario "${worktree}" "${state_home}" "${outdir}" active "${active_run_id}"
-            )
+            run_scenario "${worktree}" "${state_home}" "${outdir}" completed "${completed_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "awaiting_trigger_run_id=${awaiting_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" awaiting_trigger "${awaiting_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "active_run_id=${active_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" active "${active_run_id}" "${codemod_bin}"
+          )
           }
 
           run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"
