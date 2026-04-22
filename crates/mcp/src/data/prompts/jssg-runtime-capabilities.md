@@ -37,7 +37,7 @@ Safe modules are available by default and do not require `codemod.yaml` capabili
 - Reads, writes, `readdir`, `mkdir`, `stat`, `exists`, `unlink` all work for paths inside `target_dir`.
 - Paths that normalize outside `target_dir` throw with `err.code === "EACCES"`.
 - Missing paths inside `target_dir` throw with `err.code === "ENOENT"`.
-- `..` segments and symlinks are canonicalized before the prefix check — codemods cannot escape the sandbox by crafting tricky paths.
+- `.` and `..` path segments are normalized before the prefix check. Do not assume symlinks are resolved as part of this sandbox check.
 
 Use the default sandboxed fs whenever the codemod only touches files inside the repo. Do not add `fs` to `capabilities` just because the codemod imports it.
 

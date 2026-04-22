@@ -3,7 +3,7 @@ title: "Security & Capabilities"
 description: "Understand JSSG's deny-by-default security model, the sandboxed fs, and how to grant unrestricted access to network, disk, or process APIs"
 ---
 
-JSSG follows a **deny-by-default security model** for the most sensitive operations (network requests and spawning processes) and a **sandboxed-by-default** model for file system access. Host environment and working directory are fully hidden from codemods; anything else that could touch the outside world is either scoped down or gated behind an explicit capability.
+JSSG follows a **deny-by-default security model** for the most sensitive operations (network requests and spawning processes) and a **sandboxed-by-default** model for file system access. By default, codemods can work only with files under the target directory; anything else that could touch the outside world is either scoped down or gated behind an explicit capability.
 
 ## Why defense in depth?
 
@@ -50,7 +50,7 @@ export default codemod;
 ```
 
 <Info>
-  Path comparisons are done against the *canonical* form — symlink targets and `..` segments are resolved before the prefix check, so codemods can't escape by crafting tricky paths.
+  Path comparisons use normalized path strings: `.` and `..` segments are resolved before the prefix check, so straightforward path-traversal attempts are rejected. This check is lexical and does not resolve symlink targets.
 </Info>
 
 ### Error codes
