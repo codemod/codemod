@@ -31,9 +31,10 @@ mod config;
 mod factory;
 mod lazy;
 
-pub use config::{SemanticConfig, SemanticScope};
+pub use config::{SemanticConfig, SemanticScope, WorkspaceWalker};
 pub use factory::SemanticFactory;
 pub use language_core::{
-    ByteRange, DefinitionResult, ProviderMode, ReferencesResult, SemanticProvider,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult, SemanticError,
+    SemanticProvider, SemanticResult,
 };
 pub use lazy::LazySemanticProvider;

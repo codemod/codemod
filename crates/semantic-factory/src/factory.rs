@@ -6,7 +6,7 @@ use language_core::SemanticProvider;
 use language_javascript::OxcSemanticProvider;
 use language_python::RuffSemanticProvider;
 
-use crate::config::{SemanticConfig, SemanticScope};
+use crate::config::{SemanticConfig, SemanticScope, WorkspaceWalker};
 
 /// Factory for creating semantic providers based on language and configuration.
 pub struct SemanticFactory;
@@ -38,6 +38,7 @@ impl SemanticFactory {
     /// );
     /// ```
     pub fn create(language: &str, config: SemanticConfig) -> Option<Arc<dyn SemanticProvider>> {
+        let walker = config.walker;
         match language.to_lowercase().as_str() {
             // JavaScript/TypeScript family
             "javascript" | "typescript" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" => {
@@ -46,12 +47,27 @@ impl SemanticFactory {
                     (SemanticScope::FileScope, Some(fs_root)) => {
                         OxcSemanticProvider::file_scope_with_fs(fs_root)
                     }
-                    (SemanticScope::WorkspaceScope { root }, None) => {
-                        OxcSemanticProvider::workspace_scope(root.clone())
-                    }
-                    (SemanticScope::WorkspaceScope { root }, Some(fs_root)) => {
-                        OxcSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)
-                    }
+                    (SemanticScope::WorkspaceScope { root }, None) => match walker {
+                        WorkspaceWalker::Ignore => {
+                            OxcSemanticProvider::workspace_scope(root.clone())
+                        }
+                        WorkspaceWalker::Vfs => OxcSemanticProvider::workspace_scope_with_walker(
+                            root.clone(),
+                            language_javascript::WorkspaceWalker::Vfs,
+                        ),
+                    },
+                    (SemanticScope::WorkspaceScope { root }, Some(fs_root)) => match walker {
+                        WorkspaceWalker::Ignore => {
+                            OxcSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)
+                        }
+                        WorkspaceWalker::Vfs => {
+                            OxcSemanticProvider::workspace_scope_with_fs_and_walker(
+                                root.clone(),
+                                fs_root,
+                                language_javascript::WorkspaceWalker::Vfs,
+                            )
+                        }
+                    },
                 }))
             }
             // Python

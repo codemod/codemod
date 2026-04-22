@@ -13,7 +13,26 @@ use oxc_resolver::{
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use vfs::VfsPath;
+use vfs::{VfsFileType, VfsPath};
+
+/// Strategy for discovering workspace files during indexing.
+///
+/// The choice depends entirely on where the source of truth lives:
+///
+/// - Use [`WorkspaceWalker::Ignore`] when the fs_root is a real disk
+///   (the CLI's `PhysicalFS`). `.gitignore` is honored, hidden
+///   directories are skipped — the sensible default for on-disk codemod
+///   runs.
+/// - Use [`WorkspaceWalker::Vfs`] when the fs_root is a virtual
+///   filesystem (e.g. pg_ast_grep's `MemoryFS` seeded from a database
+///   manifest). `ignore::WalkBuilder` can't see entries that only exist
+///   in memory, so we recurse through `VfsPath::read_dir` instead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkspaceWalker {
+    #[default]
+    Ignore,
+    Vfs,
+}
 
 /// Accurate semantic analyzer with workspace-wide lazy indexing.
 pub struct AccurateAnalyzer {
@@ -32,6 +51,8 @@ pub struct AccurateAnalyzer {
     indexing_in_progress: RwLock<HashSet<PathBuf>>,
     /// Virtual filesystem root for file operations
     fs_root: VfsPath,
+    /// Strategy for discovering workspace files during bulk indexing.
+    walker: WorkspaceWalker,
 }
 
 impl AccurateAnalyzer {
@@ -55,6 +76,18 @@ impl AccurateAnalyzer {
     /// * `workspace_root` - The workspace root path for module resolution
     /// * `fs_root` - The virtual filesystem root to use for file operations
     pub fn new_with_fs(workspace_root: PathBuf, fs_root: VfsPath) -> Self {
+        Self::new_with_fs_and_walker(workspace_root, fs_root, WorkspaceWalker::default())
+    }
+
+    /// Create a new accurate analyzer with a custom virtual filesystem and
+    /// an explicit workspace walker strategy. Pick [`WorkspaceWalker::Vfs`]
+    /// when `fs_root` is a MemoryFS (or any other virtual fs whose entries
+    /// aren't visible on disk).
+    pub fn new_with_fs_and_walker(
+        workspace_root: PathBuf,
+        fs_root: VfsPath,
+        walker: WorkspaceWalker,
+    ) -> Self {
         let tsconfig_path = workspace_root.join("tsconfig.json");
         let tsconfig = if tsconfig_path.exists() {
             Some(TsconfigDiscovery::Manual(TsconfigOptions {
@@ -113,6 +146,7 @@ impl AccurateAnalyzer {
             indexed_files: RwLock::new(HashSet::new()),
             indexing_in_progress: RwLock::new(HashSet::new()),
             fs_root,
+            walker,
         }
     }
 
@@ -448,8 +482,20 @@ impl AccurateAnalyzer {
         Ok(result)
     }
 
-    /// Index all JavaScript/TypeScript files in the workspace.
+    /// Index all JavaScript/TypeScript files in the workspace. Dispatches
+    /// to the real-disk `ignore` walker or a VFS-backed recursion based
+    /// on [`Self::walker`].
     fn index_workspace_files(&self) -> SemanticResult<()> {
+        match self.walker {
+            WorkspaceWalker::Ignore => self.index_workspace_files_ignore(),
+            WorkspaceWalker::Vfs => self.index_workspace_files_vfs(),
+        }
+    }
+
+    /// Real-disk walk using `ignore::WalkBuilder`. Honors `.gitignore` and
+    /// hidden-file exclusion. Only useful when the underlying fs_root is
+    /// a PhysicalFS whose tree matches `self.workspace_root` on disk.
+    fn index_workspace_files_ignore(&self) -> SemanticResult<()> {
         let walker = ignore::WalkBuilder::new(&self.workspace_root)
             .hidden(true)
             .git_ignore(true)
@@ -466,6 +512,27 @@ impl AccurateAnalyzer {
             }
         }
 
+        Ok(())
+    }
+
+    /// Virtual-filesystem walk. Recurses from `self.fs_root` via
+    /// `read_dir`, matches indexable extensions, and rebuilds absolute
+    /// paths keyed under `self.workspace_root` so downstream cache keys
+    /// line up with `ensure_indexed`. Silently skips entries whose
+    /// metadata can't be read — a stub created without content still
+    /// counts as a file for indexing purposes once the fetcher fills it.
+    fn index_workspace_files_vfs(&self) -> SemanticResult<()> {
+        let workspace_prefix = self.workspace_root.to_string_lossy().into_owned();
+        // Resolve the VFS entry that corresponds to `workspace_root`. We
+        // prefer a VFS-aware prefix so codemods seeded from a database
+        // manifest whose paths are `/app/src/foo.ts` etc. still line up.
+        let start = self
+            .fs_root
+            .join(workspace_prefix.trim_start_matches('/'))
+            .unwrap_or_else(|_| self.fs_root.clone());
+        walk_vfs_tree(&start, &workspace_prefix, &mut |path: &Path| {
+            let _ = self.ensure_indexed(path);
+        });
         Ok(())
     }
 
@@ -579,6 +646,53 @@ impl std::fmt::Debug for AccurateAnalyzer {
             .field("indexed_files_count", &self.indexed_files.read().len())
             .finish()
     }
+}
+
+/// Recursively walk `start` (a VFS directory) and invoke `on_file` for
+/// every leaf whose extension is an indexable JS/TS flavor. `prefix` is
+/// the absolute path prefix we hand back to callers (typically the
+/// workspace root), so cache keys match what `ensure_indexed` expects.
+fn walk_vfs_tree(start: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) {
+    // Treat the root specially: empty-string path needs to stay empty so
+    // vfs::join doesn't end up with a leading slash we can't strip.
+    fn recurse(entry: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) {
+        let Ok(meta) = entry.metadata() else {
+            return;
+        };
+        match meta.file_type {
+            VfsFileType::Directory => {
+                let Ok(children) = entry.read_dir() else {
+                    return;
+                };
+                for child in children {
+                    recurse(&child, prefix, on_file);
+                }
+            }
+            VfsFileType::File => {
+                let path_str = entry.as_str();
+                let ext = Path::new(path_str)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") {
+                    // Map the VFS path ("/app/src/foo.ts" or "src/foo.ts")
+                    // back to the absolute form that matches the analyzer's
+                    // cache keys. If the VFS already gave us the absolute
+                    // form (starts with `/`), use it verbatim; otherwise
+                    // prepend `prefix`.
+                    let absolute = if path_str.starts_with('/') {
+                        path_str.to_string()
+                    } else if prefix.ends_with('/') {
+                        format!("{prefix}{path_str}")
+                    } else {
+                        format!("{prefix}/{path_str}")
+                    };
+                    on_file(Path::new(&absolute));
+                }
+            }
+        }
+    }
+    recurse(start, prefix, on_file);
 }
 
 #[cfg(test)]
