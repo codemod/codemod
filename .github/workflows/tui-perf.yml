@@ -108,6 +108,40 @@ jobs:
           else
             CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA_VALUE}"
           fi
+
+          ref_supports_tui_perf_harness() {
+            local ref="$1"
+            git show "${ref}:crates/cli/src/tui/mod.rs" 2>/dev/null | grep -q 'CODEMOD_TUI_PERF_AUTO_EXIT_SECS'
+          }
+
+          resolve_supported_baseline_ref() {
+            local preferred_ref="$1"
+            local candidate_ref="$2"
+            if ref_supports_tui_perf_harness "${preferred_ref}"; then
+              printf '%s' "${preferred_ref}"
+              return 0
+            fi
+
+            local fallback_ref=""
+            fallback_ref="$(git rev-list "${candidate_ref}" --max-count=50 --skip=1 | while read -r ref; do
+              if ref_supports_tui_perf_harness "${ref}"; then
+                printf '%s\n' "${ref}"
+                break
+              fi
+            done)"
+
+            if [ -z "${fallback_ref}" ]; then
+              echo "Unable to find a baseline ref with TUI perf harness support" >&2
+              return 1
+            fi
+
+            echo "Baseline ref ${preferred_ref} lacks TUI perf harness support; falling back to ${fallback_ref}" >&2
+            printf '%s' "${fallback_ref}"
+          }
+
+          BASELINE_REF="$(resolve_supported_baseline_ref "${BASELINE_REF}" "${CANDIDATE_REF}")"
+          echo "${BASELINE_REF}" > perf-results/resolved-baseline-ref.txt
+          echo "${CANDIDATE_REF}" > perf-results/resolved-candidate-ref.txt
           WORKTREE_ROOT="$(mktemp -d)"
           BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
           CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
