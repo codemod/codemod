@@ -306,6 +306,7 @@ jobs:
             target_dir="${suite_root}/target"
             codemod_bin="${target_dir}/debug/codemod"
 
+            mkdir -p "${outdir}"
             mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
             write_workflow_fixtures "${workflow_root}"
 
