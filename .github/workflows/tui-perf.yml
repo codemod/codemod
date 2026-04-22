@@ -239,6 +239,25 @@ jobs:
               '          echo "running"' \
               '          sleep 120' \
               > "${workflow_root}/active.yaml"
+
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: active-busy' \
+              '    name: Active Busy' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: stay-busy' \
+              '        name: Stay busy' \
+              '        run: |' \
+              '          i=0' \
+              '          while [ "$i" -lt 20 ]; do' \
+              '            echo "tick-$i"' \
+              '            i=$((i + 1))' \
+              '            sleep 0.2' \
+              '          done' \
+              '          sleep 120' \
+              > "${workflow_root}/active-busy.yaml"
           }
 
           run_workflow_and_capture_id() {
@@ -312,6 +331,30 @@ jobs:
               XDG_DATA_HOME="${state_home}" \
                 "${codemod_bin}" workflow cancel --id "${run_id}"
             ) >/dev/null 2>&1 || true
+          }
+
+          resume_workflow_if_present() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local run_id="${4:-}"
+            local target="$5"
+            local codemod_bin="$6"
+            if [ -z "${run_id}" ]; then
+              return 0
+            fi
+            log_phase "workflow-resume run_id=${run_id}"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                "${codemod_bin}" workflow resume \
+                  --workflow "${workflow}" \
+                  --id "${run_id}" \
+                  --target "${target}" \
+                  --trigger-all \
+                  --allow-child-process \
+                  --no-interactive
+            ) >/dev/null 2>&1
           }
 
           run_scenario() {
@@ -420,6 +463,24 @@ jobs:
             cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
           }
 
+          run_scenario_with_resume() {
+            local worktree="$1"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
+            local workflow="$6"
+            local target="$7"
+            local codemod_bin="$8"
+            (
+              sleep 1
+              resume_workflow_if_present "${worktree}" "${state_home}" "${workflow}" "${run_id}" "${target}" "${codemod_bin}"
+            ) &
+            local resume_pid=$!
+            run_scenario "${worktree}" "${state_home}" "${outdir}" "${name}" "${run_id}" "${codemod_bin}"
+            wait "${resume_pid}" >/dev/null 2>&1 || true
+          }
+
           run_suite() {
             local worktree="$1"
             local outdir="$2"
@@ -434,8 +495,11 @@ jobs:
             local codemod_bin
             local completed_run_id=""
             local awaiting_run_id=""
+            local awaiting_resume_run_id=""
             local active_run_id=""
+            local active_busy_run_id=""
             local active_pid=""
+            local active_busy_pid=""
 
             suite_root="$(mktemp -d)"
             state_home="${suite_root}/xdg-data"
@@ -445,7 +509,12 @@ jobs:
             codemod_bin="${target_dir}/debug/codemod"
 
             mkdir -p "${outdir}"
-            mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
+            mkdir -p "${state_home}" \
+              "${target_root}/completed" \
+              "${target_root}/awaiting" \
+              "${target_root}/awaiting-resume" \
+              "${target_root}/active" \
+              "${target_root}/active-busy"
             write_workflow_fixtures "${workflow_root}"
 
             log_phase "suite-build start ref=${ref}"
@@ -467,10 +536,16 @@ jobs:
             cleanup_suite() {
               log_phase "suite-cleanup start ref=${ref}"
               cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${active_busy_run_id:-}" "${codemod_bin}"
               cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_resume_run_id:-}" "${codemod_bin}"
               if [ -n "${active_pid:-}" ]; then
                 kill "${active_pid}" >/dev/null 2>&1 || true
                 wait "${active_pid}" >/dev/null 2>&1 || true
+              fi
+              if [ -n "${active_busy_pid:-}" ]; then
+                kill "${active_busy_pid}" >/dev/null 2>&1 || true
+                wait "${active_busy_pid}" >/dev/null 2>&1 || true
               fi
               rm -rf "${suite_root}"
               log_phase "suite-cleanup finish ref=${ref}"
@@ -498,6 +573,16 @@ jobs:
                 "${codemod_bin}"
             )"
 
+              awaiting_resume_run_id="$(
+                run_workflow_and_capture_id \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/awaiting.yaml" \
+                "${target_root}/awaiting-resume" \
+                "${outdir}/awaiting-resume-run-command.log" \
+                "${codemod_bin}"
+            )"
+
               active_pid="$(
                 start_active_workflow \
                 "${worktree}" \
@@ -508,6 +593,17 @@ jobs:
                 "${codemod_bin}"
             )"
             active_run_id="$(wait_for_run_id "${outdir}/active-run-command.log")"
+
+              active_busy_pid="$(
+                start_active_workflow \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/active-busy.yaml" \
+                "${target_root}/active-busy" \
+                "${outdir}/active-busy-run-command.log" \
+                "${codemod_bin}"
+            )"
+            active_busy_run_id="$(wait_for_run_id "${outdir}/active-busy-run-command.log")"
 
               {
                 echo "ref=${ref}"
@@ -524,6 +620,24 @@ jobs:
               echo "active_run_id=${active_run_id}"
             } >>"${outdir}/summary.txt"
             run_scenario "${worktree}" "${state_home}" "${outdir}" active "${active_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "awaiting_trigger_resume_run_id=${awaiting_resume_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario_with_resume \
+              "${worktree}" \
+              "${state_home}" \
+              "${outdir}" \
+              awaiting_trigger_resume \
+              "${awaiting_resume_run_id}" \
+              "${workflow_root}/awaiting.yaml" \
+              "${target_root}/awaiting-resume" \
+              "${codemod_bin}"
+            {
+              echo
+              echo "active_busy_run_id=${active_busy_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" active_busy "${active_busy_run_id}" "${codemod_bin}"
           )
           }
 

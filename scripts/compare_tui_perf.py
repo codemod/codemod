@@ -8,7 +8,13 @@ import sys
 
 
 COUNTER_PATTERN = re.compile(r"([a-z_]+)=([0-9]+)")
-SCENARIOS = ["completed", "awaiting_trigger", "active"]
+SCENARIOS = [
+    "completed",
+    "awaiting_trigger",
+    "active",
+    "awaiting_trigger_resume",
+    "active_busy",
+]
 
 
 def load_counters(directory: pathlib.Path) -> dict[str, dict[str, int]]:
