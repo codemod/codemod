@@ -545,43 +545,61 @@ jobs:
 
       - name: Comment TUI perf comparison on PR
         if: ${{ github.event_name == 'pull_request' || inputs.pr_number != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
         continue-on-error: true
-        run: |
-          set -euo pipefail
-          PR_NUMBER="$(cat perf-results/pr-number.txt)"
-          MARKER="<!-- codemod:tui-perf -->"
-          COMMENT_BODY_FILE="$(mktemp)"
-          {
-            echo "${MARKER}"
-            echo "## TUI Perf Comparison"
-            echo
-            cat perf-results/comparison.md
-          } > "${COMMENT_BODY_FILE}"
-          COMMENT_BODY="$(cat "${COMMENT_BODY_FILE}")"
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("node:fs");
 
-          EXISTING_COMMENT_ID="$(
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --paginate \
-              --jq "map(select(.body | contains(\"${MARKER}\"))) | last | .id // empty"
-          )"
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = Number(process.env.PR_NUMBER || fs.readFileSync("perf-results/pr-number.txt", "utf8").trim());
+            const summaryMarker = "<!-- codemod:tui-perf -->";
+            const comparisonBody = fs.readFileSync("perf-results/comparison.md", "utf8").trim();
+            const summaryBody = [
+              summaryMarker,
+              "## TUI Perf Comparison",
+              "",
+              comparisonBody,
+            ].join("\n");
 
-          set +e
-          if [ -n "${EXISTING_COMMENT_ID}" ]; then
-            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_COMMENT_ID}" \
-              -X PATCH \
-              --raw-field body="${COMMENT_BODY}" >/dev/null
-          else
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              -X POST \
-              --raw-field body="${COMMENT_BODY}" >/dev/null
-          fi
-          comment_status=$?
-          set -e
-          if [ "${comment_status}" -ne 0 ]; then
-            echo "Unable to post TUI perf PR comment with the current token; results remain available in the workflow summary and artifact." >&2
-          fi
+            try {
+              const issueComments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100,
+              });
+
+              const existingSummary = [...issueComments]
+                .reverse()
+                .find(
+                  (comment) =>
+                    comment.user?.login === "github-actions[bot]" &&
+                    comment.body?.includes(summaryMarker)
+                );
+
+              if (existingSummary) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existingSummary.id,
+                  body: summaryBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  body: summaryBody,
+                });
+              }
+            } catch (error) {
+              core.warning(`Unable to post TUI perf PR comment with the current token; results remain available in the workflow summary and artifact. ${error.message}`);
+            }
 
       - name: Upload TUI perf artifacts
         uses: actions/upload-artifact@v4
