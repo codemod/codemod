@@ -1,29 +1,22 @@
 name: TUI Perf
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: Pull request number to compare (uses PR base vs head automatically)
+        required: false
+        type: string
       baseline_ref:
-        description: Git ref to use as the baseline
+        description: Baseline git ref override when not using a PR number
         required: false
         default: "main"
         type: string
       candidate_ref:
-        description: Git ref to use as the candidate (defaults to the workflow commit)
+        description: Candidate git ref override when not using a PR number (defaults to the workflow commit)
         required: false
         default: ""
-        type: string
-      completed_run_id:
-        description: Workflow run id for a completed run
-        required: true
-        type: string
-      awaiting_trigger_run_id:
-        description: Workflow run id for an awaiting-trigger run
-        required: true
-        type: string
-      active_run_id:
-        description: Workflow run id for an active run
-        required: true
         type: string
       duration_secs:
         description: Seconds to keep each TUI session open before auto-exit
@@ -33,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: tui-perf-${{ github.ref }}
@@ -69,16 +63,34 @@ jobs:
       - name: Run baseline and candidate TUI perf scenarios
         env:
           CODEMOD_TUI_PERF_METRICS: "1"
-          CODEMOD_TUI_PERF_AUTO_EXIT_SECS: ${{ inputs.duration_secs }}
+          CODEMOD_TUI_PERF_AUTO_EXIT_SECS: ${{ inputs.duration_secs || '10' }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           BASELINE_REF: ${{ inputs.baseline_ref }}
           CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
-          COMPLETED_RUN_ID: ${{ inputs.completed_run_id }}
-          AWAITING_TRIGGER_RUN_ID: ${{ inputs.awaiting_trigger_run_id }}
-          ACTIVE_RUN_ID: ${{ inputs.active_run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p perf-results
-          CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA}"
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            BASELINE_REF="${PR_BASE_SHA}"
+            CANDIDATE_REF="${PR_HEAD_SHA}"
+            echo "Comparing PR event: ${PR_TITLE}"
+          elif [ -n "${PR_NUMBER}" ]; then
+            PR_JSON="$(
+              gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+                --jq '{base: .base.sha, head: .head.sha, title: .title}'
+            )"
+            BASELINE_REF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["base"])' <<<"${PR_JSON}")"
+            CANDIDATE_REF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])' <<<"${PR_JSON}")"
+            RESOLVED_PR_TITLE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])' <<<"${PR_JSON}")"
+            echo "Comparing PR #${PR_NUMBER}: ${RESOLVED_PR_TITLE}"
+          else
+            CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA_VALUE}"
+          fi
           WORKTREE_ROOT="$(mktemp -d)"
           BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
           CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
@@ -95,16 +107,153 @@ jobs:
           git -C "${BASELINE_WORKTREE}" submodule update --init --recursive
           git -C "${CANDIDATE_WORKTREE}" submodule update --init --recursive
 
+          extract_run_id() {
+            local output_file="$1"
+            grep -oE 'Workflow started with ID: [0-9a-f-]+' "${output_file}" | tail -n 1 | awk '{print $5}'
+          }
+
+          wait_for_run_id() {
+            local output_file="$1"
+            local waited=0
+            local run_id=""
+            while [ "${waited}" -lt 60 ]; do
+              if [ -f "${output_file}" ]; then
+                run_id="$(extract_run_id "${output_file}" || true)"
+                if [ -n "${run_id}" ]; then
+                  printf '%s' "${run_id}"
+                  return 0
+                fi
+              fi
+              sleep 1
+              waited=$((waited + 1))
+            done
+            echo "Timed out waiting for workflow run id in ${output_file}" >&2
+            return 1
+          }
+
+          write_workflow_fixtures() {
+            local workflow_root="$1"
+            mkdir -p "${workflow_root}"
+
+            cat > "${workflow_root}/completed.yaml" <<'EOF'
+          version: "1"
+          nodes:
+            - id: completed
+              name: Completed
+              type: Automatic
+              steps:
+                - name: Complete quickly
+                  action:
+                    run-script: |
+                      echo "done"
+          EOF
+
+            cat > "${workflow_root}/awaiting.yaml" <<'EOF'
+          version: "1"
+          nodes:
+            - id: prepare
+              name: Prepare
+              type: Automatic
+              steps:
+                - name: Prepare
+                  action:
+                    run-script: |
+                      echo "ready"
+            - id: manual
+              name: Manual Trigger
+              type: Automatic
+              depends_on: ["prepare"]
+              trigger:
+                type: Manual
+              steps:
+                - name: Wait for manual trigger
+                  action:
+                    run-script: |
+                      echo "manual"
+          EOF
+
+            cat > "${workflow_root}/active.yaml" <<'EOF'
+          version: "1"
+          nodes:
+            - id: active
+              name: Active
+              type: Automatic
+              steps:
+                - name: Stay running
+                  action:
+                    run-script: |
+                      echo "running"
+                      sleep 120
+          EOF
+          }
+
+          run_workflow_and_capture_id() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local target="$4"
+            local output_file="$5"
+
+            mkdir -p "$(dirname "${output_file}")"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                cargo run -p codemod -- workflow run \
+                  --workflow "${workflow}" \
+                  --target "${target}" \
+                  --allow-child-process \
+                  --no-interactive
+            ) > "${output_file}" 2>&1
+
+            extract_run_id "${output_file}"
+          }
+
+          start_active_workflow() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local target="$4"
+            local output_file="$5"
+
+            mkdir -p "$(dirname "${output_file}")"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                cargo run -p codemod -- workflow run \
+                  --workflow "${workflow}" \
+                  --target "${target}" \
+                  --allow-child-process \
+                  --no-interactive
+            ) > "${output_file}" 2>&1 &
+            echo $!
+          }
+
+          cancel_workflow_if_present() {
+            local worktree="$1"
+            local state_home="$2"
+            local run_id="${3:-}"
+            if [ -z "${run_id}" ]; then
+              return 0
+            fi
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                cargo run -p codemod -- workflow cancel --id "${run_id}"
+            ) >/dev/null 2>&1 || true
+          }
+
           run_scenario() {
             local worktree="$1"
-            local outdir="$2"
-            local name="$3"
-            local run_id="$4"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
             local output="${outdir}/${name}.log"
             mkdir -p "${outdir}"
             (
               cd "${worktree}"
-              script -q -e -c "cargo run -p codemod -- workflow tui --id ${run_id}" /dev/null
+              XDG_DATA_HOME="${state_home}" \
+                script -q -e -c "cargo run -p codemod -- workflow tui --id ${run_id}" /dev/null
             ) >"${output}" 2>&1
             grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"
             printf "%s " "${name}" >>"${outdir}/summary.txt"
@@ -115,21 +264,80 @@ jobs:
             local worktree="$1"
             local outdir="$2"
             local ref="$3"
-            {
-              echo "ref=${ref}"
-              echo "completed_run_id=${COMPLETED_RUN_ID}"
-            } >"${outdir}/summary.txt"
-            run_scenario "${worktree}" "${outdir}" completed "${COMPLETED_RUN_ID}"
-            {
-              echo
-              echo "awaiting_trigger_run_id=${AWAITING_TRIGGER_RUN_ID}"
-            } >>"${outdir}/summary.txt"
-            run_scenario "${worktree}" "${outdir}" awaiting_trigger "${AWAITING_TRIGGER_RUN_ID}"
-            {
-              echo
-              echo "active_run_id=${ACTIVE_RUN_ID}"
-            } >>"${outdir}/summary.txt"
-            run_scenario "${worktree}" "${outdir}" active "${ACTIVE_RUN_ID}"
+
+            (
+              local suite_root
+              local state_home
+              local workflow_root
+              local target_root
+              local completed_run_id=""
+              local awaiting_run_id=""
+              local active_run_id=""
+              local active_pid=""
+
+              suite_root="$(mktemp -d)"
+              state_home="${suite_root}/xdg-data"
+              workflow_root="${suite_root}/workflows"
+              target_root="${suite_root}/targets"
+
+              mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
+              write_workflow_fixtures "${workflow_root}"
+
+              cleanup_suite() {
+                cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}"
+                cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}"
+                if [ -n "${active_pid:-}" ]; then
+                  wait "${active_pid}" >/dev/null 2>&1 || true
+                fi
+                rm -rf "${suite_root}"
+              }
+
+              trap cleanup_suite EXIT
+
+              completed_run_id="$(
+                run_workflow_and_capture_id \
+                  "${worktree}" \
+                  "${state_home}" \
+                  "${workflow_root}/completed.yaml" \
+                  "${target_root}/completed" \
+                  "${outdir}/completed-run-command.log"
+              )"
+
+              awaiting_run_id="$(
+                run_workflow_and_capture_id \
+                  "${worktree}" \
+                  "${state_home}" \
+                  "${workflow_root}/awaiting.yaml" \
+                  "${target_root}/awaiting" \
+                  "${outdir}/awaiting-run-command.log"
+              )"
+
+              active_pid="$(
+                start_active_workflow \
+                  "${worktree}" \
+                  "${state_home}" \
+                  "${workflow_root}/active.yaml" \
+                  "${target_root}/active" \
+                  "${outdir}/active-run-command.log"
+              )"
+              active_run_id="$(wait_for_run_id "${outdir}/active-run-command.log")"
+
+              {
+                echo "ref=${ref}"
+                echo "completed_run_id=${completed_run_id}"
+              } >"${outdir}/summary.txt"
+              run_scenario "${worktree}" "${state_home}" "${outdir}" completed "${completed_run_id}"
+              {
+                echo
+                echo "awaiting_trigger_run_id=${awaiting_run_id}"
+              } >>"${outdir}/summary.txt"
+              run_scenario "${worktree}" "${state_home}" "${outdir}" awaiting_trigger "${awaiting_run_id}"
+              {
+                echo
+                echo "active_run_id=${active_run_id}"
+              } >>"${outdir}/summary.txt"
+              run_scenario "${worktree}" "${state_home}" "${outdir}" active "${active_run_id}"
+            )
           }
 
           run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"

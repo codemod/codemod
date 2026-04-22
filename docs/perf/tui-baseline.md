@@ -49,17 +49,20 @@ Counters:
 For CI-based perf runs:
 
 - use the manual workflow in [tui-perf.yml](/Users/sahilmobaidin/Desktop/myprojects/codemod/.github/workflows/tui-perf.yml)
+- the workflow also runs automatically on pull requests and compares the PR base SHA against the PR head SHA
 - target a dedicated self-hosted runner label such as `perf`
 - do not share the perf workflow with the normal `[self-hosted, Linux, X64]` CI pool if you want stable numbers
-- the workflow compares a `baseline_ref` and `candidate_ref` on the same runner and publishes a markdown diff report
+- the preferred workflow input is `pr_number`, which compares that PR's base SHA vs head SHA automatically
+- `baseline_ref` and `candidate_ref` remain available as manual overrides for non-PR comparisons
+- the workflow generates its own completed, awaiting-trigger, and active sample runs in isolated temporary state, then cancels any non-completed runs during cleanup
 
 ## Scenarios To Record
 
-Record baselines for these scenarios over a fixed manual run:
+Record baselines for these scenarios over a fixed run:
 
 1. Static completed run attached for 10 seconds
 2. Awaiting-trigger run attached for 10 seconds
-3. Active JSSG run attached for 10 seconds
+3. Active run attached for 10 seconds
 
 ## Suggested Baseline Table
 
@@ -69,7 +72,7 @@ Fill in this table with real measurements when comparing future changes:
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 |  |  |  | Static completed run (10s) |  |  |  |  |  |
 |  |  |  | Awaiting-trigger run (10s) |  |  |  |  |  |
-|  |  |  | Active JSSG run (10s) |  |  |  |  |  |
+|  |  |  | Active run (10s) |  |  |  |  |  |
 
 ## Expectations
 
