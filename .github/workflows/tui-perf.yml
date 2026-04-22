@@ -547,6 +547,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' || inputs.pr_number != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
         run: |
           set -euo pipefail
           PR_NUMBER="$(cat perf-results/pr-number.txt)"
@@ -566,6 +567,7 @@ jobs:
               --jq "map(select(.body | contains(\"${MARKER}\"))) | last | .id // empty"
           )"
 
+          set +e
           if [ -n "${EXISTING_COMMENT_ID}" ]; then
             gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_COMMENT_ID}" \
               -X PATCH \
@@ -574,6 +576,11 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -X POST \
               --raw-field body="${COMMENT_BODY}" >/dev/null
+          fi
+          comment_status=$?
+          set -e
+          if [ "${comment_status}" -ne 0 ]; then
+            echo "Unable to post TUI perf PR comment with the current token; results remain available in the workflow summary and artifact." >&2
           fi
 
       - name: Upload TUI perf artifacts
