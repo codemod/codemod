@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: read
 
 concurrency:
@@ -79,6 +80,7 @@ jobs:
             BASELINE_REF="${PR_BASE_SHA}"
             CANDIDATE_REF="${PR_HEAD_SHA}"
             echo "Comparing PR event: ${PR_TITLE}"
+            echo "${{ github.event.pull_request.number }}" > perf-results/pr-number.txt
           elif [ -n "${PR_NUMBER}" ]; then
             PR_JSON="$(
               gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
@@ -88,6 +90,7 @@ jobs:
             CANDIDATE_REF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])' <<<"${PR_JSON}")"
             RESOLVED_PR_TITLE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])' <<<"${PR_JSON}")"
             echo "Comparing PR #${PR_NUMBER}: ${RESOLVED_PR_TITLE}"
+            echo "${PR_NUMBER}" > perf-results/pr-number.txt
           else
             CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA_VALUE}"
           fi
@@ -351,6 +354,39 @@ jobs:
       - name: Publish TUI perf comparison
         run: |
           cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment TUI perf comparison on PR
+        if: ${{ github.event_name == 'pull_request' || inputs.pr_number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="$(cat perf-results/pr-number.txt)"
+          MARKER="<!-- codemod:tui-perf -->"
+          COMMENT_BODY_FILE="$(mktemp)"
+          {
+            echo "${MARKER}"
+            echo "## TUI Perf Comparison"
+            echo
+            cat perf-results/comparison.md
+          } > "${COMMENT_BODY_FILE}"
+          COMMENT_BODY="$(cat "${COMMENT_BODY_FILE}")"
+
+          EXISTING_COMMENT_ID="$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --paginate \
+              --jq "map(select(.body | contains(\"${MARKER}\"))) | last | .id // empty"
+          )"
+
+          if [ -n "${EXISTING_COMMENT_ID}" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_COMMENT_ID}" \
+              -X PATCH \
+              --raw-field body="${COMMENT_BODY}" >/dev/null
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -X POST \
+              --raw-field body="${COMMENT_BODY}" >/dev/null
+          fi
 
       - name: Upload TUI perf artifacts
         uses: actions/upload-artifact@v4
