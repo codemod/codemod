@@ -77,7 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           log_phase() {
-            printf '[tui-perf] %s %s\n' "$(date -u +%H:%M:%S)" "$*"
+            printf '[tui-perf] %s %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
           }
 
           mkdir -p perf-results
