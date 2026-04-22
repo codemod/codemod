@@ -31,7 +31,7 @@ permissions:
 
 concurrency:
   group: tui-perf-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   tui-perf:
