@@ -738,6 +738,83 @@ export default function transform(root) {
         }
     }
 
+    /// `readFileSync` without an `encoding` argument must return a Uint8Array
+    /// to match Node. Codemods doing binary reads (or calling `Buffer.from`
+    /// on the result) rely on this; an accidental UTF-8 string would lose
+    /// non-text bytes and break length-based checks.
+    #[test]
+    fn test_fs_sandbox_read_without_encoding_returns_uint8array() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const buf = fs.readFileSync("/app/sibling.ts");
+  const parts = [
+    "typed=" + (buf instanceof Uint8Array),
+    "len=" + buf.byteLength,
+    "b0=" + buf[0],
+    "b1=" + buf[1],
+  ];
+  const txt = fs.readFileSync("/app/sibling.ts", "utf-8");
+  parts.push("utf=" + (typeof txt));
+  parts.push("eq=" + (txt === "hi"));
+  return parts.join(";");
+}
+        "#
+        .trim();
+
+        fs::write(temp_dir.path().join("fs_bytes_codemod.js"), codemod_content)
+            .expect("Failed to write codemod file");
+
+        let root = build_memory_fs_with_files(&[
+            ("/app/main.ts", "const x = 1;"),
+            ("/app/sibling.ts", "hi"),
+        ]);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root: root.clone(),
+            fetcher: None,
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    // 'h' = 0x68 = 104, 'i' = 0x69 = 105
+                    assert_eq!(
+                        modified.content,
+                        "typed=true;len=2;b0=104;b1=105;utf=string;eq=true",
+                    );
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
     /// Mirror pg_ast_grep's batch flow: run the same fs-using codemod across
     /// many files sequentially (one tokio runtime + one QuickJS runtime per
     /// file, just like execute_codemod_sync on each Rayon worker). If the fs

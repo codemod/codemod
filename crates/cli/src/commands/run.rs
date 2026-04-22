@@ -331,6 +331,7 @@ pub async fn handler(
 
     // Set the package name so it's stored on the WorkflowRun
     engine.set_name(Some(args.package.clone()));
+    engine.workflow_run_config_mut().enable_managed_git = auto_launch_tui;
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(Arc::new(None));

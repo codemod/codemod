@@ -50,7 +50,7 @@ export default codemod;
 ```
 
 <Info>
-  Path comparisons use normalized path strings: `.` and `..` segments are resolved before the prefix check, so straightforward path-traversal attempts are rejected. This check is lexical and does not resolve symlink targets.
+  Path comparisons first normalize `.`/`..` segments and collapse redundant slashes before the prefix check. When the curated fs is backed by real disk (the CLI), the resolver additionally walks each path component with `symlink_metadata` and rejects any path that traverses a symlink — a pre-existing `target_dir/link-to-elsewhere/secret` won't slip past the guard even though its lexical form stays under `target_dir`.
 </Info>
 
 ### Error codes

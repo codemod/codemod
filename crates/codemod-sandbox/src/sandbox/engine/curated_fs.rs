@@ -2,8 +2,12 @@
 //!
 //! Exposes a Node.js-compatible `fs` (and `fs/promises`) API that is
 //! constrained to a caller-configured `target_dir` prefix. Any incoming path
-//! is normalized against `target_dir` and rejected with `EACCES` if the
-//! canonical form would escape. The actual storage is a
+//! is lexically normalized (collapsing `.`/`..` and redundant slashes) and
+//! rejected with `EACCES` if the result would escape `target_dir`. When the
+//! VFS is backed by real disk (see [`CuratedFsConfig::with_physical_target_dir`]),
+//! the resolver additionally walks each path component with `symlink_metadata`
+//! and rejects any path that traverses a symlink, so symlinks inside the
+//! repo cannot be used to escape the sandbox. The actual storage is a
 //! [`vfs::VfsPath`] so callers can plug in either a `MemoryFS` (in-memory
 //! codemod execution, e.g. pg_ast_grep) or a `PhysicalFS` (CLI) without the
 //! module caring.
@@ -13,12 +17,13 @@
 //! registered — see `in_memory_engine.rs` for the wiring.
 
 use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Async, Func, Opt},
-    Ctx, Error, Exception, IntoJs, JsLifetime, Object, Result, Value,
+    Ctx, Error, Exception, IntoJs, JsLifetime, Object, Result, TypedArray, Value,
 };
 use vfs::error::VfsErrorKind;
 use vfs::{VfsError, VfsFileType, VfsPath};
@@ -56,6 +61,13 @@ pub struct CuratedFsConfig {
     /// subsequent reads (including from other workers sharing `root`) are
     /// pure memory hits.
     pub fetcher: Option<Arc<dyn FileFetcher>>,
+    /// When set, indicates that `root` maps 1:1 to real-disk paths and gives
+    /// the host-filesystem path that corresponds to [`Self::target_dir`]. The
+    /// resolver uses this to additionally reject any requested path that
+    /// traverses a symlink; without this extra check, a `/repo/link/secret`
+    /// where `link` is a symlink to `/etc` would pass the lexical prefix
+    /// guard and let the codemod read outside the sandbox.
+    pub physical_target_dir: Option<PathBuf>,
 }
 
 // `CuratedFsConfig` contains no `'js`-bound references, so the `'js` lifetime
@@ -70,6 +82,7 @@ impl CuratedFsConfig {
             target_dir: target_dir.into(),
             root,
             fetcher: None,
+            physical_target_dir: None,
         }
     }
 
@@ -77,6 +90,17 @@ impl CuratedFsConfig {
     /// a path inside `target_dir` that isn't currently in the VFS.
     pub fn with_fetcher(mut self, fetcher: Arc<dyn FileFetcher>) -> Self {
         self.fetcher = Some(fetcher);
+        self
+    }
+
+    /// Declare that the backing VFS maps 1:1 to real-disk paths (e.g.
+    /// `PhysicalFS::new("/")`) and give the host path corresponding to
+    /// `target_dir`. Enables symlink-safe resolution: any requested path
+    /// whose existing intermediate components include a symlink is rejected
+    /// with `EACCES`, preventing sandbox escape via crafted or pre-existing
+    /// symlinks. Leave unset for in-memory VFS backends.
+    pub fn with_physical_target_dir(mut self, physical_target_dir: PathBuf) -> Self {
+        self.physical_target_dir = Some(physical_target_dir);
         self
     }
 
@@ -91,7 +115,10 @@ impl CuratedFsConfig {
 
     /// Resolve an incoming path against [`Self::target_dir`]. Relative paths
     /// are resolved beneath `target_dir`; absolute paths are left as-is but
-    /// must normalize to a location inside `target_dir`.
+    /// must normalize to a location inside `target_dir`. When
+    /// [`Self::physical_target_dir`] is set, also rejects paths whose
+    /// existing intermediate components include a symlink (so a codemod
+    /// can't escape via `target_dir/link-to-outside/...`).
     fn resolve(&self, input: &str) -> std::result::Result<(String, VfsPath), FsErrorKind> {
         let target = self.normalized_target();
         let raw = if input.starts_with('/') {
@@ -108,6 +135,9 @@ impl CuratedFsConfig {
         if !within_target {
             return Err(FsErrorKind::AccessDenied { path: normalized });
         }
+        if let Some(phys_target) = &self.physical_target_dir {
+            check_no_symlink_escape(phys_target, &target, &normalized)?;
+        }
         let vfs_path = self
             .root
             .join(normalized.trim_start_matches('/'))
@@ -116,6 +146,38 @@ impl CuratedFsConfig {
             })?;
         Ok((normalized, vfs_path))
     }
+}
+
+/// Walk the host-filesystem path corresponding to `normalized` starting from
+/// `phys_target` and reject if any component exists and is a symlink. This
+/// closes the gap that pure lexical normalization leaves open on real disk:
+/// `/repo/link/secret` passes the prefix check even when `link` is a symlink
+/// to `/etc`, and would otherwise let a codemod read outside the sandbox.
+/// Components that don't exist yet (e.g. when writing a fresh file) are
+/// ignored — no symlink can exist at a missing path.
+fn check_no_symlink_escape(
+    phys_target: &Path,
+    normalized_target: &str,
+    normalized: &str,
+) -> std::result::Result<(), FsErrorKind> {
+    let rel = normalized
+        .strip_prefix(normalized_target)
+        .unwrap_or(normalized)
+        .trim_start_matches('/');
+    let mut cursor = phys_target.to_path_buf();
+    for component in Path::new(rel).components() {
+        if let Component::Normal(name) = component {
+            cursor.push(name);
+            if let Ok(meta) = std::fs::symlink_metadata(&cursor) {
+                if meta.file_type().is_symlink() {
+                    return Err(FsErrorKind::AccessDenied {
+                        path: normalized.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Normalize a POSIX-style path: strip `.` segments, resolve `..` against
@@ -313,15 +375,12 @@ fn read_bytes_via_vfs_or_fetcher(
                             let _ = parent_vfs.create_dir_all();
                         }
                     }
-                    match vfs_path.create_file() {
-                        Ok(mut f) => {
-                            let _ = f.write_all(&bytes);
-                        }
-                        // Another worker raced us — if the file now exists,
-                        // proceed with our freshly fetched bytes and let
-                        // their write stand. Any other write failure is
-                        // non-fatal for the current read.
-                        Err(_) => {}
+                    // Another worker raced us — if the file now exists,
+                    // proceed with our freshly fetched bytes and let
+                    // their write stand. Any other write failure is
+                    // non-fatal for the current read.
+                    if let Ok(mut f) = vfs_path.create_file() {
+                        let _ = f.write_all(&bytes);
                     }
                     Ok(bytes)
                 }
@@ -354,14 +413,17 @@ fn read_file_sync_impl<'js>(
     let (normalized, vfs_path) = cfg.resolve(path).map_err(|e| throw_fs(ctx, e, "open"))?;
     let bytes = read_bytes_via_vfs_or_fetcher(ctx, &cfg, &normalized, &vfs_path)?;
     if encoding.is_some() {
+        // Node decodes as UTF-8 when `encoding` is "utf-8"/"utf8". For any
+        // other encoding we still hand back a string — the curated fs MVP
+        // doesn't implement per-encoding decoders. Codemods operating on
+        // text source don't observe a difference.
         let s = String::from_utf8_lossy(&bytes).into_owned();
         s.into_js(ctx)
     } else {
-        // TODO: return a real Buffer/Uint8Array once llrt_buffer is on the
-        // dependency path. For the curated fs MVP we always decode as UTF-8;
-        // codemods operating on text source don't observe a difference.
-        let s = String::from_utf8_lossy(&bytes).into_owned();
-        s.into_js(ctx)
+        // Match Node semantics: without `encoding`, return a Uint8Array so
+        // callers that `Buffer.from(...)` or otherwise treat the result as
+        // binary data behave the same as they do under Node.
+        TypedArray::<u8>::new(ctx.clone(), bytes).map(|ta| ta.into_value())
     }
 }
 
@@ -681,5 +743,68 @@ mod tests {
         assert_eq!(normalize_path("/app/src/../src/foo.ts"), "/app/src/foo.ts");
         assert_eq!(normalize_path("/app/../etc/passwd"), "/etc/passwd");
         assert_eq!(normalize_path("/app//src///foo.ts"), "/app/src/foo.ts");
+    }
+
+    /// When `physical_target_dir` is set, traversing a symlink — even one
+    /// whose lexical form stays under `target_dir` — must be rejected. This
+    /// is the gap pure lexical normalization leaves open on real disk.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_with_physical_target_dir_rejects_symlink_traversal() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "leaked").unwrap();
+        symlink(&outside, repo.join("link")).unwrap();
+
+        let repo_str = repo.to_string_lossy().into_owned();
+        let cfg = CuratedFsConfig::new(repo_str.clone(), MemoryFS::new().into())
+            .with_physical_target_dir(repo.clone());
+
+        // Lexically under target_dir, but traverses a symlink — must be
+        // rejected so the codemod can't read `outside/secret`.
+        let traversal = format!("{repo_str}/link/secret");
+        match cfg.resolve(&traversal) {
+            Err(FsErrorKind::AccessDenied { path }) => assert_eq!(path, traversal),
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+
+        // A non-existent path under target_dir is fine — no symlink can
+        // live at a path that doesn't exist, and writes need to resolve
+        // parents even when the file itself is absent.
+        let fresh = format!("{repo_str}/fresh.ts");
+        assert!(cfg.resolve(&fresh).is_ok());
+
+        // Regular files inside target_dir still resolve.
+        std::fs::write(repo.join("ok.ts"), "ok").unwrap();
+        let ok = format!("{repo_str}/ok.ts");
+        assert!(cfg.resolve(&ok).is_ok());
+    }
+
+    /// Without `physical_target_dir` (in-memory VFS backends like pg_ast_grep),
+    /// the symlink check is skipped — MemoryFS has no symlinks, and poking
+    /// the host filesystem would be both wrong and slow.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_without_physical_target_dir_skips_symlink_check() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        symlink(temp.path().join("outside"), repo.join("link")).unwrap();
+
+        // target_dir matches the host repo path but `physical_target_dir`
+        // is intentionally unset — this is the in-memory engine's profile.
+        let repo_str = repo.to_string_lossy().into_owned();
+        let cfg = CuratedFsConfig::new(repo_str.clone(), MemoryFS::new().into());
+
+        // Without the symlink check, lexical resolution alone succeeds; the
+        // VFS (here MemoryFS) is what ultimately serves the read and it has
+        // no concept of the host symlink.
+        let traversal = format!("{repo_str}/link/secret");
+        assert!(cfg.resolve(&traversal).is_ok());
     }
 }

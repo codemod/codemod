@@ -153,6 +153,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     )?;
 
     engine.set_name(Some(workflow_label));
+    engine.workflow_run_config_mut().enable_managed_git = auto_launch_tui;
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(std::sync::Arc::new(None));

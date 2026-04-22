@@ -349,7 +349,12 @@ where
 
         if let Some(target_dir) = curated_fs_target.clone() {
             let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
-            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+            // PhysicalFS is rooted at "/", so `target_dir` is already the
+            // host-disk path corresponding to the VFS target. Hand it through
+            // so the resolver can reject paths that traverse a symlink.
+            let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
+                .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+            ctx.store_userdata(cfg)
                 .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: format!("Failed to store CuratedFsConfig: {:?}", e),
@@ -782,7 +787,12 @@ where
 
         if let Some(target_dir) = curated_fs_target.clone() {
             let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
-            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+            // See the selector-config callsite above: PhysicalFS is rooted
+            // at "/", so target_dir already names the host path and can be
+            // reused for the symlink-safe check.
+            let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
+                .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+            ctx.store_userdata(cfg)
                 .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: format!("Failed to store CuratedFsConfig: {:?}", e),

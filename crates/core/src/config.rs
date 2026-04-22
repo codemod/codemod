@@ -118,6 +118,12 @@ pub struct WorkflowRunConfig {
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
     /// Optional per-task git worktree used for managed git execution.
     pub managed_git_worktree: Option<ManagedGitWorktree>,
+    /// When false, skip managed git operations (branch switching, worktrees,
+    /// commits, push, pull request creation) for nodes that declare
+    /// `branch_name` or `pull_request`. Cloud mode still manages git regardless
+    /// of this flag. Defaults to true; CLI sets it to false for headless runs
+    /// so those operations stay scoped to TUI-driven workflows.
+    pub enable_managed_git: bool,
 }
 
 impl Default for WorkflowRunConfig {
@@ -150,6 +156,7 @@ impl Default for WorkflowRunConfig {
             shell_command_approval_callback: None,
             install_skill_executor: None,
             managed_git_worktree: None,
+            enable_managed_git: true,
         }
     }
 }
