@@ -19,8 +19,9 @@ This guide provides comprehensive documentation for creating codemods using Java
 ## Runtime and Capabilities
 
 - JSSG is a QuickJS runtime with LLRT-based Node compatibility.
-- Standard Node-style imports are available in JSSG; some modules are capability-gated.
-- If the codemod uses gated APIs such as `fs`, `fetch`, or `child_process`, update `codemod.yaml` in the same change with the matching `capabilities` entry.
+- Standard Node-style imports are available in JSSG. `fs` is sandboxed to the target directory by default (no capability needed); `fetch` and `child_process` are gated.
+- Do not add `fs` to `capabilities` just because the codemod imports it. Only list `fs` when the codemod actually needs to read/write paths outside the target directory (that upgrades to the unrestricted real-disk fs). This should be rarely needed.
+- If the codemod uses `fetch` or `child_process`, update `codemod.yaml` in the same change with the matching `capabilities` entry.
 - For related multi-file JSSG work, prefer `jssgTransform` or other JSSG APIs before falling back to shell steps.
 - For detailed runtime and capability rules, read `jssg-runtime-capabilities-instructions` from Codemod MCP.
 
