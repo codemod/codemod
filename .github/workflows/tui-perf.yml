@@ -54,6 +54,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Verify deterministic TUI perf baseline
+        if: github.event_name != 'pull_request'
         run: |
           cargo test -p codemod should_redraw_is_false_for_static_idle_ui_without_changes -- --nocapture
           cargo test -p codemod draw_counter_counts_only_initial_draw_for_static_idle_screen -- --nocapture
@@ -64,7 +65,7 @@ jobs:
       - name: Run baseline and candidate TUI perf scenarios
         env:
           CODEMOD_TUI_PERF_METRICS: "1"
-          CODEMOD_TUI_PERF_AUTO_EXIT_SECS: ${{ inputs.duration_secs || '10' }}
+          DURATION_SECS_INPUT: ${{ inputs.duration_secs }}
           PR_NUMBER: ${{ inputs.pr_number }}
           BASELINE_REF: ${{ inputs.baseline_ref }}
           CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
@@ -76,6 +77,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p perf-results
+          AUTO_EXIT_SECS="${DURATION_SECS_INPUT:-}"
+          if [ -z "${AUTO_EXIT_SECS}" ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ]; then
+              AUTO_EXIT_SECS="3"
+            else
+              AUTO_EXIT_SECS="10"
+            fi
+          fi
+          export CODEMOD_TUI_PERF_AUTO_EXIT_SECS="${AUTO_EXIT_SECS}"
           if [ "${EVENT_NAME}" = "pull_request" ]; then
             BASELINE_REF="${PR_BASE_SHA}"
             CANDIDATE_REF="${PR_HEAD_SHA}"

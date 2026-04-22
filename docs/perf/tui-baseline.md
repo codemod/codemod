@@ -50,6 +50,10 @@ For CI-based perf runs:
 
 - use the manual workflow in [tui-perf.yml](/Users/sahilmobaidin/Desktop/myprojects/codemod/.github/workflows/tui-perf.yml)
 - the workflow also runs automatically on pull requests and compares the PR base SHA against the PR head SHA
+- pull request runs are intentionally lighter-weight:
+  - they skip the extra deterministic unit-test pass
+  - they use a shorter default TUI auto-exit window of 3 seconds
+- manual runs keep the longer default 10-second window and can still be used for fuller baseline capture
 - target a dedicated self-hosted runner label such as `perf`
 - do not share the perf workflow with the normal `[self-hosted, Linux, X64]` CI pool if you want stable numbers
 - the preferred workflow input is `pr_number`, which compares that PR's base SHA vs head SHA automatically
