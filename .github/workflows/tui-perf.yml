@@ -155,56 +155,56 @@ jobs:
             local workflow_root="$1"
             mkdir -p "${workflow_root}"
 
-            cat > "${workflow_root}/completed.yaml" <<'EOF'
-          version: "1"
-          nodes:
-            - id: completed
-              name: Completed
-              type: automatic
-              steps:
-                - id: complete-quickly
-                  name: Complete quickly
-                  run: |
-                    echo "done"
-          EOF
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: completed' \
+              '    name: Completed' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: complete-quickly' \
+              '        name: Complete quickly' \
+              '        run: |' \
+              '          echo "done"' \
+              > "${workflow_root}/completed.yaml"
 
-            cat > "${workflow_root}/awaiting.yaml" <<'EOF'
-          version: "1"
-          nodes:
-            - id: prepare
-              name: Prepare
-              type: automatic
-              steps:
-                - id: prepare
-                  name: Prepare
-                  run: |
-                    echo "ready"
-            - id: manual
-              name: Manual Trigger
-              type: automatic
-              depends_on: ["prepare"]
-              trigger:
-                type: manual
-              steps:
-                - id: wait-for-manual-trigger
-                  name: Wait for manual trigger
-                  run: |
-                    echo "manual"
-          EOF
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: prepare' \
+              '    name: Prepare' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: prepare' \
+              '        name: Prepare' \
+              '        run: |' \
+              '          echo "ready"' \
+              '  - id: manual' \
+              '    name: Manual Trigger' \
+              '    type: automatic' \
+              '    depends_on: ["prepare"]' \
+              '    trigger:' \
+              '      type: manual' \
+              '    steps:' \
+              '      - id: wait-for-manual-trigger' \
+              '        name: Wait for manual trigger' \
+              '        run: |' \
+              '          echo "manual"' \
+              > "${workflow_root}/awaiting.yaml"
 
-            cat > "${workflow_root}/active.yaml" <<'EOF'
-          version: "1"
-          nodes:
-            - id: active
-              name: Active
-              type: automatic
-              steps:
-                - id: stay-running
-                  name: Stay running
-                  run: |
-                    echo "running"
-                    sleep 120
-          EOF
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: active' \
+              '    name: Active' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: stay-running' \
+              '        name: Stay running' \
+              '        run: |' \
+              '          echo "running"' \
+              '          sleep 120' \
+              > "${workflow_root}/active.yaml"
           }
 
           run_workflow_and_capture_id() {
@@ -297,82 +297,81 @@ jobs:
               RUN_ID="${run_id}" \
               OUTPUT_PATH="${output}" \
               TIMEOUT_SECS="${timeout_secs}" \
-              python3 - <<'PY'; then
-              import os
-              import pty
-              import select
-              import signal
-              import subprocess
-              import sys
-              import time
+              python3 -c 'import textwrap; exec(textwrap.dedent("""
+                import os
+                import pty
+                import select
+                import signal
+                import subprocess
+                import sys
+                import time
 
-              worktree = os.environ["WORKTREE"]
-              state_home = os.environ["STATE_HOME"]
-              codemod_bin = os.environ["CODEMOD_BIN"]
-              run_id = os.environ["RUN_ID"]
-              output_path = os.environ["OUTPUT_PATH"]
-              timeout_secs = int(os.environ["TIMEOUT_SECS"])
+                worktree = os.environ["WORKTREE"]
+                state_home = os.environ["STATE_HOME"]
+                codemod_bin = os.environ["CODEMOD_BIN"]
+                run_id = os.environ["RUN_ID"]
+                output_path = os.environ["OUTPUT_PATH"]
+                timeout_secs = int(os.environ["TIMEOUT_SECS"])
 
-              master_fd, slave_fd = pty.openpty()
-              env = os.environ.copy()
-              env["XDG_DATA_HOME"] = state_home
+                master_fd, slave_fd = pty.openpty()
+                env = os.environ.copy()
+                env["XDG_DATA_HOME"] = state_home
 
-              proc = subprocess.Popen(
-                  [codemod_bin, "workflow", "tui", "--id", run_id],
-                  cwd=worktree,
-                  env=env,
-                  stdin=slave_fd,
-                  stdout=slave_fd,
-                  stderr=slave_fd,
-                  close_fds=True,
-              )
-              os.close(slave_fd)
+                proc = subprocess.Popen(
+                    [codemod_bin, "workflow", "tui", "--id", run_id],
+                    cwd=worktree,
+                    env=env,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                )
+                os.close(slave_fd)
 
-              deadline = time.monotonic() + timeout_secs
-              timed_out = False
+                deadline = time.monotonic() + timeout_secs
+                timed_out = False
 
-              with open(output_path, "wb") as output_file:
-                  while True:
-                      if proc.poll() is not None:
-                          break
-                      if time.monotonic() >= deadline:
-                          timed_out = True
-                          proc.send_signal(signal.SIGTERM)
-                          try:
-                              proc.wait(timeout=5)
-                          except subprocess.TimeoutExpired:
-                              proc.kill()
-                              proc.wait()
-                          break
+                with open(output_path, "wb") as output_file:
+                    while True:
+                        if proc.poll() is not None:
+                            break
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            proc.send_signal(signal.SIGTERM)
+                            try:
+                                proc.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait()
+                            break
 
-                      ready, _, _ = select.select([master_fd], [], [], 0.2)
-                      if master_fd in ready:
-                          try:
-                              chunk = os.read(master_fd, 65536)
-                          except OSError:
-                              chunk = b""
-                          if chunk:
-                              output_file.write(chunk)
-                              output_file.flush()
+                        ready, _, _ = select.select([master_fd], [], [], 0.2)
+                        if master_fd in ready:
+                            try:
+                                chunk = os.read(master_fd, 65536)
+                            except OSError:
+                                chunk = b""
+                            if chunk:
+                                output_file.write(chunk)
+                                output_file.flush()
 
-                  while True:
-                      try:
-                          chunk = os.read(master_fd, 65536)
-                      except OSError:
-                          break
-                      if not chunk:
-                          break
-                      output_file.write(chunk)
+                    while True:
+                        try:
+                            chunk = os.read(master_fd, 65536)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        output_file.write(chunk)
 
-              os.close(master_fd)
+                os.close(master_fd)
 
-              if timed_out:
-                  print(f"TUI scenario exceeded timeout of {timeout_secs}s", file=sys.stderr)
-                  sys.exit(124)
+                if timed_out:
+                    print(f"TUI scenario exceeded timeout of {timeout_secs}s", file=sys.stderr)
+                    sys.exit(124)
 
-              sys.exit(proc.returncode or 0)
-              PY
-            then
+                sys.exit(proc.returncode or 0)
+              """))'; then
               echo "tui scenario command failed for ${name} run ${run_id}" >&2
               cat "${output}" >&2 || true
               return 1
