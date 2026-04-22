@@ -561,14 +561,17 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-In interactive mode, `codemod init` prompts for the core package decisions, then shows a review screen before scaffolding. You can edit fields from that review screen before creating files.
+In interactive mode, `codemod init` prompts for the codemod name and author, then shows a review screen before scaffolding. You can edit all other fields from that review screen before creating files.
 
 Interactive defaults:
 
 - directory: name-derived package directory when `[PATH]` is omitted
+- codemod type: `ast-grep-js` with agent skill behavior
 - agent skill behavior: included by default for workflow packages
+- target language: `typescript`
 - description: `Codemod package for <name>`
-- author: `Author <author@example.com>`
+- author: prompted; defaults to the logged-in user as `username <email>` when available
+- private package: `false`
 - license: `MIT`
 - package manager: `npm`
 - GitHub Actions publishing workflow: disabled
@@ -637,7 +640,8 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 <ResponseField name="--author <AUTHOR>" type="string">
   Author name and email stored in `codemod.yaml` package metadata.
 
-  Defaults to `Author <author@example.com>`.
+  Interactive mode prompts for this value and defaults to the logged-in user as `username <email>` when available.
+  In `--no-interactive` mode, the CLI uses `--author`, then the logged-in user, then the OS username.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
@@ -729,7 +733,7 @@ npx codemod publish [PATH]
 
 <Info>
   Package metadata (name, version, access level, etc.) is read from `codemod.yaml`. See [Package Structure](/package-structure#package-metadata-codemod-yaml) for configuration options.
-  If `author` is missing or still the placeholder value, `codemod publish` warns and can replace the uploaded package's `codemod.yaml` author metadata with values inferred from the authenticated user. This does not affect the Registry Publisher shown in Codemod Registry, which always reflects the logged-in publishing account.
+  `author` is required in `codemod.yaml`.
 </Info>
 
 <Card title="Publishing Guide" icon="upload" href="/publishing">

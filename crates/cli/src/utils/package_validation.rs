@@ -638,7 +638,7 @@ mod tests {
             name: name.to_string(),
             version: "1.0.0".to_string(),
             description: "description".to_string(),
-            author: Some("author".to_string()),
+            author: "author".to_string(),
             license: None,
             copyright: None,
             repository: None,

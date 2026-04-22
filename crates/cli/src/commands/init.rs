@@ -1,4 +1,4 @@
-use crate::utils::manifest::PLACEHOLDER_AUTHOR;
+use crate::auth::{format_author_from_user_info, TokenStorage};
 use crate::utils::skill_layout::{
     expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
 };
@@ -6,7 +6,8 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use console::{style, Emoji};
 use inquire::{Confirm, InquireError, Select, Text};
-use log::info;
+use log::{debug, info};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -88,13 +89,6 @@ enum ProjectType {
     Shell,
     /// YAML ast-grep codemod (legacy)
     AstGrepYaml,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InteractiveCodemodType {
-    Jssg,
-    MultiStepWorkflow,
-    AgentSkill,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,8 +324,7 @@ pub fn handler(args: &Command) -> Result<()> {
         let config = ProjectConfig {
             name: project_name,
             description: args.description.clone().unwrap_or(default_description),
-            author: normalize_optional_string(args.author.clone())
-                .unwrap_or_else(|| PLACEHOLDER_AUTHOR.to_string()),
+            author: resolve_non_interactive_author(args.author.clone())?,
             license: args.license.clone().unwrap_or_else(|| "MIT".to_string()),
             project_type,
             package_behavior,
@@ -476,6 +469,63 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn default_author_for_registry(storage: &TokenStorage, registry_url: &str) -> Option<String> {
+    storage
+        .get_auth_for_registry(registry_url)
+        .ok()
+        .flatten()
+        .and_then(|stored_auth| format_author_from_user_info(&stored_auth.user))
+}
+
+fn resolve_default_author_from_active_registry() -> Option<String> {
+    let storage = match TokenStorage::new() {
+        Ok(storage) => storage,
+        Err(error) => {
+            debug!("Failed to initialize token storage while resolving default author: {error}");
+            return None;
+        }
+    };
+
+    let config = match storage.load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            debug!("Failed to load CLI config while resolving default author: {error}");
+            return None;
+        }
+    };
+
+    default_author_for_registry(&storage, &config.default_registry)
+}
+
+fn resolve_os_username() -> Option<String> {
+    ["USER", "LOGNAME", "USERNAME"]
+        .into_iter()
+        .find_map(|key| normalize_optional_string(env::var(key).ok()))
+}
+
+fn choose_non_interactive_author(
+    explicit_author: Option<String>,
+    logged_in_author: Option<String>,
+    os_username: Option<String>,
+) -> Result<String> {
+    normalize_optional_string(explicit_author)
+        .or(logged_in_author)
+        .or(os_username)
+        .ok_or_else(|| {
+            anyhow!(
+                "Author is required. Pass --author, log in with 'npx codemod@latest login', or ensure an OS username is available."
+            )
+        })
+}
+
+fn resolve_non_interactive_author(explicit_author: Option<String>) -> Result<String> {
+    choose_non_interactive_author(
+        explicit_author,
+        resolve_default_author_from_active_registry(),
+        resolve_os_username(),
+    )
+}
+
 fn ensure_project_path_ready(project_path: &Path, force: bool, no_interactive: bool) -> Result<()> {
     if !project_path.exists() || force {
         return Ok(());
@@ -546,7 +596,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
             if let Some(pt) = &args.project_type {
                 normalize_project_type(pt.clone())
             } else {
-                select_project_type()?
+                ProjectType::AstGrepJs
             }
         } else {
             ProjectType::AstGrepJs
@@ -556,24 +606,13 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         let project_type = normalize_project_type(pt.clone());
         (project_type, PackageBehavior::WorkflowAndSkill)
     } else {
-        match select_interactive_codemod_type()? {
-            InteractiveCodemodType::AgentSkill => {
-                (ProjectType::AstGrepJs, PackageBehavior::SkillOnly)
-            }
-            InteractiveCodemodType::Jssg => {
-                (ProjectType::AstGrepJs, PackageBehavior::WorkflowAndSkill)
-            }
-            InteractiveCodemodType::MultiStepWorkflow => {
-                (ProjectType::Hybrid, PackageBehavior::WorkflowAndSkill)
-            }
-        }
+        (ProjectType::AstGrepJs, PackageBehavior::WorkflowAndSkill)
     };
 
-    // Language selection
     let language = if let Some(lang) = &args.language {
         lang.clone()
     } else {
-        select_language()?
+        "typescript".to_string()
     };
 
     // Project details
@@ -595,18 +634,16 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         default_description_for(&name)
     };
 
-    let author = normalize_optional_string(args.author.clone())
-        .unwrap_or_else(|| PLACEHOLDER_AUTHOR.to_string());
+    let author = if let Some(author) = normalize_optional_string(args.author.clone()) {
+        author
+    } else {
+        let default_author = resolve_default_author_from_active_registry();
+        prompt_author(default_author.as_deref())?
+    };
 
     let license = args.license.clone().unwrap_or_else(|| "MIT".to_string());
 
-    let private = if args.private {
-        true
-    } else {
-        Confirm::new("Private package?")
-            .with_default(false)
-            .prompt()?
-    };
+    let private = args.private;
 
     let workspace = args.workspace;
 
@@ -783,7 +820,7 @@ fn review_project_before_scaffold(
                 Ok(())
             }
             "Author" => {
-                config.author = prompt_author(&config.author)?;
+                config.author = prompt_author(Some(&config.author))?;
                 Ok(())
             }
             "License" => {
@@ -829,16 +866,24 @@ fn review_project_before_scaffold(
     }
 }
 
-fn prompt_author(default: &str) -> Result<String> {
-    Ok(Text::new("Author:")
-        .with_default(default)
+fn prompt_author(default: Option<&str>) -> Result<String> {
+    let prompt = match default {
+        Some(default) => Text::new("Author:")
+            .with_default(default)
         .with_help_message(
-            "Use `Name <email>` format for codemod.yaml metadata. During publish, the placeholder can be replaced from your authenticated user for the uploaded package only. Registry Publisher still reflects the logged-in publishing account.",
-        )
+            "Stored in codemod.yaml. Use `Name <email>` when possible. You can change other package settings in the review step.",
+        ),
+        None => Text::new("Author:")
+            .with_help_message(
+                "Stored in codemod.yaml. Use `Name <email>` when possible. You can change other package settings in the review step.",
+            ),
+    };
+
+    Ok(prompt
         .with_validator(|input: &str| {
             if input.trim().is_empty() {
                 Ok(inquire::validator::Validation::Invalid(
-                    "Author is required. Update the placeholder or keep it until publish.".into(),
+                    "Author is required.".into(),
                 ))
             } else {
                 Ok(inquire::validator::Validation::Valid)
@@ -933,42 +978,6 @@ fn edit_agent_skill_behavior(config: &mut ProjectConfig) -> Result<()> {
         PackageBehavior::WorkflowOnly
     };
     Ok(())
-}
-
-fn select_interactive_codemod_type() -> Result<InteractiveCodemodType> {
-    let options = vec![
-        "jssg codemod (covers most use cases)",
-        "multi-step workflow (shell command, YAML & jssg)",
-        "agent skill codemod",
-    ];
-
-    let selection =
-        Select::new("What type of codemod would you like to create?", options).prompt()?;
-
-    match selection {
-        "jssg codemod (covers most use cases)" => Ok(InteractiveCodemodType::Jssg),
-        "multi-step workflow (shell command, YAML & jssg)" => {
-            Ok(InteractiveCodemodType::MultiStepWorkflow)
-        }
-        "agent skill codemod" => Ok(InteractiveCodemodType::AgentSkill),
-        _ => Ok(InteractiveCodemodType::Jssg), // Default fallback
-    }
-}
-
-fn select_project_type() -> Result<ProjectType> {
-    let options = vec![
-        "jssg codemod (covers most use cases)",
-        "multi-step workflow (shell command, YAML & jssg)",
-    ];
-
-    let selection =
-        Select::new("What type of codemod would you like to create?", options).prompt()?;
-
-    match selection {
-        "jssg codemod (covers most use cases)" => Ok(ProjectType::AstGrepJs),
-        "multi-step workflow (shell command, YAML & jssg)" => Ok(ProjectType::Hybrid),
-        _ => Ok(ProjectType::AstGrepJs), // Default fallback
-    }
 }
 
 fn select_language() -> Result<String> {
@@ -1077,7 +1086,7 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let manifest_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
-        .replace("{author_block}", &format!("author: \"{}\"", config.author))
+        .replace("{author}", &config.author)
         .replace("{license}", &config.license)
         .replace("{language}", &config.language)
         .replace(
@@ -2199,15 +2208,15 @@ mod tests {
     }
 
     #[test]
-    fn create_manifest_includes_placeholder_author() {
+    fn create_manifest_includes_required_author() {
         let temp_dir = tempdir().unwrap();
-        let project_path = temp_dir.path().join("placeholder-author-project");
+        let project_path = temp_dir.path().join("authored-project");
         fs::create_dir_all(&project_path).unwrap();
 
         let config = ProjectConfig {
-            name: "placeholder-author-project".to_string(),
+            name: "authored-project".to_string(),
             description: "Workflow package".to_string(),
-            author: PLACEHOLDER_AUTHOR.to_string(),
+            author: "alice <alice@example.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
             package_behavior: PackageBehavior::WorkflowOnly,
@@ -2223,8 +2232,40 @@ mod tests {
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
 
-        assert!(manifest.contains("author: \"Author <author@example.com>\""));
-        assert_eq!(parsed_manifest.author, Some(PLACEHOLDER_AUTHOR.to_string()));
+        assert!(manifest.contains("author: \"alice <alice@example.com>\""));
+        assert_eq!(parsed_manifest.author, "alice <alice@example.com>");
+    }
+
+    #[test]
+    fn choose_non_interactive_author_prefers_explicit_author() {
+        let author = choose_non_interactive_author(
+            Some("explicit <user@example.com>".to_string()),
+            Some("alice <alice@example.com>".to_string()),
+            Some("os-user".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(author, "explicit <user@example.com>");
+    }
+
+    #[test]
+    fn choose_non_interactive_author_falls_back_to_logged_in_user() {
+        let author = choose_non_interactive_author(
+            None,
+            Some("alice <alice@example.com>".to_string()),
+            Some("os-user".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(author, "alice <alice@example.com>");
+    }
+
+    #[test]
+    fn choose_non_interactive_author_falls_back_to_os_username() {
+        let author =
+            choose_non_interactive_author(None, None, Some("os-user".to_string())).unwrap();
+
+        assert_eq!(author, "os-user");
     }
 
     #[test]

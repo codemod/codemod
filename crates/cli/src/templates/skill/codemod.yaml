@@ -3,7 +3,7 @@ schema_version: "1.0"
 name: "{name}"
 version: "0.1.0"
 description: "{description}"
-{author_block}
+author: "{author}"
 license: "{license}"
 {repository}
 

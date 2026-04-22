@@ -1,6 +1,4 @@
-use crate::utils::manifest::{
-    is_placeholder_author, normalize_author, CodemodManifest, PLACEHOLDER_AUTHOR,
-};
+use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
     detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape,
@@ -12,7 +10,6 @@ use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
 use console::style;
-use inquire::Confirm;
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
@@ -21,7 +18,6 @@ use serde_json::Value;
 use serde_yaml;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -32,7 +28,7 @@ use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 use crate::utils::skill_layout::expected_authored_skill_file;
 
 use crate::auth::storage::StoredAuth;
-use crate::auth::{fetch_user_info_with_bearer_token, format_author_from_user_info, TokenStorage};
+use crate::auth::TokenStorage;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
 
@@ -70,15 +66,6 @@ impl PublishAuthSource {
             Self::StoredAuth(auth) => &auth.tokens.access_token,
         }
     }
-
-    async fn inferred_author(&self, registry_url: &str) -> Result<Option<String>> {
-        match self {
-            Self::EnvironmentToken(token) => Ok(format_author_from_user_info(
-                &fetch_user_info_with_bearer_token(registry_url, token).await?,
-            )),
-            Self::StoredAuth(auth) => Ok(format_author_from_user_info(&auth.user)),
-        }
-    }
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -99,8 +86,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let config = storage.load_config()?;
     let registry_url = config.default_registry.clone();
     let auth_source = resolve_publish_auth_source(&storage, &registry_url)?;
-    let resolved_author = resolve_publish_author(&manifest, &auth_source, &registry_url).await?;
-    let effective_manifest = resolve_effective_manifest(manifest, resolved_author)?;
+    let effective_manifest = resolve_effective_manifest(manifest)?;
 
     // Validate package structure and get JS files to bundle
     let js_files_to_bundle = validate_package_structure(&package_path, &effective_manifest)?;
@@ -166,130 +152,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     Ok(())
 }
 
-fn should_prompt_for_placeholder_author_replacement() -> bool {
-    io::stdin().is_terminal() && io::stdout().is_terminal()
-}
-
-async fn resolve_publish_author(
-    manifest: &CodemodManifest,
-    auth_source: &PublishAuthSource,
-    registry_url: &str,
-) -> Result<Option<String>> {
-    let manifest_author = normalize_author(manifest.author.clone());
-    let author_needs_resolution =
-        manifest_author.is_none() || is_placeholder_author(manifest_author.as_deref());
-
-    if !author_needs_resolution {
-        return Ok(manifest_author);
-    }
-
-    println!(
-        "{}",
-        publish_author_resolution_warning(manifest_author.as_deref())
-    );
-
-    let inferred_author = normalize_author(auth_source.inferred_author(registry_url).await?);
-    let Some(inferred_author) = inferred_author else {
-        println!(
-            "{}",
-            publish_author_resolution_fallback(manifest_author.as_deref())
-        );
-        return Ok(manifest_author);
-    };
-
-    if should_prompt_for_placeholder_author_replacement() {
-        let replace_author = Confirm::new(&publish_author_resolution_prompt(
-            manifest_author.as_deref(),
-            &inferred_author,
-        ))
-        .with_default(true)
-        .with_help_message(
-            "Only updates uploaded codemod.yaml. Registry Publisher stays the logged-in account.",
-        )
-        .prompt()?;
-
-        if !replace_author {
-            println!(
-                "{}",
-                publish_author_resolution_declined_message(manifest_author.as_deref())
-            );
-            return Ok(manifest_author);
-        }
-    } else {
-        println!(
-            "{} Using authenticated user {} for uploaded codemod.yaml author metadata.",
-            style("!").yellow().bold(),
-            style(&inferred_author).cyan()
-        );
-    }
-
-    Ok(Some(inferred_author))
-}
-
-fn publish_author_resolution_warning(author: Option<&str>) -> String {
-    if author.is_none() {
-        format!(
-            "{} codemod.yaml author is missing.",
-            style("!").yellow().bold()
-        )
-    } else {
-        format!(
-            "{} codemod.yaml author is still the placeholder: {}.",
-            style("!").yellow().bold(),
-            style(PLACEHOLDER_AUTHOR).yellow()
-        )
-    }
-}
-
-fn publish_author_resolution_prompt(author: Option<&str>, inferred_author: &str) -> String {
-    if author.is_none() {
-        format!("Use '{inferred_author}' as the uploaded package author for this publish?")
-    } else {
-        format!("Replace the placeholder with '{inferred_author}' for this publish?")
-    }
-}
-
-fn publish_author_resolution_fallback(author: Option<&str>) -> String {
-    if author.is_none() {
-        format!(
-            "{} Unable to infer author metadata from the authenticated user. Update codemod.yaml or run 'npx codemod@latest login' before publishing.",
-            style("!").yellow().bold()
-        )
-    } else {
-        format!(
-            "{} Continuing with the placeholder author in codemod.yaml. Update it before publishing again.",
-            style("!").yellow().bold()
-        )
-    }
-}
-
-fn publish_author_resolution_declined_message(author: Option<&str>) -> String {
-    if author.is_none() {
-        format!(
-            "{} Publish cannot continue without an author in codemod.yaml. Update it or accept the suggested value.",
-            style("!").yellow().bold()
-        )
-    } else {
-        format!(
-            "{} Continuing with the placeholder author in codemod.yaml. Update it to avoid publishing placeholder metadata.",
-            style("!").yellow().bold()
-        )
-    }
-}
-
-fn resolve_effective_manifest(
-    mut manifest: CodemodManifest,
-    resolved_author: Option<String>,
-) -> Result<CodemodManifest> {
-    manifest.author =
-        normalize_author(manifest.author).or_else(|| normalize_author(resolved_author));
-
-    if manifest.author.is_none() {
+fn resolve_effective_manifest(mut manifest: CodemodManifest) -> Result<CodemodManifest> {
+    let author = manifest.author.trim().to_string();
+    if author.is_empty() {
         return Err(anyhow!(
-            "Package author metadata is missing. Run 'npx codemod@latest login' to infer codemod.yaml author metadata from the authenticated user, or set 'author' explicitly in codemod.yaml. The Registry Publisher remains the logged-in publishing account."
+            "Package author is missing. Set 'author' explicitly in codemod.yaml."
         ));
     }
 
+    manifest.author = author;
     Ok(manifest)
 }
 
@@ -304,8 +175,13 @@ fn load_manifest(package_path: &Path) -> Result<CodemodManifest> {
     }
 
     let manifest_content = fs::read_to_string(&manifest_path)?;
-    let manifest: CodemodManifest = serde_yaml::from_str(&manifest_content)
-        .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
+    let manifest: CodemodManifest = serde_yaml::from_str(&manifest_content).map_err(|e| {
+        if e.to_string().contains("missing field `author`") {
+            anyhow!("Package author is missing. Set 'author' explicitly in codemod.yaml.")
+        } else {
+            anyhow!("Failed to parse codemod.yaml: {}", e)
+        }
+    })?;
 
     debug!(
         "Loaded manifest for package: {} v{}",
@@ -893,7 +769,7 @@ codemod-skill-version: 0.1.0
             name: name.to_string(),
             version: "1.0.0".to_string(),
             description: "description".to_string(),
-            author: Some("author".to_string()),
+            author: "author".to_string(),
             license: None,
             copyright: None,
             repository: None,
@@ -917,59 +793,28 @@ codemod-skill-version: 0.1.0
     fn resolve_effective_manifest_preserves_explicit_author() {
         let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
 
-        let effective =
-            resolve_effective_manifest(manifest, Some("alice <alice@example.com>".to_string()))
-                .unwrap();
+        let effective = resolve_effective_manifest(manifest).unwrap();
 
-        assert_eq!(effective.author, Some("author".to_string()));
+        assert_eq!(effective.author, "author".to_string());
     }
 
     #[test]
-    fn resolve_effective_manifest_uses_inferred_author_when_missing() {
+    fn resolve_effective_manifest_trims_required_author() {
         let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        manifest.author = None;
+        manifest.author = "  alice <alice@example.com>  ".to_string();
 
-        let effective =
-            resolve_effective_manifest(manifest, Some("alice <alice@example.com>".to_string()))
-                .unwrap();
+        let effective = resolve_effective_manifest(manifest).unwrap();
 
-        assert_eq!(
-            effective.author,
-            Some("alice <alice@example.com>".to_string())
-        );
+        assert_eq!(effective.author, "alice <alice@example.com>".to_string());
     }
 
     #[test]
-    fn resolve_effective_manifest_errors_when_author_cannot_be_resolved() {
+    fn resolve_effective_manifest_errors_when_author_is_blank() {
         let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        manifest.author = None;
+        manifest.author = "   ".to_string();
 
-        let error = resolve_effective_manifest(manifest, None).unwrap_err();
+        let error = resolve_effective_manifest(manifest).unwrap_err();
         assert!(error.to_string().contains("Package author is missing"));
-    }
-
-    #[test]
-    fn manifest_author_inference_is_needed_only_when_missing_or_blank() {
-        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        assert!(!is_placeholder_author(manifest.author.as_deref()));
-
-        let mut blank_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        blank_author_manifest.author = Some("  ".to_string());
-        assert_eq!(normalize_author(blank_author_manifest.author), None);
-
-        let mut missing_author_manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        missing_author_manifest.author = None;
-        assert_eq!(normalize_author(missing_author_manifest.author), None);
-    }
-
-    #[test]
-    fn placeholder_author_is_detected_even_with_whitespace() {
-        assert!(is_placeholder_author(Some(PLACEHOLDER_AUTHOR)));
-        assert!(is_placeholder_author(Some(
-            "  Author <author@example.com>  "
-        )));
-        assert!(is_placeholder_author(Some("alice <author@example.com>")));
-        assert!(!is_placeholder_author(Some("alice <alice@example.com>")));
     }
 
     #[test]
@@ -1033,32 +878,6 @@ codemod-skill-version: 0.1.0
             "plain text error"
         );
         assert_eq!(extract_backend_error_message("   "), "");
-    }
-
-    #[test]
-    fn missing_author_uses_missing_author_warning_and_prompt_copy() {
-        assert!(publish_author_resolution_warning(None).contains("codemod.yaml author is missing"));
-        assert!(
-            publish_author_resolution_prompt(None, "alice <alice@example.com>")
-                .contains("Use 'alice <alice@example.com>' as the uploaded package author")
-        );
-        assert!(publish_author_resolution_declined_message(None)
-            .contains("Publish cannot continue without an author in codemod.yaml"));
-    }
-
-    #[test]
-    fn placeholder_author_uses_placeholder_warning_and_prompt_copy() {
-        assert!(publish_author_resolution_warning(Some(PLACEHOLDER_AUTHOR))
-            .contains("codemod.yaml author is still the placeholder"));
-        assert!(publish_author_resolution_prompt(
-            Some(PLACEHOLDER_AUTHOR),
-            "alice <alice@example.com>"
-        )
-        .contains("Replace the placeholder with 'alice <alice@example.com>'"));
-        assert!(
-            publish_author_resolution_declined_message(Some(PLACEHOLDER_AUTHOR))
-                .contains("Continuing with the placeholder author in codemod.yaml")
-        );
     }
 
     #[test]
@@ -1263,7 +1082,7 @@ nodes:
         let temp_dir = tempdir().unwrap();
         let package_path = temp_dir.path();
         let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
-        manifest.author = Some("alice <alice@example.com>".to_string());
+        manifest.author = "alice <alice@example.com>".to_string();
 
         fs::write(
             package_path.join("codemod.yaml"),

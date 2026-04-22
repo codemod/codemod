@@ -876,7 +876,7 @@ mod tests {
             name: "sample".to_string(),
             version: "0.1.0".to_string(),
             description: "sample".to_string(),
-            author: Some("codemod".to_string()),
+            author: "codemod".to_string(),
             license: None,
             copyright: None,
             repository: None,
