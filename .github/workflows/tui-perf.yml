@@ -1,0 +1,151 @@
+name: TUI Perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Git ref to use as the baseline
+        required: false
+        default: "main"
+        type: string
+      candidate_ref:
+        description: Git ref to use as the candidate (defaults to the workflow commit)
+        required: false
+        default: ""
+        type: string
+      completed_run_id:
+        description: Workflow run id for a completed run
+        required: true
+        type: string
+      awaiting_trigger_run_id:
+        description: Workflow run id for an awaiting-trigger run
+        required: true
+        type: string
+      active_run_id:
+        description: Workflow run id for an active run
+        required: true
+        type: string
+      duration_secs:
+        description: Seconds to keep each TUI session open before auto-exit
+        required: false
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tui-perf-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tui-perf:
+    name: TUI Perf Comparison
+    runs-on: [self-hosted, Linux, X64, perf]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config bsdutils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify deterministic TUI perf baseline
+        run: |
+          cargo test -p codemod should_redraw_is_false_for_static_idle_ui_without_changes -- --nocapture
+          cargo test -p codemod draw_counter_counts_only_initial_draw_for_static_idle_screen -- --nocapture
+          cargo test -p codemod draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events -- --nocapture
+          cargo test -p codemod draw_counter_counts_deadline_tick_for_running_screen -- --nocapture
+          cargo test -p codemod reduce_workflow_receiver_requests_snapshot_after_receiver_lag -- --nocapture
+
+      - name: Run baseline and candidate TUI perf scenarios
+        env:
+          CODEMOD_TUI_PERF_METRICS: "1"
+          CODEMOD_TUI_PERF_AUTO_EXIT_SECS: ${{ inputs.duration_secs }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
+          COMPLETED_RUN_ID: ${{ inputs.completed_run_id }}
+          AWAITING_TRIGGER_RUN_ID: ${{ inputs.awaiting_trigger_run_id }}
+          ACTIVE_RUN_ID: ${{ inputs.active_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p perf-results
+          CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA}"
+          WORKTREE_ROOT="$(mktemp -d)"
+          BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
+          CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
+
+          cleanup() {
+            git worktree remove --force "${BASELINE_WORKTREE}" >/dev/null 2>&1 || true
+            git worktree remove --force "${CANDIDATE_WORKTREE}" >/dev/null 2>&1 || true
+            rm -rf "${WORKTREE_ROOT}"
+          }
+          trap cleanup EXIT
+
+          git worktree add "${BASELINE_WORKTREE}" "${BASELINE_REF}"
+          git worktree add "${CANDIDATE_WORKTREE}" "${CANDIDATE_REF}"
+          git -C "${BASELINE_WORKTREE}" submodule update --init --recursive
+          git -C "${CANDIDATE_WORKTREE}" submodule update --init --recursive
+
+          run_scenario() {
+            local worktree="$1"
+            local outdir="$2"
+            local name="$3"
+            local run_id="$4"
+            local output="${outdir}/${name}.log"
+            mkdir -p "${outdir}"
+            (
+              cd "${worktree}"
+              script -q -e -c "cargo run -p codemod -- workflow tui --id ${run_id}" /dev/null
+            ) >"${output}" 2>&1
+            grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"
+            printf "%s " "${name}" >>"${outdir}/summary.txt"
+            cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
+          }
+
+          run_suite() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            {
+              echo "ref=${ref}"
+              echo "completed_run_id=${COMPLETED_RUN_ID}"
+            } >"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${outdir}" completed "${COMPLETED_RUN_ID}"
+            {
+              echo
+              echo "awaiting_trigger_run_id=${AWAITING_TRIGGER_RUN_ID}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${outdir}" awaiting_trigger "${AWAITING_TRIGGER_RUN_ID}"
+            {
+              echo
+              echo "active_run_id=${ACTIVE_RUN_ID}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${outdir}" active "${ACTIVE_RUN_ID}"
+          }
+
+          run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"
+          run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
+
+          python3 scripts/compare_tui_perf.py \
+            perf-results/baseline \
+            perf-results/candidate \
+            > perf-results/comparison.md
+
+      - name: Publish TUI perf comparison
+        run: |
+          cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload TUI perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-perf-results
+          path: perf-results/

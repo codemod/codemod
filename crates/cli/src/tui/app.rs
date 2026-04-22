@@ -258,11 +258,12 @@ impl TuiState {
         }
     }
 
-    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) {
+    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) -> bool {
+        let previous_scroll = self.task_list_scroll;
         let visible_len = self.visible_tasks().len();
         if visible_len == 0 || viewport_height == 0 {
             self.task_list_scroll = 0;
-            return;
+            return previous_scroll != self.task_list_scroll;
         }
 
         let max_scroll = visible_len.saturating_sub(viewport_height);
@@ -275,6 +276,7 @@ impl TuiState {
                 .saturating_sub(viewport_height);
         }
         self.task_list_scroll = self.task_list_scroll.min(max_scroll);
+        previous_scroll != self.task_list_scroll
     }
 
     pub fn visible_task_window(&self, viewport_height: usize) -> Vec<&Task> {
@@ -570,13 +572,44 @@ impl TuiState {
         });
     }
 
-    pub fn clear_expired_log_modal_notice(&mut self) {
+    pub fn clear_expired_log_modal_notice(&mut self) -> bool {
         if self
             .log_modal_notice
             .as_ref()
             .is_some_and(|notice| Instant::now() >= notice.expires_at)
         {
             self.log_modal_notice = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn next_redraw_deadline(&self) -> Option<Instant> {
+        let mut deadline = self
+            .log_modal_notice
+            .as_ref()
+            .map(|notice| notice.expires_at);
+
+        if self.has_live_elapsed_clock() {
+            let now = Utc::now();
+            let millis_until_next_second = 1_000_u64 - u64::from(now.timestamp_subsec_millis());
+            let elapsed_deadline = Instant::now() + Duration::from_millis(millis_until_next_second);
+            deadline = Some(match deadline {
+                Some(existing) => existing.min(elapsed_deadline),
+                None => elapsed_deadline,
+            });
+        }
+
+        deadline
+    }
+
+    fn has_live_elapsed_clock(&self) -> bool {
+        match self.screen {
+            Screen::Runs => self.runs.iter().any(|run| run.ended_at.is_none()),
+            Screen::RunDetail => self
+                .tasks
+                .iter()
+                .any(|task| task.started_at.is_some() && task.ended_at.is_none()),
         }
     }
 
@@ -962,10 +995,10 @@ mod tests {
         Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use uuid::Uuid;
 
-    use super::{AppEvent, TaskProgressView, TuiState};
+    use super::{AppEvent, Screen, TaskProgressView, TuiState};
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
@@ -2277,5 +2310,63 @@ mod tests {
         };
 
         assert_eq!(state.task_elapsed_text(&task), "-");
+    }
+
+    #[test]
+    fn next_redraw_deadline_is_none_for_static_ui() {
+        let mut state = TuiState::default();
+        state.screen = Screen::Runs;
+        state.runs = vec![WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: butterflow_models::WorkflowStatus::Completed,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        }];
+
+        assert!(state.next_redraw_deadline().is_none());
+    }
+
+    #[test]
+    fn next_redraw_deadline_is_some_for_running_runs_screen() {
+        let mut state = TuiState::default();
+        state.screen = Screen::Runs;
+        state.runs = vec![WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: butterflow_models::WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        }];
+
+        let deadline = state
+            .next_redraw_deadline()
+            .expect("running UI should refresh");
+        assert!(deadline > Instant::now());
+        assert!(deadline <= Instant::now() + Duration::from_secs(1));
     }
 }
