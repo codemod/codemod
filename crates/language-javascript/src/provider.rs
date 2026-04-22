@@ -1,6 +1,6 @@
 //! Main OXC semantic provider implementation.
 
-use crate::accurate::AccurateAnalyzer;
+use crate::accurate::{AccurateAnalyzer, WorkspaceWalker};
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
     filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
@@ -113,6 +113,45 @@ impl OxcSemanticProvider {
             )),
             fs_root,
             physical_root: None, // Custom VFS - paths handled by VFS implementation
+        }
+    }
+
+    /// Workspace-scope provider with an explicit walker strategy,
+    /// defaulting the filesystem to PhysicalFS (same as
+    /// [`Self::workspace_scope`]).
+    pub fn workspace_scope_with_walker(workspace_root: PathBuf, walker: WorkspaceWalker) -> Self {
+        let canonical_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.clone());
+        let fs_root = filesystem::physical_path(&canonical_root);
+        Self {
+            analyzer: AnalyzerKind::WorkspaceScope(AccurateAnalyzer::new_with_fs_and_walker(
+                canonical_root.clone(),
+                fs_root.clone(),
+                walker,
+            )),
+            fs_root,
+            physical_root: Some(canonical_root),
+        }
+    }
+
+    /// Workspace-scope provider with a custom VFS and an explicit walker
+    /// strategy. Use [`WorkspaceWalker::Vfs`] when `fs_root` is virtual
+    /// so the workspace walker sees entries seeded into the VFS rather
+    /// than falling back to `ignore::WalkBuilder` against the real disk.
+    pub fn workspace_scope_with_fs_and_walker(
+        workspace_root: PathBuf,
+        fs_root: VfsPath,
+        walker: WorkspaceWalker,
+    ) -> Self {
+        Self {
+            analyzer: AnalyzerKind::WorkspaceScope(AccurateAnalyzer::new_with_fs_and_walker(
+                workspace_root,
+                fs_root.clone(),
+                walker,
+            )),
+            fs_root,
+            physical_root: None,
         }
     }
 

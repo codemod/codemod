@@ -44,6 +44,7 @@ mod lightweight;
 mod oxc_adapter;
 mod provider;
 
+pub use accurate::WorkspaceWalker;
 pub use error::JsSemanticError;
 pub use provider::OxcSemanticProvider;
 

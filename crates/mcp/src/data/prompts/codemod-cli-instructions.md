@@ -368,9 +368,12 @@ Options:
   --allow-dirty        Allow running on repos with uncommitted changes
   --no-interactive     CI/headless mode - no prompts, auto-accept packages
   --no-color           Disable colored diff output in dry-run mode
-  --allow-fs           Allow filesystem access for the codemod
-  --allow-fetch        Allow network requests for the codemod
-  --allow-child-process Allow spawning child processes
+  --allow-fs           Upgrade the default sandboxed fs (which only permits
+                       reads/writes inside the target directory) to
+                       unrestricted real-disk fs. Only needed when the codemod
+                       accesses paths outside the target directory.
+  --allow-fetch        Allow network requests for the codemod.
+  --allow-child-process Allow spawning child processes.
   --param KEY=VALUE    Pass parameters to the codemod (e.g., --param autoAiReview=true)
   --registry           Custom registry URL
   --force              Force re-download even if cached
