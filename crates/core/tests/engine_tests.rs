@@ -2247,6 +2247,7 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
     let state_adapter = Box::new(MockStateAdapter::new());
     let config = WorkflowRunConfig {
         target_path: repo_dir.path().to_path_buf(),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -2369,6 +2370,7 @@ export default function transform(ast) {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: repo_dir.path().to_path_buf(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
