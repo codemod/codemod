@@ -6245,5 +6245,4 @@ mod tests {
         assert!(message.contains("No progress observed"));
         assert!(message.contains("src/stalled.ts"));
     }
-
 }

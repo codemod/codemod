@@ -6793,41 +6793,42 @@ async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
 #[tokio::test]
 async fn await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay() {
     let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-    record_unit_progress(
-        &progress_state,
-        "src/fast.ts",
-        StepPhase::ExecutionStarted,
-    );
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
     let idle_timed_out = Arc::new(AtomicBool::new(false));
     let idle_notify = Arc::new(Notify::new());
     let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
 
     let local = tokio::task::LocalSet::new();
-    let result = tokio::time::timeout(Duration::from_millis(100), local.run_until(async move {
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
 
-        let execution_task = tokio::task::spawn_local(async move {
-            let _ = release_rx.await;
-            Ok(CodemodOutput {
-                primary: ExecutionResult::Unmodified,
-                secondary: vec![],
-            })
-        });
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
 
-        let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
-            execution_task,
-            Arc::clone(&idle_timed_out),
-            Arc::clone(&idle_notify),
-            Arc::clone(&idle_failure_message),
-            Arc::clone(&progress_state),
-            Duration::from_secs(1),
-            "src/fast.ts",
-        ));
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
 
-        tokio::task::yield_now().await;
-        release_tx.send(()).expect("completion signal should be sent");
-        wait_task.await.expect("wait task should join")
-    }))
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            wait_task.await.expect("wait task should join")
+        }),
+    )
     .await
     .expect("completed execution should not wait for a polling interval");
 
@@ -6841,55 +6842,56 @@ async fn await_js_ast_grep_execution_task_returns_prompt_completion_without_poll
 #[tokio::test]
 async fn await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal() {
     let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-    record_unit_progress(
-        &progress_state,
-        "src/fast.ts",
-        StepPhase::ExecutionStarted,
-    );
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
     let idle_timed_out = Arc::new(AtomicBool::new(false));
     let idle_notify = Arc::new(Notify::new());
     let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
 
     let local = tokio::task::LocalSet::new();
-    let result = tokio::time::timeout(Duration::from_millis(100), local.run_until(async move {
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        let idle_timed_out_for_trigger = Arc::clone(&idle_timed_out);
-        let idle_notify_for_trigger = Arc::clone(&idle_notify);
-        let idle_failure_message_for_trigger = Arc::clone(&idle_failure_message);
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let idle_timed_out_for_trigger = Arc::clone(&idle_timed_out);
+            let idle_notify_for_trigger = Arc::clone(&idle_notify);
+            let idle_failure_message_for_trigger = Arc::clone(&idle_failure_message);
 
-        let trigger = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            idle_timed_out_for_trigger.store(true, Ordering::Release);
-            if let Ok(mut message) = idle_failure_message_for_trigger.lock() {
-                *message = Some("unexpected timeout".to_string());
-            }
-            idle_notify_for_trigger.notify_waiters();
-        });
+            let trigger = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                idle_timed_out_for_trigger.store(true, Ordering::Release);
+                if let Ok(mut message) = idle_failure_message_for_trigger.lock() {
+                    *message = Some("unexpected timeout".to_string());
+                }
+                idle_notify_for_trigger.notify_waiters();
+            });
 
-        let execution_task = tokio::task::spawn_local(async move {
-            let _ = release_rx.await;
-            Ok(CodemodOutput {
-                primary: ExecutionResult::Unmodified,
-                secondary: vec![],
-            })
-        });
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
 
-        let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
-            execution_task,
-            Arc::clone(&idle_timed_out),
-            Arc::clone(&idle_notify),
-            Arc::clone(&idle_failure_message),
-            Arc::clone(&progress_state),
-            Duration::from_secs(1),
-            "src/fast.ts",
-        ));
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
 
-        tokio::task::yield_now().await;
-        release_tx.send(()).expect("completion signal should be sent");
-        let result = wait_task.await.expect("wait task should join");
-        trigger.await.expect("idle trigger should join");
-        result
-    }))
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            let result = wait_task.await.expect("wait task should join");
+            trigger.await.expect("idle trigger should join");
+            result
+        }),
+    )
     .await
     .expect("completed execution should resolve before a later idle timeout signal");
 
