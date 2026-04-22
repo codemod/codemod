@@ -530,9 +530,63 @@ jobs:
           log_phase "suite start kind=baseline ref=${BASELINE_REF}"
           run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"
           log_phase "suite finish kind=baseline ref=${BASELINE_REF}"
+
+          run_focused_perf_tests() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="${SHARED_TARGET_DIR}"
+            local results_md="${outdir}/focused-tests.md"
+            local results_txt="${outdir}/focused-tests.txt"
+
+            mkdir -p "${outdir}"
+            : > "${results_txt}"
+
+            run_focused_test() {
+              local label="$1"
+              shift
+              log_phase "focused-test start ref=${ref} label=${label}"
+              if (
+                cd "${worktree}"
+                CARGO_TARGET_DIR="${target_dir}" "$@"
+              ) >> "${results_txt}" 2>&1; then
+                printf '| `%s` | PASS |\n' "${label}" >> "${results_md}"
+              else
+                printf '| `%s` | FAIL |\n' "${label}" >> "${results_md}"
+                echo "focused perf test failed: ${label}" >&2
+                cat "${results_txt}" >&2 || true
+                return 1
+              fi
+              log_phase "focused-test finish ref=${ref} label=${label}"
+            }
+
+            {
+              echo "## Focused Perf Regression Tests"
+              echo
+              echo "| Test | Result |"
+              echo "| --- | --- |"
+            } > "${results_md}"
+
+            run_focused_test "should_redraw_is_false_for_static_idle_ui_without_changes" \
+              cargo test -q -p codemod should_redraw_is_false_for_static_idle_ui_without_changes -- --nocapture
+            run_focused_test "draw_counter_counts_only_initial_draw_for_static_idle_screen" \
+              cargo test -q -p codemod draw_counter_counts_only_initial_draw_for_static_idle_screen -- --nocapture
+            run_focused_test "draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events" \
+              cargo test -q -p codemod draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events -- --nocapture
+            run_focused_test "draw_counter_counts_deadline_tick_for_running_screen" \
+              cargo test -q -p codemod draw_counter_counts_deadline_tick_for_running_screen -- --nocapture
+            run_focused_test "reduce_workflow_receiver_requests_snapshot_after_receiver_lag" \
+              cargo test -q -p codemod reduce_workflow_receiver_requests_snapshot_after_receiver_lag -- --nocapture
+            run_focused_test "await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay" \
+              cargo test -q -p butterflow-core await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay -- --nocapture
+            run_focused_test "await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal" \
+              cargo test -q -p butterflow-core await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal -- --nocapture
+          }
+
           log_phase "suite start kind=candidate ref=${CANDIDATE_REF}"
           run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
           log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
+          run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
 
           python3 scripts/compare_tui_perf.py \
             perf-results/baseline \
@@ -541,6 +595,10 @@ jobs:
 
       - name: Publish TUI perf comparison
         run: |
+          if [ -f perf-results/candidate/focused-tests.md ]; then
+            cat perf-results/candidate/focused-tests.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
           cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment TUI perf comparison on PR
@@ -561,18 +619,12 @@ jobs:
             const pull_number = Number(process.env.PR_NUMBER || fs.readFileSync("perf-results/pr-number.txt", "utf8").trim());
             const summaryMarker = "<!-- codemod:tui-perf -->";
             const comparisonBody = fs.readFileSync("perf-results/comparison.md", "utf8").trim();
+            const focusedTestsBody = fs.existsSync("perf-results/candidate/focused-tests.md")
+              ? fs.readFileSync("perf-results/candidate/focused-tests.md", "utf8").trim()
+              : "";
             const baselineRef = fs.readFileSync("perf-results/resolved-baseline-ref.txt", "utf8").trim();
             const candidateRef = fs.readFileSync("perf-results/resolved-candidate-ref.txt", "utf8").trim();
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const trackedTests = [
-              "`should_redraw_is_false_for_static_idle_ui_without_changes`",
-              "`draw_counter_counts_only_initial_draw_for_static_idle_screen`",
-              "`draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events`",
-              "`draw_counter_counts_deadline_tick_for_running_screen`",
-              "`reduce_workflow_receiver_requests_snapshot_after_receiver_lag`",
-              "`await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay`",
-              "`await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal`",
-            ];
             const summaryBody = [
               summaryMarker,
               "## TUI Perf Comparison",
@@ -582,12 +634,10 @@ jobs:
               `- Candidate ref: \`${candidateRef}\``,
               `- Updated at: ${new Date().toISOString()}`,
               "",
-              "### Tracked Perf Regressions",
-              "",
-              ...trackedTests.map((testName) => `- ${testName}`),
-              "",
+              focusedTestsBody,
+              focusedTestsBody ? "" : null,
               comparisonBody,
-            ].join("\n");
+            ].filter(Boolean).join("\n");
 
             try {
               const issueComments = await github.paginate(github.rest.issues.listComments, {
