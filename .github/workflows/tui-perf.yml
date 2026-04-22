@@ -76,6 +76,10 @@ jobs:
           GITHUB_SHA_VALUE: ${{ github.sha }}
         run: |
           set -euo pipefail
+          log_phase() {
+            printf '[tui-perf] %s %s\n' "$(date -u +%H:%M:%S)" "$*"
+          }
+
           mkdir -p perf-results
           AUTO_EXIT_SECS="${DURATION_SECS_INPUT:-}"
           if [ -z "${AUTO_EXIT_SECS}" ]; then
@@ -130,10 +134,12 @@ jobs:
             local output_file="$1"
             local waited=0
             local run_id=""
+            log_phase "wait-for-run-id start output=${output_file}"
             while [ "${waited}" -lt 60 ]; do
               if [ -f "${output_file}" ]; then
                 run_id="$(extract_run_id "${output_file}" || true)"
                 if [ -n "${run_id}" ]; then
+                  log_phase "wait-for-run-id finish output=${output_file} run_id=${run_id}"
                   printf '%s' "${run_id}"
                   return 0
                 fi
@@ -210,6 +216,7 @@ jobs:
             local codemod_bin="$6"
 
             mkdir -p "$(dirname "${output_file}")"
+            log_phase "workflow-run start workflow=${workflow} target=${target}"
             if ! (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
@@ -231,6 +238,7 @@ jobs:
               cat "${output_file}" >&2 || true
               return 1
             fi
+            log_phase "workflow-run finish workflow=${workflow} run_id=${run_id}"
             printf '%s' "${run_id}"
           }
 
@@ -243,6 +251,7 @@ jobs:
             local codemod_bin="$6"
 
             mkdir -p "$(dirname "${output_file}")"
+            log_phase "workflow-run active-start workflow=${workflow} target=${target}"
             (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
@@ -263,6 +272,7 @@ jobs:
             if [ -z "${run_id}" ]; then
               return 0
             fi
+            log_phase "workflow-cancel run_id=${run_id}"
             (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
@@ -278,17 +288,25 @@ jobs:
             local run_id="$5"
             local codemod_bin="$6"
             local output="${outdir}/${name}.log"
+            local timeout_secs=$((CODEMOD_TUI_PERF_AUTO_EXIT_SECS + 20))
             mkdir -p "${outdir}"
-            (
+            log_phase "tui-scenario start name=${name} run_id=${run_id} timeout=${timeout_secs}s"
+            if ! (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
+                timeout "${timeout_secs}" \
                 script -q -e -c "\"${codemod_bin}\" workflow tui --id ${run_id}" /dev/null
-            ) >"${output}" 2>&1
+            ) >"${output}" 2>&1; then
+              echo "tui scenario command failed for ${name} run ${run_id}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
             if ! grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"; then
               echo "missing TUI perf counters for ${name} run ${run_id}" >&2
               cat "${output}" >&2 || true
               return 1
             fi
+            log_phase "tui-scenario finish name=${name} run_id=${run_id}"
             printf "%s " "${name}" >>"${outdir}/summary.txt"
             cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
           }
@@ -321,23 +339,32 @@ jobs:
             mkdir -p "${state_home}" "${target_root}/completed" "${target_root}/awaiting" "${target_root}/active"
             write_workflow_fixtures "${workflow_root}"
 
-            (
+            log_phase "suite-build start ref=${ref}"
+            if ! (
               cd "${worktree}"
               CARGO_TARGET_DIR="${target_dir}" cargo build -q -p codemod --bin codemod
-            ) >"${outdir}/build.log" 2>&1
-            if [ ! -x "${codemod_bin}" ]; then
+            ) >"${outdir}/build.log" 2>&1; then
               echo "failed to build codemod binary for ${ref}" >&2
               cat "${outdir}/build.log" >&2 || true
               return 1
             fi
+            if [ ! -x "${codemod_bin}" ]; then
+              echo "built codemod binary missing for ${ref}" >&2
+              cat "${outdir}/build.log" >&2 || true
+              return 1
+            fi
+            log_phase "suite-build finish ref=${ref}"
 
             cleanup_suite() {
+              log_phase "suite-cleanup start ref=${ref}"
               cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}" "${codemod_bin}"
               cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}" "${codemod_bin}"
               if [ -n "${active_pid:-}" ]; then
+                kill "${active_pid}" >/dev/null 2>&1 || true
                 wait "${active_pid}" >/dev/null 2>&1 || true
               fi
               rm -rf "${suite_root}"
+              log_phase "suite-cleanup finish ref=${ref}"
             }
 
               trap cleanup_suite EXIT
@@ -391,8 +418,12 @@ jobs:
           )
           }
 
+          log_phase "suite start kind=baseline ref=${BASELINE_REF}"
           run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"
+          log_phase "suite finish kind=baseline ref=${BASELINE_REF}"
+          log_phase "suite start kind=candidate ref=${CANDIDATE_REF}"
           run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
+          log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
 
           python3 scripts/compare_tui_perf.py \
             perf-results/baseline \
