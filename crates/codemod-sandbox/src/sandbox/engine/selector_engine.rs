@@ -1,4 +1,5 @@
 use super::codemod_lang::CodemodLang;
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
 use crate::metrics::MetricsModule;
@@ -23,6 +24,12 @@ pub struct SelectorEngineOptions<'a, R> {
     pub language: CodemodLang,
     pub resolver: Arc<R>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    /// Directory that the curated `fs` module is constrained to. When
+    /// `Some` and the caller hasn't opted into the llrt `Fs` capability,
+    /// the codemod's `import "fs"` resolves to a [`CuratedFsModule`]
+    /// backed by `vfs::PhysicalFS` at disk root `/`, with reads/writes
+    /// prefix-checked against this path.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Extract a selector from a codemod module using QuickJS
@@ -54,6 +61,10 @@ where
         },
     })?;
 
+    // Track whether the caller opted into llrt's real-disk fs capability
+    // so we know whether to install the curated fs below instead.
+    let mut fs_capability_enabled = false;
+
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
@@ -64,6 +75,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -72,6 +84,19 @@ where
             }
         }
     }
+
+    // If the caller provided a target_directory and didn't explicitly opt
+    // into llrt's unrestricted fs, install the curated fs. The script sees
+    // real on-disk paths; reads/writes outside `target_directory` are
+    // rejected with `EACCES`.
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 
@@ -86,6 +111,14 @@ where
     // Add MetricsModule (metrics tracking)
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
+    // Register the curated `fs` / `fs/promises` modules when applicable.
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -113,6 +146,18 @@ where
                 message: format!("Failed to attach global modules: {e}"),
             },
         })?;
+
+        // Install the curated fs config (if applicable) before the codemod
+        // module evaluates so its first `import "fs"` resolves cleanly.
+        if let Some(target_dir) = curated_fs_target {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
 
         let execution = async {
             let module = Module::declare(ctx.clone(), "__selector_extractor.js", js_code)

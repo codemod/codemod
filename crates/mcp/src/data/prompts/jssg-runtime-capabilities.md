@@ -17,6 +17,7 @@ Safe modules are available by default and do not require `codemod.yaml` capabili
 - `console`
 - `crypto`
 - `events`
+- `fs` (sandboxed — see below)
 - `os`
 - `path`
 - `perf_hooks`
@@ -29,17 +30,28 @@ Safe modules are available by default and do not require `codemod.yaml` capabili
 - `util`
 - `zlib`
 
-Unsafe modules require an explicit `capabilities` entry in `codemod.yaml`:
+### `fs` is sandboxed by default
 
-- `fs` -> `fs`
-- `fetch` -> `fetch`
-- `child_process` -> `child_process`
+`fs` and `fs/promises` are available without any capability entry, but are constrained to the workflow's target directory:
+
+- Reads, writes, `readdir`, `mkdir`, `stat`, `exists`, `unlink` all work for paths inside `target_dir`.
+- Paths that normalize outside `target_dir` throw with `err.code === "EACCES"`.
+- Missing paths inside `target_dir` throw with `err.code === "ENOENT"`.
+- `.` and `..` path segments are normalized before the prefix check. On real-disk runs the resolver also rejects any path that traverses a symlink (checked via `symlink_metadata`), so symlinks inside the repo cannot be used to escape the sandbox.
+
+Use the default sandboxed fs whenever the codemod only touches files inside the repo. Do not add `fs` to `capabilities` just because the codemod imports it.
+
+### Capability-gated (require explicit opt-in)
+
+- `fs` (unrestricted) — upgrades the sandboxed fs to LLRT's real-disk `fs`, removing the `target_dir` prefix check. Only add this if the codemod genuinely reads or writes paths outside the target directory (home config, caches, `/tmp`, etc.).
+- `fetch` — network requests. Fully deny-by-default.
+- `child_process` — process spawning. Fully deny-by-default.
 
 If the codemod imports or relies on one of these gated APIs, update `codemod.yaml` in the same change. Do not leave the transform using gated APIs without the matching capability declaration.
 
 ```yaml
 capabilities:
-  - fs
+  - fs             # only when paths outside target_dir are needed
   - fetch
   - child_process
 ```
@@ -56,7 +68,8 @@ When you add or remove a gated runtime dependency:
 
 Example:
 
-- If the codemod reads adjacent config files with `fs`, add `fs`.
+- If the codemod reads adjacent config files with `fs` that live inside the target directory, **no capability entry is needed** — the default sandboxed fs covers it.
+- If it reads files outside the target directory (e.g. `~/.config/...`), add `fs`.
 - If it calls an HTTP API with `fetch`, add `fetch`.
 - If it shells out to another tool with `child_process`, add `child_process`.
 

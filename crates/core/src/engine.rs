@@ -216,8 +216,11 @@ fn select_shard_scan_eligible_files(
     }
 }
 
-fn should_manage_git_for_node(node: &Node) -> bool {
-    crate::git_ops::is_cloud_mode() || node.pull_request.is_some() || node.branch_name.is_some()
+fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
+    if crate::git_ops::is_cloud_mode() {
+        return true;
+    }
+    enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some())
 }
 
 fn record_unit_progress(
@@ -926,7 +929,12 @@ impl Engine {
                                 .iter()
                                 .find(|node| node.id == task.node_id)
                             {
-                                if should_manage_git_for_node(node) {
+                                if engine.workflow_run_config.enable_worktrees
+                                    && should_manage_git_for_node(
+                                        node,
+                                        engine.workflow_run_config.enable_managed_git,
+                                    )
+                                {
                                     let ctx =
                                         crate::git_ops::build_task_expression_context(&task.id.to_string());
                                     let configured_branch =
@@ -2488,7 +2496,8 @@ impl Engine {
 
         // Workflows that declare git outputs should use the managed branch/commit/PR path
         // in both cloud and local runs.
-        let manage_git = should_manage_git_for_node(node);
+        let manage_git =
+            should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git);
         // Always build task expression context so CODEMOD_TASK_* env vars are
         // available as `task.*` template variables regardless of mode.
         let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
@@ -3602,6 +3611,7 @@ impl Engine {
                 .capabilities
                 .as_ref()
                 .map(|v| v.clone().into_iter().collect()),
+            target_directory: Some(&target_path),
         })
         .await
         .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
@@ -5348,6 +5358,7 @@ impl Engine {
             resolver,
             input,
             capabilities: self.workflow_run_config.capabilities.clone(),
+            target_directory: Some(target_path),
         };
 
         let result = execute_shard_function_with_quickjs(options)
@@ -5936,7 +5947,8 @@ mod tests {
             }),
         };
 
-        assert!(should_manage_git_for_node(&node));
+        assert!(should_manage_git_for_node(&node, true));
+        assert!(!should_manage_git_for_node(&node, false));
     }
 
     #[test]

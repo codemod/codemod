@@ -115,7 +115,14 @@ pub struct LlrtModuleBuilder {
 
 impl LlrtModuleBuilder {
     pub fn build() -> Self {
-        let default_modules = default_modules_set();
+        Self::build_with_exclusions(&[])
+    }
+
+    pub fn build_with_exclusions(exclude: &[LlrtSupportedModules]) -> Self {
+        let mut default_modules = default_modules_set();
+        for excluded in exclude {
+            default_modules.remove(excluded);
+        }
         let module_builder = ModuleBuilder::new()
             .with_global(module::init)
             .with_module(module::ModuleModule);

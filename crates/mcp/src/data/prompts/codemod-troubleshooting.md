@@ -29,13 +29,14 @@ Fix:
 ## Capability/Permission Failures
 
 Symptom:
-- transform needs filesystem, network, or child process capability.
+- transform fails with `err.code === "EACCES"` when reading/writing outside the target directory, or `fetch is not defined`, or `Cannot find module 'child_process'`.
 
 Fix:
-- enable required capability flags:
-  - `--allow-fs`
-  - `--allow-fetch`
-  - `--allow-child-process`
+- The default sandboxed `fs` already allows reads/writes inside the target directory. If the codemod only touches files inside the repo, no flag is needed — investigate the path instead.
+- If the codemod genuinely needs to access paths outside `target_dir`, network, or subprocesses, enable the matching flag:
+  - `--allow-fs` — swaps the sandboxed fs for the unrestricted real-disk fs (removes the `target_dir` prefix check).
+  - `--allow-fetch` — exposes the `fetch` global.
+  - `--allow-child-process` — exposes the `child_process` module.
 - for automation, combine with:
   - `--no-interactive`
 
