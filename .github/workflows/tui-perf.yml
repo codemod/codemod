@@ -143,12 +143,12 @@ jobs:
           nodes:
             - id: completed
               name: Completed
-              type: Automatic
+              type: automatic
               steps:
-                - name: Complete quickly
-                  action:
-                    run-script: |
-                      echo "done"
+                - id: complete-quickly
+                  name: Complete quickly
+                  run: |
+                    echo "done"
           EOF
 
             cat > "${workflow_root}/awaiting.yaml" <<'EOF'
@@ -156,23 +156,23 @@ jobs:
           nodes:
             - id: prepare
               name: Prepare
-              type: Automatic
+              type: automatic
               steps:
-                - name: Prepare
-                  action:
-                    run-script: |
-                      echo "ready"
+                - id: prepare
+                  name: Prepare
+                  run: |
+                    echo "ready"
             - id: manual
               name: Manual Trigger
-              type: Automatic
+              type: automatic
               depends_on: ["prepare"]
               trigger:
-                type: Manual
+                type: manual
               steps:
-                - name: Wait for manual trigger
-                  action:
-                    run-script: |
-                      echo "manual"
+                - id: wait-for-manual-trigger
+                  name: Wait for manual trigger
+                  run: |
+                    echo "manual"
           EOF
 
             cat > "${workflow_root}/active.yaml" <<'EOF'
@@ -180,13 +180,13 @@ jobs:
           nodes:
             - id: active
               name: Active
-              type: Automatic
+              type: automatic
               steps:
-                - name: Stay running
-                  action:
-                    run-script: |
-                      echo "running"
-                      sleep 120
+                - id: stay-running
+                  name: Stay running
+                  run: |
+                    echo "running"
+                    sleep 120
           EOF
           }
 
@@ -198,7 +198,7 @@ jobs:
             local output_file="$5"
 
             mkdir -p "$(dirname "${output_file}")"
-            (
+            if ! (
               cd "${worktree}"
               XDG_DATA_HOME="${state_home}" \
                 cargo run -p codemod -- workflow run \
@@ -206,9 +206,20 @@ jobs:
                   --target "${target}" \
                   --allow-child-process \
                   --no-interactive
-            ) > "${output_file}" 2>&1
+            ) > "${output_file}" 2>&1; then
+              echo "workflow run failed for ${workflow}" >&2
+              cat "${output_file}" >&2 || true
+              return 1
+            fi
 
-            extract_run_id "${output_file}"
+            local run_id
+            run_id="$(extract_run_id "${output_file}" || true)"
+            if [ -z "${run_id}" ]; then
+              echo "workflow run did not print a run id for ${workflow}" >&2
+              cat "${output_file}" >&2 || true
+              return 1
+            fi
+            printf '%s' "${run_id}"
           }
 
           start_active_workflow() {
@@ -258,7 +269,11 @@ jobs:
               XDG_DATA_HOME="${state_home}" \
                 script -q -e -c "cargo run -p codemod -- workflow tui --id ${run_id}" /dev/null
             ) >"${output}" 2>&1
-            grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"
+            if ! grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"; then
+              echo "missing TUI perf counters for ${name} run ${run_id}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
             printf "%s " "${name}" >>"${outdir}/summary.txt"
             cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
           }
