@@ -14,6 +14,7 @@ use log::{debug, info, warn};
 use regex::Regex;
 use reqwest;
 use serde::Deserialize;
+use serde_json::Value;
 use serde_yaml;
 use std::collections::HashMap;
 use std::fs;
@@ -26,6 +27,7 @@ use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 #[cfg(test)]
 use crate::utils::skill_layout::expected_authored_skill_file;
 
+use crate::auth::storage::StoredAuth;
 use crate::auth::TokenStorage;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
@@ -52,6 +54,20 @@ struct PublishedPackage {
     published_at: String,
 }
 
+enum PublishAuthSource {
+    EnvironmentToken(String),
+    StoredAuth(Box<StoredAuth>),
+}
+
+impl PublishAuthSource {
+    fn access_token(&self) -> &str {
+        match self {
+            Self::EnvironmentToken(token) => token,
+            Self::StoredAuth(auth) => &auth.tokens.access_token,
+        }
+    }
+}
+
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let package_path = args
         .path
@@ -63,31 +79,30 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     info!("Publishing codemod from: {}", package_path.display());
 
-    // Load and validate manifest
     let manifest = load_manifest(&package_path)?;
-
-    // Validate package structure and get JS files to bundle
-    let js_files_to_bundle = validate_package_structure(&package_path, &manifest)?;
-
-    // Create package bundle with bundled JS files
-    let bundle_path = create_package_bundle(&package_path, &manifest, &js_files_to_bundle).await?;
 
     // Get registry configuration
     let storage = TokenStorage::new()?;
     let config = storage.load_config()?;
     let registry_url = config.default_registry.clone();
-    let storage = TokenStorage::new()?;
+    let auth_source = resolve_publish_auth_source(&storage, &registry_url)?;
+    let effective_manifest = resolve_effective_manifest(manifest)?;
 
-    let access_token = match std::env::var("CODEMOD_AUTH_TOKEN") {
-        Ok(token) if !token.trim().is_empty() => {
-            debug!("Using auth token from CODEMOD_AUTH_TOKEN environment variable");
-            token
-        }
-        _ => get_stored_auth_token(&storage, &registry_url)?,
-    };
+    // Validate package structure and get JS files to bundle
+    let js_files_to_bundle = validate_package_structure(&package_path, &effective_manifest)?;
+
+    // Create package bundle with bundled JS files
+    let bundle_path =
+        create_package_bundle(&package_path, &effective_manifest, &js_files_to_bundle).await?;
 
     // Upload package
-    let response = upload_package(&registry_url, &bundle_path, &manifest, &access_token).await?;
+    let response = upload_package(
+        &registry_url,
+        &bundle_path,
+        &effective_manifest,
+        auth_source.access_token(),
+    )
+    .await?;
 
     if !response.success {
         return Err(anyhow!("Failed to publish package"));
@@ -98,8 +113,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             BaseEvent {
                 kind: "codemodPublished".to_string(),
                 properties: HashMap::from([
-                    ("codemodName".to_string(), manifest.name.clone()),
-                    ("version".to_string(), manifest.version.clone()),
+                    ("codemodName".to_string(), effective_manifest.name.clone()),
+                    ("version".to_string(), effective_manifest.version.clone()),
                     ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
@@ -137,6 +152,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     Ok(())
 }
 
+fn resolve_effective_manifest(mut manifest: CodemodManifest) -> Result<CodemodManifest> {
+    let author = manifest.author.trim().to_string();
+    if author.is_empty() {
+        return Err(anyhow!(
+            "Package author is missing. Set 'author' explicitly in codemod.yaml."
+        ));
+    }
+
+    manifest.author = author;
+    Ok(manifest)
+}
+
 fn load_manifest(package_path: &Path) -> Result<CodemodManifest> {
     let manifest_path = package_path.join("codemod.yaml");
 
@@ -148,8 +175,13 @@ fn load_manifest(package_path: &Path) -> Result<CodemodManifest> {
     }
 
     let manifest_content = fs::read_to_string(&manifest_path)?;
-    let manifest: CodemodManifest = serde_yaml::from_str(&manifest_content)
-        .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
+    let manifest: CodemodManifest = serde_yaml::from_str(&manifest_content).map_err(|e| {
+        if e.to_string().contains("missing field `author`") {
+            anyhow!("Package author is missing. Set 'author' explicitly in codemod.yaml.")
+        } else {
+            anyhow!("Failed to parse codemod.yaml: {}", e)
+        }
+    })?;
 
     debug!(
         "Loaded manifest for package: {} v{}",
@@ -350,8 +382,16 @@ async fn create_package_bundle(
 
             debug!("Adding file to bundle: {}", relative_path.display());
 
-            // Check if this is a JS file that should be replaced with bundled version
-            if let Some(bundled_code) = bundled_files.get(&relative_path_str) {
+            if relative_path_str == "codemod.yaml" {
+                let rendered_manifest = serde_yaml::to_string(manifest)?;
+                let mut header = tar::Header::new_gnu();
+                header.set_path(relative_path)?;
+                header.set_size(rendered_manifest.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append(&header, rendered_manifest.as_bytes())?;
+                info!("Replaced codemod.yaml with effective manifest");
+            } else if let Some(bundled_code) = bundled_files.get(&relative_path_str) {
                 // Add bundled version instead of original
                 let mut header = tar::Header::new_gnu();
                 header.set_path(relative_path)?;
@@ -496,11 +536,15 @@ async fn upload_package(
         let error_text = response.text().await.unwrap_or_default();
 
         if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow!("Version {} already exists.", manifest.version));
+            return Err(anyhow!(format_publish_conflict_error(
+                manifest,
+                &error_text
+            )));
         } else if status == reqwest::StatusCode::FORBIDDEN {
-            return Err(anyhow!(
-                "Access denied. You may not have permission to publish to this package."
-            ));
+            return Err(anyhow!(format_publish_forbidden_error(
+                manifest,
+                &error_text
+            )));
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
                 "Authentication failed. Please run 'npx codemod@latest login' again."
@@ -512,6 +556,72 @@ async fn upload_package(
 
     let publish_response: PublishResponse = response.json().await?;
     Ok(publish_response)
+}
+
+fn format_publish_conflict_error(manifest: &CodemodManifest, error_text: &str) -> String {
+    let backend_message = extract_backend_error_message(error_text);
+    if !backend_message.is_empty() {
+        return format!(
+            "Access denied. The registry refused this publish because {}",
+            ensure_sentence(backend_message)
+        );
+    }
+
+    format!(
+        "Access denied. The registry refused this publish because version {} already exists for package '{}'.",
+        manifest.version, manifest.name
+    )
+}
+
+fn format_publish_forbidden_error(manifest: &CodemodManifest, error_text: &str) -> String {
+    let backend_message = extract_backend_error_message(error_text);
+    if is_publish_name_taken_error(&backend_message) {
+        return format!(
+            "Access denied. The registry refused this publish because package name '{}' is already taken. Choose a different package name or publish under a scope you own.",
+            manifest.name
+        );
+    }
+
+    if !backend_message.is_empty() {
+        return format!(
+            "Access denied. You may not have permission to publish to this package. Backend message: {}",
+            backend_message
+        );
+    }
+
+    "Access denied. You may not have permission to publish to this package. If this is a new unscoped package, the package name may already be taken or may require trusted publisher configuration.".to_string()
+}
+
+fn ensure_sentence(message: String) -> String {
+    let trimmed = message.trim().trim_end_matches('.');
+    format!("{trimmed}.")
+}
+
+fn extract_backend_error_message(error_text: &str) -> String {
+    let trimmed = error_text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = value.get("message").and_then(Value::as_str) {
+            return message.trim().to_string();
+        }
+        if let Some(error) = value.get("error").and_then(Value::as_str) {
+            return error.trim().to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn is_publish_name_taken_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("already taken")
+        || normalized.contains("already been taken")
+        || normalized.contains("name is taken")
+        || normalized.contains("package name already exists")
+        || normalized.contains("package already exists")
 }
 
 fn calculate_package_size(package_path: &Path) -> Result<u64> {
@@ -561,7 +671,15 @@ fn format_package_name(package: &PublishedPackage) -> String {
     }
 }
 
-fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<String> {
+fn resolve_publish_auth_source(
+    storage: &TokenStorage,
+    registry_url: &str,
+) -> Result<PublishAuthSource> {
+    if let Some(token) = normalize_env_auth_token(std::env::var("CODEMOD_AUTH_TOKEN").ok()) {
+        debug!("Using auth token from CODEMOD_AUTH_TOKEN environment variable");
+        return Ok(PublishAuthSource::EnvironmentToken(token));
+    }
+
     let auth = storage
         .get_auth_for_registry(registry_url)?
         .ok_or_else(|| {
@@ -570,7 +688,14 @@ fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<S
                 registry_url
             )
         })?;
-    Ok(auth.tokens.access_token)
+
+    Ok(PublishAuthSource::StoredAuth(Box::new(auth)))
+}
+
+fn normalize_env_auth_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
 }
 
 #[cfg(test)]
@@ -660,6 +785,97 @@ codemod-skill-version: 0.1.0
             validation: None,
             capabilities: None,
         }
+    }
+
+    #[test]
+    fn resolve_effective_manifest_preserves_explicit_author() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+
+        let effective = resolve_effective_manifest(manifest).unwrap();
+
+        assert_eq!(effective.author, "author".to_string());
+    }
+
+    #[test]
+    fn resolve_effective_manifest_trims_required_author() {
+        let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        manifest.author = "  alice <alice@example.com>  ".to_string();
+
+        let effective = resolve_effective_manifest(manifest).unwrap();
+
+        assert_eq!(effective.author, "alice <alice@example.com>".to_string());
+    }
+
+    #[test]
+    fn resolve_effective_manifest_errors_when_author_is_blank() {
+        let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        manifest.author = "   ".to_string();
+
+        let error = resolve_effective_manifest(manifest).unwrap_err();
+        assert!(error.to_string().contains("Package author is missing"));
+    }
+
+    #[test]
+    fn environment_auth_token_is_trimmed_and_blank_values_are_ignored() {
+        assert_eq!(
+            normalize_env_auth_token(Some("  token-value\n".to_string())),
+            Some("token-value".to_string())
+        );
+        assert_eq!(normalize_env_auth_token(Some("  \n".to_string())), None);
+        assert_eq!(normalize_env_auth_token(None), None);
+    }
+
+    #[test]
+    fn forbidden_publish_error_surfaces_taken_name() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "my-codemod");
+
+        let message = format_publish_forbidden_error(
+            &manifest,
+            r#"{"error":"Forbidden","message":"Package name is already taken"}"#,
+        );
+
+        assert!(message.starts_with("Access denied."));
+        assert!(message.contains("package name 'my-codemod' is already taken"));
+    }
+
+    #[test]
+    fn conflict_publish_error_uses_access_denied_framing() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "my-codemod");
+
+        let message = format_publish_conflict_error(
+            &manifest,
+            r#"{"error":"Conflict","message":"Version 0.1.0 already exists"}"#,
+        );
+
+        assert!(message.starts_with("Access denied."));
+        assert!(message.contains("Version 0.1.0 already exists."));
+    }
+
+    #[test]
+    fn forbidden_publish_error_includes_backend_message_when_available() {
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+
+        let message = format_publish_forbidden_error(
+            &manifest,
+            r#"{"error":"Forbidden","message":"Only organization owners may publish here"}"#,
+        );
+
+        assert!(message.contains("Backend message: Only organization owners may publish here"));
+    }
+
+    #[test]
+    fn extract_backend_error_message_reads_json_message() {
+        assert_eq!(
+            extract_backend_error_message(
+                r#"{"error":"Forbidden","message":"Package name is already taken"}"#
+            ),
+            "Package name is already taken"
+        );
+        assert_eq!(
+            extract_backend_error_message("plain text error"),
+            "plain text error"
+        );
+        assert_eq!(extract_backend_error_message("   "), "");
     }
 
     #[test]
@@ -856,5 +1072,65 @@ nodes:
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("missing compatibility marker"));
+    }
+
+    #[test]
+    fn bundled_package_contains_effective_manifest() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let temp_dir = tempdir().unwrap();
+        let package_path = temp_dir.path();
+        let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        manifest.author = "alice <alice@example.com>".to_string();
+
+        fs::write(
+            package_path.join("codemod.yaml"),
+            r#"schema_version: "1.0"
+name: "example"
+version: "1.0.0"
+description: "description"
+workflow: "workflow.yaml"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            package_path.join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: run
+    name: Run
+    type: automatic
+    steps:
+      - id: run
+        name: Run
+        run: echo hello
+"#,
+        )
+        .unwrap();
+
+        let bundle_path = runtime
+            .block_on(create_package_bundle(package_path, &manifest, &[]))
+            .unwrap();
+
+        let archive_file = fs::File::open(&bundle_path).unwrap();
+        let decoder = flate2::read::GzDecoder::new(archive_file);
+        let mut archive = tar::Archive::new(decoder);
+        let mut bundled_manifest = None;
+
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if entry.path().unwrap() == Path::new("codemod.yaml") {
+                let mut content = String::new();
+                use std::io::Read;
+                entry.read_to_string(&mut content).unwrap();
+                bundled_manifest = Some(content);
+                break;
+            }
+        }
+
+        let bundled_manifest = bundled_manifest.expect("bundled codemod.yaml should exist");
+        assert!(bundled_manifest.contains("author: alice <alice@example.com>"));
+
+        fs::remove_file(bundle_path).unwrap();
     }
 }
