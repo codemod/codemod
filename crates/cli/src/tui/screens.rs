@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
+use crate::tui::app::{ApprovalPrompt, Screen, TuiState, WorktreeConsentScope};
 
 fn log_modal_copy_hint() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -579,12 +579,19 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         .split(area);
 
     let (title, body, help_text) = match approval {
-        ApprovalPrompt::WorktreeConsent { .. } => (
-            "Trigger All".to_string(),
-            "Trigger all pending tasks?\n\nThis will use git worktrees for the bulk run."
-                .to_string(),
-            "y/Enter approve  esc cancel".to_string(),
-        ),
+        ApprovalPrompt::WorktreeConsent { scope, .. } => match scope {
+            WorktreeConsentScope::Bulk => (
+                "Trigger All".to_string(),
+                "Trigger all pending tasks?\n\nThis will use git worktrees for the bulk run."
+                    .to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+            WorktreeConsentScope::SingleTask => (
+                "Trigger Task".to_string(),
+                "Trigger this task?\n\nThis will use a git worktree.".to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+        },
         ApprovalPrompt::PullRequestConsent { title, head, .. } => (
             "Publish Branch and Create Pull Request".to_string(),
             format!(
@@ -912,6 +919,7 @@ mod tests {
         let state = TuiState {
             approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
                 task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::Bulk,
             }),
             ..TuiState::default()
         };
@@ -919,6 +927,25 @@ mod tests {
         let lines = render_state(&state, 80, 24);
         assert!(lines.iter().any(|line| line.contains("Trigger All")));
         assert!(lines.iter().any(|line| line.contains("git worktrees")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_single_task_worktree_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::SingleTask,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger Task")));
+        assert!(lines.iter().any(|line| line.contains("a git worktree")));
         assert!(lines
             .iter()
             .any(|line| line.contains("approve") && line.contains("cancel")));
