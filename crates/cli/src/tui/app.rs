@@ -86,6 +86,12 @@ enum TaskPublishState {
     Created,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TaskPullRequestMetadata {
+    title: String,
+    branch: String,
+}
+
 impl Default for TuiState {
     fn default() -> Self {
         Self {
@@ -545,6 +551,28 @@ impl TuiState {
             } else {
                 None
             }
+        })
+    }
+
+    fn task_pull_request_metadata(task: &Task) -> Option<TaskPullRequestMetadata> {
+        const PREFIX: &str = "Pull request metadata: ";
+        task.logs.iter().rev().find_map(|line| {
+            let metadata = line.strip_prefix(PREFIX)?;
+            let metadata = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+            let title = metadata
+                .get("title")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let branch = metadata
+                .get("branch")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            Some(TaskPullRequestMetadata {
+                title: title.to_string(),
+                branch: branch.to_string(),
+            })
         })
     }
 
@@ -1116,21 +1144,28 @@ impl TuiState {
         {
             return None;
         }
-        let branch_name = task.logs.iter().rev().find_map(|line| {
-            line.strip_prefix("Preparing git worktree for branch ")
-                .and_then(|value| value.split(" in ").next())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    line.strip_prefix("Creating git worktree for branch ")
+        let branch_name = Self::task_pull_request_metadata(task)
+            .map(|metadata| metadata.branch)
+            .or_else(|| {
+                task.logs.iter().rev().find_map(|line| {
+                    line.strip_prefix("Preparing git worktree for branch ")
                         .and_then(|value| value.split(" in ").next())
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .map(ToOwned::to_owned)
+                        .or_else(|| {
+                            line.strip_prefix("Creating git worktree for branch ")
+                                .and_then(|value| value.split(" in ").next())
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToOwned::to_owned)
+                        })
                 })
-        })?;
-        Some((task.id, node.name.clone(), branch_name))
+            })?;
+        let title = Self::task_pull_request_metadata(task)
+            .map(|metadata| metadata.title)
+            .unwrap_or_else(|| node.name.clone());
+        Some((task.id, title, branch_name))
     }
 
     pub fn begin_create_pr_confirmation(&mut self) -> bool {
@@ -2839,6 +2874,76 @@ mod tests {
             state.approval_accept_command(),
             Some(WorkflowCommand::CreatePullRequest { task_id: actual_task_id })
                 if actual_task_id == task_id
+        ));
+    }
+
+    #[test]
+    fn manual_create_pr_prompt_uses_persisted_pull_request_metadata() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply AST transformations".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: Some("codemod-${{ task.id }}".to_string()),
+                        pull_request: Some(butterflow_models::step::PullRequestConfig {
+                            title: "Generic title".to_string(),
+                            body: None,
+                            draft: Some(true),
+                            base: None,
+                        }),
+                    }],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now()),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    r#"Pull request metadata: {"title":"[DRAFT] Debarrel backstage-auth-main","body":null,"draft":true,"base":"main","branch":"codemod-auth-main"}"#.to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        assert!(state.begin_create_pr_confirmation());
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::ManualPullRequestConsent { title, head, .. })
+                if title == "[DRAFT] Debarrel backstage-auth-main" && head == "codemod-auth-main"
         ));
     }
 
