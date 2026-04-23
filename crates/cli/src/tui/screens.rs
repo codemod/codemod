@@ -586,13 +586,15 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
             "y/Enter approve  esc cancel".to_string(),
         ),
         ApprovalPrompt::PullRequestConsent { title, head, .. } => (
-            "Create Pull Request".to_string(),
-            format!("Create pull request for completed task?\n\nTitle: {title}\nBranch: {head}"),
+            "Publish Branch and Create Pull Request".to_string(),
+            format!(
+                "Publish branch and create pull request for completed task?\n\nTitle: {title}\nBranch: {head}"
+            ),
             "y/Enter approve  esc cancel".to_string(),
         ),
         ApprovalPrompt::ManualPullRequestConsent { title, head, .. } => (
-            "Create Pull Request".to_string(),
-            format!("Create pull request now?\n\nTitle: {title}\nBranch: {head}"),
+            "Publish Branch and Create Pull Request".to_string(),
+            format!("Publish branch and create pull request now?\n\nTitle: {title}\nBranch: {head}"),
             "y/Enter approve  esc cancel".to_string(),
         ),
         ApprovalPrompt::Shell { command, .. } => (
@@ -993,7 +995,7 @@ mod tests {
         let lines = render_state(&state, 80, 24);
         assert!(lines
             .iter()
-            .any(|line| line.contains("Create Pull Request")));
+            .any(|line| line.contains("Publish Branch and Create Pull Request")));
         assert!(lines.iter().any(|line| line.contains("codemod-branch")));
         assert!(lines
             .iter()

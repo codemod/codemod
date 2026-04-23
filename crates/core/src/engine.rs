@@ -793,8 +793,10 @@ impl Engine {
             })?;
 
         let _ = self
-            .append_task_log(task_id, "Creating pull request from existing branch")
+            .append_task_log(task_id, "Publishing branch and creating pull request")
             .await;
+
+        crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
 
         let pr_url = crate::git_ops::create_pull_request(
             &pr.title,
@@ -3155,8 +3157,6 @@ impl Engine {
                         .append_task_log(task_id, "Publishing branch and creating pull request")
                         .await;
                     let push_and_pr_result: Result<PullRequestOutcome> = async {
-                        crate::git_ops::push_branch(branch, target_path).await?;
-
                         let pr = self
                             .resolve_pull_request_config(&workflow_run, &task, node)?
                             .ok_or_else(|| {
@@ -3182,13 +3182,15 @@ impl Engine {
                             if !approved {
                                 let _ = self
                                     .append_task_log(
-                                        task_id,
-                                        "Pull request creation deferred; use create-pr to continue later",
+                                    task_id,
+                                        "Branch publication and pull request creation deferred; use create-pr to continue later",
                                     )
                                     .await;
                                 return Ok(PullRequestOutcome::Deferred);
                             }
                         }
+
+                        crate::git_ops::push_branch(branch, target_path).await?;
 
                         crate::git_ops::create_pull_request(
                             &pr.title,
