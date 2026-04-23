@@ -116,6 +116,7 @@ jobs:
             git show "${ref}:crates/cli/src/tui/mod.rs" 2>/dev/null | grep -q 'CODEMOD_TUI_PERF_AUTO_EXIT_SECS'
           }
 
+          echo "0" > perf-results/baseline-unavailable.txt
           resolve_supported_baseline_ref() {
             local preferred_ref="$1"
             local candidate_ref="$2"
@@ -133,8 +134,10 @@ jobs:
             done)"
 
             if [ -z "${fallback_ref}" ]; then
-              echo "Unable to find a baseline ref with TUI perf harness support" >&2
-              return 1
+              echo "Baseline ref ${preferred_ref} and recent ancestors lack TUI perf harness support; using candidate as its own baseline" >&2
+              echo "1" > perf-results/baseline-unavailable.txt
+              printf '%s' "${candidate_ref}"
+              return 0
             fi
 
             echo "Baseline ref ${preferred_ref} lacks TUI perf harness support; falling back to ${fallback_ref}" >&2
@@ -708,6 +711,14 @@ jobs:
             perf-results/baseline \
             perf-results/candidate \
             > perf-results/comparison.md
+          if [ "$(cat perf-results/baseline-unavailable.txt)" = "1" ]; then
+            {
+              echo "> Baseline comparison unavailable: the PR base does not contain the TUI perf harness, so this run compares the candidate against itself and reports candidate-side regression tests."
+              echo
+              cat perf-results/comparison.md
+            } > perf-results/comparison.md.tmp
+            mv perf-results/comparison.md.tmp perf-results/comparison.md
+          fi
 
       - name: Publish TUI perf comparison
         run: |
