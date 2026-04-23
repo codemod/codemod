@@ -648,6 +648,8 @@ async fn run_tui_loop(
                                 state.selected_task_trigger_command(),
                             ) {
                                 spawn_command(session.handle(), command);
+                            } else {
+                                state.begin_selected_task_trigger_confirmation();
                             }
                         }
                         KeyCode::Char('G') => {

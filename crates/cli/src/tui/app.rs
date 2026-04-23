@@ -17,6 +17,7 @@ pub enum Screen {
 pub enum ApprovalPrompt {
     WorktreeConsent {
         task_ids: Vec<Uuid>,
+        scope: WorktreeConsentScope,
     },
     PullRequestConsent {
         request_id: Uuid,
@@ -47,6 +48,12 @@ pub enum ApprovalPrompt {
         options: Vec<(String, String)>,
         selected: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorktreeConsentScope {
+    SingleTask,
+    Bulk,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +166,18 @@ impl TuiState {
 
     fn is_bulk_triggerable_task(&self, task: &Task) -> bool {
         self.is_individually_triggerable_task(task) && !self.is_install_skill_task(task)
+    }
+
+    fn task_uses_managed_git(&self, task: &Task) -> bool {
+        self.current_run
+            .as_ref()
+            .and_then(|run| {
+                run.workflow
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == task.node_id)
+            })
+            .is_some_and(|node| node.branch_name.is_some() || node.pull_request.is_some())
     }
 
     fn task_dependencies_satisfied(&self, task: &Task) -> bool {
@@ -1005,9 +1024,11 @@ impl TuiState {
 
     pub fn approval_accept_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
-            ApprovalPrompt::WorktreeConsent { task_ids } => Some(WorkflowCommand::TriggerTasks {
-                task_ids: task_ids.clone(),
-            }),
+            ApprovalPrompt::WorktreeConsent { task_ids, .. } => {
+                Some(WorkflowCommand::TriggerTasks {
+                    task_ids: task_ids.clone(),
+                })
+            }
             ApprovalPrompt::PullRequestConsent { request_id, .. } => {
                 Some(WorkflowCommand::RespondPullRequestApproval {
                     request_id: *request_id,
@@ -1126,17 +1147,34 @@ impl TuiState {
         if task_ids.is_empty() {
             return false;
         }
-        self.approval = Some(ApprovalPrompt::WorktreeConsent { task_ids });
+        self.approval = Some(ApprovalPrompt::WorktreeConsent {
+            task_ids,
+            scope: WorktreeConsentScope::Bulk,
+        });
         true
     }
 
     pub fn selected_task_trigger_command(&self) -> Option<WorkflowCommand> {
         let task = self.selected_task()?;
-        if self.is_individually_triggerable_task(task) {
+        if self.is_individually_triggerable_task(task) && !self.task_uses_managed_git(task) {
             Some(WorkflowCommand::TriggerTask { task_id: task.id })
         } else {
             None
         }
+    }
+
+    pub fn begin_selected_task_trigger_confirmation(&mut self) -> bool {
+        let Some(task) = self.selected_task() else {
+            return false;
+        };
+        if !self.is_individually_triggerable_task(task) || !self.task_uses_managed_git(task) {
+            return false;
+        }
+        self.approval = Some(ApprovalPrompt::WorktreeConsent {
+            task_ids: vec![task.id],
+            scope: WorktreeConsentScope::SingleTask,
+        });
+        true
     }
 
     fn selected_task_is_pr_eligible(&self) -> Option<(Uuid, String, String)> {
@@ -2368,6 +2406,74 @@ mod tests {
             other => panic!("expected install-skill trigger command, got {other:?}"),
         }
         assert_eq!(state.visible_awaiting_task_ids(), vec![normal_task_id]);
+    }
+
+    #[test]
+    fn managed_git_task_requires_worktree_consent_for_individual_trigger() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply transforms".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: Some("codemod-${{ task.id }}".to_string()),
+                        pull_request: None,
+                    }],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        assert!(state.selected_task_trigger_command().is_none());
+        assert!(state.begin_selected_task_trigger_confirmation());
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::WorktreeConsent {
+                ref task_ids,
+                scope: super::WorktreeConsentScope::SingleTask
+            }) if *task_ids == vec![task_id]
+        ));
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::TriggerTasks { task_ids }) if task_ids == vec![task_id]
+        ));
     }
 
     #[test]
