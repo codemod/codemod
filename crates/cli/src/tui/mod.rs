@@ -1,5 +1,7 @@
 pub mod app;
 pub mod event;
+#[cfg(test)]
+mod render_latency_bench;
 mod screens;
 
 use std::io;

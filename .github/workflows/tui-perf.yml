@@ -751,38 +751,63 @@ jobs:
               cargo test -q -p butterflow-core await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal -- --nocapture
           }
 
-          run_jssg_wait_latency_benchmark() {
+          run_timed_benchmark() {
             local worktree="$1"
             local outdir="$2"
             local ref="$3"
             local target_dir="$4"
-            local output="${outdir}/jssg-wait-latency.log"
+            local label="$5"
+            local package="$6"
+            local test_args="$7"
+            local marker="$8"
+            local output="${outdir}/${label}.log"
 
             mkdir -p "${outdir}"
-            log_phase "timed-benchmark start ref=${ref} label=jssg-wait-latency"
+            log_phase "timed-benchmark start ref=${ref} label=${label}"
             if ! (
               cd "${worktree}"
               CARGO_TARGET_DIR="${target_dir}" \
-                cargo test -q -p butterflow-core \
-                  --test jssg_wait_latency_bench \
-                  await_js_ast_grep_execution_task_completion_latency_benchmark \
-                  -- --ignored --nocapture
+                cargo test -q -p "${package}" ${test_args} -- --ignored --nocapture
             ) >"${output}" 2>&1; then
-              echo "timed benchmark failed for ${ref}" >&2
+              echo "timed benchmark ${label} failed for ${ref}" >&2
               cat "${output}" >&2 || true
               return 1
             fi
-            if ! grep "JSSG_WAIT_LATENCY_MICROS" "${output}" | tail -n 1 >"${outdir}/jssg-wait-latency.metrics"; then
-              echo "timed benchmark did not emit JSSG wait latency metrics for ${ref}" >&2
+            if ! grep "${marker}" "${output}" | tail -n 1 >"${outdir}/${label}.metrics"; then
+              echo "timed benchmark ${label} did not emit metrics for ${ref}" >&2
               cat "${output}" >&2 || true
               return 1
             fi
-            log_phase "timed-benchmark finish ref=${ref} label=jssg-wait-latency"
+            log_phase "timed-benchmark finish ref=${ref} label=${label}"
+          }
+
+          run_timed_benchmarks() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "jssg-wait-latency" \
+              "butterflow-core" \
+              "--test jssg_wait_latency_bench await_js_ast_grep_execution_task_completion_latency_benchmark" \
+              "JSSG_WAIT_LATENCY_MICROS"
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "tui-render-latency" \
+              "codemod" \
+              "large_task_list_render_latency_benchmark" \
+              "TUI_RENDER_LATENCY_MICROS"
           }
 
           compare_timed_benchmarks() {
-            BASELINE_METRICS="perf-results/baseline/jssg-wait-latency.metrics" \
-            CANDIDATE_METRICS="perf-results/candidate/jssg-wait-latency.metrics" \
             python3 - <<'PY'
           import os
           import re
@@ -797,38 +822,40 @@ jobs:
               return values
 
 
-          baseline = read_metric(os.environ["BASELINE_METRICS"])
-          candidate = read_metric(os.environ["CANDIDATE_METRICS"])
-          baseline_median = baseline["median"]
-          candidate_median = candidate["median"]
-          delta = candidate_median - baseline_median
-          ratio = (candidate_median / baseline_median) if baseline_median else 0.0
-          regressed = candidate_median > baseline_median * 1.25 and delta > 50_000
-
-          status = "FAIL" if regressed else "PASS"
+          benchmarks = [
+              ("jssg-wait-latency", "jssg_wait_completion_latency", 50_000),
+              ("tui-render-latency", "large_task_list_render_latency", 2_000),
+          ]
+          failed = False
           with open("perf-results/timed-benchmarks.md", "w", encoding="utf-8") as output:
               output.write("## Timed Perf Benchmarks\n\n")
               output.write("| Benchmark | Baseline median | Candidate median | Delta | Ratio | Result |\n")
               output.write("| --- | ---: | ---: | ---: | ---: | --- |\n")
-              output.write(
-                  "| `jssg_wait_completion_latency` "
-                  f"| {baseline_median} us "
-                  f"| {candidate_median} us "
-                  f"| {delta:+} us "
-                  f"| {ratio:.2f}x "
-                  f"| {status} |\n"
-              )
+              for file_stem, label, absolute_floor in benchmarks:
+                  baseline = read_metric(f"perf-results/baseline/{file_stem}.metrics")
+                  candidate = read_metric(f"perf-results/candidate/{file_stem}.metrics")
+                  baseline_median = baseline["median"]
+                  candidate_median = candidate["median"]
+                  delta = candidate_median - baseline_median
+                  ratio = (candidate_median / baseline_median) if baseline_median else 0.0
+                  regressed = candidate_median > baseline_median * 1.25 and delta > absolute_floor
+                  failed = failed or regressed
+                  status = "FAIL" if regressed else "PASS"
+                  output.write(
+                      f"| `{label}` "
+                      f"| {baseline_median} us "
+                      f"| {candidate_median} us "
+                      f"| {delta:+} us "
+                      f"| {ratio:.2f}x "
+                      f"| {status} |\n"
+                  )
               output.write("\n")
               output.write(
-                  "_Fails only when candidate median is more than 25% slower and at least 50ms slower._\n"
+                  "_Fails only when candidate median is more than 25% slower and exceeds the benchmark-specific absolute floor._\n"
               )
 
-          if regressed:
-              print(
-                  "JSSG wait latency regressed: "
-                  f"baseline median={baseline_median}us candidate median={candidate_median}us",
-                  file=sys.stderr,
-              )
+          if failed:
+              print("Timed benchmark regression detected", file=sys.stderr)
               sys.exit(1)
           PY
           }
@@ -837,8 +864,8 @@ jobs:
           run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
           log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
           run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
-          run_jssg_wait_latency_benchmark "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
-          run_jssg_wait_latency_benchmark "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          run_timed_benchmarks "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
+          run_timed_benchmarks "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
           compare_timed_benchmarks
 
           python3 scripts/compare_tui_perf.py \
