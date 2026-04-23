@@ -579,6 +579,12 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         .split(area);
 
     let (title, body, help_text) = match approval {
+        ApprovalPrompt::WorktreeConsent { .. } => (
+            "Trigger All".to_string(),
+            "Trigger all pending tasks?\n\nThis will use git worktrees for the bulk run."
+                .to_string(),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
         ApprovalPrompt::Shell { command, .. } => (
             "Approval".to_string(),
             format!("Approve shell command?\n\n{command}"),
@@ -944,5 +950,22 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("Enter") && line.contains("choose")));
+    }
+
+    #[test]
+    fn render_worktree_consent_modal_text() {
+        let state = TuiState {
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger All")));
+        assert!(lines.iter().any(|line| line.contains("git worktrees")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
     }
 }
