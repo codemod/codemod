@@ -165,6 +165,11 @@ jobs:
           git worktree add "${CANDIDATE_WORKTREE}" "${CANDIDATE_REF}"
           git -C "${BASELINE_WORKTREE}" submodule update --init --recursive
           git -C "${CANDIDATE_WORKTREE}" submodule update --init --recursive
+          BENCH_TEST_PATH="crates/core/tests/jssg_wait_latency_bench.rs"
+          if [ -f "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" ]; then
+            mkdir -p "${BASELINE_WORKTREE}/$(dirname "${BENCH_TEST_PATH}")"
+            cp "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${BENCH_TEST_PATH}"
+          fi
 
           extract_run_id() {
             local output_file="$1"
@@ -746,10 +751,95 @@ jobs:
               cargo test -q -p butterflow-core await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal -- --nocapture
           }
 
+          run_jssg_wait_latency_benchmark() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+            local output="${outdir}/jssg-wait-latency.log"
+
+            mkdir -p "${outdir}"
+            log_phase "timed-benchmark start ref=${ref} label=jssg-wait-latency"
+            if ! (
+              cd "${worktree}"
+              CARGO_TARGET_DIR="${target_dir}" \
+                cargo test -q -p butterflow-core \
+                  --test jssg_wait_latency_bench \
+                  await_js_ast_grep_execution_task_completion_latency_benchmark \
+                  -- --ignored --nocapture
+            ) >"${output}" 2>&1; then
+              echo "timed benchmark failed for ${ref}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            if ! grep "JSSG_WAIT_LATENCY_MICROS" "${output}" | tail -n 1 >"${outdir}/jssg-wait-latency.metrics"; then
+              echo "timed benchmark did not emit JSSG wait latency metrics for ${ref}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            log_phase "timed-benchmark finish ref=${ref} label=jssg-wait-latency"
+          }
+
+          compare_timed_benchmarks() {
+            BASELINE_METRICS="perf-results/baseline/jssg-wait-latency.metrics" \
+            CANDIDATE_METRICS="perf-results/candidate/jssg-wait-latency.metrics" \
+            python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+
+          def read_metric(path: str) -> dict[str, int]:
+              text = open(path, encoding="utf-8").read()
+              values = {key: int(value) for key, value in re.findall(r"(median|min|max)=([0-9]+)", text)}
+              if "median" not in values:
+                  raise SystemExit(f"missing median in {path}: {text}")
+              return values
+
+
+          baseline = read_metric(os.environ["BASELINE_METRICS"])
+          candidate = read_metric(os.environ["CANDIDATE_METRICS"])
+          baseline_median = baseline["median"]
+          candidate_median = candidate["median"]
+          delta = candidate_median - baseline_median
+          ratio = (candidate_median / baseline_median) if baseline_median else 0.0
+          regressed = candidate_median > baseline_median * 1.25 and delta > 50_000
+
+          status = "FAIL" if regressed else "PASS"
+          with open("perf-results/timed-benchmarks.md", "w", encoding="utf-8") as output:
+              output.write("## Timed Perf Benchmarks\n\n")
+              output.write("| Benchmark | Baseline median | Candidate median | Delta | Ratio | Result |\n")
+              output.write("| --- | ---: | ---: | ---: | ---: | --- |\n")
+              output.write(
+                  "| `jssg_wait_completion_latency` "
+                  f"| {baseline_median} us "
+                  f"| {candidate_median} us "
+                  f"| {delta:+} us "
+                  f"| {ratio:.2f}x "
+                  f"| {status} |\n"
+              )
+              output.write("\n")
+              output.write(
+                  "_Fails only when candidate median is more than 25% slower and at least 50ms slower._\n"
+              )
+
+          if regressed:
+              print(
+                  "JSSG wait latency regressed: "
+                  f"baseline median={baseline_median}us candidate median={candidate_median}us",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
+          }
+
           log_phase "suite start kind=candidate ref=${CANDIDATE_REF}"
           run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
           log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
           run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          run_jssg_wait_latency_benchmark "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
+          run_jssg_wait_latency_benchmark "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          compare_timed_benchmarks
 
           python3 scripts/compare_tui_perf.py \
             perf-results/baseline \
@@ -768,6 +858,10 @@ jobs:
         run: |
           if [ -f perf-results/candidate/focused-tests.md ]; then
             cat perf-results/candidate/focused-tests.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f perf-results/timed-benchmarks.md ]; then
+            cat perf-results/timed-benchmarks.md >> "$GITHUB_STEP_SUMMARY"
             printf '\n' >> "$GITHUB_STEP_SUMMARY"
           fi
           cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
@@ -793,6 +887,9 @@ jobs:
             const focusedTestsBody = fs.existsSync("perf-results/candidate/focused-tests.md")
               ? fs.readFileSync("perf-results/candidate/focused-tests.md", "utf8").trim()
               : "";
+            const timedBenchmarksBody = fs.existsSync("perf-results/timed-benchmarks.md")
+              ? fs.readFileSync("perf-results/timed-benchmarks.md", "utf8").trim()
+              : "";
             const baselineRef = fs.readFileSync("perf-results/resolved-baseline-ref.txt", "utf8").trim();
             const candidateRef = fs.readFileSync("perf-results/resolved-candidate-ref.txt", "utf8").trim();
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
@@ -807,6 +904,8 @@ jobs:
               "",
               focusedTestsBody,
               focusedTestsBody ? "" : null,
+              timedBenchmarksBody,
+              timedBenchmarksBody ? "" : null,
               comparisonBody,
             ].filter(Boolean).join("\n");
 
