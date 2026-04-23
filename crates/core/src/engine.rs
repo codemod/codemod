@@ -136,7 +136,7 @@ async fn execute_install_skill_in_isolated_runtime(
             .worker_threads(2)
             .enable_all()
             .build()
-            .expect("failed to build install-skill runtime");
+            .map_err(|error| anyhow::anyhow!("failed to build install-skill runtime: {error}"))?;
         rt.block_on(executor.execute(request))
     })
     .await
