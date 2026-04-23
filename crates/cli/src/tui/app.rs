@@ -2445,7 +2445,7 @@ mod tests {
                 ended_at: Some(Utc::now()),
                 logs: vec![
                     "Creating git worktree for branch codemod-1234 in /tmp/repo".to_string(),
-                    "Pull request creation deferred; use create-pr to continue later".to_string(),
+                    "Branch publication and pull request creation deferred; use create-pr to continue later".to_string(),
                 ],
                 master_task_id: None,
                 matrix_values: None,
