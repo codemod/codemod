@@ -1733,8 +1733,7 @@ mod tests {
         let state = HashMap::new();
 
         assert!(
-            !evaluate_condition("${{ params.flag }}", &params, &state, None, None, None)
-                .unwrap()
+            !evaluate_condition("${{ params.flag }}", &params, &state, None, None, None).unwrap()
         );
     }
 
