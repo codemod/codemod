@@ -72,6 +72,7 @@ jobs:
           BASELINE_REF: ${{ inputs.baseline_ref }}
           CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -96,7 +97,7 @@ jobs:
             BASELINE_REF="${PR_BASE_SHA}"
             CANDIDATE_REF="${PR_HEAD_SHA}"
             echo "Comparing PR event: ${PR_TITLE}"
-            echo "${{ github.event.pull_request.number }}" > perf-results/pr-number.txt
+            echo "${PR_EVENT_NUMBER}" > perf-results/pr-number.txt
           elif [ -n "${PR_NUMBER}" ]; then
             PR_JSON="$(
               gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
