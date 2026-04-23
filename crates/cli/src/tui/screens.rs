@@ -64,10 +64,12 @@ fn task_row_status_style(task: &butterflow_models::Task) -> Style {
     }
 }
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
-    if let Some(approval) = &state.approval {
-        frame.render_widget(Clear, frame.area());
-        render_approval_modal(frame, approval);
-        return;
+    if matches!(state.screen, Screen::RunDetail) {
+        if let Some(approval) = &state.approval {
+            frame.render_widget(Clear, frame.area());
+            render_approval_modal(frame, approval);
+            return;
+        }
     }
 
     if state.show_log_modal {
@@ -990,7 +992,9 @@ mod tests {
 
         assert!(task_row.contains("Publish failed"));
         assert!(!task_row.contains("Failed"));
-        assert!(lines.iter().any(|line| line.contains("Press p to retry")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publish failed, press p to try again")));
     }
 
     #[test]
@@ -1126,6 +1130,7 @@ mod tests {
     #[test]
     fn render_selection_modal_places_help_bar_at_bottom() {
         let state = TuiState {
+            screen: Screen::RunDetail,
             approval: Some(crate::tui::app::ApprovalPrompt::Selection {
                 request_id: Uuid::new_v4(),
                 title: "Choose install scope".to_string(),
@@ -1150,6 +1155,7 @@ mod tests {
     #[test]
     fn render_worktree_consent_modal_text() {
         let state = TuiState {
+            screen: Screen::RunDetail,
             approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
                 task_ids: vec![Uuid::new_v4()],
             }),
@@ -1167,6 +1173,7 @@ mod tests {
     #[test]
     fn render_manual_pull_request_consent_modal_text() {
         let state = TuiState {
+            screen: Screen::RunDetail,
             approval: Some(crate::tui::app::ApprovalPrompt::ManualPullRequestConsent {
                 task_id: Uuid::new_v4(),
                 title: "Draft PR".to_string(),
