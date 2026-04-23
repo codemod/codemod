@@ -987,18 +987,117 @@ impl TuiState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
         node::NodeType,
-        step::{Step, StepAction, UseInstallSkill},
+        step::{Step, StepAction, UseInstallSkill, UseJSAstGrep},
         Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
+    use std::collections::HashMap;
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
     use super::{AppEvent, Screen, TaskProgressView, TuiState};
+
+    pub(crate) fn benchmark_run_detail_state(task_count: usize) -> TuiState {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply AST transformations".to_string(),
+                        description: None,
+                        r#type: NodeType::Automatic,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![Step {
+                            id: Some("rewrite-imports".to_string()),
+                            name: "Rewrite imports".to_string(),
+                            action: StepAction::JSAstGrep(UseJSAstGrep {
+                                js_file: "transform.js".to_string(),
+                                include: None,
+                                exclude: None,
+                                base_path: None,
+                                max_threads: None,
+                                dry_run: None,
+                                language: None,
+                                capabilities: None,
+                                semantic_analysis: None,
+                            }),
+                            env: None,
+                            condition: None,
+                            commit: None,
+                        }],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    }],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: now - chrono::Duration::minutes(1),
+                ended_at: None,
+                capabilities: None,
+                name: Some("large-shard-workflow.yaml".to_string()),
+                target_path: None,
+            }),
+            ..TuiState::default()
+        };
+
+        state.tasks = (0..task_count)
+            .map(|index| {
+                let task_id = Uuid::new_v4();
+                state.task_progress.insert(
+                    task_id,
+                    TaskProgressView {
+                        processed_files: (index % 97) as u64,
+                        total_files: Some(100),
+                    },
+                );
+                Task {
+                    id: task_id,
+                    workflow_run_id: run_id,
+                    node_id: "apply-transforms".to_string(),
+                    status: if index % 5 == 0 {
+                        TaskStatus::Completed
+                    } else {
+                        TaskStatus::Running
+                    },
+                    started_at: Some(now - chrono::Duration::seconds((index % 120) as i64)),
+                    ended_at: if index % 5 == 0 { Some(now) } else { None },
+                    logs: vec![
+                        "Starting js-ast-grep file loop (explicit-files, target files: 100)"
+                            .to_string(),
+                        format!("Processing file: packages/app-{index}/src/index.ts"),
+                    ],
+                    master_task_id: None,
+                    matrix_values: Some(HashMap::from([(
+                        "name".to_string(),
+                        serde_json::Value::String(format!(
+                            "backstage-package-with-long-shard-name-{index:04}"
+                        )),
+                    )])),
+                    is_master: false,
+                    error: None,
+                }
+            })
+            .collect();
+        state
+    }
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
