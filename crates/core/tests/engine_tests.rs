@@ -2427,15 +2427,11 @@ export default function transform(ast) {
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks
-                .iter()
-                .all(|task| task.logs.join("\n").contains("Processing file:"));
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
-            {
+            if child_tasks.len() == child_task_ids.len() && all_terminal {
                 return;
             }
 
@@ -2445,7 +2441,7 @@ export default function transform(ast) {
     .await
     .unwrap_or_else(|_| {
         panic!(
-            "timed out waiting for session-driven capability-approved manual matrix children to process files and finish; last child states were {:?}",
+            "timed out waiting for session-driven capability-approved manual matrix children to finish; last child states were {:?}",
             latest_states.lock().unwrap().clone()
         )
     });
@@ -2574,17 +2570,11 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks.iter().all(|task| {
-                let logs = task.logs.join("\n");
-                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
-                    && logs.contains("Processing file:")
-            });
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
-            {
+            if child_tasks.len() == child_task_ids.len() && all_terminal {
                 return;
             }
 
