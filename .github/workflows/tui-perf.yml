@@ -396,6 +396,7 @@ jobs:
                 run_id = os.environ["RUN_ID"]
                 output_path = os.environ["OUTPUT_PATH"]
                 timeout_secs = int(os.environ["TIMEOUT_SECS"])
+                send_terminal_activity = os.environ.get("SEND_TERMINAL_ACTIVITY") == "1"
 
                 master_fd, slave_fd = pty.openpty()
                 env = os.environ.copy()
@@ -413,12 +414,31 @@ jobs:
                 os.close(slave_fd)
 
                 deadline = time.monotonic() + timeout_secs
+                started_at = time.monotonic()
+                sent_key = False
+                sent_resize = False
                 timed_out = False
 
                 with open(output_path, "wb") as output_file:
                     while True:
                         if proc.poll() is not None:
                             break
+                        elapsed = time.monotonic() - started_at
+                        if send_terminal_activity and not sent_key and elapsed >= 0.5:
+                            os.write(master_fd, b"j")
+                            sent_key = True
+                        if send_terminal_activity and not sent_resize and elapsed >= 1.0:
+                            import fcntl
+                            import struct
+                            import termios
+
+                            fcntl.ioctl(
+                                master_fd,
+                                termios.TIOCSWINSZ,
+                                struct.pack("HHHH", 32, 100, 0, 0),
+                            )
+                            proc.send_signal(signal.SIGWINCH)
+                            sent_resize = True
                         if time.monotonic() >= deadline:
                             timed_out = True
                             proc.send_signal(signal.SIGTERM)
@@ -468,6 +488,18 @@ jobs:
             log_phase "tui-scenario finish name=${name} run_id=${run_id}"
             printf "%s " "${name}" >>"${outdir}/summary.txt"
             cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
+          }
+
+          run_scenario_with_terminal_activity() {
+            local worktree="$1"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
+            local codemod_bin="$6"
+
+            SEND_TERMINAL_ACTIVITY=1 \
+              run_scenario "${worktree}" "${state_home}" "${outdir}" "${name}" "${run_id}" "${codemod_bin}"
           }
 
           run_scenario_with_resume() {
@@ -616,6 +648,17 @@ jobs:
                 echo "completed_run_id=${completed_run_id}"
               } >"${outdir}/summary.txt"
             run_scenario "${worktree}" "${state_home}" "${outdir}" completed "${completed_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "terminal_activity_run_id=${completed_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario_with_terminal_activity \
+              "${worktree}" \
+              "${state_home}" \
+              "${outdir}" \
+              terminal_activity \
+              "${completed_run_id}" \
+              "${codemod_bin}"
             {
               echo
               echo "awaiting_trigger_run_id=${awaiting_run_id}"

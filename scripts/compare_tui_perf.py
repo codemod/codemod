@@ -14,6 +14,7 @@ SCENARIOS = [
     "active",
     "awaiting_trigger_resume",
     "active_busy",
+    "terminal_activity",
 ]
 
 
@@ -63,13 +64,20 @@ def main() -> int:
                 "| --- | ---: | ---: | ---: |",
             ]
         )
-        metrics = sorted(set(baseline[scenario]) | set(candidate[scenario]))
+        metrics = [
+            metric
+            for metric in sorted(set(baseline[scenario]) | set(candidate[scenario]))
+            if baseline[scenario].get(metric, 0) != 0
+            or candidate[scenario].get(metric, 0) != 0
+        ]
         for metric in metrics:
             before = baseline[scenario].get(metric, 0)
             after = candidate[scenario].get(metric, 0)
             lines.append(
                 f"| `{metric}` | {before} | {after} | {render_delta(after - before)} |"
             )
+        if not metrics:
+            lines.append("| `_none_` | 0 | 0 | 0 |")
         lines.append("")
 
     sys.stdout.write("\n".join(lines))
