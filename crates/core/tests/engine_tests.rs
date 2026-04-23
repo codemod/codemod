@@ -8,10 +8,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tokio::sync::Notify;
 
-use butterflow_core::engine::{CapabilitiesData, Engine};
+use butterflow_core::engine::{
+    await_js_ast_grep_execution_task, build_js_ast_grep_idle_timeout_message, finish_unit_progress,
+    js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
+    select_shard_scan_eligible_files, CapabilitiesData, Engine, StepPhase, StepProgressState,
+    UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
+};
 use butterflow_core::structured_log::StructuredLogger;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
 use butterflow_core::{
@@ -26,6 +34,7 @@ use butterflow_models::step::{
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult};
 
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
@@ -2080,9 +2089,10 @@ async fn test_failing_install_skill_child_reconciles_matrix_master() {
 async fn test_install_skill_executor_receives_workflow_bundle_path() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let bundle_dir = TempDir::new().unwrap();
+    let config_bundle_dir = TempDir::new().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let config = WorkflowRunConfig {
-        bundle_path: bundle_dir.path().to_path_buf(),
+        bundle_path: config_bundle_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "installed".to_string(),
@@ -2093,7 +2103,12 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
 
     let workflow = create_manual_matrix_install_skill_workflow();
     let workflow_run_id = engine
-        .run_workflow(workflow, HashMap::new(), None, None)
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(bundle_dir.path().to_path_buf()),
+            None,
+        )
         .await
         .unwrap();
 
@@ -2660,6 +2675,7 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
     let state_adapter = Box::new(MockStateAdapter::new());
     let config = WorkflowRunConfig {
         target_path: repo_dir.path().to_path_buf(),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -2782,6 +2798,7 @@ export default function transform(ast) {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: repo_dir.path().to_path_buf(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -2838,14 +2855,18 @@ export default function transform(ast) {
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks
-                .iter()
-                .all(|task| task.logs.join("\n").contains("Processing file:"));
+            let all_started_debarrel_step = child_tasks.iter().all(|task| {
+                task.logs
+                    .join("\n")
+                    .contains("Step started: Debarrel: rewrite imports and clean up barrels")
+            });
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            if child_tasks.len() == child_task_ids.len()
+                && all_started_debarrel_step
+                && all_terminal
             {
                 return;
             }
@@ -2934,6 +2955,7 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -2985,16 +3007,24 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
                 .collect();
             *latest_states_for_loop.lock().unwrap() = snapshot;
 
-            let all_have_file_progress = child_tasks.iter().all(|task| {
+            let all_started_debarrel_step = child_tasks.iter().all(|task| {
+                task.logs
+                    .join("\n")
+                    .contains("Step started: Debarrel: rewrite imports and clean up barrels")
+            });
+            let any_have_execution_progress = child_tasks.iter().any(|task| {
                 let logs = task.logs.join("\n");
-                logs.contains("Step started: Debarrel: rewrite imports and clean up barrels")
-                    && logs.contains("Processing file:")
+                logs.contains("Processing file:")
+                    || logs.contains("Publishing branch and creating pull request")
             });
             let all_terminal = child_tasks
                 .iter()
                 .all(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Failed));
 
-            if child_tasks.len() == child_task_ids.len() && all_have_file_progress && all_terminal
+            if child_tasks.len() == child_task_ids.len()
+                && all_started_debarrel_step
+                && any_have_execution_progress
+                && all_terminal
             {
                 return;
             }
@@ -6582,3 +6612,292 @@ async fn test_expression_resolution_nonexistent_variable() {
 // TODO: test_cycle_detection_direct_cycle
 // TODO: test_find_cycle_in_chain
 // TODO: test_runtime_cycle_detection
+
+#[test]
+fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
+    let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+    assert_eq!(
+        js_ast_grep_idle_timeout(),
+        Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+    );
+
+    std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+    assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+}
+
+#[test]
+fn shard_scan_falls_back_to_selector_matches_when_dry_run_finds_no_edits() {
+    let eligible = select_shard_scan_eligible_files(
+        Vec::new(),
+        vec!["src/a.ts".to_string(), "src/b.ts".to_string()],
+    );
+
+    assert_eq!(eligible, vec!["src/a.ts", "src/b.ts"]);
+}
+
+#[test]
+fn shard_scan_prefers_modified_files_when_available() {
+    let eligible = select_shard_scan_eligible_files(
+        vec!["src/changed.ts".to_string()],
+        vec!["src/selector-only.ts".to_string()],
+    );
+
+    assert_eq!(eligible, vec!["src/changed.ts"]);
+}
+
+#[test]
+fn record_unit_progress_updates_global_and_active_units() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    let before = state.lock().unwrap().global_last_progress_at;
+
+    std::thread::sleep(Duration::from_millis(5));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::ExecutionStarted);
+    assert!(snapshot.global_last_progress_at > before);
+    let unit = snapshot.active_units.get("src/example.ts").unwrap();
+    assert_eq!(unit.phase, StepPhase::ExecutionStarted);
+    assert!(unit.last_progress_at > before);
+    assert!(snapshot.output_active_units.contains("src/example.ts"));
+}
+
+#[test]
+fn record_output_progress_refreshes_executing_units() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+    let before = state
+        .lock()
+        .unwrap()
+        .active_units
+        .get("src/example.ts")
+        .unwrap()
+        .last_progress_at;
+
+    std::thread::sleep(Duration::from_millis(5));
+    record_output_progress(&state);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::Output);
+    let unit = snapshot.active_units.get("src/example.ts").unwrap();
+    assert_eq!(unit.phase, StepPhase::Output);
+    assert!(unit.last_progress_at > before);
+}
+
+#[test]
+fn finish_unit_progress_removes_active_unit() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+    finish_unit_progress(&state, "src/example.ts", StepPhase::ExecutionFinished);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::ExecutionFinished);
+    assert!(!snapshot.active_units.contains_key("src/example.ts"));
+    assert!(!snapshot.output_active_units.contains("src/example.ts"));
+}
+
+#[test]
+fn build_idle_timeout_message_uses_stalest_active_unit() {
+    let now = Instant::now();
+    let mut state = StepProgressState::new();
+    state.global_last_progress_at = now - Duration::from_secs(90);
+    state.global_phase = StepPhase::Output;
+    state.active_units.insert(
+        "src/fresh.ts".to_string(),
+        UnitProgressState {
+            last_progress_at: now - Duration::from_secs(10),
+            phase: StepPhase::Output,
+        },
+    );
+    state.active_units.insert(
+        "src/stale.ts".to_string(),
+        UnitProgressState {
+            last_progress_at: now - Duration::from_secs(75),
+            phase: StepPhase::ExecutionStarted,
+        },
+    );
+
+    let message = build_js_ast_grep_idle_timeout_message(&state, Duration::from_secs(60));
+    assert!(message.contains("src/stale.ts"));
+    assert!(message.contains("execution started"));
+    assert!(message.contains("active units: 2"));
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(
+        &progress_state,
+        "src/stalled.ts",
+        StepPhase::ExecutionStarted,
+    );
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let idle_timed_out_for_task = Arc::clone(&idle_timed_out);
+    let idle_notify_for_task = Arc::clone(&idle_notify);
+    let idle_failure_message_for_task = Arc::clone(&idle_failure_message);
+    let progress_state_for_task = Arc::clone(&progress_state);
+    let result = local
+            .run_until(async move {
+                let trigger = tokio::spawn({
+                    let idle_timed_out = Arc::clone(&idle_timed_out_for_task);
+                    let idle_notify = Arc::clone(&idle_notify_for_task);
+                    let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        idle_timed_out.store(true, Ordering::Release);
+                        if let Ok(mut message) = idle_failure_message.lock() {
+                            *message = Some(
+                                "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"
+                                    .to_string(),
+                            );
+                        }
+                        idle_notify.notify_waiters();
+                    }
+                });
+
+                let execution_task = tokio::task::spawn_local(async move {
+                    futures_util::future::pending::<
+                        std::result::Result<
+                            CodemodOutput,
+                            codemod_sandbox::sandbox::errors::ExecutionError,
+                        >,
+                    >()
+                    .await
+                });
+
+                let result = await_js_ast_grep_execution_task(
+                    execution_task,
+                    idle_timed_out_for_task,
+                    idle_notify_for_task,
+                    idle_failure_message_for_task,
+                    progress_state_for_task,
+                    Duration::from_secs(1),
+                    "src/stalled.ts",
+                )
+                .await;
+                trigger.await.unwrap();
+                result
+            })
+            .await;
+
+    let error = result.expect_err("pending execution should time out");
+    let message = error.to_string();
+    assert!(message.contains("No progress observed"));
+    assert!(message.contains("src/stalled.ts"));
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
+
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
+
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            wait_task.await.expect("wait task should join")
+        }),
+    )
+    .await
+    .expect("completed execution should not wait for a polling interval");
+
+    let output = result
+        .expect("helper should return successfully")
+        .expect("execution should complete successfully");
+    assert!(matches!(output.primary, ExecutionResult::Unmodified));
+    assert!(output.secondary.is_empty());
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let idle_timed_out_for_trigger = Arc::clone(&idle_timed_out);
+            let idle_notify_for_trigger = Arc::clone(&idle_notify);
+            let idle_failure_message_for_trigger = Arc::clone(&idle_failure_message);
+
+            let trigger = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                idle_timed_out_for_trigger.store(true, Ordering::Release);
+                if let Ok(mut message) = idle_failure_message_for_trigger.lock() {
+                    *message = Some("unexpected timeout".to_string());
+                }
+                idle_notify_for_trigger.notify_waiters();
+            });
+
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
+
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
+
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            let result = wait_task.await.expect("wait task should join");
+            trigger.await.expect("idle trigger should join");
+            result
+        }),
+    )
+    .await
+    .expect("completed execution should resolve before a later idle timeout signal");
+
+    let output = result
+        .expect("helper should return successfully")
+        .expect("execution should complete successfully");
+    assert!(matches!(output.primary, ExecutionResult::Unmodified));
+    assert!(output.secondary.is_empty());
+}

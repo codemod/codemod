@@ -14,6 +14,41 @@ fn log_modal_copy_hint() -> &'static str {
     }
 }
 
+fn workflow_status_style(status: butterflow_models::WorkflowStatus) -> Style {
+    match status {
+        butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::WorkflowStatus::Running => Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::WorkflowStatus::Failed => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        butterflow_models::WorkflowStatus::Completed => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
+
+fn task_status_style(status: butterflow_models::TaskStatus) -> Style {
+    match status {
+        butterflow_models::TaskStatus::AwaitingTrigger => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Running => Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Failed => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        butterflow_models::TaskStatus::Completed => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
     if let Some(approval) = &state.approval {
         frame.render_widget(Clear, frame.area());
@@ -129,21 +164,7 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
             let prefix = if is_selected { "▶" } else { " " };
             let status_text = TuiState::workflow_status_text(run.status);
             let elapsed_text = TuiState::workflow_elapsed_text(run);
-            let status_style = match run.status {
-                butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::WorkflowStatus::Running => Style::default()
-                    .fg(Color::Rgb(255, 165, 0))
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::WorkflowStatus::Failed => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                butterflow_models::WorkflowStatus::Completed => Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                _ => Style::default(),
-            };
+            let status_style = workflow_status_style(run.status);
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!("{prefix} ")),
                 Span::styled(
@@ -200,21 +221,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(chunks[0]);
-        let status_style = match run.status {
-            butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            butterflow_models::WorkflowStatus::Running => Style::default()
-                .fg(Color::Rgb(255, 165, 0))
-                .add_modifier(Modifier::BOLD),
-            butterflow_models::WorkflowStatus::Failed => {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-            }
-            butterflow_models::WorkflowStatus::Completed => Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default(),
-        };
+        let status_style = workflow_status_style(run.status);
         let mut lines = vec![Line::from(vec![
             Span::raw(state.display_workflow_name()),
             Span::raw("  "),
@@ -353,21 +360,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
             let progress_bar = state
                 .task_progress_bar(task, progress_width)
                 .unwrap_or_else(|| " ".repeat(progress_width));
-            let status_style = match task.status {
-                butterflow_models::TaskStatus::AwaitingTrigger => Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::TaskStatus::Running => Style::default()
-                    .fg(Color::Rgb(255, 165, 0))
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::TaskStatus::Failed => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                butterflow_models::TaskStatus::Completed => Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                _ => Style::default(),
-            };
+            let status_style = task_status_style(task.status);
 
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!(
@@ -450,8 +443,14 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
 
     let title = state
         .selected_task()
-        .map(|task| format!("Logs: {} ({:?})", task.node_id, task.status))
-        .unwrap_or_else(|| "Logs".to_string());
+        .map(|task| {
+            Line::from(vec![
+                Span::raw(format!("Logs: {} (", task.node_id)),
+                Span::styled(format!("{:?}", task.status), task_status_style(task.status)),
+                Span::raw(")"),
+            ])
+        })
+        .unwrap_or_else(|| Line::from("Logs"));
 
     let logs = Paragraph::new(state.selected_task_log_text())
         .scroll((state.log_modal_scroll, 0))
@@ -836,5 +835,57 @@ mod tests {
             .unwrap();
 
         assert!(notice_line > hint_line);
+    }
+
+    #[test]
+    fn render_log_modal_title_includes_task_status() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Failed,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: Some(Utc::now()),
+            logs: vec!["boom".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: Some("boom".to_string()),
+        });
+        state.open_log_modal(6);
+
+        let lines = render_state(&state, 100, 20);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Logs: install-skill (Failed)")));
+    }
+
+    #[test]
+    fn render_selection_modal_places_help_bar_at_bottom() {
+        let state = TuiState {
+            approval: Some(crate::tui::app::ApprovalPrompt::Selection {
+                request_id: Uuid::new_v4(),
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    ("project".to_string(), "project".to_string()),
+                    ("user".to_string(), "user (~/.claude/skills)".to_string()),
+                ],
+                selected: 0,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Choose install scope")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Enter") && line.contains("choose")));
     }
 }
