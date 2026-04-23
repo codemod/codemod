@@ -872,9 +872,10 @@ jobs:
                   "_Fails only when candidate median is more than 25% slower and exceeds the benchmark-specific absolute floor._\n"
               )
 
+          with open("perf-results/timed-benchmarks-failed.txt", "w", encoding="utf-8") as marker:
+              marker.write("1\n" if failed else "0\n")
           if failed:
               print("Timed benchmark regression detected", file=sys.stderr)
-              sys.exit(1)
           PY
           }
 
@@ -898,8 +899,13 @@ jobs:
             } > perf-results/comparison.md.tmp
             mv perf-results/comparison.md.tmp perf-results/comparison.md
           fi
+          if [ "$(cat perf-results/timed-benchmarks-failed.txt)" = "1" ]; then
+            echo "Timed benchmark regression detected" >&2
+            exit 1
+          fi
 
       - name: Publish TUI perf comparison
+        if: always()
         run: |
           if [ -f perf-results/candidate/focused-tests.md ]; then
             cat perf-results/candidate/focused-tests.md >> "$GITHUB_STEP_SUMMARY"
@@ -912,7 +918,7 @@ jobs:
           cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment TUI perf comparison on PR
-        if: ${{ github.event_name == 'pull_request' || inputs.pr_number != '' }}
+        if: ${{ always() && (github.event_name == 'pull_request' || inputs.pr_number != '') }}
         continue-on-error: true
         uses: actions/github-script@v7
         env:
@@ -990,6 +996,7 @@ jobs:
             }
 
       - name: Upload TUI perf artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tui-perf-results
