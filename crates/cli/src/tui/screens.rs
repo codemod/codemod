@@ -51,7 +51,7 @@ fn task_status_style(status: butterflow_models::TaskStatus) -> Style {
 }
 
 fn task_row_status_style(task: &butterflow_models::Task) -> Style {
-    if TuiState::task_publish_failed(task) {
+    if TuiState::task_publish_in_progress(task) || TuiState::task_publish_failed(task) {
         Style::default()
             .fg(Color::Rgb(255, 165, 0))
             .add_modifier(Modifier::BOLD)
@@ -562,6 +562,7 @@ fn truncate_text(text: &str, max_width: usize) -> String {
 fn compact_status_text(status: &str, max_width: usize) -> String {
     let candidates: Vec<&str> = match status {
         "Awaiting trigger" => vec!["Awaiting trigger", "Awaiting", "Await"],
+        "Publishing" => vec!["Publishing", "Publish", "Pub"],
         "Publish failed" => vec!["Publish failed", "Pub failed", "Pub fail"],
         "PR pending" => vec!["PR pending", "PR pend"],
         "Running" => vec!["Running", "Run"],
@@ -990,6 +991,63 @@ mod tests {
         assert!(task_row.contains("Publish failed"));
         assert!(!task_row.contains("Failed"));
         assert!(lines.iter().any(|line| line.contains("Press p to retry")));
+    }
+
+    #[test]
+    fn render_run_detail_shows_publishing_status_for_retry_attempt() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                    "Publishing branch and creating pull request".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms"))
+            .expect("task row should render");
+
+        assert!(task_row.contains("Publishing"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publishing branch and creating pull request")));
     }
 
     #[test]
