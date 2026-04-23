@@ -126,6 +126,62 @@ struct ResolvedPullRequestConfig {
     branch: String,
 }
 
+const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+
+fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+    format!(
+        "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
+        serde_json::json!({
+            "title": pr.title,
+            "body": pr.body,
+            "draft": pr.draft,
+            "base": pr.base,
+            "branch": pr.branch,
+        })
+    )
+}
+
+fn pull_request_config_from_task_logs(
+    task: &Task,
+    fallback: ResolvedPullRequestConfig,
+) -> ResolvedPullRequestConfig {
+    let Some(metadata) = task.logs.iter().rev().find_map(|line| {
+        line.strip_prefix(PULL_REQUEST_METADATA_LOG_PREFIX)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    }) else {
+        return fallback;
+    };
+
+    ResolvedPullRequestConfig {
+        title: metadata
+            .get("title")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.title),
+        body: metadata
+            .get("body")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.body),
+        draft: metadata
+            .get("draft")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback.draft),
+        base: metadata
+            .get("base")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.base),
+        branch: metadata
+            .get("branch")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.branch),
+    }
+}
+
 fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
@@ -789,6 +845,11 @@ impl Engine {
             .ok_or_else(|| {
                 Error::Runtime("Task is not eligible for pull request creation".to_string())
             })?;
+        let pr = pull_request_config_from_task_logs(&task, pr);
+
+        let _ = self
+            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+            .await;
 
         let _ = self
             .append_task_log(task_id, "Publishing branch and creating pull request")
@@ -3190,6 +3251,9 @@ impl Engine {
                                     "Task is not eligible for pull request creation".to_string(),
                                 )
                             })?;
+                        let _ = self
+                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+                            .await;
 
                         if let Some(approval_callback) =
                             &self.workflow_run_config.pull_request_approval_callback
