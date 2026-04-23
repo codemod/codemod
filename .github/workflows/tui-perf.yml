@@ -789,7 +789,7 @@ jobs:
           import sys
 
 
-          def read_metric(path: str) -> dict[str, int]:
+          def read_metric(path):
               text = open(path, encoding="utf-8").read()
               values = {key: int(value) for key, value in re.findall(r"(median|min|max)=([0-9]+)", text)}
               if "median" not in values:
