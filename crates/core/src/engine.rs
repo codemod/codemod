@@ -3229,46 +3229,22 @@ impl Engine {
                     if let Err(e) = push_and_pr_result {
                         git_step_logger
                             .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-
-                        // Mark the task as failed
-                        let mut fields = HashMap::new();
-                        fields.insert(
-                            "status".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                            },
-                        );
-                        fields.insert(
-                            "ended_at".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(Utc::now())?),
-                            },
-                        );
-                        fields.insert(
-                            "error".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Add,
-                                value: Some(serde_json::to_value(format!(
-                                    "Push/PR creation failed: {}",
-                                    e
-                                ))?),
-                            },
-                        );
-                        let task_diff = TaskDiff { task_id, fields };
-                        self.state_adapter
-                            .lock()
-                            .await
-                            .apply_task_diff(&task_diff)
-                            .await?;
-                        self.emit_task_updated(task_id).await;
-
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Branch publication and pull request creation failed: {e}"),
+                            )
+                            .await;
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                "Use create-pr to retry after fixing the remote or permissions",
+                            )
+                            .await;
                         self.emit_error(format!(
-                            "Task {} ({}) push/PR creation failed: {}",
+                            "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
-                        return Err(e);
                     }
 
                     git_step_logger
