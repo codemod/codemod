@@ -8,6 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use butterflow_models::step::UseInstallSkill;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use thiserror::Error;
 
 use crate::{
     ai_handoff::AgentOption,
@@ -39,6 +40,40 @@ pub struct DryRunChange {
 pub type DryRunCallback = Arc<dyn Fn(DryRunChange) + Send + Sync>;
 
 #[derive(Clone, Debug)]
+pub struct SelectionPromptOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectionPrompt {
+    pub title: String,
+    pub options: Vec<SelectionPromptOption>,
+    pub default_index: usize,
+}
+
+pub type SelectionPromptCallback =
+    Arc<dyn Fn(SelectionPrompt) -> Result<Option<String>, anyhow::Error> + Send + Sync>;
+
+#[derive(Clone, Debug, Error)]
+#[error("{message}")]
+pub struct DeferredInteractionError {
+    message: String,
+}
+
+impl DeferredInteractionError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ShellCommandExecutionRequest {
     pub command: String,
     pub node_id: String,
@@ -57,13 +92,16 @@ pub struct ManagedGitWorktree {
     pub path: PathBuf,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InstallSkillExecutionRequest {
     pub install_skill: UseInstallSkill,
     pub no_interactive: bool,
+    pub quiet: bool,
+    pub bundle_path: Option<PathBuf>,
     pub target_path: PathBuf,
     pub env: HashMap<String, String>,
     pub output_format: OutputFormat,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
 }
 
 #[async_trait]
@@ -91,6 +129,7 @@ pub struct WorkflowRunConfig {
     pub agent: Option<String>,
     /// Callback for presenting agent selection UI when no agent is specified
     pub agent_selection_callback: Option<AgentSelectionCallback>,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
     /// Callback for reporting changes in dry-run mode
     pub dry_run_callback: Option<DryRunCallback>,
     /// Skip executing install-skill steps at runtime (used by package run UX)
@@ -149,6 +188,7 @@ impl Default for WorkflowRunConfig {
             no_interactive: false,
             agent: None,
             agent_selection_callback: None,
+            selection_prompt_callback: None,
             dry_run_callback: None,
             skip_install_skill_steps: false,
             auto_trigger_manual_steps: false,
