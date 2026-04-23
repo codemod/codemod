@@ -1596,7 +1596,10 @@ fn discovery_guide_paths_with_runtime(
     Ok(paths)
 }
 
-fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
+pub(crate) fn skill_root_hint_for_scope(
+    harness: Harness,
+    scope: InstallScope,
+) -> AdapterResult<String> {
     Ok(match scope {
         InstallScope::Project => match harness {
             Harness::Claude => ".claude/skills".to_string(),
