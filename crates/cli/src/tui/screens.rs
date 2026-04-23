@@ -208,7 +208,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(1),
-            Constraint::Length(2),
+            Constraint::Length(3),
         ])
         .split(size);
 
@@ -790,6 +790,63 @@ mod tests {
         assert!(task_row.contains('['));
         assert!(task_row.contains('>'));
         assert!(task_row.contains(']'));
+    }
+
+    #[test]
+    fn render_run_detail_keeps_last_visible_task_above_help_bar() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: Some(Utc::now() - Duration::seconds(index as i64)),
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                })
+                .collect(),
+            selected_task: 5,
+            task_list_scroll: 1,
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let last_task_line = lines
+            .iter()
+            .position(|line| line.contains("node-5"))
+            .unwrap();
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("Enter") && line.contains("logs"))
+            .unwrap();
+
+        assert!(last_task_line < hint_line);
     }
 
     #[test]

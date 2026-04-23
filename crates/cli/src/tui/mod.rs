@@ -148,7 +148,11 @@ fn log_modal_viewport_height(terminal_height: u16) -> u16 {
 }
 
 fn task_list_viewport_height(terminal_height: u16) -> usize {
-    terminal_height.saturating_sub(5) as usize
+    // Run detail reserves:
+    // - 3 rows for the header
+    // - 1 row for the task table header
+    // - 3 rows for completion detail / spacer / help bar
+    terminal_height.saturating_sub(7) as usize
 }
 
 fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
@@ -716,7 +720,9 @@ async fn bind_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{reduce_workflow_receiver, should_redraw, TuiPerfCounters};
+    use super::{
+        reduce_workflow_receiver, should_redraw, task_list_viewport_height, TuiPerfCounters,
+    };
     use crate::tui::app::{Screen, TuiState};
     use butterflow_core::workflow_runtime::WorkflowEvent;
     use butterflow_models::{workflow::Workflow, WorkflowRun, WorkflowStatus};
@@ -957,6 +963,12 @@ mod tests {
         ]);
 
         assert_eq!(draws, 2);
+    }
+
+    #[test]
+    fn task_list_viewport_height_matches_run_detail_layout() {
+        assert_eq!(task_list_viewport_height(24), 17);
+        assert_eq!(task_list_viewport_height(10), 3);
     }
 
     #[test]
