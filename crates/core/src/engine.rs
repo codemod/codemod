@@ -158,12 +158,12 @@ struct PreparedStepExecution {
     state_input_path: PathBuf,
 }
 
-const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StepPhase {
+pub enum StepPhase {
     Starting,
     FileQueued,
     FileLoaded,
@@ -189,9 +189,9 @@ impl std::fmt::Display for StepPhase {
 }
 
 #[derive(Debug)]
-struct UnitProgressState {
-    last_progress_at: Instant,
-    phase: StepPhase,
+pub struct UnitProgressState {
+    pub last_progress_at: Instant,
+    pub phase: StepPhase,
 }
 
 impl UnitProgressState {
@@ -205,15 +205,21 @@ impl UnitProgressState {
 }
 
 #[derive(Debug)]
-struct StepProgressState {
-    global_last_progress_at: Instant,
-    global_phase: StepPhase,
-    active_units: HashMap<String, UnitProgressState>,
-    output_active_units: HashSet<String>,
+pub struct StepProgressState {
+    pub global_last_progress_at: Instant,
+    pub global_phase: StepPhase,
+    pub active_units: HashMap<String, UnitProgressState>,
+    pub output_active_units: HashSet<String>,
+}
+
+impl Default for StepProgressState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StepProgressState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             global_last_progress_at: Instant::now(),
             global_phase: StepPhase::Starting,
@@ -223,7 +229,7 @@ impl StepProgressState {
     }
 }
 
-fn js_ast_grep_idle_timeout() -> Duration {
+pub fn js_ast_grep_idle_timeout() -> Duration {
     let override_ms = std::env::var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -231,7 +237,7 @@ fn js_ast_grep_idle_timeout() -> Duration {
     Duration::from_millis(override_ms.unwrap_or(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT))
 }
 
-fn select_shard_scan_eligible_files(
+pub fn select_shard_scan_eligible_files(
     modified_files: Vec<String>,
     selector_matched_files: Vec<String>,
 ) -> Vec<String> {
@@ -247,7 +253,7 @@ fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
         || (enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some()))
 }
 
-fn record_unit_progress(
+pub fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -268,7 +274,7 @@ fn record_unit_progress(
     }
 }
 
-fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
+pub fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     if let Ok(mut state) = state.lock() {
         let now = Instant::now();
         state.global_last_progress_at = now;
@@ -284,7 +290,7 @@ fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     }
 }
 
-fn finish_unit_progress(
+pub fn finish_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -297,7 +303,7 @@ fn finish_unit_progress(
     }
 }
 
-fn build_js_ast_grep_idle_timeout_message(
+pub fn build_js_ast_grep_idle_timeout_message(
     state: &StepProgressState,
     idle_timeout: Duration,
 ) -> String {
@@ -352,7 +358,7 @@ fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
     message
 }
 
-async fn await_js_ast_grep_execution_task(
+pub async fn await_js_ast_grep_execution_task(
     execution_task: tokio::task::JoinHandle<
         std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>,
     >,
@@ -3439,7 +3445,7 @@ impl Engine {
                     install_skill: install_skill.clone(),
                     no_interactive: self.workflow_run_config.no_interactive,
                     quiet: self.workflow_run_config.quiet,
-                    bundle_path: Some(self.workflow_run_config.bundle_path.clone()),
+                    bundle_path: bundle_path.clone(),
                     target_path: self.workflow_run_config.target_path.clone(),
                     env: prepared.env.clone(),
                     output_format: self.workflow_run_config.output_format,
@@ -5889,7 +5895,6 @@ impl Clone for Engine {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6251,6 +6256,7 @@ export default function transform(ast) {
                     async move {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         idle_timed_out.store(true, Ordering::Release);
+                        idle_notify.notify_waiters();
                         if let Ok(mut message) = idle_failure_message.lock() {
                             *message = Some(
                                 "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"

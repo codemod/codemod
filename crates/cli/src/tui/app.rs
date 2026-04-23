@@ -1,5 +1,5 @@
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
-use butterflow_models::{Task, TaskStatus, WorkflowRun};
+use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -93,8 +93,33 @@ impl TuiState {
         )
     }
 
-    fn is_ignorable_pending_install_skill(task: &Task) -> bool {
-        task.node_id == "install-skill" && task.status == TaskStatus::AwaitingTrigger
+    fn is_install_skill_task(&self, task: &Task) -> bool {
+        self.current_run
+            .as_ref()
+            .and_then(|run| {
+                run.workflow
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == task.node_id)
+            })
+            .map(|node| {
+                node.steps
+                    .iter()
+                    .any(|step| matches!(step.action, StepAction::InstallSkill(_)))
+            })
+            .unwrap_or_else(|| task.node_id == "install-skill")
+    }
+
+    fn is_ignorable_pending_install_skill(&self, task: &Task) -> bool {
+        self.is_install_skill_task(task) && task.status == TaskStatus::AwaitingTrigger
+    }
+
+    fn is_individually_triggerable_task(&self, task: &Task) -> bool {
+        task.status == TaskStatus::AwaitingTrigger && self.task_dependencies_satisfied(task)
+    }
+
+    fn is_bulk_triggerable_task(&self, task: &Task) -> bool {
+        self.is_individually_triggerable_task(task) && !self.is_install_skill_task(task)
     }
 
     fn task_dependencies_satisfied(&self, task: &Task) -> bool {
@@ -141,7 +166,7 @@ impl TuiState {
 
         self.tasks.iter().all(|task| {
             Self::is_terminal_task_status(task.status)
-                || Self::is_ignorable_pending_install_skill(task)
+                || self.is_ignorable_pending_install_skill(task)
         })
     }
 
@@ -233,11 +258,12 @@ impl TuiState {
         }
     }
 
-    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) {
+    pub fn sync_task_list_scroll(&mut self, viewport_height: usize) -> bool {
+        let previous_scroll = self.task_list_scroll;
         let visible_len = self.visible_tasks().len();
         if visible_len == 0 || viewport_height == 0 {
             self.task_list_scroll = 0;
-            return;
+            return previous_scroll != self.task_list_scroll;
         }
 
         let max_scroll = visible_len.saturating_sub(viewport_height);
@@ -250,6 +276,7 @@ impl TuiState {
                 .saturating_sub(viewport_height);
         }
         self.task_list_scroll = self.task_list_scroll.min(max_scroll);
+        previous_scroll != self.task_list_scroll
     }
 
     pub fn visible_task_window(&self, viewport_height: usize) -> Vec<&Task> {
@@ -499,10 +526,21 @@ impl TuiState {
     pub fn selected_task_log_text(&self) -> String {
         self.selected_task()
             .map(|task| {
-                if task.logs.is_empty() {
+                let mut lines = task.logs.clone();
+
+                if task.status == TaskStatus::Failed {
+                    if let Some(error) = task.error.as_deref() {
+                        let rendered_error = format!("Error: {error}");
+                        if !lines.iter().any(|line| line == &rendered_error) {
+                            lines.push(rendered_error);
+                        }
+                    }
+                }
+
+                if lines.is_empty() {
                     "No logs yet".to_string()
                 } else {
-                    task.logs.join("\n")
+                    lines.join("\n")
                 }
             })
             .unwrap_or_else(|| "No task selected".to_string())
@@ -534,13 +572,44 @@ impl TuiState {
         });
     }
 
-    pub fn clear_expired_log_modal_notice(&mut self) {
+    pub fn clear_expired_log_modal_notice(&mut self) -> bool {
         if self
             .log_modal_notice
             .as_ref()
             .is_some_and(|notice| Instant::now() >= notice.expires_at)
         {
             self.log_modal_notice = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn next_redraw_deadline(&self) -> Option<Instant> {
+        let mut deadline = self
+            .log_modal_notice
+            .as_ref()
+            .map(|notice| notice.expires_at);
+
+        if self.has_live_elapsed_clock() {
+            let now = Utc::now();
+            let millis_until_next_second = 1_000_u64 - u64::from(now.timestamp_subsec_millis());
+            let elapsed_deadline = Instant::now() + Duration::from_millis(millis_until_next_second);
+            deadline = Some(match deadline {
+                Some(existing) => existing.min(elapsed_deadline),
+                None => elapsed_deadline,
+            });
+        }
+
+        deadline
+    }
+
+    fn has_live_elapsed_clock(&self) -> bool {
+        match self.screen {
+            Screen::Runs => self.runs.iter().any(|run| run.ended_at.is_none()),
+            Screen::RunDetail => self
+                .tasks
+                .iter()
+                .any(|task| task.started_at.is_some() && task.ended_at.is_none()),
         }
     }
 
@@ -565,7 +634,6 @@ impl TuiState {
             .saturating_add(amount)
             .min(self.log_modal_max_scroll(viewport_height));
     }
-
     pub fn scroll_logs_to_top(&mut self) {
         self.log_modal_scroll = 0;
     }
@@ -579,17 +647,15 @@ impl TuiState {
             Screen::Runs => {
                 self.selected_run = self.selected_run.saturating_sub(1);
             }
-            Screen::RunDetail => {
-                if let Some(
-                    ApprovalPrompt::AgentSelection { selected, .. }
-                    | ApprovalPrompt::Selection { selected, .. },
-                ) = &mut self.approval
-                {
+            Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::AgentSelection { selected, .. })
+                | Some(ApprovalPrompt::Selection { selected, .. }) => {
                     *selected = selected.saturating_sub(1);
-                } else {
+                }
+                _ => {
                     self.selected_task = self.selected_task.saturating_sub(1);
                 }
-            }
+            },
         }
     }
 
@@ -853,7 +919,7 @@ impl TuiState {
 
     pub fn selected_task_trigger_command(&self) -> Option<WorkflowCommand> {
         let task = self.selected_task()?;
-        if task.status == TaskStatus::AwaitingTrigger && self.task_dependencies_satisfied(task) {
+        if self.is_individually_triggerable_task(task) {
             Some(WorkflowCommand::TriggerTask { task_id: task.id })
         } else {
             None
@@ -863,8 +929,7 @@ impl TuiState {
     pub fn visible_awaiting_task_ids(&self) -> Vec<Uuid> {
         self.visible_tasks()
             .into_iter()
-            .filter(|task| task.status == TaskStatus::AwaitingTrigger)
-            .filter(|task| self.task_dependencies_satisfied(task))
+            .filter(|task| self.is_bulk_triggerable_task(task))
             .map(|task| task.id)
             .collect()
     }
@@ -923,16 +988,17 @@ impl TuiState {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use butterflow_core::workflow_runtime::{WorkflowEvent, WorkflowSnapshot};
+    use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
-        node::NodeType, Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
+        node::NodeType,
+        step::{Step, StepAction, UseInstallSkill},
+        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
+    use std::time::{Duration, Instant};
     use uuid::Uuid;
 
-    use super::{AppEvent, TaskProgressView, TuiState};
+    use super::{AppEvent, Screen, TaskProgressView, TuiState};
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
@@ -1570,6 +1636,33 @@ mod tests {
     }
 
     #[test]
+    fn selected_task_log_text_includes_failed_task_error() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Failed,
+            started_at: None,
+            ended_at: None,
+            logs: vec![
+                "Task execution starting".to_string(),
+                "Step started: Install debarrel skill".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: Some("Failed to execute install-skill step".to_string()),
+        });
+
+        assert_eq!(
+            state.selected_task_log_text(),
+            "Task execution starting\nStep started: Install debarrel skill\nError: Failed to execute install-skill step"
+        );
+    }
+
+    #[test]
     fn task_list_scroll_tracks_selection_window() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState {
@@ -1656,6 +1749,30 @@ mod tests {
     }
 
     #[test]
+    fn task_help_text_shows_individual_trigger_only_for_install_skill() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.task_help_text(),
+            "Enter logs  t trigger  c cancel  esc back  q quit"
+        );
+    }
+
+    #[test]
     fn selected_task_trigger_command_requires_dependencies() {
         let run_id = Uuid::new_v4();
         let dependency_task_id = Uuid::new_v4();
@@ -1678,7 +1795,20 @@ mod tests {
                         trigger: None,
                         strategy: None,
                         runtime: None,
-                        steps: vec![],
+                        steps: vec![Step {
+                            id: Some("install-skill-step".to_string()),
+                            name: "Install debarrel skill".to_string(),
+                            action: StepAction::InstallSkill(UseInstallSkill {
+                                package: "debarrel".to_string(),
+                                path: None,
+                                harness: None,
+                                scope: None,
+                                force: None,
+                            }),
+                            env: None,
+                            condition: None,
+                            commit: None,
+                        }],
                         env: Default::default(),
                         branch_name: None,
                         pull_request: None,
@@ -1744,7 +1874,114 @@ mod tests {
             Some(blocked_task_id)
         );
         assert!(state.selected_task_trigger_command().is_none());
-        assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
+        assert!(state.visible_awaiting_task_ids().is_empty());
+    }
+
+    #[test]
+    fn install_skill_is_individually_triggerable_but_excluded_from_trigger_all() {
+        let run_id = Uuid::new_v4();
+        let install_skill_task_id = Uuid::new_v4();
+        let normal_task_id = Uuid::new_v4();
+        let state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![
+                        butterflow_models::Node {
+                            id: "node2".to_string(),
+                            name: "Install Skill".to_string(),
+                            description: None,
+                            r#type: NodeType::Manual,
+                            depends_on: vec![],
+                            trigger: None,
+                            strategy: None,
+                            runtime: None,
+                            steps: vec![Step {
+                                id: Some("install-skill-step".to_string()),
+                                name: "Install debarrel skill".to_string(),
+                                action: StepAction::InstallSkill(UseInstallSkill {
+                                    package: "debarrel".to_string(),
+                                    path: None,
+                                    harness: None,
+                                    scope: None,
+                                    force: None,
+                                }),
+                                env: None,
+                                condition: None,
+                                commit: None,
+                            }],
+                            env: Default::default(),
+                            branch_name: None,
+                            pull_request: None,
+                        },
+                        butterflow_models::Node {
+                            id: "apply-transforms".to_string(),
+                            name: "Apply transforms".to_string(),
+                            description: None,
+                            r#type: NodeType::Manual,
+                            depends_on: vec![],
+                            trigger: None,
+                            strategy: None,
+                            runtime: None,
+                            steps: vec![],
+                            env: Default::default(),
+                            branch_name: None,
+                            pull_request: None,
+                        },
+                    ],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![
+                Task {
+                    id: install_skill_task_id,
+                    workflow_run_id: run_id,
+                    node_id: "node2".to_string(),
+                    status: TaskStatus::AwaitingTrigger,
+                    started_at: None,
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                },
+                Task {
+                    id: normal_task_id,
+                    workflow_run_id: run_id,
+                    node_id: "apply-transforms".to_string(),
+                    status: TaskStatus::AwaitingTrigger,
+                    started_at: None,
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                },
+            ],
+            ..TuiState::default()
+        };
+
+        match state.selected_task_trigger_command() {
+            Some(WorkflowCommand::TriggerTask { task_id }) => {
+                assert_eq!(task_id, install_skill_task_id);
+            }
+            other => panic!("expected install-skill trigger command, got {other:?}"),
+        }
+        assert_eq!(state.visible_awaiting_task_ids(), vec![normal_task_id]);
     }
 
     #[test]
@@ -1981,5 +2218,155 @@ mod tests {
         });
 
         assert_eq!(state.selected_task_completion_detail(), None);
+    }
+
+    #[test]
+    fn selection_prompt_approval_accepts_selected_value() {
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
+            request_id,
+            prompt: butterflow_core::config::SelectionPrompt {
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    butterflow_core::config::SelectionPromptOption {
+                        value: "project".to_string(),
+                        label: "project".to_string(),
+                    },
+                    butterflow_core::config::SelectionPromptOption {
+                        value: "user".to_string(),
+                        label: "user".to_string(),
+                    },
+                ],
+                default_index: 1,
+            },
+            at: Utc::now(),
+        }));
+
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::RespondSelection {
+                request_id: actual_request_id,
+                selection: Some(selection),
+            }) if actual_request_id == request_id && selection == "user"
+        ));
+    }
+
+    #[test]
+    fn selection_prompt_reject_defers_selected_task() {
+        let workflow_run_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+        state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
+            request_id,
+            prompt: butterflow_core::config::SelectionPrompt {
+                title: "Choose harness".to_string(),
+                options: vec![butterflow_core::config::SelectionPromptOption {
+                    value: "claude".to_string(),
+                    label: "Claude".to_string(),
+                }],
+                default_index: 0,
+            },
+            at: Utc::now(),
+        }));
+
+        assert!(matches!(
+            state.approval_reject_command(),
+            Some(WorkflowCommand::RespondSelection {
+                request_id: actual_request_id,
+                selection: None,
+            }) if actual_request_id == request_id
+        ));
+    }
+
+    #[test]
+    fn task_elapsed_text_is_dash_without_started_at() {
+        let state = TuiState::default();
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::AwaitingTrigger,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+
+        assert_eq!(state.task_elapsed_text(&task), "-");
+    }
+
+    #[test]
+    fn next_redraw_deadline_is_none_for_static_ui() {
+        let mut state = TuiState::default();
+        state.screen = Screen::Runs;
+        state.runs = vec![WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: butterflow_models::WorkflowStatus::Completed,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        }];
+
+        assert!(state.next_redraw_deadline().is_none());
+    }
+
+    #[test]
+    fn next_redraw_deadline_is_some_for_running_runs_screen() {
+        let mut state = TuiState::default();
+        state.screen = Screen::Runs;
+        state.runs = vec![WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: butterflow_models::WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        }];
+
+        let deadline = state
+            .next_redraw_deadline()
+            .expect("running UI should refresh");
+        assert!(deadline > Instant::now());
+        assert!(deadline <= Instant::now() + Duration::from_secs(1));
     }
 }
