@@ -238,6 +238,8 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         semantic_provider: provider,
         metrics_context: None,
         shared_state_context: None,
+        runtime_event_callback: None,
+        cancellation_flag: None,
         test_mode: false,
         dry_run: false,
         target_directory: None,
@@ -403,5 +405,3 @@ macro_rules! jssg_test {
         }
     };
 }
-
-pub use jssg_test;

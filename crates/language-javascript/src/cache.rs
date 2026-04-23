@@ -156,6 +156,14 @@ impl SymbolCache {
             .map(|e| (e.symbols.clone(), e.content.clone()))
     }
 
+    pub fn content_matches(&self, path: &Path, candidate: &str) -> bool {
+        self.files
+            .read()
+            .get(path)
+            .map(|e| e.content == candidate)
+            .unwrap_or(false)
+    }
+
     /// Check if a file is in the cache.
     pub fn contains(&self, path: &Path) -> bool {
         self.files.read().contains_key(path)

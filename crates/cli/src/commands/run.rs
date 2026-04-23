@@ -5,9 +5,7 @@ use crate::utils::package_validation::{
     detect_package_behavior_shape_with_manifest_hint, expected_workflow_path, PackageBehaviorShape,
 };
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::workflow_runner::run_workflow;
-#[cfg(unix)]
-use crate::workflow_runner::{run_workflow_with_tui, workflow_has_manual_nodes};
+use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
@@ -194,61 +192,32 @@ pub async fn handler(
     };
 
     // Auto-force dry-run for non-pro users accessing pro codemods.
-    // Offer login first — if user logs in with a pro account, re-resolve
-    // the package so they get full access.
+    // Show an informational notice explaining what free preview covers and
+    // how to unlock applying changes + advanced insights.
     let (resolved_package, dry_run) = if resolved_package.dry_run_only {
-        let mut resolved = resolved_package;
-        let mut logged_in = false;
-
         if !args.dry_run && !args.no_interactive {
-            println!(
-                "{}",
-                style("This is a pro codemod. You can preview changes, but applying them requires a Pro plan.").yellow()
-            );
-            let should_login = Confirm::new("Would you like to login now?")
-                .with_default(true)
-                .prompt()
-                .unwrap_or(false);
+            let notice = style(
+                "This is a Pro codemod. Preview changes and insights for free with no login or code sharing. \
+                 Applying changes and advanced insights requires a Pro plan and signing in. \
+                 Learn more: codemod.com/contact."
+            )
+            .yellow();
 
-            if should_login {
-                let login_args = crate::commands::login::Command::new();
-                if let Err(e) = crate::commands::login::handler(&login_args).await {
-                    eprintln!("{}", style(format!("Login failed: {e}")).red());
-                } else {
-                    // Re-resolve to check if user now has pro access
-                    let new_client = create_registry_client(args.registry.clone())?;
-                    match new_client
-                        .resolve_package(&args.package, Some(&registry_url), true, None)
-                        .await
-                    {
-                        Ok(new_resolved) => {
-                            resolved = new_resolved;
-                            logged_in = true;
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "{}",
-                                style(format!("Failed to re-resolve package: {e}")).red()
-                            );
-                        }
-                    }
-                }
+            // Only block for a keypress when both stdin and stdout are attached
+            // to a terminal. Otherwise the notice (or the "press any key" line)
+            // would be hidden from the user — e.g. `codemod run <pro> > out.txt`
+            // would silently hang. In that case, route the notice to stderr so
+            // it stays visible and proceed straight into dry-run.
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                println!("{notice}");
+                println!("{}", style("Press any key to proceed.").dim());
+                wait_for_any_key();
+            } else {
+                eprintln!("{notice}");
             }
         }
 
-        if resolved.dry_run_only && !logged_in && !args.dry_run {
-            println!(
-                "{}",
-                style("Running in dry-run mode (preview only).").yellow()
-            );
-        }
-
-        let dry_run = if resolved.dry_run_only {
-            true
-        } else {
-            args.dry_run
-        };
-        (resolved, dry_run)
+        (resolved_package, true)
     } else {
         (resolved_package, args.dry_run)
     };
@@ -316,6 +285,9 @@ pub async fn handler(
 
     let params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+    let workflow_definition = butterflow_core::utils::parse_workflow_file(&workflow_path)
+        .map_err(|e| anyhow::anyhow!("Failed to parse workflow before run: {}", e))?;
+    let auto_launch_tui = !args.no_interactive && workflow_has_manual_steps(&workflow_definition);
 
     let capabilities = resolve_capabilities(
         ResolveCapabilitiesArgs {
@@ -335,7 +307,7 @@ pub async fn handler(
     let output_format = args.format;
 
     // Run workflow using the extracted workflow runner
-    let (mut engine, mut config) = create_engine(
+    let (mut engine, config) = create_engine(
         workflow_path,
         target_path.clone(),
         dry_run,
@@ -357,8 +329,20 @@ pub async fn handler(
         Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
-    // Set the package name so it's stored on the WorkflowRun for TUI display
+    // Set the package name so it's stored on the WorkflowRun
     engine.set_name(Some(args.package.clone()));
+    {
+        let cfg = engine.workflow_run_config_mut();
+        cfg.enable_managed_git = auto_launch_tui;
+        cfg.enable_worktrees = auto_launch_tui;
+    }
+    if auto_launch_tui {
+        engine.set_quiet(true);
+        engine.set_progress_callback(Arc::new(None));
+        engine
+            .workflow_run_config_mut()
+            .capture_stdout_in_quiet_mode = false;
+    }
 
     // For pro codemod dry-run: streamline execution — auto-trigger manual
     // steps, skip shards, skip state writes, flatten matrix to one task per node.
@@ -371,35 +355,7 @@ pub async fn handler(
         engine_config.flatten_matrix_tasks = true;
     }
 
-    // Check if workflow has manual nodes and should launch TUI (Unix only)
-    // Skip TUI for pro dry-run since manual steps are auto-triggered.
-    #[cfg(unix)]
-    let use_tui = if resolved_package.dry_run_only {
-        false
-    } else {
-        let workflow =
-            butterflow_core::utils::parse_workflow_file(engine.get_workflow_file_path())?;
-        !args.no_interactive && workflow_has_manual_nodes(&workflow)
-    };
-    #[cfg(not(unix))]
-    let use_tui = false;
-
-    if use_tui {
-        // Don't set quiet=true on the engine — the TUI's StdioGuard already
-        // redirects fd 1/2 to /dev/null, so runner println! is suppressed.
-        // During passthrough (log viewer), stdout is restored and we *want*
-        // runner output to reach the terminal.
-        config.progress_callback = Arc::new(None);
-    }
-
-    #[cfg(unix)]
-    let run_result = if use_tui {
-        run_workflow_with_tui(&engine, config).await
-    } else {
-        run_workflow(&engine, config).await
-    };
-    #[cfg(not(unix))]
-    let run_result = run_workflow(&engine, config).await;
+    let run_result = run_workflow(&mut engine, config).await;
 
     if let Err(e) = run_result {
         // Clean up cached pro codemod on failure too
@@ -420,51 +376,49 @@ pub async fn handler(
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
-    if !use_tui {
-        if dry_run {
-            println!("\n=== DRY RUN SUMMARY ===");
-            println!("Files that would be modified: {files_modified}");
-            println!("Files that would be unmodified: {files_unmodified}");
-            if files_with_errors > 0 {
-                println!("Files with errors: {files_with_errors}");
-            }
-            println!("No changes were made to the filesystem.");
-        } else {
-            println!("\n📝 Modified files: {files_modified}");
-            println!("✅ Unmodified files: {files_unmodified}");
-            if files_with_errors > 0 {
-                println!("❌ Files with errors: {files_with_errors}");
-            }
+    if dry_run {
+        println!("\n=== DRY RUN SUMMARY ===");
+        println!("Files that would be modified: {files_modified}");
+        println!("Files that would be unmodified: {files_unmodified}");
+        if files_with_errors > 0 {
+            println!("Files with errors: {files_with_errors}");
         }
+        println!("No changes were made to the filesystem.");
+    } else {
+        println!("\n📝 Modified files: {files_modified}");
+        println!("✅ Unmodified files: {files_unmodified}");
+        if files_with_errors > 0 {
+            println!("❌ Files with errors: {files_with_errors}");
+        }
+    }
 
-        if crate::utils::metrics::should_show_report(
-            args.report,
-            args.no_interactive,
-            &metrics_data,
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let report = ExecutionReport::build(
+            args.package.clone(),
+            None,
+            duration_ms,
+            dry_run,
+            target_path.display().to_string(),
+            CLI_VERSION.to_string(),
             files_modified,
-        ) {
-            let collected_diffs = diff_collector
-                .map(|c| c.lock().unwrap().clone())
-                .unwrap_or_default();
+            files_unmodified,
+            files_with_errors,
+            convert_metrics(&metrics_data),
+            convert_diffs(&collected_diffs, &target_path.display().to_string()),
+        );
 
-            let report = ExecutionReport::build(
-                args.package.clone(),
-                None,
-                duration_ms,
-                dry_run,
-                target_path.display().to_string(),
-                CLI_VERSION.to_string(),
-                files_modified,
-                files_unmodified,
-                files_with_errors,
-                convert_metrics(&metrics_data),
-                convert_diffs(&collected_diffs, &target_path.display().to_string()),
-            );
-
-            crate::report_server::serve_report(report).await?;
-        } else {
-            crate::utils::metrics::print_metrics(&metrics_data);
-        }
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     let execution_id = generate_execution_id();
@@ -510,6 +464,30 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
         "Legacy codemod command failed with exit code: {:?}",
         exit_code
     )
+}
+
+/// Block until the user presses any key. Falls back to a no-op when either
+/// stdin or stdout isn't a terminal (e.g. piped input or redirected output)
+/// or when raw mode can't be enabled. Callers must ensure any prompt they want
+/// the user to read has already been printed to a stream the user can see.
+fn wait_for_any_key() {
+    use crossterm::event::{read, Event, KeyEventKind};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return;
+    }
+    if enable_raw_mode().is_err() {
+        return;
+    }
+    loop {
+        match read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    let _ = disable_raw_mode();
 }
 
 fn load_codemod_manifest(codemod_config_path: &Path) -> Result<Option<CodemodManifest>> {

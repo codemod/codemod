@@ -125,17 +125,12 @@ impl OutputFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Default)]
 pub enum PeriodicUpdatePolicy {
     Manual,
     Notify,
+    #[default]
     AutoSafe,
-}
-
-impl Default for PeriodicUpdatePolicy {
-    fn default() -> Self {
-        Self::AutoSafe
-    }
 }
 
 impl PeriodicUpdatePolicy {

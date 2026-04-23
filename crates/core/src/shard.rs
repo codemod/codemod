@@ -1,8 +1,15 @@
-use butterflow_models::step::{BuiltinShardMethod, BuiltinShardType, ShardMethod, UseShard};
+use butterflow_models::step::{BuiltinShardType, UseShard};
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Resolved shard method with concrete `usize` values (after expression resolution).
+pub struct ResolvedBuiltinShardMethod {
+    pub r#type: BuiltinShardType,
+    pub max_files_per_shard: usize,
+    pub min_shard_size: Option<usize>,
+}
 
 /// Result of shard evaluation — one entry per shard, written to workflow state.
 ///
@@ -43,13 +50,9 @@ pub fn evaluate_builtin_shards(
     target_path: &Path,
     eligible_files: Option<&[String]>,
     previous_shards: Option<&Vec<serde_json::Value>>,
+    resolved_method: &ResolvedBuiltinShardMethod,
 ) -> Result<Vec<ShardResult>, String> {
-    let method = match &shard_config.method {
-        ShardMethod::Builtin(builtin) => builtin,
-        ShardMethod::Function(_) => {
-            return Err("evaluate_builtin_shards called with custom function method".to_string());
-        }
-    };
+    let method = resolved_method;
 
     // Resolve target relative to the working directory; defaults to target_path itself
     let search_base = match shard_config.target.as_deref() {
@@ -137,7 +140,7 @@ pub fn evaluate_builtin_shards(
 fn evaluate_incremental(
     previous: &[serde_json::Value],
     current_files: &HashSet<&str>,
-    method: &BuiltinShardMethod,
+    method: &ResolvedBuiltinShardMethod,
     search_base: &Path,
     target_path: &Path,
 ) -> Result<Vec<ShardResult>, String> {
@@ -845,7 +848,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let method = BuiltinShardMethod {
+        let method = ResolvedBuiltinShardMethod {
             r#type: BuiltinShardType::Directory,
             max_files_per_shard: 3,
             min_shard_size: None,
@@ -898,7 +901,7 @@ mod tests {
         // Only the api file still exists — utils file was deleted
         let current: HashSet<&str> = ["src/api/handler.ts"].into_iter().collect();
 
-        let method = BuiltinShardMethod {
+        let method = ResolvedBuiltinShardMethod {
             r#type: BuiltinShardType::Directory,
             max_files_per_shard: 10,
             min_shard_size: None,
@@ -932,7 +935,7 @@ mod tests {
             .into_iter()
             .collect();
 
-        let method = BuiltinShardMethod {
+        let method = ResolvedBuiltinShardMethod {
             r#type: BuiltinShardType::Directory,
             max_files_per_shard: 10,
             min_shard_size: None,
@@ -964,7 +967,7 @@ mod tests {
         // b.ts was deleted
         let current: HashSet<&str> = ["src/api/a.ts", "src/api/c.ts"].into_iter().collect();
 
-        let method = BuiltinShardMethod {
+        let method = ResolvedBuiltinShardMethod {
             r#type: BuiltinShardType::Directory,
             max_files_per_shard: 10,
             min_shard_size: None,
@@ -1011,7 +1014,7 @@ mod tests {
         // utils file deleted, so utils-0 is dropped, hooks-0 gets re-indexed to 1
         let current: HashSet<&str> = ["src/api/a.ts", "src/hooks/b.ts"].into_iter().collect();
 
-        let method = BuiltinShardMethod {
+        let method = ResolvedBuiltinShardMethod {
             r#type: BuiltinShardType::Directory,
             max_files_per_shard: 10,
             min_shard_size: None,

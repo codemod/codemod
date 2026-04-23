@@ -70,8 +70,8 @@ pub struct Node {
     #[ts(optional, as = "Option<String>")]
     pub branch_name: Option<String>,
 
-    /// Pull request configuration. When present (and in cloud mode), a PR is
-    /// automatically created at the end of the node execution.
+    /// Pull request configuration. When present, the engine creates a managed
+    /// git branch and opens a PR at the end of the node execution.
     #[serde(default)]
     #[ts(optional, as = "Option<PullRequestConfig>")]
     pub pull_request: Option<PullRequestConfig>,

@@ -1366,15 +1366,6 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
-fn package_manager_test_command(package_manager: Option<&str>) -> String {
-    match package_manager {
-        Some("pnpm") => "pnpm test".to_string(),
-        Some("yarn") => "yarn test".to_string(),
-        Some("bun") => "bun test".to_string(),
-        _ => "npm test".to_string(),
-    }
-}
-
 fn create_github_action(project_path: &Path, workspace: bool) -> Result<()> {
     let workflows_dir = project_path.join(".github").join("workflows");
     fs::create_dir_all(&workflows_dir)?;
@@ -2125,11 +2116,11 @@ mod tests {
 
     #[test]
     fn package_manager_test_command_matches_package_manager() {
-        assert_eq!(package_manager_test_command(Some("pnpm")), "pnpm test");
-        assert_eq!(package_manager_test_command(Some("yarn")), "yarn test");
-        assert_eq!(package_manager_test_command(Some("bun")), "bun test");
-        assert_eq!(package_manager_test_command(Some("npm")), "npm test");
-        assert_eq!(package_manager_test_command(None), "npm test");
+        assert_eq!(package_manager_test_command("pnpm"), "pnpm test");
+        assert_eq!(package_manager_test_command("yarn"), "yarn test");
+        assert_eq!(package_manager_test_command("bun"), "bun test");
+        assert_eq!(package_manager_test_command("npm"), "npm test");
+        assert_eq!(package_manager_test_command("unknown"), "npm test");
     }
 
     #[test]

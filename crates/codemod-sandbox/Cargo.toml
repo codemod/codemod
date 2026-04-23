@@ -16,6 +16,7 @@ tokio = { version = "1.0", features = [
 ], optional = true }
 bytes = "1.0"
 dashmap = "6"
+vfs = { version = "0.12", optional = true, default-features = false }
 sha2 = "0.10"
 oxc_resolver = "11.13.1"
 oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
@@ -86,6 +87,7 @@ native = [
   "language-python",
   "tree-sitter-loader",
   "ast-grep-dynamic",
+  "vfs",
 ]
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]

@@ -20,7 +20,6 @@ use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tool
 
 const TASK_DONE_REASON_PREFIX: &str = "__task_done__:";
 const DYNAMIC_CONTEXT_SAMPLE_DOCS: usize = 6;
-
 pub struct ExecuteAiStepConfig {
     pub endpoint: String,
     pub api_key: String,

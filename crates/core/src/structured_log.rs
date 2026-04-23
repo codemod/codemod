@@ -4,6 +4,48 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub type CapturedLineCallback = Arc<dyn Fn(String) + Send + Sync>;
+
+fn strip_ansi_escape_sequences(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    #[allow(clippy::while_let_on_iterator)]
+                    while let Some(next) = chars.next() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    #[allow(clippy::while_let_on_iterator)]
+                    while let Some(next) = chars.next() {
+                        if next == '\u{7}' {
+                            break;
+                        }
+                        if next == '\u{1b}' && matches!(chars.peek(), Some('\\')) {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        output.push(ch);
+    }
+
+    output
+}
+
 /// Output format for the engine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
@@ -254,74 +296,107 @@ impl StructuredLogger {
 /// directly to the saved real stdout. The structured logger itself also writes
 /// to the saved real stdout (via `override_fd`), so its output is not captured.
 ///
-/// On drop, the original stdout is restored and the reader thread is joined.
+/// On drop, the original stdout/stderr are restored and the reader thread is joined.
 pub struct StdoutCaptureGuard {
     #[cfg(unix)]
-    saved_fd: i32,
+    saved_stdout_fd: i32,
+    #[cfg(unix)]
+    saved_stderr_fd: i32,
     #[cfg(unix)]
     reader_handle: Option<std::thread::JoinHandle<()>>,
     #[cfg(unix)]
-    override_fd: Arc<Mutex<Option<i32>>>,
+    override_fd: Option<Arc<Mutex<Option<i32>>>>,
 }
 
 impl StdoutCaptureGuard {
     /// Start capturing stdout. Returns `Some(guard)` on success, `None` on failure
     /// or on non-Unix platforms.
     #[cfg(unix)]
-    pub fn start(logger: &StructuredLogger) -> Option<Self> {
+    pub fn start(
+        logger: Option<&StructuredLogger>,
+        line_callback: Option<CapturedLineCallback>,
+    ) -> Option<Self> {
         use std::os::unix::io::FromRawFd;
 
-        // Save current stdout fd
-        let saved_fd = unsafe { libc::dup(1) };
-        if saved_fd == -1 {
+        // Save current stdout/stderr fds
+        let saved_stdout_fd = unsafe { libc::dup(1) };
+        if saved_stdout_fd == -1 {
+            return None;
+        }
+        let saved_stderr_fd = unsafe { libc::dup(2) };
+        if saved_stderr_fd == -1 {
+            unsafe { libc::close(saved_stdout_fd) };
             return None;
         }
 
-        // Create pipe
         let mut pipe_fds = [0i32; 2];
         if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
-            unsafe { libc::close(saved_fd) };
+            unsafe {
+                libc::close(saved_stdout_fd);
+                libc::close(saved_stderr_fd);
+            };
             return None;
         }
         let read_fd = pipe_fds[0];
         let write_fd = pipe_fds[1];
 
-        // Redirect fd 1 to the pipe write end
         if unsafe { libc::dup2(write_fd, 1) } == -1 {
             unsafe {
-                libc::close(saved_fd);
+                libc::close(saved_stdout_fd);
+                libc::close(saved_stderr_fd);
                 libc::close(read_fd);
                 libc::close(write_fd);
             }
             return None;
         }
-        // Close the original write_fd; fd 1 is now the only write end
+        if unsafe { libc::dup2(write_fd, 2) } == -1 {
+            unsafe {
+                libc::dup2(saved_stdout_fd, 1);
+                libc::close(saved_stdout_fd);
+                libc::close(saved_stderr_fd);
+                libc::close(read_fd);
+                libc::close(write_fd);
+            }
+            return None;
+        }
         unsafe { libc::close(write_fd) };
 
-        // Tell the logger to write to the saved fd (bypassing fd 1 redirect)
-        let override_fd = Arc::clone(&logger.override_fd);
-        *override_fd.lock().unwrap() = Some(saved_fd);
+        let override_fd = logger.map(|logger| Arc::clone(&logger.override_fd));
+        if let Some(override_fd) = override_fd.as_ref() {
+            *override_fd.lock().unwrap() = Some(saved_stdout_fd);
+        }
 
-        // Spawn reader thread: reads captured stdout lines and wraps in JSONL
-        let cb_logger = logger.clone();
+        // Capture both streams through one pipe so log order matches the
+        // combined terminal output. Source attribution is no longer reliable at
+        // this layer, so captured lines are tagged as stdio.
+        let cb_logger = logger.cloned();
         let handle = std::thread::spawn(move || {
             let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
             let reader = std::io::BufReader::new(read_file);
             use std::io::BufRead;
             for line in reader.lines() {
                 match line {
-                    Ok(line) if !line.is_empty() => {
-                        cb_logger.log("info", &line);
+                    Ok(line) => {
+                        let line = strip_ansi_escape_sequences(&line);
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let tagged = format!("[stdio] {}", line);
+                        if let Some(callback) = line_callback.as_ref() {
+                            callback(tagged.clone());
+                        }
+                        if let Some(logger) = cb_logger.as_ref() {
+                            logger.log("info", &tagged);
+                        }
                     }
-                    Ok(_) => {} // skip empty lines
                     Err(_) => break,
                 }
             }
-            // read_file is dropped here, closing read_fd
         });
 
         Some(Self {
-            saved_fd,
+            saved_stdout_fd,
+            saved_stderr_fd,
             reader_handle: Some(handle),
             override_fd,
         })
@@ -329,7 +404,10 @@ impl StdoutCaptureGuard {
 
     /// Non-Unix fallback: capture is not supported.
     #[cfg(not(unix))]
-    pub fn start(_logger: &StructuredLogger) -> Option<Self> {
+    pub fn start(
+        _logger: Option<&StructuredLogger>,
+        _line_callback: Option<CapturedLineCallback>,
+    ) -> Option<Self> {
         None
     }
 }
@@ -337,9 +415,12 @@ impl StdoutCaptureGuard {
 #[cfg(unix)]
 impl Drop for StdoutCaptureGuard {
     fn drop(&mut self) {
-        // Restore original stdout. dup2 atomically closes the old fd 1 (pipe
-        // write end), which causes the reader thread to see EOF.
-        unsafe { libc::dup2(self.saved_fd, 1) };
+        // Restore original stdout/stderr. Restoring both closes the shared pipe
+        // write end, which causes the reader thread to see EOF.
+        unsafe {
+            libc::dup2(self.saved_stdout_fd, 1);
+            libc::dup2(self.saved_stderr_fd, 2);
+        };
 
         // Wait for the reader thread to drain remaining data and finish.
         // This is a brief blocking wait since the pipe write end is closed.
@@ -348,10 +429,15 @@ impl Drop for StdoutCaptureGuard {
         }
 
         // Reset override_fd so the logger goes back to normal stdout
-        *self.override_fd.lock().unwrap() = None;
+        if let Some(override_fd) = self.override_fd.as_ref() {
+            *override_fd.lock().unwrap() = None;
+        }
 
-        // Close the saved fd (fd 1 still works — dup2 created a new reference)
-        unsafe { libc::close(self.saved_fd) };
+        // Close the saved fds (fd 1/2 still work — dup2 created new references)
+        unsafe {
+            libc::close(self.saved_stdout_fd);
+            libc::close(self.saved_stderr_fd);
+        };
     }
 }
 

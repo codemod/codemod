@@ -114,6 +114,100 @@ struct TransformRiskSummary {
     risky_regex_lines: Vec<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackageManager {
+    Npm,
+    Yarn,
+    Pnpm,
+    Bun,
+}
+
+impl PackageManager {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "npm" => Some(Self::Npm),
+            "yarn" => Some(Self::Yarn),
+            "pnpm" => Some(Self::Pnpm),
+            "bun" => Some(Self::Bun),
+            _ => None,
+        }
+    }
+
+    fn from_package_root(package_root: &Path) -> Self {
+        if package_root.join("pnpm-lock.yaml").exists() {
+            Self::Pnpm
+        } else if package_root.join("yarn.lock").exists() {
+            Self::Yarn
+        } else if package_root.join("bun.lockb").exists() || package_root.join("bun.lock").exists()
+        {
+            Self::Bun
+        } else {
+            Self::Npm
+        }
+    }
+
+    fn binary(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Yarn => "yarn",
+            Self::Pnpm => "pnpm",
+            Self::Bun => "bun",
+        }
+    }
+
+    fn allowed_command_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Npm => &["npm", "npx"],
+            Self::Yarn => &["yarn"],
+            Self::Pnpm => &["pnpm"],
+            Self::Bun => &["bun", "bunx"],
+        }
+    }
+}
+
+enum PackageCommand<'a> {
+    RunScript {
+        manager: PackageManager,
+        script: &'a str,
+    },
+}
+
+impl PackageCommand<'_> {
+    fn program(&self) -> &'static str {
+        match self {
+            Self::RunScript { manager, .. } => manager.binary(),
+        }
+    }
+
+    fn apply(&self, command: &mut Command) {
+        match self {
+            Self::RunScript {
+                manager: PackageManager::Yarn,
+                script,
+            } => {
+                command.arg(script);
+            }
+            Self::RunScript { script, .. } => {
+                command.args(["run", script]);
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for PackageCommand<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RunScript {
+                manager: PackageManager::Yarn,
+                script,
+            } => write!(formatter, "yarn {script}"),
+            Self::RunScript { manager, script } => {
+                write!(formatter, "{} run {script}", manager.binary())
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PackageValidationHandler;
 
@@ -179,7 +273,7 @@ impl PackageValidationHandler {
             Some(
                 run_package_script(
                     &package_root,
-                    infer_package_manager_command(&package_root),
+                    infer_package_manager(&package_root),
                     "test",
                     request.command_timeout_seconds,
                 )
@@ -193,7 +287,7 @@ impl PackageValidationHandler {
             Some(
                 run_package_script(
                     &package_root,
-                    infer_package_manager_command(&package_root),
+                    infer_package_manager(&package_root),
                     "check-types",
                     request.command_timeout_seconds,
                 )
@@ -598,30 +692,39 @@ fn preferred_package_manager_name<'a>(
         return package_manager;
     }
 
-    infer_package_manager_command(package_root)
+    infer_package_manager(package_root).binary()
 }
 
 fn detect_package_manager_drift_in_scripts(
     package_json: &PackageJsonLite,
     preferred_package_manager: &str,
 ) -> Vec<String> {
-    let mismatch_markers = match preferred_package_manager {
-        "yarn" => ["npx ", "npm ", "pnpm ", "bun ", "bunx "].as_slice(),
-        "pnpm" => ["npx ", "npm ", "yarn ", "bun ", "bunx "].as_slice(),
-        "bun" => ["npx ", "npm ", "yarn ", "pnpm "].as_slice(),
-        _ => ["yarn ", "pnpm ", "bun ", "bunx "].as_slice(),
-    };
+    let preferred_manager =
+        PackageManager::from_name(preferred_package_manager).unwrap_or(PackageManager::Npm);
 
     package_json
         .scripts
         .iter()
         .filter_map(|(name, command)| {
-            let lower = command.to_ascii_lowercase();
-            mismatch_markers
+            package_manager_commands_in_script(command)
                 .iter()
-                .any(|marker| lower.contains(marker))
+                .any(|command_name| {
+                    !preferred_manager
+                        .allowed_command_names()
+                        .contains(&command_name.as_str())
+                })
                 .then_some(name.clone())
         })
+        .collect()
+}
+
+fn package_manager_commands_in_script(command: &str) -> Vec<String> {
+    const PACKAGE_MANAGER_COMMANDS: [&str; 6] = ["npm", "npx", "yarn", "pnpm", "bun", "bunx"];
+
+    command
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+        .map(str::to_ascii_lowercase)
+        .filter(|token| PACKAGE_MANAGER_COMMANDS.contains(&token.as_str()))
         .collect()
 }
 
@@ -681,20 +784,17 @@ fn detect_transform_risks(transform_content: Option<&str>) -> TransformRiskSumma
 
 async fn run_package_script(
     package_root: &Path,
-    package_manager: &str,
+    package_manager: PackageManager,
     script: &str,
     timeout_seconds: u64,
 ) -> ProcessCheckResult {
-    let mut command = Command::new(package_manager);
-    let command_display = package_script_command_display(package_manager, script);
-    match package_manager {
-        "yarn" => {
-            command.arg(script);
-        }
-        _ => {
-            command.arg("run").arg(script);
-        }
-    }
+    let package_command = PackageCommand::RunScript {
+        manager: package_manager,
+        script,
+    };
+    let command_display = package_command.to_string();
+    let mut command = Command::new(package_command.program());
+    package_command.apply(&mut command);
 
     let result = tokio::time::timeout(
         Duration::from_secs(timeout_seconds),
@@ -747,23 +847,8 @@ fn truncate_tail(value: &str, max_chars: usize) -> String {
     format!("…{truncated}")
 }
 
-fn package_script_command_display(package_manager: &str, script: &str) -> String {
-    match package_manager {
-        "yarn" => format!("{package_manager} {script}"),
-        _ => format!("{package_manager} run {script}"),
-    }
-}
-
-fn infer_package_manager_command(package_root: &Path) -> &'static str {
-    if package_root.join("pnpm-lock.yaml").exists() {
-        "pnpm"
-    } else if package_root.join("yarn.lock").exists() {
-        "yarn"
-    } else if package_root.join("bun.lockb").exists() || package_root.join("bun.lock").exists() {
-        "bun"
-    } else {
-        "npm"
-    }
+fn infer_package_manager(package_root: &Path) -> PackageManager {
+    PackageManager::from_package_root(package_root)
 }
 
 impl Default for PackageValidationHandler {
@@ -916,9 +1001,20 @@ mod tests {
 
     #[test]
     fn yarn_command_display_matches_actual_invocation_shape() {
-        assert_eq!(package_script_command_display("yarn", "test"), "yarn test");
         assert_eq!(
-            package_script_command_display("npm", "test"),
+            PackageCommand::RunScript {
+                manager: PackageManager::Yarn,
+                script: "test",
+            }
+            .to_string(),
+            "yarn test"
+        );
+        assert_eq!(
+            PackageCommand::RunScript {
+                manager: PackageManager::Npm,
+                script: "test",
+            }
+            .to_string(),
             "npm run test"
         );
     }

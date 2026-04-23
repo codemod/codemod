@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Angular from "codemod:ast-grep/langs/angular";
 
-async function transform(root: SgRoot<Angular>): Promise<string> {
+const codemod: Codemod<Angular> = async (root) => {
   const rootNode = root.root();
 
   // Find all ngClass array bindings
@@ -67,4 +67,4 @@ async function transform(root: SgRoot<Angular>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

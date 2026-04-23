@@ -104,10 +104,10 @@ Packages can be as simple as a single transformation or as complex as multi-step
 
 ```typescript
 // Example: Replace console.log with logger.info
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
 
   // Find all console.log calls
@@ -128,7 +128,7 @@ const transform: Transform<TSX> = (root) => {
   return rootNode.commitEdits(edits);
 };
 
-export default transform;
+export default codemod;
 ```
 
 jssg combines the power of AST transformations with the flexibility of JavaScript, making complex transformations intuitive and testable.

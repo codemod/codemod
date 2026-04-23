@@ -30,3 +30,29 @@ Symptom:
 Fix:
 - use `run:` for shell command steps in `workflow.yaml`
 - do not invent `command:` as a workflow step field
+
+## Capability/permission failures
+
+Symptom:
+- a transform fails with `err.code === "EACCES"` when reading/writing outside the target directory, `fetch is not defined`, or `Cannot find module 'child_process'`
+
+Fix:
+- the default sandboxed `fs` allows reads/writes inside the target directory; if the codemod only touches files inside the repo, investigate the path before adding capability flags
+- if the codemod genuinely needs paths outside `target_dir`, network, or subprocesses, enable the matching flag: `--allow-fs`, `--allow-fetch`, or `--allow-child-process`
+- for automation, combine runtime flags with `--no-interactive`
+
+## Registry/Auth Failures
+
+Symptom:
+- package resolution, search, or publish fails with auth errors
+
+Fix:
+- check current auth with `codemod whoami`
+- login with `codemod login`
+- logout or reset with `codemod logout --all`
+
+## Search Returns No Useful Results
+
+Fix:
+- broaden query text and increase result size, for example `codemod search migration --size 50`
+- quote multi-word queries, for example `codemod search "jest vitest migration" --size 50`

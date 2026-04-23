@@ -1,7 +1,11 @@
 use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use inquire::Confirm;
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs,
+    io::{self, BufRead, BufReader, IsTerminal, Write},
+    path::PathBuf,
+};
 
 use crate::utils::{ancestor_search::find_in_ancestors, manifest::CodemodManifest};
 
@@ -92,9 +96,11 @@ pub(crate) fn prompt_capabilities(
         return capabilities;
     }
 
-    println!();
-    println!("  This codemod requests the following permissions:");
-    println!();
+    reset_terminal_for_prompt();
+
+    eprintln!();
+    eprintln!("  This codemod requests the following permissions:");
+    eprintln!();
     for cap in &unsafe_requested {
         let desc = match cap {
             LlrtSupportedModules::Fs => "File system access (read/write files)",
@@ -102,15 +108,16 @@ pub(crate) fn prompt_capabilities(
             LlrtSupportedModules::ChildProcess => "Run shell commands (child processes)",
             _ => "Unknown capability",
         };
-        println!("   - {:?} -- {}", cap, desc);
+        eprintln!("   - {:?} -- {}", cap, desc);
     }
-    println!();
+    eprintln!();
 
-    let answer = Confirm::new("Grant these permissions?")
-        .with_default(true)
-        .with_help_message("Deny to run without these capabilities (codemod may fail)")
-        .prompt()
-        .unwrap_or(false);
+    let answer = prompt_yes_no(
+        "Grant these permissions? (Y/n): ",
+        true,
+        "Deny to run without these capabilities (codemod may fail)",
+    )
+    .unwrap_or(false);
 
     if answer {
         capabilities
@@ -120,5 +127,146 @@ pub(crate) fn prompt_capabilities(
             .into_iter()
             .filter(|c| !unsafe_set.contains(c) || cli_granted.contains(c))
             .collect()
+    }
+}
+
+fn prompt_yes_no(prompt: &str, default_yes: bool, help: &str) -> io::Result<bool> {
+    let mut input = open_prompt_reader()?;
+    let mut stderr = io::stderr().lock();
+    prompt_yes_no_with_io(prompt, default_yes, help, &mut input, &mut stderr)
+}
+
+fn prompt_yes_no_with_io<R: BufRead, W: Write>(
+    prompt: &str,
+    default_yes: bool,
+    help: &str,
+    input: &mut R,
+    output: &mut W,
+) -> io::Result<bool> {
+    loop {
+        writeln!(output, "  [{help}]")?;
+        write!(output, "  {prompt}")?;
+        output.flush()?;
+
+        let mut answer = String::new();
+        let bytes_read = input.read_line(&mut answer)?;
+        if bytes_read == 0 {
+            writeln!(output)?;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal prompt closed before a response was provided",
+            ));
+        }
+
+        let answer = answer.trim().to_ascii_lowercase();
+
+        let accepted = match answer.as_str() {
+            "" => Some(default_yes),
+            "y" | "yes" => Some(true),
+            "n" | "no" => Some(false),
+            _ => None,
+        };
+
+        match accepted {
+            Some(value) => {
+                writeln!(output)?;
+                return Ok(value);
+            }
+            None => {
+                writeln!(output, "  Please answer y or n.")?;
+                writeln!(output)?;
+            }
+        }
+    }
+}
+
+fn open_prompt_reader() -> io::Result<Box<dyn BufRead>> {
+    #[cfg(unix)]
+    {
+        if let Ok(tty) = fs::OpenOptions::new().read(true).open("/dev/tty") {
+            return Ok(Box::new(BufReader::new(tty)));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(tty) = fs::OpenOptions::new().read(true).open("CONIN$") {
+            return Ok(Box::new(BufReader::new(tty)));
+        }
+    }
+
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        return Ok(Box::new(BufReader::new(stdin)));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "interactive prompt is unavailable because stdin is not a terminal",
+    ))
+}
+
+fn reset_terminal_for_prompt() {
+    #[cfg(unix)]
+    {
+        use crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture};
+        use crossterm::execute;
+        use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
+
+        let _ = disable_raw_mode();
+        if let Ok(mut tty) = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+        {
+            let _ = execute!(
+                tty,
+                DisableFocusChange,
+                DisableBracketedPaste,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_yes_no_accepts_explicit_default_line() {
+        let mut input = io::Cursor::new(b"\n");
+        let mut output = Vec::new();
+
+        let accepted = prompt_yes_no_with_io(
+            "Grant these permissions? (Y/n): ",
+            true,
+            "help",
+            &mut input,
+            &mut output,
+        )
+        .unwrap();
+
+        assert!(accepted);
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("Grant these permissions?"));
+    }
+
+    #[test]
+    fn prompt_yes_no_rejects_eof_without_approving() {
+        let mut input = io::Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+
+        let error = prompt_yes_no_with_io(
+            "Grant these permissions? (Y/n): ",
+            true,
+            "help",
+            &mut input,
+            &mut output,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

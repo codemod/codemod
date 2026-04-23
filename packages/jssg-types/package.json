@@ -1,6 +1,6 @@
 {
   "name": "@codemod.com/jssg-types",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": false,
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
   "keywords": [
@@ -33,6 +33,10 @@
     "./metrics": {
       "types": "./src/metrics.d.ts",
       "default": "./src/metrics.d.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime.d.ts",
+      "default": "./src/runtime.d.ts"
     },
     "./workflow": {
       "types": "./src/workflow.d.ts",

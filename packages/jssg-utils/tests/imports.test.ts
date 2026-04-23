@@ -1,6 +1,11 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import { getImport, addImport, removeImport } from "../src/javascript/exports/imports.ts";
+import {
+  getImport,
+  addImport,
+  removeImport,
+  getAllImports,
+} from "../src/javascript/exports/imports.ts";
 import type JS from "@codemod.com/jssg-types/langs/javascript";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type TSX from "@codemod.com/jssg-types/langs/tsx";
@@ -11,6 +16,277 @@ function parseProgram<T extends Language>(lang: string, src: string) {
   const root = parse<T>(lang, src);
   return root.root();
 }
+
+// ============================================================================
+// getAllImports tests
+// ============================================================================
+function testReturnsEmptyArrayWhenNoImports() {
+  const program = parseProgram("javascript", "const x = 1;\nconsole.log(x);\n");
+
+  const resDefault = getAllImports(program, { type: "default", from: "mod" });
+  assert(Array.isArray(resDefault), "Should return an array");
+  assert(resDefault.length === 0, "Should be empty when no imports exist");
+
+  const resNamed = getAllImports(program, { type: "named", name: "x", from: "mod" });
+  assert(Array.isArray(resNamed), "Should return an array");
+  assert(resNamed.length === 0, "Should be empty when no imports exist");
+}
+
+function testReturnsEmptyArrayWhenModuleNotImported() {
+  const program = parseProgram("javascript", "import foo from 'other';\nconsole.log(foo);\n");
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 0, "Should be empty when the requested module is not imported");
+}
+
+function testReturnsEmptyArrayWhenNamedSpecifierNotFound() {
+  const program = parseProgram("javascript", "import { alpha } from 'mod';\nconsole.log(alpha);\n");
+
+  const res = getAllImports(program, { type: "named", name: "beta", from: "mod" });
+  assert(res.length === 0, "Should be empty when the requested named specifier does not exist");
+}
+
+function testSingleDefaultESMImport() {
+  const program = parseProgram("javascript", "import foo from 'mod';\nconsole.log(foo);\n");
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.alias === "foo", "Alias should be the default import name");
+  assert(res[0]!.isNamespace === false, "isNamespace should be false");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+  assert(res[0]!.node.text() === "foo", "Node should reflect identifier");
+}
+
+function testSingleDefaultCJSImport() {
+  const program = parseProgram("javascript", "const bar = require('mod');\nconsole.log(bar);\n");
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.alias === "bar", "Alias should be the variable name");
+  assert(res[0]!.moduleType === "cjs", "moduleType should be cjs for require()");
+}
+
+function testSingleNamedImportWithAlias() {
+  const program = parseProgram(
+    "javascript",
+    "import { baz as qux } from 'mod';\nconsole.log(qux);\n",
+  );
+
+  const res = getAllImports(program, { type: "named", name: "baz", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.alias === "qux", "Alias should use the local alias");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+  assert(res[0]!.node.text() === "qux", "Node should be the alias identifier");
+}
+
+function testSingleNamedImportWithoutAlias() {
+  const program = parseProgram("javascript", "import { q } from 'mod';\nconsole.log(q);\n");
+
+  const res = getAllImports(program, { type: "named", name: "q", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.alias === "q", "Alias should fall back to the original name");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testSingleDestructuredCJSImport() {
+  const program = parseProgram(
+    "javascript",
+    "const { bar } = require('mod');\nconsole.log(bar);\n",
+  );
+
+  const res = getAllImports(program, { type: "named", name: "bar", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.alias === "bar", "Alias should be the destructured name");
+  assert(res[0]!.moduleType === "cjs", "moduleType should be cjs");
+}
+
+function testMultipleDefaultImports_ESMandCJS() {
+  const program = parseProgram(
+    "javascript",
+    ["import foo from 'mod';", "const bar = require('mod');", "console.log(foo, bar);"].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 2, "Should return both the ESM and CJS default imports");
+
+  const esmResult = res.find((r) => r.moduleType === "esm");
+  const cjsResult = res.find((r) => r.moduleType === "cjs");
+
+  assert(esmResult !== undefined, "Should include the ESM import");
+  assert(esmResult!.alias === "foo", "ESM alias should be foo");
+
+  assert(cjsResult !== undefined, "Should include the CJS import");
+  assert(cjsResult!.alias === "bar", "CJS alias should be bar");
+}
+
+function testMultipleNamedImports_ESMandCJS() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { helper } from 'mod';",
+      "const { helper: helperCJS } = require('mod');",
+      "console.log(helper, helperCJS);",
+    ].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "named", name: "helper", from: "mod" });
+  assert(res.length === 2, "Should return both ESM and CJS named imports");
+
+  const esmResult = res.find((r) => r.moduleType === "esm");
+  const cjsResult = res.find((r) => r.moduleType === "cjs");
+
+  assert(esmResult !== undefined, "Should include the ESM named import");
+  assert(esmResult!.alias === "helper", "ESM alias should be helper (no alias)");
+
+  assert(cjsResult !== undefined, "Should include the CJS named import");
+  assert(cjsResult!.alias === "helperCJS", "CJS alias should be the renamed binding");
+}
+
+function testMultipleNamedImports_SameModuleDifferentAliases() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { util as utilA } from 'mod';",
+      "import { util as utilB } from 'mod';",
+      "console.log(utilA, utilB);",
+    ].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "named", name: "util", from: "mod" });
+  assert(res.length === 2, "Should return both aliased imports of the same specifier");
+
+  const aliases = res.map((r) => r.alias).sort();
+  assert(aliases[0] === "utilA" && aliases[1] === "utilB", "Should capture both local aliases");
+
+  assert(
+    res.every((r) => r.moduleType === "esm"),
+    "Both should be esm",
+  );
+}
+
+function testMultipleDefaultImports_OnlyReturnsMatchingModule() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import foo from 'mod';",
+      "const bar = require('mod');",
+      "import unrelated from 'other';",
+      "console.log(foo, bar, unrelated);",
+    ].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 2, "Should return only imports from the requested module");
+  assert(
+    res.every((r) => r.alias !== "unrelated"),
+    "Should not include imports from other modules",
+  );
+}
+
+function testNamespaceFallback_WhenNoTypedMatchFound_DefaultQuery() {
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return the namespace import as fallback");
+  assert(res[0]!.isNamespace === true, "isNamespace should be true");
+  assert(res[0]!.alias === "ns", "Alias should be the namespace binding name");
+  assert(res[0]!.moduleType === "esm", "Namespace imports are always ESM");
+}
+
+function testNamespaceFallback_WhenNoTypedMatchFound_NamedQuery() {
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
+
+  const res = getAllImports(program, { type: "named", name: "something", from: "mod" });
+  assert(res.length === 1, "Should return the namespace import as fallback");
+  assert(res[0]!.isNamespace === true, "isNamespace should be true");
+  assert(res[0]!.alias === "ns", "Alias should be the namespace binding name");
+}
+
+function testNamespaceNotReturnedWhenTypedResultsExist() {
+  const program = parseProgram(
+    "javascript",
+    ["import foo from 'mod';", "import * as ns from 'mod';", "console.log(foo, ns);"].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return only the default import, not the namespace too");
+  assert(res[0]!.alias === "foo", "Should return the default import");
+  assert(res[0]!.isNamespace === false, "Should not be the namespace result");
+}
+
+function testSingleNamespaceImport_getAllImports_StillWorks() {
+  // Baseline: single namespace import still comes back as a one-element array
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.isNamespace === true, "Should be a namespace import");
+  assert(res[0]!.alias === "ns", "Alias should be ns");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testMultipleNamespaceImports_getAllImports_AllReturned() {
+  // Core new behaviour: getAllImports returns both
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 2, "Should return both namespace imports");
+  assert(
+    res.every((r) => r.isNamespace === true),
+    "Both should have isNamespace true",
+  );
+  assert(
+    res.every((r) => r.moduleType === "esm"),
+    "Both should be esm",
+  );
+
+  const aliases = res.map((r) => r.alias).sort();
+  assert(aliases[0] === "nsA" && aliases[1] === "nsB", "Should capture both aliases");
+}
+
+function testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned() {
+  // Named query also falls back to namespace — getAllImports returns all
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getAllImports(program, { type: "named", name: "anything", from: "mod" });
+  assert(res.length === 2, "Named query should also get all namespace imports as fallback");
+  assert(
+    res.every((r) => r.isNamespace === true),
+    "Both should be namespace",
+  );
+}
+
+function testNamespaceNotReturnedAlongsideTypedResults_getAllImports() {
+  // getAllImports also suppresses namespace when typed results exist
+  const program = parseProgram(
+    "javascript",
+    [
+      "import foo from 'mod';",
+      "import * as nsA from 'mod';",
+      "import * as nsB from 'mod';",
+      "console.log(foo, nsA, nsB);",
+    ].join("\n"),
+  );
+
+  const res = getAllImports(program, { type: "default", from: "mod" });
+  assert(res.length === 1, "Should return only the default import, not the namespace imports");
+  assert(res[0]!.alias === "foo", "Should be the default import");
+  assert(res[0]!.isNamespace === false, "Should not be a namespace result");
+}
+
+// ============================================================================
+// getImport tests
+// ============================================================================
 
 function testReturnsNullWhenNoMatches() {
   const program = parseProgram("javascript", "const x = 1;\nconsole.log(x);\n");
@@ -128,6 +404,66 @@ function testNamespaceImportModuleType() {
   assert(res!.alias === "ns", "Alias should be namespace name");
   assert(res!.isNamespace === true, "isNamespace should be true");
   assert(res!.moduleType === "esm", "moduleType should be esm for namespace import");
+}
+
+function testSingleNamespaceImport_StillWorks() {
+  // Baseline: getImport with a single namespace import is unaffected
+  const program = parseProgram("javascript", "import * as ns from 'mod';\nconsole.log(ns);\n");
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "ns", "Alias should be ns");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testMultipleNamespaceImports_ReturnsFirstOnly() {
+  // Key behavioural difference: getImport preserves its single-result contract
+  // and returns only the first namespace import even when multiple exist
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "nsA", "Should return only the first namespace import in source order");
+}
+
+function testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly() {
+  // Named query also falls back to namespace — getImport returns only the first
+  const program = parseProgram(
+    "javascript",
+    ["import * as nsA from 'mod';", "import * as nsB from 'mod';", "console.log(nsA, nsB);"].join(
+      "\n",
+    ),
+  );
+
+  const res = getImport(program, { type: "named", name: "anything", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.isNamespace === true, "Should be a namespace import");
+  assert(res!.alias === "nsA", "Should return only the first namespace import");
+}
+
+function testNamespaceNotReturnedAlongsideTypedResults() {
+  // When a real typed match exists, namespace fallback must not appear in getImport
+  const program = parseProgram(
+    "javascript",
+    [
+      "import foo from 'mod';",
+      "import * as nsA from 'mod';",
+      "import * as nsB from 'mod';",
+      "console.log(foo, nsA, nsB);",
+    ].join("\n"),
+  );
+
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should return a result");
+  assert(res!.alias === "foo", "Should be the default import, not a namespace");
+  assert(res!.isNamespace === false, "Should not be a namespace result");
 }
 
 // ============================================================================
@@ -255,6 +591,61 @@ function testAddImportAfterExisting() {
   assert(modIdx > otherIdx, "New import should be after existing import");
 }
 
+function testAddImportAfterExistingKeepsSeparateLines() {
+  const source = [
+    "import a from 'a';",
+    "import b from 'b';",
+    "import c from 'c';",
+    "console.log(a, b, c);",
+    "",
+  ].join("\n");
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "import a from 'a';",
+        "import b from 'b';",
+        "import c from 'c';",
+        "import foo from 'mod';",
+        "console.log(a, b, c);",
+        "",
+      ].join("\n"),
+    "New import should be inserted on its own line after existing imports",
+  );
+}
+
+function testAddImportAfterMixedImportsUsesLastSourcePosition() {
+  const source = ["const a = require('a');", "import b from 'b';", "console.log(a, b);", ""].join(
+    "\n",
+  );
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "const a = require('a');",
+        "import b from 'b';",
+        "import foo from 'mod';",
+        "console.log(a, b);",
+        "",
+      ].join("\n"),
+    "New import should be inserted after the last import by source position",
+  );
+}
+
 // ============================================================================
 // removeImport tests
 // ============================================================================
@@ -322,7 +713,322 @@ function testRemoveDefaultCJS() {
   assert(!result.includes("require"), "Should remove require statement");
 }
 
+function testRemoveDefault_SingleDeclarator_StillWorks() {
+  // Baseline: normal single-declarator CJS removal is unaffected by the guard
+  const program = parseProgram("javascript", "const foo = require('mod');\nconsole.log(foo);\n");
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit for a normal single-declarator require");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should remove the require statement");
+  assert(result.includes("console.log"), "Should keep unrelated code");
+}
+
+function testRemoveDefault_MultiDeclarator_ReturnsNull() {
+  // Core safety behaviour: `const foo = require('mod'), x = 1` must NOT be
+  // removed - removeImport should return null rather than delete `x`
+  const program = parseProgram(
+    "javascript",
+    "const foo = require('mod'), x = 1;\nconsole.log(foo, x);\n",
+  );
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(
+    edit === null,
+    "Should return null for multi-declarator CJS — removing the whole statement would delete unrelated bindings",
+  );
+}
+
+function testRemoveDefault_MultiDeclarator_SourceCodeUnchanged() {
+  // Companion to the above: verify that when null is returned, no code is modified
+  const src = "const foo = require('mod'), x = 1;\nconsole.log(foo, x);\n";
+  const program = parseProgram("javascript", src);
+
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit === null, "edit should be null");
+  // No commitEdits call - source is untouched by definition when edit is null
+  assert(program.text() === src, "Program source should be unchanged");
+}
+
+function testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected() {
+  // A multi-declarator declaration for one module must not interfere with
+  // normal single-declarator removal of a different module in the same file
+  const program = parseProgram(
+    "javascript",
+    [
+      "const foo = require('mod'), x = 1;",
+      "const bar = require('other');",
+      "console.log(foo, x, bar);",
+    ].join("\n"),
+  );
+
+  const editMod = removeImport(program, { type: "default", from: "mod" });
+  assert(editMod === null, "Multi-declarator mod should still be null");
+
+  const editOther = removeImport(program, { type: "default", from: "other" });
+  assert(editOther !== null, "Single-declarator other should produce an edit");
+  const result = program.commitEdits([editOther!]);
+  assert(!result.includes("require('other')"), "Should remove the single-declarator require");
+  assert(result.includes("require('mod')"), "Should leave the multi-declarator require intact");
+}
+
+/** Before removeImport supported `variable_declaration`, this returned null (only lexical_declaration was matched). */
+function testRemoveDefaultVarCJS() {
+  const program = parseProgram("javascript", "var foo = require('mod');\nconsole.log(foo);\n");
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit for var + require");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should remove var require statement");
+  assert(result.includes("console.log(foo)"), "Should keep usage");
+}
+
+/** Bare `require('mod')` has no binding, so getImport is null; removal required `removeSideEffectForms`. */
+function testRemoveBareRequireOnlyWithSideEffectFlag() {
+  const src = "require('mod');\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without removeSideEffectForms, bare require should not be removed (backward compatible)",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, bare require should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require('mod')"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Do not strip `require` when the module id only appears nested (not the direct specifier). */
+function testRemoveBareRequireNestedStringNotRemoved() {
+  const src = "require(getName('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Nested string literal must not be treated as require('mod')",
+  );
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+/** Parenthesized string literal is still a direct specifier. */
+function testRemoveBareRequireParenthesizedLiteralStillRemoved() {
+  const src = "require(('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "Parenthesized literal should still count as direct specifier");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Side-effect `import 'mod'` — same as bare require: needs removeSideEffectForms. */
+function testRemoveSideEffectImportWithFlag() {
+  const src = "import 'mod';\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without flag, side-effect import should not be removed",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, side-effect import should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("import 'mod'"), "Should strip side-effect import");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** `import foo, { bar } from 'mod'` + remove default → must keep `{ bar }`. */
+function testRemoveDefault_MixedWithNamed_KeepsNamedSibling() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected default stripped but named kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, * as ns from 'mod'` + remove default → must keep `* as ns`. */
+function testRemoveDefault_MixedWithNamespace_KeepsNamespaceSibling() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, * as ns from 'mod';\nconsole.log(foo, ns);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import * as ns from 'mod';\nconsole.log(foo, ns);\n",
+    `Expected default stripped but namespace kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar } from 'mod'` + remove last named ['bar'] → must keep `foo`. */
+function testRemoveNamed_LastInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected named clause stripped but default kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar } from 'mod'` + remove ['bar', 'unrelated'] → only `bar` is present; strip just the named clause. */
+function testRemoveNamed_PartiallyPresentInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar", "unrelated"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected only present specifier removed, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Removing ALL named specifiers from a mixed statement drops just the `{ ... }` chunk. */
+function testRemoveNamed_AllInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar", "baz"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar, baz);\n",
+    `Expected named clause stripped, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar, baz } from 'mod'` + remove ['bar'] → keep default AND remaining named. */
+function testRemoveNamed_SubsetOfMixed_KeepsBoth() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    /^import foo, \{\s*baz\s*\} from 'mod';\nconsole\.log\(foo, bar, baz\);\n$/.test(result),
+    `Expected bar removed but foo and baz kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Guard: options.specifiers may contain names not in the statement — must not delete bindings that were never requested. */
+function testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo, bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  // `unrelated` is not in the statement; only `foo` is actually being removed,
+  // so `bar` must survive.
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["foo", "unrelated"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected only foo removed, bar kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, * as ns from 'mod'` + remove namespace → must keep `foo`. */
+function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, * as ns from 'mod';\nconsole.log(foo, ns);\n",
+  );
+  const edit = removeImport(program, { type: "namespace", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, ns);\n",
+    `Expected namespace stripped but default kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Only the module source string counts — not other string literals (e.g. import attributes). */
+function testRemoveSideEffectImportOnlyMatchesSourceField() {
+  const src = "import 'foo' assert { type: 'mod' };\nconsole.log(1);\n";
+  const program = parseProgram("typescript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Package name only in import attributes must not remove the statement",
+  );
+  assert(program.text() === src, "Source must be unchanged");
+}
+
 function run() {
+  // getAllImports tests
+  testReturnsEmptyArrayWhenNoImports();
+  testReturnsEmptyArrayWhenModuleNotImported();
+  testReturnsEmptyArrayWhenNamedSpecifierNotFound();
+  testSingleDefaultESMImport();
+  testSingleDefaultCJSImport();
+  testSingleNamedImportWithAlias();
+  testSingleNamedImportWithoutAlias();
+  testSingleDestructuredCJSImport();
+  testMultipleDefaultImports_ESMandCJS();
+  testMultipleNamedImports_ESMandCJS();
+  testMultipleNamedImports_SameModuleDifferentAliases();
+  testMultipleDefaultImports_OnlyReturnsMatchingModule();
+  testNamespaceFallback_WhenNoTypedMatchFound_DefaultQuery();
+  testNamespaceFallback_WhenNoTypedMatchFound_NamedQuery();
+  testNamespaceNotReturnedWhenTypedResultsExist();
+  testSingleNamespaceImport_getAllImports_StillWorks();
+  testMultipleNamespaceImports_getAllImports_AllReturned();
+  testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned();
+  testNamespaceNotReturnedAlongsideTypedResults_getAllImports();
+
   // getImport tests
   testReturnsNullWhenNoMatches();
   testDefaultImportFromDEFAULT_NAME();
@@ -334,6 +1040,10 @@ function run() {
   testDestructuredRequireModuleType();
   testDestructuredDynamicImportModuleType();
   testNamespaceImportModuleType();
+  testSingleNamespaceImport_StillWorks();
+  testMultipleNamespaceImports_ReturnsFirstOnly();
+  testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly();
+  testNamespaceNotReturnedAlongsideTypedResults();
 
   // addImport tests
   testAddDefaultImportESM();
@@ -345,6 +1055,8 @@ function run() {
   testAddImportSkipsExistingNamed();
   testAddImportMergesNamedSpecifiers();
   testAddImportAfterExisting();
+  testAddImportAfterExistingKeepsSeparateLines();
+  testAddImportAfterMixedImportsUsesLastSourcePosition();
 
   // removeImport tests
   testRemoveDefaultImportESM();
@@ -353,6 +1065,24 @@ function run() {
   testRemoveNamedImportLast();
   testRemoveImportNotFound();
   testRemoveDefaultCJS();
+  testRemoveDefault_SingleDeclarator_StillWorks();
+  testRemoveDefault_MultiDeclarator_ReturnsNull();
+  testRemoveDefault_MultiDeclarator_SourceCodeUnchanged();
+  testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected();
+  testRemoveDefaultVarCJS();
+  testRemoveBareRequireOnlyWithSideEffectFlag();
+  testRemoveBareRequireNestedStringNotRemoved();
+  testRemoveBareRequireParenthesizedLiteralStillRemoved();
+  testRemoveSideEffectImportWithFlag();
+  testRemoveSideEffectImportOnlyMatchesSourceField();
+  testRemoveDefault_MixedWithNamed_KeepsNamedSibling();
+  testRemoveDefault_MixedWithNamespace_KeepsNamespaceSibling();
+  testRemoveNamed_LastInMixed_KeepsDefault();
+  testRemoveNamed_PartiallyPresentInMixed_KeepsDefault();
+  testRemoveNamed_AllInMixed_KeepsDefault();
+  testRemoveNamed_SubsetOfMixed_KeepsBoth();
+  testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches();
+  testRemoveNamespace_MixedWithDefault_KeepsDefault();
 
   console.log("imports.test.ts: all assertions passed");
 }

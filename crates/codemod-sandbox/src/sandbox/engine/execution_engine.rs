@@ -1,4 +1,5 @@
 use super::codemod_lang::CodemodLang;
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
@@ -8,6 +9,7 @@ use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
+use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeHooksContext, RuntimeModule};
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
@@ -21,6 +23,7 @@ use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 /// Flag indicating whether execution is in test mode.
@@ -155,6 +158,10 @@ pub struct JssgExecutionOptions<'a, R> {
     pub metrics_context: Option<MetricsContext>,
     /// Optional shared state context for cross-thread state communication
     pub shared_state_context: Option<SharedStateContext>,
+    /// Optional runtime event callback for codemod:runtime hook emissions
+    pub runtime_event_callback: Option<RuntimeEventCallback>,
+    /// Optional cancellation flag exposed to codemod:runtime.isCanceled()
+    pub cancellation_flag: Option<Arc<AtomicBool>>,
     /// Whether this is a test execution (jssgTransform becomes a no-op)
     pub test_mode: bool,
     /// Whether this is a dry-run execution (passed to codemod via options.dryRun)
@@ -195,6 +202,10 @@ where
     // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
 
+    // Track whether the caller opted into llrt's real-disk fs capability
+    // so we know whether to install the curated fs below instead.
+    let mut fs_capability_enabled = false;
+
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
@@ -205,6 +216,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -213,6 +225,17 @@ where
             }
         }
     }
+
+    // Install the curated `fs` when the caller gave us a target directory
+    // and didn't explicitly opt into the unrestricted llrt fs.
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
     // Add AstGrepModule
@@ -226,6 +249,17 @@ where
     // Add MetricsModule (metrics tracking)
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
+    // Add RuntimeModule (progress/failure hooks)
+    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
+    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -249,6 +283,10 @@ where
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
     let shared_state_context = options.shared_state_context.clone();
+    let runtime_hooks_context = RuntimeHooksContext::new(
+        options.runtime_event_callback.clone(),
+        options.cancellation_flag.clone(),
+    );
     let test_mode = options.test_mode;
 
     // Execute JavaScript code
@@ -303,6 +341,27 @@ where
             },
         })?;
 
+        ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store RuntimeHooksContext: {:?}", e),
+            },
+        })?;
+
+        if let Some(target_dir) = curated_fs_target.clone() {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            // PhysicalFS is rooted at "/", so `target_dir` is already the
+            // host-disk path corresponding to the VFS target. Hand it through
+            // so the resolver can reject paths that traverse a symlink.
+            let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
+                .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+            ctx.store_userdata(cfg)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
+
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
@@ -319,14 +378,15 @@ where
                 })?;
 
             // Evaluate module.
-            let (evaluated, _) = module
+            let (evaluated, eval_value) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
+
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             while ctx.execute_pending_job() {}
 
@@ -407,20 +467,12 @@ where
 
             // Call it and return value.
             let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
-                ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                }
+                map_transform_execution_error(&runtime_hooks_context, e)
             })?;
             let result_obj = maybe_promise(result_obj_promise)
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             let primary = process_transform_result(
                 &result_obj,
@@ -437,6 +489,21 @@ where
         execution.await
     })
     .await
+}
+
+fn map_transform_execution_error(
+    runtime_hooks_context: &RuntimeHooksContext,
+    error: impl std::fmt::Display,
+) -> ExecutionError {
+    if let Some(source) = runtime_hooks_context.take_pending_failure() {
+        ExecutionError::RuntimeHook { source }
+    } else {
+        ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                message: error.to_string(),
+            },
+        }
+    }
 }
 
 /// Options for executing a standalone JavaScript file
@@ -493,6 +560,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
+    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
@@ -513,6 +583,7 @@ where
 
     let metrics_context = options.metrics_context.clone();
     let shared_state_context = options.shared_state_context.clone();
+    let runtime_hooks_context = RuntimeHooksContext::default();
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
@@ -528,6 +599,12 @@ where
         ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
+
+        ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store RuntimeHooksContext: {:?}", e),
             },
         })?;
 
@@ -560,21 +637,13 @@ where
             let (_, eval_value) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             // Await the module evaluation promise to surface errors from top-level await
             maybe_promise(eval_value.into())
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             Ok(())
         };
@@ -592,6 +661,12 @@ pub struct ShardFunctionOptions<'a, R> {
     /// Optional capabilities to gate module access (fetch, fs, child_process).
     /// When `None`, no extra modules are enabled.
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    /// Directory the curated `fs` module is constrained to. When `Some`
+    /// and the caller hasn't opted into the llrt `Fs` capability, the
+    /// shard function's `import "fs"` resolves to the curated fs backed
+    /// by `vfs::PhysicalFS` at disk root `/`, prefix-checked against this
+    /// path.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Execute a shard function with QuickJS and return the result as JSON.
@@ -625,6 +700,7 @@ where
         },
     })?;
 
+    let mut fs_capability_enabled = false;
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
         for capability in capabilities {
@@ -634,6 +710,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -642,6 +719,14 @@ where
             }
         }
     }
+
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
 
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
@@ -654,6 +739,16 @@ where
 
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
+    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
+    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -674,6 +769,7 @@ where
         })?;
 
     let input_value = options.input;
+    let runtime_hooks_context = RuntimeHooksContext::default();
 
     async_with!(context => |ctx| {
         // Store a default SharedStateContext so codemod:workflow functions work
@@ -682,6 +778,27 @@ where
                 message: format!("Failed to store SharedStateContext: {:?}", e),
             },
         })?;
+
+        ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store RuntimeHooksContext: {:?}", e),
+            },
+        })?;
+
+        if let Some(target_dir) = curated_fs_target.clone() {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            // See the selector-config callsite above: PhysicalFS is rooted
+            // at "/", so target_dir already names the host path and can be
+            // reused for the symlink-safe check.
+            let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
+                .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+            ctx.store_userdata(cfg)
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
 
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -710,21 +827,13 @@ where
             let (evaluated, eval_value) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             // Await the module evaluation promise to surface errors from top-level await
             maybe_promise(eval_value.into())
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             let namespace = evaluated
                 .namespace()
@@ -751,22 +860,15 @@ where
                     },
                 })?;
 
-            let result_promise = func.call((input_js,)).catch(&ctx).map_err(|e| {
-                ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                }
-            })?;
+            let result_promise = func
+                .call((input_js,))
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             let result_value = maybe_promise(result_promise)
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             // Convert QuickJS result back to serde_json::Value
             let result_json: JsValue = JsValue::from_js(&ctx, result_value).map_err(|e| ExecutionError::Runtime {
@@ -786,10 +888,11 @@ where
 mod tests {
     use super::*;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use crate::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind, RuntimeFailureKind};
     use ast_grep_language::SupportLang;
     use std::fs;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     fn js_lang() -> CodemodLang {
@@ -861,6 +964,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -911,6 +1016,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -961,6 +1068,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -1011,6 +1120,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -1053,6 +1164,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -1100,6 +1213,8 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -1208,6 +1323,8 @@ function example() {
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
             shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: None,
@@ -1246,5 +1363,239 @@ function example() {
             3,
             "Should have counted 3 console.log calls"
         );
+    }
+
+    #[tokio::test]
+    async fn test_execute_codemod_emits_runtime_progress_events() {
+        let codemod_content = r#"
+import runtime from "codemod:runtime";
+
+export default function transform(root) {
+  runtime.progress("Preparing transform");
+  runtime.warn("Non-fatal warning", { kind: "warning" });
+  return null;
+}
+        "#
+        .trim();
+
+        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+        let events = Arc::new(Mutex::new(Vec::<RuntimeEvent>::new()));
+        let events_for_callback = Arc::clone(&events);
+        let runtime_event_callback: RuntimeEventCallback = Arc::new(move |event| {
+            events_for_callback
+                .lock()
+                .expect("events lock should succeed")
+                .push(event);
+        });
+
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "console.log('hello');",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: Some(runtime_event_callback),
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
+        assert!(result.is_ok());
+
+        let events = events.lock().expect("events lock should succeed");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, RuntimeEventKind::Progress);
+        assert_eq!(events[0].message, "Preparing transform");
+        assert_eq!(events[1].kind, RuntimeEventKind::Warn);
+        assert_eq!(events[1].message, "Non-fatal warning");
+        assert_eq!(events[1].meta.as_deref(), Some("{\"kind\":\"warning\"}"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_codemod_fail_step_surfaces_runtime_hook_error() {
+        let codemod_content = r#"
+import runtime from "codemod:runtime";
+
+export default function transform(root) {
+  runtime.failStep("Boom", { code: "step_failed" });
+  return null;
+}
+        "#
+        .trim();
+
+        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "console.log('hello');",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
+        match result {
+            Err(ExecutionError::RuntimeHook { source }) => {
+                assert_eq!(source.kind, RuntimeFailureKind::Step);
+                assert_eq!(source.message, "Boom");
+                assert_eq!(source.meta.as_deref(), Some("{\"code\":\"step_failed\"}"));
+            }
+            other => panic!("Expected runtime hook error, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_codemod_top_level_fail_step_surfaces_runtime_hook_error() {
+        let codemod_content = r#"
+import runtime from "codemod:runtime";
+
+runtime.failStep("Init failed", { code: "init_failed" });
+
+export default function transform(root) {
+  return null;
+}
+        "#
+        .trim();
+
+        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "console.log('hello');",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
+        match result {
+            Err(ExecutionError::RuntimeHook { source }) => {
+                assert_eq!(source.kind, RuntimeFailureKind::Step);
+                assert_eq!(source.message, "Init failed");
+                assert_eq!(source.meta.as_deref(), Some("{\"code\":\"init_failed\"}"));
+            }
+            other => panic!("Expected runtime hook error, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_codemod_fail_file_surfaces_runtime_hook_error() {
+        let codemod_content = r#"
+import runtime from "codemod:runtime";
+
+export default async function transform(root) {
+  await Promise.resolve();
+  runtime.failFile("Bad file", { file: "test.js" });
+  return null;
+}
+        "#
+        .trim();
+
+        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "console.log('hello');",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: None,
+        };
+
+        let result = execute_codemod_with_quickjs(options).await;
+        match result {
+            Err(ExecutionError::RuntimeHook { source }) => {
+                assert_eq!(source.kind, RuntimeFailureKind::File);
+                assert_eq!(source.message, "Bad file");
+                assert_eq!(source.meta.as_deref(), Some("{\"file\":\"test.js\"}"));
+            }
+            other => panic!("Expected runtime hook error, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_shard_fail_step_surfaces_runtime_hook_error() {
+        let shard_content = r#"
+import runtime from "codemod:runtime";
+
+export default function shard(input) {
+  runtime.failStep("Shard failed", { shard: "team-a" });
+  return [];
+}
+        "#
+        .trim();
+
+        let (_temp_dir, shard_path) = setup_test_codemod(shard_content);
+        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
+
+        let options = ShardFunctionOptions {
+            script_path: &shard_path,
+            resolver,
+            input: serde_json::json!({
+                "files": ["test.js"],
+                "params": {},
+                "state": {}
+            }),
+            capabilities: None,
+            target_directory: None,
+        };
+
+        let result = execute_shard_function_with_quickjs(options).await;
+        match result {
+            Err(ExecutionError::RuntimeHook { source }) => {
+                assert_eq!(source.kind, RuntimeFailureKind::Step);
+                assert_eq!(source.message, "Shard failed");
+                assert_eq!(source.meta.as_deref(), Some("{\"shard\":\"team-a\"}"));
+            }
+            other => panic!("Expected runtime hook error, got: {:?}", other),
+        }
     }
 }

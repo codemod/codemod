@@ -16,5 +16,6 @@ Agent-only reminders:
 - Use `dump_ast` before broadening heuristics.
 - If symbol origin matters, enable semantic analysis and add binding-aware guards instead of sweeping by text alone.
 - Return `null` when no change is needed, and commit collected edits from the root node.
-- If runtime-gated APIs such as `fs`, `fetch`, or `child_process` are used, update `codemod.yaml` capabilities in the same change.
+- The default sandboxed `fs` allows reads/writes inside the target directory; only request unrestricted `fs` capability when paths outside `target_dir` are genuinely needed.
+- If runtime-gated APIs such as unrestricted `fs`, `fetch`, or `child_process` are used, update `codemod.yaml` capabilities in the same change.
 - If a package already snapshots metrics, treat `metrics.json` as part of the expected test output.

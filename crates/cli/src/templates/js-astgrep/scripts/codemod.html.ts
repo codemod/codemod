@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Html from "codemod:ast-grep/langs/html";
 
-async function transform(root: SgRoot<Html>): Promise<string> {
+const codemod: Codemod<Html> = async (root) => {
   const rootNode = root.root();
 
   // Replace <center> tags with styled div
@@ -54,4 +54,4 @@ async function transform(root: SgRoot<Html>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

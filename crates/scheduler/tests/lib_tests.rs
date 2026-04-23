@@ -530,7 +530,7 @@ async fn test_find_runnable_tasks_manual_trigger() {
 
     // Now, node2's dependencies are met, but it has a manual trigger.
     let runnable_after_node1 = scheduler
-        .find_runnable_tasks(&run, &vec![task1, task2])
+        .find_runnable_tasks(&run, &[task1, task2])
         .await
         .unwrap();
 
@@ -560,7 +560,7 @@ async fn test_find_runnable_tasks_manual_node_type() {
 
     // Node2's dependencies are met, but it's a manual node type.
     let runnable_after_node1 = scheduler
-        .find_runnable_tasks(&run, &vec![task1, task2])
+        .find_runnable_tasks(&run, &[task1, task2])
         .await
         .unwrap();
 
