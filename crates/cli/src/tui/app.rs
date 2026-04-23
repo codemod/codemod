@@ -62,6 +62,7 @@ pub struct TuiState {
     pub selected_run: usize,
     pub current_run: Option<WorkflowRun>,
     pub tasks: Vec<Task>,
+    pub run_tasks: HashMap<Uuid, Vec<Task>>,
     pub task_progress: HashMap<Uuid, TaskProgressView>,
     pub selected_task: usize,
     pub task_list_scroll: usize,
@@ -100,6 +101,7 @@ impl Default for TuiState {
             selected_run: 0,
             current_run: None,
             tasks: Vec::new(),
+            run_tasks: HashMap::new(),
             task_progress: HashMap::new(),
             selected_task: 0,
             task_list_scroll: 0,
@@ -192,27 +194,19 @@ impl TuiState {
         self.tasks.iter().filter(|task| !task.is_master).collect()
     }
 
-    pub fn is_effectively_complete(&self) -> bool {
-        let Some(run) = self.current_run.as_ref() else {
-            return false;
-        };
-
-        if self.tasks.is_empty() {
+    fn run_is_effectively_complete(&self, run: &WorkflowRun, tasks: &[Task]) -> bool {
+        if tasks.is_empty() {
             return matches!(run.status, butterflow_models::WorkflowStatus::Completed);
         }
 
-        self.tasks.iter().all(|task| {
+        tasks.iter().all(|task| {
             Self::is_terminal_task_status(task.status)
                 || self.is_ignorable_pending_install_skill(task)
         })
     }
 
-    pub fn display_run_status(&self) -> String {
-        let Some(run) = self.current_run.as_ref() else {
-            return "Unknown".to_string();
-        };
-
-        if self.is_effectively_complete()
+    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, tasks: &[Task]) -> String {
+        if self.run_is_effectively_complete(run, tasks)
             && matches!(
                 run.status,
                 butterflow_models::WorkflowStatus::AwaitingTrigger
@@ -222,6 +216,20 @@ impl TuiState {
         } else {
             Self::workflow_status_text(run.status)
         }
+    }
+
+    pub fn display_run_status(&self) -> String {
+        let Some(run) = self.current_run.as_ref() else {
+            return "Unknown".to_string();
+        };
+        self.display_status_for_run_with_tasks(run, &self.tasks)
+    }
+
+    pub fn display_status_for_list_run(&self, run: &WorkflowRun) -> String {
+        self.run_tasks
+            .get(&run.id)
+            .map(|tasks| self.display_status_for_run_with_tasks(run, tasks))
+            .unwrap_or_else(|| Self::workflow_status_text(run.status))
     }
 
     pub fn display_workflow_name(&self) -> String {
@@ -346,6 +354,9 @@ impl TuiState {
         self.screen = Screen::RunDetail;
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        if let Some(run) = self.current_run.as_ref() {
+            self.run_tasks.insert(run.id, self.tasks.clone());
+        }
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
@@ -366,6 +377,9 @@ impl TuiState {
         }
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        if let Some(run) = self.current_run.as_ref() {
+            self.run_tasks.insert(run.id, self.tasks.clone());
+        }
         self.task_progress
             .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
         if let Some(selected_task_id) = selected_task_id {
@@ -1452,9 +1466,14 @@ mod tests {
             },
         ];
 
-        assert!(state.is_effectively_complete());
         assert_eq!(
             state.display_run_status(),
+            "Completed (install-skill pending)"
+        );
+        let run = state.current_run.as_ref().unwrap().clone();
+        state.run_tasks.insert(run_id, state.tasks.clone());
+        assert_eq!(
+            state.display_status_for_list_run(&run),
             "Completed (install-skill pending)"
         );
     }
@@ -1496,7 +1515,6 @@ mod tests {
             error: None,
         }];
 
-        assert!(!state.is_effectively_complete());
         assert_eq!(state.display_run_status(), "Running");
     }
 
@@ -1537,7 +1555,6 @@ mod tests {
             error: Some("boom".to_string()),
         }];
 
-        assert!(state.is_effectively_complete());
         assert_eq!(state.display_run_status(), "Failed");
     }
 

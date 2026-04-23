@@ -178,7 +178,7 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
         .map(|(index, run)| {
             let is_selected = index == state.selected_run;
             let prefix = if is_selected { "▶" } else { " " };
-            let status_text = TuiState::workflow_status_text(run.status);
+            let status_text = state.display_status_for_list_run(run);
             let elapsed_text = TuiState::workflow_elapsed_text(run);
             let status_style = workflow_status_style(run.status);
             let item = ListItem::new(Line::from(vec![
