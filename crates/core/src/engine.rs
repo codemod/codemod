@@ -794,18 +794,43 @@ impl Engine {
             .append_task_log(task_id, "Publishing branch and creating pull request")
             .await;
 
-        crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
+        let pr_url = match async {
+            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
 
-        let pr_url = crate::git_ops::create_pull_request(
-            &pr.title,
-            pr.body.as_deref(),
-            pr.draft,
-            &pr.branch,
-            pr.base.as_deref(),
-            &task.id.to_string(),
-            &self.workflow_run_config.target_path,
-        )
-        .await?;
+            crate::git_ops::create_pull_request(
+                &pr.title,
+                pr.body.as_deref(),
+                pr.draft,
+                &pr.branch,
+                pr.base.as_deref(),
+                &task.id.to_string(),
+                &self.workflow_run_config.target_path,
+            )
+            .await
+        }
+        .await
+        {
+            Ok(pr_url) => pr_url,
+            Err(error) => {
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        format!("Branch publication and pull request creation failed: {error}"),
+                    )
+                    .await;
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        "Use create-pr to retry after fixing the remote or permissions",
+                    )
+                    .await;
+                self.emit_error(format!(
+                    "Task {} ({}) branch publication/PR creation failed: {}",
+                    task.id, node.id, error
+                ));
+                return Ok(None);
+            }
+        };
 
         match &pr_url {
             Some(pr_url) => {
