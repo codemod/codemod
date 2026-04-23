@@ -585,6 +585,16 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
                 .to_string(),
             "y/Enter approve  esc cancel".to_string(),
         ),
+        ApprovalPrompt::PullRequestConsent { title, head, .. } => (
+            "Create Pull Request".to_string(),
+            format!("Create pull request for completed task?\n\nTitle: {title}\nBranch: {head}"),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
+        ApprovalPrompt::ManualPullRequestConsent { title, head, .. } => (
+            "Create Pull Request".to_string(),
+            format!("Create pull request now?\n\nTitle: {title}\nBranch: {head}"),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
         ApprovalPrompt::Shell { command, .. } => (
             "Approval".to_string(),
             format!("Approve shell command?\n\n{command}"),
@@ -907,6 +917,27 @@ mod tests {
         let lines = render_state(&state, 80, 24);
         assert!(lines.iter().any(|line| line.contains("Trigger All")));
         assert!(lines.iter().any(|line| line.contains("git worktrees")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_manual_pull_request_consent_modal_text() {
+        let state = TuiState {
+            approval: Some(crate::tui::app::ApprovalPrompt::ManualPullRequestConsent {
+                task_id: Uuid::new_v4(),
+                title: "Draft PR".to_string(),
+                head: "codemod-branch".to_string(),
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Create Pull Request")));
+        assert!(lines.iter().any(|line| line.contains("codemod-branch")));
         assert!(lines
             .iter()
             .any(|line| line.contains("approve") && line.contains("cancel")));

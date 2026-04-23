@@ -514,6 +514,8 @@ async fn run_tui_loop(
                             if !matches!(
                                 state.approval,
                                 Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::PullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::ManualPullRequestConsent { .. })
                                     | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) =>
@@ -537,6 +539,8 @@ async fn run_tui_loop(
                             if matches!(
                                 state.approval,
                                 Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::PullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::ManualPullRequestConsent { .. })
                                     | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) {
@@ -653,6 +657,9 @@ async fn run_tui_loop(
                         }
                         KeyCode::Char('T') => {
                             state.begin_trigger_all_confirmation();
+                        }
+                        KeyCode::Char('p') => {
+                            state.begin_create_pr_confirmation();
                         }
                         KeyCode::Char('c') => {
                             if let Some(session) = runtime.session.as_ref() {

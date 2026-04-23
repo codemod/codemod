@@ -1,7 +1,7 @@
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
 use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -17,6 +17,16 @@ pub enum Screen {
 pub enum ApprovalPrompt {
     WorktreeConsent {
         task_ids: Vec<Uuid>,
+    },
+    PullRequestConsent {
+        request_id: Uuid,
+        title: String,
+        head: String,
+    },
+    ManualPullRequestConsent {
+        task_id: Uuid,
+        title: String,
+        head: String,
     },
     Shell {
         request_id: Uuid,
@@ -56,6 +66,7 @@ pub struct TuiState {
     pub selected_task: usize,
     pub task_list_scroll: usize,
     pub approval: Option<ApprovalPrompt>,
+    pub pending_approvals: VecDeque<ApprovalPrompt>,
     pub show_log_modal: bool,
     pub log_modal_scroll: u16,
     pub log_modal_notice: Option<LogModalNotice>,
@@ -79,6 +90,7 @@ impl Default for TuiState {
             selected_task: 0,
             task_list_scroll: 0,
             approval: None,
+            pending_approvals: VecDeque::new(),
             show_log_modal: false,
             log_modal_scroll: 0,
             log_modal_notice: None,
@@ -88,6 +100,14 @@ impl Default for TuiState {
 
 impl TuiState {
     const LOG_MODAL_NOTICE_TTL: Duration = Duration::from_secs(2);
+
+    fn enqueue_approval(&mut self, approval: ApprovalPrompt) {
+        if self.approval.is_some() {
+            self.pending_approvals.push_back(approval);
+        } else {
+            self.approval = Some(approval);
+        }
+    }
 
     fn is_terminal_task_status(status: TaskStatus) -> bool {
         matches!(
@@ -651,7 +671,9 @@ impl TuiState {
                 self.selected_run = self.selected_run.saturating_sub(1);
             }
             Screen::RunDetail => match &mut self.approval {
-                Some(ApprovalPrompt::WorktreeConsent { .. }) => {}
+                Some(ApprovalPrompt::WorktreeConsent { .. })
+                | Some(ApprovalPrompt::PullRequestConsent { .. })
+                | Some(ApprovalPrompt::ManualPullRequestConsent { .. }) => {}
                 Some(ApprovalPrompt::AgentSelection { selected, .. })
                 | Some(ApprovalPrompt::Selection { selected, .. }) => {
                     *selected = selected.saturating_sub(1);
@@ -671,7 +693,9 @@ impl TuiState {
                 }
             }
             Screen::RunDetail => match &mut self.approval {
-                Some(ApprovalPrompt::WorktreeConsent { .. }) => {}
+                Some(ApprovalPrompt::WorktreeConsent { .. })
+                | Some(ApprovalPrompt::PullRequestConsent { .. })
+                | Some(ApprovalPrompt::ManualPullRequestConsent { .. }) => {}
                 Some(ApprovalPrompt::AgentSelection {
                     selected, options, ..
                 }) => {
@@ -778,9 +802,20 @@ impl TuiState {
                 request,
                 ..
             } => {
-                self.approval = Some(ApprovalPrompt::Shell {
+                self.enqueue_approval(ApprovalPrompt::Shell {
                     request_id,
                     command: request.command,
+                });
+            }
+            WorkflowEvent::PullRequestApprovalRequested {
+                request_id,
+                request,
+                ..
+            } => {
+                self.enqueue_approval(ApprovalPrompt::PullRequestConsent {
+                    request_id,
+                    title: request.title,
+                    head: request.head,
                 });
             }
             WorkflowEvent::CapabilitiesApprovalRequested {
@@ -788,7 +823,7 @@ impl TuiState {
                 modules,
                 ..
             } => {
-                self.approval = Some(ApprovalPrompt::Capabilities {
+                self.enqueue_approval(ApprovalPrompt::Capabilities {
                     request_id,
                     modules: modules
                         .into_iter()
@@ -801,7 +836,7 @@ impl TuiState {
                 options,
                 ..
             } => {
-                self.approval = Some(ApprovalPrompt::AgentSelection {
+                self.enqueue_approval(ApprovalPrompt::AgentSelection {
                     request_id,
                     options: options
                         .into_iter()
@@ -826,7 +861,7 @@ impl TuiState {
             WorkflowEvent::SelectionRequested {
                 request_id, prompt, ..
             } => {
-                self.approval = Some(ApprovalPrompt::Selection {
+                self.enqueue_approval(ApprovalPrompt::Selection {
                     request_id,
                     title: prompt.title,
                     options: prompt
@@ -845,6 +880,15 @@ impl TuiState {
             ApprovalPrompt::WorktreeConsent { task_ids } => Some(WorkflowCommand::TriggerTasks {
                 task_ids: task_ids.clone(),
             }),
+            ApprovalPrompt::PullRequestConsent { request_id, .. } => {
+                Some(WorkflowCommand::RespondPullRequestApproval {
+                    request_id: *request_id,
+                    approved: true,
+                })
+            }
+            ApprovalPrompt::ManualPullRequestConsent { task_id, .. } => {
+                Some(WorkflowCommand::CreatePullRequest { task_id: *task_id })
+            }
             ApprovalPrompt::Shell { request_id, .. } => {
                 Some(WorkflowCommand::RespondShellApproval {
                     request_id: *request_id,
@@ -895,6 +939,13 @@ impl TuiState {
     pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
             ApprovalPrompt::WorktreeConsent { .. } => None,
+            ApprovalPrompt::PullRequestConsent { request_id, .. } => {
+                Some(WorkflowCommand::RespondPullRequestApproval {
+                    request_id: *request_id,
+                    approved: false,
+                })
+            }
+            ApprovalPrompt::ManualPullRequestConsent { .. } => None,
             ApprovalPrompt::Shell { request_id, .. } => {
                 Some(WorkflowCommand::RespondShellApproval {
                     request_id: *request_id,
@@ -923,7 +974,7 @@ impl TuiState {
     }
 
     pub fn clear_approval(&mut self) {
-        self.approval = None;
+        self.approval = self.pending_approvals.pop_front();
     }
 
     pub fn begin_trigger_all_confirmation(&mut self) -> bool {
@@ -944,6 +995,56 @@ impl TuiState {
         }
     }
 
+    fn selected_task_is_pr_eligible(&self) -> Option<(Uuid, String, String)> {
+        let task = self.selected_task()?;
+        if task.status != TaskStatus::Completed {
+            return None;
+        }
+        let run = self.current_run.as_ref()?;
+        let node = run
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == task.node_id)?;
+        if node.pull_request.is_none() && node.branch_name.is_none() {
+            return None;
+        }
+        if task
+            .logs
+            .iter()
+            .any(|line| line.starts_with("Pull request created: "))
+        {
+            return None;
+        }
+        let branch_name = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Preparing git worktree for branch ")
+                .and_then(|value| value.split(" in ").next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    line.strip_prefix("Creating git worktree for branch ")
+                        .and_then(|value| value.split(" in ").next())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+        })?;
+        Some((task.id, node.name.clone(), branch_name))
+    }
+
+    pub fn begin_create_pr_confirmation(&mut self) -> bool {
+        let Some((task_id, title, head)) = self.selected_task_is_pr_eligible() else {
+            return false;
+        };
+        self.enqueue_approval(ApprovalPrompt::ManualPullRequestConsent {
+            task_id,
+            title,
+            head,
+        });
+        true
+    }
+
     pub fn visible_awaiting_task_ids(&self) -> Vec<Uuid> {
         self.visible_tasks()
             .into_iter()
@@ -959,6 +1060,9 @@ impl TuiState {
         }
         if !self.visible_awaiting_task_ids().is_empty() {
             parts.push("T trigger-all".to_string());
+        }
+        if self.selected_task_is_pr_eligible().is_some() {
+            parts.push("p create-pr".to_string());
         }
         parts.push("c cancel".to_string());
         parts.push("esc back".to_string());
@@ -2236,6 +2340,128 @@ mod tests {
         });
 
         assert_eq!(state.selected_task_completion_detail(), None);
+    }
+
+    #[test]
+    fn reducer_queues_pull_request_approvals() {
+        let first_request_id = Uuid::new_v4();
+        let second_request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+
+        state.reduce(AppEvent::Workflow(
+            WorkflowEvent::PullRequestApprovalRequested {
+                request_id: first_request_id,
+                request: butterflow_core::config::PullRequestCreationRequest {
+                    title: "First PR".to_string(),
+                    body: None,
+                    draft: true,
+                    head: "codemod-first".to_string(),
+                    base: Some("main".to_string()),
+                    node_id: "apply-transforms".to_string(),
+                    node_name: "Apply transforms".to_string(),
+                    task_id: Uuid::new_v4().to_string(),
+                },
+                at: Utc::now(),
+            },
+        ));
+        state.reduce(AppEvent::Workflow(
+            WorkflowEvent::PullRequestApprovalRequested {
+                request_id: second_request_id,
+                request: butterflow_core::config::PullRequestCreationRequest {
+                    title: "Second PR".to_string(),
+                    body: None,
+                    draft: true,
+                    head: "codemod-second".to_string(),
+                    base: Some("main".to_string()),
+                    node_id: "apply-transforms".to_string(),
+                    node_name: "Apply transforms".to_string(),
+                    task_id: Uuid::new_v4().to_string(),
+                },
+                at: Utc::now(),
+            },
+        ));
+
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id, .. })
+                if request_id == first_request_id
+        ));
+        state.clear_approval();
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id, .. })
+                if request_id == second_request_id
+        ));
+    }
+
+    #[test]
+    fn completed_pr_eligible_task_shows_create_pr_hint_and_command() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply transforms".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: Some("codemod-${{ task.id }}".to_string()),
+                        pull_request: Some(butterflow_models::step::PullRequestConfig {
+                            title: "Draft PR".to_string(),
+                            body: None,
+                            draft: Some(true),
+                            base: None,
+                        }),
+                    }],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now()),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Creating git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Pull request creation deferred; use create-pr to continue later".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        assert!(state.task_help_text().contains("p create-pr"));
+        assert!(state.begin_create_pr_confirmation());
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::CreatePullRequest { task_id: actual_task_id })
+                if actual_task_id == task_id
+        ));
     }
 
     #[test]
