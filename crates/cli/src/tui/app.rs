@@ -28,6 +28,12 @@ pub enum ApprovalPrompt {
         options: Vec<(String, bool)>,
         selected: usize,
     },
+    Selection {
+        request_id: Uuid,
+        title: String,
+        options: Vec<(String, String)>,
+        selected: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -574,7 +580,11 @@ impl TuiState {
                 self.selected_run = self.selected_run.saturating_sub(1);
             }
             Screen::RunDetail => {
-                if let Some(ApprovalPrompt::AgentSelection { selected, .. }) = &mut self.approval {
+                if let Some(
+                    ApprovalPrompt::AgentSelection { selected, .. }
+                    | ApprovalPrompt::Selection { selected, .. },
+                ) = &mut self.approval
+                {
                     *selected = selected.saturating_sub(1);
                 } else {
                     self.selected_task = self.selected_task.saturating_sub(1);
@@ -590,21 +600,28 @@ impl TuiState {
                     self.selected_run = (self.selected_run + 1).min(self.runs.len() - 1);
                 }
             }
-            Screen::RunDetail => {
-                if let Some(ApprovalPrompt::AgentSelection {
+            Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::AgentSelection {
                     selected, options, ..
-                }) = &mut self.approval
-                {
+                }) => {
                     if !options.is_empty() {
                         *selected = (*selected + 1).min(options.len() - 1);
                     }
-                } else {
+                }
+                Some(ApprovalPrompt::Selection {
+                    selected, options, ..
+                }) => {
+                    if !options.is_empty() {
+                        *selected = (*selected + 1).min(options.len() - 1);
+                    }
+                }
+                _ => {
                     let visible_len = self.visible_tasks().len();
                     if visible_len > 0 {
                         self.selected_task = (self.selected_task + 1).min(visible_len - 1);
                     }
                 }
-            }
+            },
         }
     }
 
@@ -735,6 +752,20 @@ impl TuiState {
                     selected: 0,
                 });
             }
+            WorkflowEvent::SelectionRequested {
+                request_id, prompt, ..
+            } => {
+                self.approval = Some(ApprovalPrompt::Selection {
+                    request_id,
+                    title: prompt.title,
+                    options: prompt
+                        .options
+                        .into_iter()
+                        .map(|option| (option.value, option.label))
+                        .collect(),
+                    selected: prompt.default_index,
+                });
+            }
         }
     }
 
@@ -773,6 +804,17 @@ impl TuiState {
                     },
                 }
             }),
+            ApprovalPrompt::Selection {
+                request_id,
+                options,
+                selected,
+                ..
+            } => options
+                .get(*selected)
+                .map(|(value, _)| WorkflowCommand::RespondSelection {
+                    request_id: *request_id,
+                    selection: Some(value.clone()),
+                }),
         }
     }
 
@@ -792,6 +834,12 @@ impl TuiState {
             }
             ApprovalPrompt::AgentSelection { request_id, .. } => {
                 Some(WorkflowCommand::RespondAgentSelection {
+                    request_id: *request_id,
+                    selection: None,
+                })
+            }
+            ApprovalPrompt::Selection { request_id, .. } => {
+                Some(WorkflowCommand::RespondSelection {
                     request_id: *request_id,
                     selection: None,
                 })
