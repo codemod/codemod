@@ -14,21 +14,23 @@ fn log_modal_copy_hint() -> &'static str {
     }
 }
 
-fn workflow_status_style(status: butterflow_models::WorkflowStatus) -> Style {
-    match status {
-        butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-        butterflow_models::WorkflowStatus::Running => Style::default()
-            .fg(Color::Rgb(255, 165, 0))
-            .add_modifier(Modifier::BOLD),
-        butterflow_models::WorkflowStatus::Failed => {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        }
-        butterflow_models::WorkflowStatus::Completed => Style::default()
+fn workflow_status_text_style(status_text: &str) -> Style {
+    if status_text.starts_with("Completed") {
+        Style::default()
             .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        _ => Style::default(),
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Awaiting trigger") {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Running") {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Failed") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
     }
 }
 
@@ -180,7 +182,7 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
             let prefix = if is_selected { "▶" } else { " " };
             let status_text = state.display_status_for_list_run(run);
             let elapsed_text = TuiState::workflow_elapsed_text(run);
-            let status_style = workflow_status_style(run.status);
+            let status_style = workflow_status_text_style(&status_text);
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!("{prefix} ")),
                 Span::styled(
@@ -228,7 +230,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         ])
         .split(size);
 
-    let header = if let Some(run) = &state.current_run {
+    let header = if state.current_run.is_some() {
         let header_row_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -237,11 +239,12 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(chunks[0]);
-        let status_style = workflow_status_style(run.status);
+        let status_text = state.display_run_status();
+        let status_style = workflow_status_text_style(&status_text);
         let mut lines = vec![Line::from(vec![
             Span::raw(state.display_workflow_name()),
             Span::raw("  "),
-            Span::styled(state.display_run_status(), status_style),
+            Span::styled(status_text, status_style),
         ])];
         if let Some(target_path) = state.display_target_path() {
             lines.push(Line::from(target_path));
