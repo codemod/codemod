@@ -31,20 +31,56 @@ impl VfsFileSystem {
     }
 
     /// Map an absolute path handed in by the resolver to a `VfsPath`
-    /// under our root. The resolver always passes absolute paths (it
-    /// canonicalizes specifiers relative to the workspace root), but the
-    /// leading `/` is part of the absolute form — `VfsPath::join` rejects
-    /// leading slashes, so we strip it first.
+    /// under our root.
+    ///
+    /// oxc_resolver canonicalizes specifiers relative to the workspace
+    /// root, which on POSIX yields `/app/foo/bar.ts` and on Windows
+    /// yields `C:\app\foo\bar.ts`. Both have to collapse to the same
+    /// `app/foo/bar.ts` VFS key; anything that assumes a single forward
+    /// slash as the root marker will silently mis-resolve the Windows
+    /// case (`VfsPath::join` rejects the leading `C:` prefix).
+    ///
+    /// Walking `Path::components()` drops drive prefixes, root markers,
+    /// and `.` components, and puts each remaining `Normal` component
+    /// under a `/`-joined relative key — exactly what `VfsPath::join`
+    /// wants on both platforms.
     fn resolve_path(&self, path: &Path) -> io::Result<VfsPath> {
-        let s = path.to_string_lossy();
-        let rel = s.trim_start_matches('/');
+        let rel = path_to_vfs_rel(path);
         if rel.is_empty() {
             return Ok(self.root.clone());
         }
         self.root
-            .join(rel)
+            .join(&rel)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
     }
+}
+
+/// Platform-portable conversion of an absolute/relative `Path` into the
+/// `/`-joined relative string VFS paths expect. Intermediate `..`
+/// components are preserved so the resolver can climb out of a
+/// directory; drive prefixes, root markers, and `.` components are
+/// dropped because the VFS has no concept of them.
+fn path_to_vfs_rel(path: &Path) -> String {
+    use std::path::Component;
+    let mut out = String::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str(&part.to_string_lossy());
+            }
+            Component::ParentDir => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str("..");
+            }
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {}
+        }
+    }
+    out
 }
 
 impl OxcFileSystem for VfsFileSystem {

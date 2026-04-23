@@ -749,12 +749,17 @@ fn default_resolve_options() -> ResolveOptions {
 /// tsconfig exists — `Auto` still queries via `VfsFileSystem`, so
 /// per-package tsconfigs seeded into the VFS are still discovered.
 fn vfs_tsconfig_discovery(workspace_root: &Path, fs_root: &VfsPath) -> Option<TsconfigDiscovery> {
-    let rel = workspace_root.to_string_lossy();
-    let trimmed = rel.trim_start_matches('/');
+    // Build the `/`-joined relative VFS key from `workspace_root`'s
+    // components rather than string-slicing its stringified form. The
+    // stringified approach broke on Windows (`C:\app\...` stripped only
+    // a missing leading `/`, then `VfsPath::join` rejected the drive
+    // prefix and we silently fell back to `Auto`, skipping any root
+    // tsconfig the repo actually declared).
+    let trimmed = workspace_root_to_vfs_key(workspace_root);
     let root_vp = if trimmed.is_empty() {
         fs_root.clone()
     } else {
-        match fs_root.join(trimmed) {
+        match fs_root.join(&trimmed) {
             Ok(p) => p,
             Err(_) => return Some(TsconfigDiscovery::Auto),
         }
@@ -773,6 +778,33 @@ fn vfs_tsconfig_discovery(workspace_root: &Path, fs_root: &VfsPath) -> Option<Ts
     } else {
         Some(TsconfigDiscovery::Auto)
     }
+}
+
+/// Collapse a filesystem `workspace_root` (possibly with a drive prefix
+/// or backslash separators on Windows) into the `/`-joined relative
+/// string VFS keys use. Shared with `VfsFileSystem::resolve_path` in
+/// intent but lives here to avoid the crate's module-boundary cycle.
+fn workspace_root_to_vfs_key(path: &Path) -> String {
+    use std::path::Component;
+    let mut out = String::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str(&part.to_string_lossy());
+            }
+            Component::ParentDir => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str("..");
+            }
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {}
+        }
+    }
+    out
 }
 
 /// Recursively walk `start` (a VFS directory) and invoke `on_file` for

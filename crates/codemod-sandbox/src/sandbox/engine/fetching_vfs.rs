@@ -2,7 +2,7 @@
 //! [`FileFetcher`] read-through.
 
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 use vfs::error::VfsErrorKind;
@@ -24,27 +24,30 @@ pub struct FetchingMemoryFs {
     /// address space, not the sandboxed one.
     fetcher: Arc<dyn FileFetcher>,
     /// Absolute sandbox root (e.g. `/app`). Paths whose absolute form
-    /// starts with this prefix have the prefix stripped when forwarded
-    /// to the fetcher. Paths outside are never forwarded (the fetcher
-    /// only knows about repo paths) — this is the sandbox boundary.
+    /// equals this root or begins with `<root>/` have the prefix
+    /// stripped when forwarded to the fetcher. Paths outside are never
+    /// forwarded (the fetcher only knows about repo paths) — this is
+    /// the sandbox boundary.
     sandbox_root: Arc<str>,
-    /// Paths declared via `stub_path`. Membership says "upstream is
-    /// authoritative; content lazy". Removal happens on successful
-    /// hydration.
-    stubs: Arc<DashMap<String, ()>>,
-    /// Paths whose content in the inner memfs matches the upstream
-    /// source (either we fetched it, or the caller wrote it via
-    /// `create_file`). Lookups on hydrated paths are pure inner-memfs
-    /// hits; the fetcher is never consulted again.
-    hydrated: Arc<DashMap<String, ()>>,
+    /// Single-map design (vs. separate `stubs` + `hydrated` DashMaps)
+    /// closes the thundering-herd race: two readers observing the same
+    /// `Stub` entry share one `Arc<OnceLock>` so the fetcher runs at
+    /// most once per path regardless of whether the underlying
+    /// `FileFetcher` itself dedups.
+    state: Arc<DashMap<String, PathState>>,
+}
+
+#[derive(Clone)]
+enum PathState {
+    Stub(Arc<OnceLock<Result<(), String>>>),
+    Hydrated,
 }
 
 impl std::fmt::Debug for FetchingMemoryFs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FetchingMemoryFs")
             .field("sandbox_root", &self.sandbox_root.as_ref())
-            .field("stub_count", &self.stubs.len())
-            .field("hydrated_count", &self.hydrated.len())
+            .field("tracked_paths", &self.state.len())
             .finish()
     }
 }
@@ -56,13 +59,17 @@ impl FetchingMemoryFs {
             inner: Arc::new(MemoryFS::new()),
             fetcher,
             sandbox_root: Arc::from(sandbox_root),
-            stubs: Arc::new(DashMap::new()),
-            hydrated: Arc::new(DashMap::new()),
+            state: Arc::new(DashMap::new()),
         }
     }
 
     /// Record that `path` exists in the upstream store without fetching
     /// it. `path` must be absolute (vfs-style: starts with `/`).
+    /// Relative paths would create inconsistent state between
+    /// `ensure_parents` (which walks from root) and the inner
+    /// `create_file` (which would insert the relative form verbatim).
+    /// In debug builds this is a hard assert; in release we early-
+    /// return so a stray caller can't desync the map.
     ///
     /// Creates an empty file + parent directories in the inner memfs so
     /// `read_dir`, `exists`, and `metadata` all behave as if the file
@@ -72,12 +79,30 @@ impl FetchingMemoryFs {
         if path.is_empty() {
             return;
         }
+        debug_assert!(
+            path.starts_with('/'),
+            "FetchingMemoryFs::stub_path requires an absolute path, got {path:?}"
+        );
+        if !path.starts_with('/') {
+            return;
+        }
+        // Existing `Hydrated` wins: the caller already has authoritative
+        // content, so registering a stub on top would wrongly re-enable
+        // fetcher traffic.
+        if matches!(
+            self.state.get(path).map(|v| v.clone()),
+            Some(PathState::Hydrated)
+        ) {
+            return;
+        }
         ensure_parents(&self.inner, path);
         // It's fine if the file already exists — seeding the same stub
         // twice is idempotent and non-fatal in all the paths that hit
         // this code.
         let _ = self.inner.create_file(path);
-        self.stubs.insert(path.to_string(), ());
+        self.state
+            .entry(path.to_string())
+            .or_insert_with(|| PathState::Stub(Arc::new(OnceLock::new())));
     }
 
     /// Write `content` into `path` authoritatively (the caller has the
@@ -95,8 +120,7 @@ impl FetchingMemoryFs {
     }
 
     fn mark_hydrated(&self, path: &str) {
-        self.stubs.remove(path);
-        self.hydrated.insert(path.to_string(), ());
+        self.state.insert(path.to_string(), PathState::Hydrated);
     }
 
     /// Translate a vfs-absolute path to the repo-relative form the
@@ -107,38 +131,34 @@ impl FetchingMemoryFs {
         if prefix.is_empty() {
             return Some(path.trim_start_matches('/').to_string());
         }
-        let stripped = path.strip_prefix(prefix)?;
-        Some(stripped.trim_start_matches('/').to_string())
+        if path == prefix {
+            return Some(String::new());
+        }
+        let child_prefix = format!("{prefix}/");
+        let stripped = path.strip_prefix(&child_prefix)?;
+        Some(stripped.to_string())
     }
 
-    fn hydrate_from_fetcher(&self, path: &str) -> VfsResult<()> {
-        let Some(repo_path) = self.to_repo_path(path) else {
-            // Not our concern; leave as-is so the inner memfs serves its
-            // current (possibly empty) content.
-            return Ok(());
+    fn run_fetch(&self, path: &str) -> Result<(), String> {
+        let repo_path = match self.to_repo_path(path) {
+            Some(p) => p,
+            None => return Ok(()), // outside sandbox → pass through
         };
-
         match self.fetcher.fetch(&repo_path) {
             Ok(Some(bytes)) => {
-                // `write_authoritative` also marks hydrated, so even if
-                // the fetched file is legitimately empty we won't keep
-                // re-fetching it.
-                self.write_authoritative(path, &bytes)
+                ensure_parents(&self.inner, path);
+                let mut writer = self.inner.create_file(path).map_err(|e| e.to_string())?;
+                writer.write_all(&bytes).map_err(|e| e.to_string())?;
+                drop(writer);
+                Ok(())
             }
-            Ok(None) => {
-                // Upstream says the file doesn't exist. We were asked
-                // for it via a stub, so the caller already thought it
-                // did; surface as `FileNotFound` to match ordinary VFS
-                // semantics. Also mark hydrated so we don't keep asking.
-                self.mark_hydrated(path);
-                Err(VfsError::from(VfsErrorKind::FileNotFound))
-            }
-            Err(msg) => Err(VfsError::from(VfsErrorKind::Other(format!(
-                "fetcher failed for {path}: {msg}"
-            )))),
+            Ok(None) => Err(FILE_NOT_FOUND.to_string()),
+            Err(msg) => Err(format!("fetcher failed for {path}: {msg}")),
         }
     }
 }
+
+const FILE_NOT_FOUND: &str = "__fetching_vfs_file_not_found__";
 
 /// Walk a `/`-separated absolute path and make sure every parent
 /// directory exists in `fs`. Mirrors `mkdir -p`. Failures on individual
@@ -178,29 +198,41 @@ impl FileSystem for FetchingMemoryFs {
     }
 
     fn open_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndRead + Send>> {
-        // A stub that hasn't been hydrated fires exactly one fetch per
-        // path (the FileFetcher dedups in-flight requests internally).
-        // Hydrated stubs skip straight to the inner memfs, as do paths
-        // we never stubbed in the first place (batch-owned content).
-        if self.stubs.contains_key(path) && !self.hydrated.contains_key(path) {
-            self.hydrate_from_fetcher(path)?;
+        // Pull the current state snapshot (cloning the `Arc<OnceLock>`
+        // release the DashMap shard guard before we call into the
+        // fetcher. It avoids deadlocks if the fetcher re-enters VFS).
+        let snapshot = self.state.get(path).map(|v| v.clone());
+        match snapshot {
+            Some(PathState::Stub(cell)) => {
+                let outcome = cell.get_or_init(|| self.run_fetch(path)).clone();
+                match outcome {
+                    Ok(()) => {
+                        self.state.insert(path.to_string(), PathState::Hydrated);
+                    }
+                    Err(ref msg) if msg == FILE_NOT_FOUND => {
+                        self.state.insert(path.to_string(), PathState::Hydrated);
+                        return Err(VfsError::from(VfsErrorKind::FileNotFound));
+                    }
+                    Err(msg) => {
+                        return Err(VfsError::from(VfsErrorKind::Other(msg.clone())));
+                    }
+                }
+            }
+            Some(PathState::Hydrated) | None => {}
         }
         self.inner.open_file(path)
     }
 
     fn create_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
-        // Direct writes through the vfs trait (e.g. from
-        // `curated_fs.writeFileSync`) supply authoritative content for
-        // this process. Mark hydrated so no subsequent read re-fetches.
+        let writer = self.inner.create_file(path)?;
         self.mark_hydrated(path);
-        self.inner.create_file(path)
+        Ok(writer)
     }
 
     fn append_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
-        // Same reasoning as `create_file`: after append, the content in
-        // the inner memfs is this process's source of truth.
+        let writer = self.inner.append_file(path)?;
         self.mark_hydrated(path);
-        self.inner.append_file(path)
+        Ok(writer)
     }
 
     fn metadata(&self, path: &str) -> VfsResult<VfsMetadata> {
@@ -212,8 +244,7 @@ impl FileSystem for FetchingMemoryFs {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.stubs.remove(path);
-        self.hydrated.remove(path);
+        self.state.remove(path);
         self.inner.remove_file(path)
     }
 
@@ -369,6 +400,102 @@ mod tests {
         let root: VfsPath = fs.into();
         assert_eq!(read_to_string(&root, "other/scratch.txt"), "outside");
         assert_eq!(fetcher.hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn concurrent_readers_hydrate_stub_exactly_once() {
+        // Two threads race to read the same stub. The FetchingMemoryFs
+        // must dedup through its OnceLock-per-path so the (possibly
+        // non-deduping) fetcher sees at most one call regardless of
+        // how many workers observed the stub.
+        use std::sync::Barrier;
+
+        struct SlowFetcher {
+            hits: AtomicUsize,
+            barrier: Arc<Barrier>,
+        }
+        impl FileFetcher for SlowFetcher {
+            fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+                self.hits.fetch_add(1, Ordering::SeqCst);
+                // Park here to give the second reader time to reach
+                // `open_file`; the barrier releases only when both have
+                // arrived, making a doubled fetch obvious if the dedup
+                // is broken.
+                self.barrier.wait();
+                Ok(Some(format!("// {path}").into_bytes()))
+            }
+        }
+
+        let barrier = Arc::new(Barrier::new(1));
+        let fetcher = Arc::new(SlowFetcher {
+            hits: AtomicUsize::new(0),
+            barrier: Arc::clone(&barrier),
+        });
+        let fs = FetchingMemoryFs::new(fetcher.clone() as Arc<dyn FileFetcher>, "/app");
+        fs.stub_path("/app/src/shared.ts");
+
+        let root: VfsPath = fs.into();
+        let root_a = root.clone();
+        let root_b = root.clone();
+
+        let t1 = std::thread::spawn(move || read_to_string(&root_a, "app/src/shared.ts"));
+        let t2 = std::thread::spawn(move || read_to_string(&root_b, "app/src/shared.ts"));
+
+        let a = t1.join().unwrap();
+        let b = t2.join().unwrap();
+        // Fetcher was called with the repo-relative form (sandbox-stripped).
+        assert_eq!(a, "// src/shared.ts");
+        assert_eq!(b, "// src/shared.ts");
+        assert_eq!(
+            fetcher.hits.load(Ordering::SeqCst),
+            1,
+            "OnceLock-per-path should collapse concurrent readers into a single fetch"
+        );
+    }
+
+    #[test]
+    fn sibling_prefix_paths_are_not_treated_as_inside_sandbox() {
+        // Without a path-segment boundary, `/app2/foo` would hit the
+        // fetcher because its string starts with `/app`. This test
+        // pins that the fetcher is NOT consulted for siblings — the
+        // sandbox boundary must be a real path separator.
+        struct RefusalFetcher;
+        impl FileFetcher for RefusalFetcher {
+            fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+                panic!("fetcher must not be called for out-of-sandbox path {path}");
+            }
+        }
+
+        let fs = FetchingMemoryFs::new(Arc::new(RefusalFetcher) as Arc<dyn FileFetcher>, "/app");
+        // Directly populate a sibling path outside the sandbox.
+        fs.write_authoritative("/app2/foo.ts", b"outside").unwrap();
+
+        let root: VfsPath = fs.into();
+        assert_eq!(read_to_string(&root, "app2/foo.ts"), "outside");
+    }
+
+    #[test]
+    fn create_file_error_leaves_state_untouched() {
+        // If the inner memfs rejects a `create_file` (e.g. missing
+        // parent directory that a stub had already materialized), the
+        // wrapper must not flip state to `Hydrated` — a caller retrying
+        // via `open_file` should still be able to consult the fetcher
+        // for the original stub. Regression guard for a PR review note.
+        let fetcher = Arc::new(RecordingFetcher::new());
+        fetcher.serve("src/foo.ts", b"fetched content");
+        let fs = FetchingMemoryFs::new(fetcher.clone() as Arc<dyn FileFetcher>, "/app");
+        fs.stub_path("/app/src/foo.ts");
+
+        // Attempt a create under a non-existent parent; MemoryFS will
+        // reject this and `create_file` must propagate the error
+        // without mutating our state map.
+        let create_err = FileSystem::create_file(&fs, "/app/missing/intermediate/x.ts");
+        assert!(create_err.is_err(), "expected create_file to fail");
+
+        // Stub for /app/src/foo.ts must still resolve via the fetcher.
+        let root: VfsPath = fs.into();
+        assert_eq!(read_to_string(&root, "app/src/foo.ts"), "fetched content");
+        assert_eq!(fetcher.hits.load(Ordering::SeqCst), 1);
     }
 
     #[test]
