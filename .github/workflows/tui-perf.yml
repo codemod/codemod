@@ -66,6 +66,7 @@ jobs:
       - name: Run baseline and candidate TUI perf scenarios
         env:
           CODEMOD_TUI_PERF_METRICS: "1"
+          GH_TOKEN: ${{ github.token }}
           DURATION_SECS_INPUT: ${{ inputs.duration_secs }}
           PR_NUMBER: ${{ inputs.pr_number }}
           BASELINE_REF: ${{ inputs.baseline_ref }}

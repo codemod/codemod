@@ -315,11 +315,16 @@ impl WorkflowSessionInteractor {
             let request_id = Uuid::new_v4();
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             pending.selection.lock().unwrap().insert(request_id, tx);
-            let _ = sender.send(WorkflowEvent::SelectionRequested {
+            if let Err(error) = sender.send(WorkflowEvent::SelectionRequested {
                 request_id,
                 prompt: prompt.clone(),
                 at: Utc::now(),
-            });
+            }) {
+                pending.selection.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver selection prompt event: {error}"
+                ));
+            }
             rx.recv()
                 .map_err(|error| anyhow::anyhow!("selection response channel closed: {error}"))?
                 .ok_or_else(|| DeferredInteractionError::new("selection prompt canceled").into())
@@ -648,6 +653,7 @@ pub struct WorkflowSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SelectionPromptOption;
     use crate::execution::CodemodExecutionConfig;
     use codemod_llrt_capabilities::types::LlrtSupportedModules;
     use std::collections::HashSet;
@@ -923,5 +929,31 @@ mod tests {
             rx.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[tokio::test]
+    async fn selection_prompt_fails_fast_when_event_delivery_is_closed() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender, Arc::clone(&pending));
+        let callback = interactor.selection_callback();
+
+        let error = callback(SelectionPrompt {
+            title: "Choose install scope".to_string(),
+            options: vec![SelectionPromptOption {
+                value: "project".to_string(),
+                label: "project".to_string(),
+            }],
+            default_index: 0,
+        })
+        .expect_err("closed event delivery should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deliver selection prompt event"),
+            "unexpected error: {error:#}"
+        );
+        assert!(pending.selection.lock().unwrap().is_empty());
     }
 }
