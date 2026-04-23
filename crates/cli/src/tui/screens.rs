@@ -414,6 +414,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(footer_chunks[0]);
+        let detail = truncate_text(&detail, detail_chunks[1].width as usize);
         frame.render_widget(
             Paragraph::new(detail).style(Style::default().fg(Color::DarkGray)),
             detail_chunks[1],
@@ -865,6 +866,59 @@ mod tests {
             .unwrap();
 
         assert!(last_task_line < hint_line);
+    }
+
+    #[test]
+    fn render_run_detail_truncates_long_completion_detail() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Pull request created: https://github.com/example/repo/pull/1234567890/with/an/extra/long/path".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let detail_line = lines
+            .iter()
+            .find(|line| line.contains("Branch: codemod-1234"))
+            .expect("detail line should render");
+
+        assert!(detail_line.chars().count() <= 80);
     }
 
     #[test]

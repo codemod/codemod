@@ -474,7 +474,9 @@ impl TuiState {
     pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
         if let Some(progress) = self.task_progress.get(&task.id) {
             if let Some(total) = progress.total_files {
-                let processed = if task.status == TaskStatus::Completed {
+                let processed = if task.status == TaskStatus::Completed
+                    || Self::task_transform_phase_finished(task)
+                {
                     total
                 } else {
                     progress.processed_files.min(total)
@@ -501,12 +503,22 @@ impl TuiState {
             .iter()
             .filter(|line| line.starts_with("Processing file: "))
             .count();
-        let processed = if task.status == TaskStatus::Completed {
-            total
-        } else {
-            processed.min(total)
-        };
+        let processed =
+            if task.status == TaskStatus::Completed || Self::task_transform_phase_finished(task) {
+                total
+            } else {
+                processed.min(total)
+            };
         Some((processed, total))
+    }
+
+    fn task_transform_phase_finished(task: &Task) -> bool {
+        task.logs.iter().any(|line| {
+            line == "Step execution finished; finalizing git state"
+                || line == "Publishing branch and creating pull request"
+                || line.starts_with("Branch publication and pull request creation deferred;")
+                || line.starts_with("Branch publication and pull request creation failed:")
+        })
     }
 
     pub fn task_progress_bar(&self, task: &Task, width: usize) -> Option<String> {
@@ -522,7 +534,7 @@ impl TuiState {
         let inner_width = width.saturating_sub(2);
         let mut bar = String::with_capacity(width);
         bar.push('[');
-        if task.status == TaskStatus::Completed {
+        if task.status == TaskStatus::Completed || Self::task_transform_phase_finished(task) {
             for _ in 0..inner_width {
                 bar.push('=');
             }
@@ -1556,6 +1568,38 @@ mod tests {
             TuiState::default().task_progress_bar(&task, 4).as_deref(),
             Some("[==]")
         );
+    }
+
+    #[test]
+    fn task_progress_bar_fills_after_transform_finalization() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 100)".to_string(),
+                "Step execution finished; finalizing git state".to_string(),
+                "Publishing branch and creating pull request".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 0,
+                total_files: Some(100),
+            },
+        );
+
+        assert_eq!(state.task_progress_counts(&task), Some((100, 100)));
+        assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[====]"));
     }
 
     #[test]
