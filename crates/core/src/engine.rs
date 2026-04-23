@@ -1175,7 +1175,7 @@ impl Engine {
                                                 )
                                                 .await;
                                             match tokio::time::timeout(
-                                                tokio::time::Duration::from_secs(30),
+                                                tokio::time::Duration::from_secs(120),
                                                 crate::git_ops::create_worktree(
                                                     &repo_root,
                                                     &branch,

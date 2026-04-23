@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use butterflow_models::variable::TaskExpressionContext;
 use butterflow_models::Result;
@@ -76,6 +77,11 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
     }
 }
 
+fn worktree_operation_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn sanitize_path_component(value: &str) -> String {
     let sanitized: String = value
         .chars()
@@ -130,6 +136,7 @@ pub fn worktree_path(repo_root: &Path, branch: &str, task_id: &str) -> PathBuf {
 }
 
 pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> Result<PathBuf> {
+    let _lock = worktree_operation_lock().lock().await;
     let worktree_path = worktree_path(repo_root, branch, task_id);
 
     if let Some(parent) = worktree_path.parent() {
@@ -171,6 +178,7 @@ pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> R
 }
 
 pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let _lock = worktree_operation_lock().lock().await;
     let output = Command::new("git")
         .args([
             "worktree",
