@@ -56,6 +56,8 @@ pub struct CodemodExecutionConfig {
     pub base_path: Option<PathBuf>,
     /// Globs to include
     pub include_globs: Option<Vec<String>>,
+    /// Explicit files to process without glob walking
+    pub explicit_files: Option<Vec<PathBuf>>,
     /// Globs to exclude
     pub exclude_globs: Option<Vec<String>>,
     /// Dry run mode
@@ -89,24 +91,22 @@ impl CodemodExecutionConfig {
                 .map_err(|e| -> Box<dyn Error> { e })?;
         }
 
-        let globs = self.build_globs(&search_base)?;
+        let explicit_files = self.explicit_files.clone();
+        let globs = if explicit_files.is_some() {
+            None
+        } else {
+            self.build_globs(&search_base)?
+        };
 
-        let total_files = self.count_files(&search_base, &globs)?;
+        let total_files = if let Some(files) = explicit_files.as_ref() {
+            files.len() as u64
+        } else {
+            self.count_files(&search_base, &globs)?
+        };
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
         }
-
-        let num_threads = self.threads.unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map_or(1, |n| n.get())
-                .min(12)
-        });
-
-        let walker = self
-            .create_walk_builder(&search_base, globs)
-            .threads(num_threads)
-            .build_parallel();
 
         let shared_context = Arc::new(SharedExecutionContext {
             task_id: Arc::from(task_id),
@@ -117,47 +117,89 @@ impl CodemodExecutionConfig {
             total_files,
         });
 
-        walker.run(|| {
-            let ctx = Arc::clone(&shared_context);
+        if let Some(files) = explicit_files {
+            for file_path in files {
+                if let Some(ref progress_cb) = shared_context.progress_callback.as_ref() {
+                    let file_path_str = file_path.to_string_lossy();
+                    (progress_cb.callback)(
+                        &shared_context.task_id,
+                        &file_path_str,
+                        "processing",
+                        Some(&shared_context.total_files),
+                        &shared_context.processed_count.load(Ordering::Relaxed),
+                    );
+                }
 
-            Box::new(move |entry| match entry {
-                Ok(dir_entry) => {
-                    let file_path = dir_entry.path();
+                (shared_context.callback)(&file_path, shared_context.config);
 
-                    if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
-                        if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
-                            let file_path_str = file_path.to_string_lossy();
-                            (progress_cb.callback)(
-                                &ctx.task_id,
-                                &file_path_str,
-                                "processing",
-                                Some(&ctx.total_files),
-                                &ctx.processed_count.load(Ordering::Relaxed),
-                            );
+                let current_count = shared_context
+                    .processed_count
+                    .fetch_add(1, Ordering::Relaxed);
+
+                if let Some(ref progress_cb) = shared_context.progress_callback.as_ref() {
+                    (progress_cb.callback)(
+                        &shared_context.task_id,
+                        "",
+                        "increment",
+                        Some(&shared_context.total_files),
+                        &(current_count + 1),
+                    );
+                }
+            }
+        } else {
+            let num_threads = self.threads.unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map_or(1, |n| n.get())
+                    .min(12)
+            });
+
+            let walker = self
+                .create_walk_builder(&search_base, globs)
+                .threads(num_threads)
+                .build_parallel();
+
+            walker.run(|| {
+                let ctx = Arc::clone(&shared_context);
+
+                Box::new(move |entry| match entry {
+                    Ok(dir_entry) => {
+                        let file_path = dir_entry.path();
+
+                        if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
+                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                                let file_path_str = file_path.to_string_lossy();
+                                (progress_cb.callback)(
+                                    &ctx.task_id,
+                                    &file_path_str,
+                                    "processing",
+                                    Some(&ctx.total_files),
+                                    &ctx.processed_count.load(Ordering::Relaxed),
+                                );
+                            }
+
+                            (ctx.callback)(file_path, ctx.config);
+
+                            let current_count = ctx.processed_count.fetch_add(1, Ordering::Relaxed);
+
+                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                                (progress_cb.callback)(
+                                    &ctx.task_id,
+                                    "",
+                                    "increment",
+                                    Some(&ctx.total_files),
+                                    &(current_count + 1),
+                                );
+                            }
                         }
-
-                        (ctx.callback)(file_path, ctx.config);
-
-                        let current_count = ctx.processed_count.fetch_add(1, Ordering::Relaxed);
-
-                        if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
-                            (progress_cb.callback)(
-                                &ctx.task_id,
-                                "",
-                                "increment",
-                                Some(&ctx.total_files),
-                                &(current_count + 1),
-                            );
-                        }
+                        WalkState::Continue
                     }
-                    WalkState::Continue
-                }
-                Err(err) => {
-                    eprintln!("Walk error: {err}");
-                    WalkState::Continue
-                }
-            })
-        });
+                    Err(err) => {
+                        eprintln!("Walk error: {err}");
+                        WalkState::Continue
+                    }
+                })
+            });
+        }
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             let final_count = shared_context.processed_count.load(Ordering::Relaxed);
@@ -198,6 +240,10 @@ impl CodemodExecutionConfig {
             Ok(base) => base,
             Err(_) => return Vec::new(),
         };
+
+        if let Some(files) = self.explicit_files.clone() {
+            return files;
+        }
 
         let globs = match self.build_globs(&search_base) {
             Ok(globs) => globs,
@@ -309,5 +355,95 @@ impl CodemodExecutionConfig {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CodemodExecutionConfig;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    fn temp_dir() -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("butterflow-exec-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn collect_files_uses_explicit_include_files_without_walking_repo() {
+        let root = temp_dir();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let first = root.join("a.ts");
+        let second = nested.join("b.ts");
+        let ignored = nested.join("c.ts");
+        fs::write(&first, "a").unwrap();
+        fs::write(&second, "b").unwrap();
+        fs::write(&ignored, "c").unwrap();
+
+        let config = CodemodExecutionConfig {
+            pre_run_callback: None,
+            progress_callback: Arc::new(None),
+            target_path: Some(root.clone()),
+            base_path: None,
+            include_globs: None,
+            explicit_files: Some(vec![first.clone(), second.clone()]),
+            exclude_globs: None,
+            dry_run: false,
+            languages: None,
+            threads: Some(1),
+            capabilities: Some(HashSet::new()),
+        };
+
+        let mut files = config.collect_files();
+        files.sort();
+        assert_eq!(files, vec![first, second]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn execute_with_explicit_include_files_processes_only_targeted_files() {
+        let root = temp_dir();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let first = root.join("a.ts");
+        let second = nested.join("b.ts");
+        let ignored = nested.join("c.ts");
+        fs::write(&first, "a").unwrap();
+        fs::write(&second, "b").unwrap();
+        fs::write(&ignored, "c").unwrap();
+
+        let config = CodemodExecutionConfig {
+            pre_run_callback: None,
+            progress_callback: Arc::new(None),
+            target_path: Some(root.clone()),
+            base_path: None,
+            include_globs: None,
+            explicit_files: Some(vec![first.clone(), second.clone()]),
+            exclude_globs: None,
+            dry_run: false,
+            languages: None,
+            threads: Some(1),
+            capabilities: Some(HashSet::new()),
+        };
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_callback = Arc::clone(&seen);
+        config
+            .execute(|path, _| {
+                seen_for_callback.lock().unwrap().push(path.to_path_buf());
+            })
+            .unwrap();
+
+        let mut seen_paths = seen.lock().unwrap().clone();
+        seen_paths.sort();
+        assert_eq!(seen_paths, vec![first, second]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

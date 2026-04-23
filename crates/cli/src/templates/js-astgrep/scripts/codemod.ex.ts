@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Elixir from "codemod:ast-grep/langs/elixir";
 
-async function transform(root: SgRoot<Elixir>): Promise<string> {
+const codemod: Codemod<Elixir> = async (root) => {
   const rootNode = root.root();
 
   // Find IO.puts calls
@@ -37,4 +37,4 @@ async function transform(root: SgRoot<Elixir>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

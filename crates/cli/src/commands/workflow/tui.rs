@@ -3,48 +3,37 @@ use clap::Args;
 use uuid::Uuid;
 
 use crate::engine::create_engine;
-use crate::tui;
+use crate::tui::run_workflow_tui;
 
 #[derive(Args, Debug)]
 pub struct Command {
-    /// Go directly to the task list for a specific workflow run ID
+    /// Existing workflow run ID to attach to
     #[arg(short, long)]
-    id: Option<Uuid>,
+    pub id: Option<Uuid>,
 
-    /// Maximum number of workflow runs to display
+    /// Number of workflow runs to show in the browser
     #[arg(short, long, default_value = "20")]
-    limit: usize,
+    pub limit: usize,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
-    let target_path = std::env::current_dir()?;
-
-    // Use a minimal engine config for browsing -- no workflow file needed
-    // We create a dummy config since we just need the state adapter
-    let (mut engine, _config) = create_engine(
-        target_path.join("workflow.yaml"), // dummy path
-        target_path,
+    let (engine, _) = create_engine(
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        None,
+        None,
         false,
-        true, // allow dirty -- we're just browsing
-        std::collections::HashMap::new(),
-        None,
-        None,
-        true, // no_interactive
         false,
         None,
         false,
-        butterflow_core::structured_log::OutputFormat::Text,
+        Default::default(),
         None,
         None,
         None,
     )?;
 
-    engine.set_quiet(true);
-    engine.set_progress_callback(std::sync::Arc::new(None));
-
-    if let Some(workflow_run_id) = args.id {
-        tui::run_tui_for_run(engine, workflow_run_id).await
-    } else {
-        tui::run_tui(engine, args.limit).await
-    }
+    run_workflow_tui(engine, args.id, args.limit).await
 }

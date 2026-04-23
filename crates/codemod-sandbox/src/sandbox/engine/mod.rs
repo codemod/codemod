@@ -1,3 +1,5 @@
+#[cfg(feature = "native")]
+pub mod curated_fs;
 pub mod execution_engine;
 pub mod in_memory_engine;
 pub mod quickjs_adapters;

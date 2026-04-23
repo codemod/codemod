@@ -2,6 +2,7 @@
 
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -73,6 +74,136 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
         Some(name) if !name.is_empty() => name.to_string(),
         _ => format!("codemod-{}", task_signature),
     }
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => ch,
+            _ => '-',
+        })
+        .collect();
+
+    let trimmed = sanitized.trim_start_matches('.');
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        "worktree".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub async fn repo_root(working_dir: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(working_dir)
+        .output()
+        .await
+        .map_err(|e| butterflow_models::Error::Runtime(format!("git rev-parse failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(butterflow_models::Error::Runtime(format!(
+            "git rev-parse --show-toplevel failed: {stderr}"
+        )));
+    }
+
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+pub fn worktree_path(repo_root: &Path, branch: &str, task_id: &str) -> PathBuf {
+    let repo_name = repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repo");
+    let container = repo_root
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{repo_name}.codemod-worktrees"));
+    container.join(format!(
+        "{}-{}",
+        sanitize_path_component(branch),
+        sanitize_path_component(task_id)
+    ))
+}
+
+pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> Result<PathBuf> {
+    let worktree_path = worktree_path(repo_root, branch, task_id);
+
+    if let Some(parent) = worktree_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            butterflow_models::Error::Runtime(format!(
+                "failed to create worktree parent directory: {e}"
+            ))
+        })?;
+    }
+
+    if worktree_path.exists() {
+        let _ = remove_worktree(repo_root, &worktree_path).await;
+    }
+
+    let output = Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "--force",
+            "-B",
+            branch,
+            worktree_path.to_string_lossy().as_ref(),
+            "HEAD",
+        ])
+        .current_dir(repo_root)
+        .output()
+        .await
+        .map_err(|e| butterflow_models::Error::Runtime(format!("git worktree add failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(butterflow_models::Error::Runtime(format!(
+            "git worktree add failed for branch {}: {}",
+            branch, stderr
+        )));
+    }
+
+    Ok(worktree_path)
+}
+
+pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "worktree",
+            "remove",
+            "--force",
+            worktree_path.to_string_lossy().as_ref(),
+        ])
+        .current_dir(repo_root)
+        .output()
+        .await
+        .map_err(|e| {
+            butterflow_models::Error::Runtime(format!("git worktree remove failed: {e}"))
+        })?;
+
+    if !output.status.success() && worktree_path.exists() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(butterflow_models::Error::Runtime(format!(
+            "git worktree remove failed: {stderr}"
+        )));
+    }
+
+    if worktree_path.exists() {
+        tokio::fs::remove_dir_all(worktree_path)
+            .await
+            .map_err(|e| {
+                butterflow_models::Error::Runtime(format!(
+                    "failed to remove worktree directory {}: {e}",
+                    worktree_path.display()
+                ))
+            })?;
+    }
+
+    Ok(())
 }
 
 /// Checkout a new branch. Equivalent to `git checkout -b <branch>`.
@@ -491,4 +622,28 @@ async fn create_pull_request_via_gh(
     }
 
     Ok(pr_url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_path_component, worktree_path};
+    use std::path::Path;
+
+    #[test]
+    fn sanitize_path_component_rewrites_dot_segments() {
+        assert_eq!(sanitize_path_component("."), "worktree");
+        assert_eq!(sanitize_path_component(".."), "worktree");
+        assert_eq!(sanitize_path_component("...hidden"), "hidden");
+        assert_eq!(sanitize_path_component("../branch"), "-branch");
+    }
+
+    #[test]
+    fn worktree_path_stays_within_container_for_dot_segments() {
+        let repo_root = Path::new("/tmp/example-repo");
+        let worktree = worktree_path(repo_root, "..", ".");
+        assert_eq!(
+            worktree,
+            Path::new("/tmp/example-repo.codemod-worktrees/worktree-worktree")
+        );
+    }
 }

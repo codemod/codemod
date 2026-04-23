@@ -1,642 +1,420 @@
 pub mod app;
 pub mod event;
-pub mod screens;
+mod screens;
 
-use std::collections::{HashSet, VecDeque};
-use std::fs::{File, OpenOptions};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::io;
+use std::time::Duration;
 
 use anyhow::Result;
-use butterflow_core::ai_handoff::AgentOption;
-use butterflow_core::config::{
-    AgentSelectionCallback, CapabilitiesSecurityCallback, ShellCommandApprovalCallback,
-    ShellCommandExecutionRequest,
-};
+use arboard::Clipboard;
 use butterflow_core::engine::Engine;
-use butterflow_core::execution::CodemodExecutionConfig;
-use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture,
+use butterflow_core::execution::ProgressCallback;
+use butterflow_core::workflow_runtime::{
+    publish_event, WorkflowCommand, WorkflowEvent, WorkflowSession, WorkflowSnapshot,
 };
-use crossterm::execute;
+use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use crossterm::{execute, ExecutableCommand};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use app::{
-    AgentSelectionItem, App, AppEffect, EffectResult, LogView, PendingAgentSelection,
-    PendingCapabilityApproval, PendingShellApproval,
-};
-use event::{AppEvent, EventHandler};
-use screens::{render_screen_background, StatusLine, StatusTone};
+use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
+use crate::tui::event::AppEvent;
 
-type TuiTerminal = Terminal<CrosstermBackend<File>>;
+struct TerminalGuard;
 
-/// Run the TUI starting at the run list.
-pub async fn run_tui(mut engine: Engine, limit: usize) -> Result<()> {
-    let runtime = configure_engine_for_tui(&mut engine);
-
-    let app = App::new(
-        engine.is_dry_run(),
-        engine.get_capabilities().clone(),
-        limit,
-    );
-    run_tui_loop(app, engine, runtime).await
-}
-
-/// Run the TUI starting at the task list for a specific workflow run.
-pub async fn run_tui_for_run(mut engine: Engine, workflow_run_id: Uuid) -> Result<()> {
-    let runtime = configure_engine_for_tui(&mut engine);
-
-    run_tui_for_run_with_runtime(engine, workflow_run_id, runtime).await
-}
-
-pub(crate) async fn run_tui_for_run_with_runtime(
-    engine: Engine,
-    workflow_run_id: Uuid,
-    runtime: TuiRuntime,
-) -> Result<()> {
-    let app = App::new_for_run(
-        engine.is_dry_run(),
-        engine.get_capabilities().clone(),
-        workflow_run_id,
-    );
-    run_tui_loop(app, engine, runtime).await
-}
-
-pub(crate) fn configure_engine_for_tui(engine: &mut Engine) -> TuiRuntime {
-    engine.set_quiet(true);
-    engine.set_progress_callback(Arc::new(None));
-    let pre_approved_capabilities = engine.get_capabilities().clone().unwrap_or_default();
-    let config = engine.workflow_run_config_mut();
-
-    let (shell_tx, approval_rx) = mpsc::unbounded_channel();
-    let approval_callback: ShellCommandApprovalCallback = Arc::new(move |request| {
-        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-        shell_tx
-            .send(ShellApprovalMessage {
-                request: request.clone(),
-                response_tx,
-            })
-            .map_err(|_| anyhow::anyhow!("TUI approval channel closed"))?;
-
-        response_rx
-            .recv()
-            .map_err(|_| anyhow::anyhow!("TUI approval response channel closed"))?
-    });
-    config.shell_command_approval_callback = Some(approval_callback);
-
-    let (capability_tx, capability_approval_rx) = mpsc::unbounded_channel();
-    let checked_capabilities = Arc::new(Mutex::new(pre_approved_capabilities));
-    let unsafe_capabilities: HashSet<LlrtSupportedModules> =
-        UNSAFE_MODULES.iter().copied().collect();
-    let capability_callback: CapabilitiesSecurityCallback =
-        Arc::new(move |request: &CodemodExecutionConfig| {
-            let requested = request
-                .capabilities
-                .as_ref()
-                .map(|set| {
-                    let checked = checked_capabilities.lock().unwrap();
-                    set.iter()
-                        .filter(|module| {
-                            unsafe_capabilities.contains(module) && !checked.contains(module)
-                        })
-                        .copied()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-
-            if requested.is_empty() {
-                return Ok(());
-            }
-
-            let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-            capability_tx
-                .send(CapabilityApprovalMessage {
-                    modules: requested.clone(),
-                    response_tx,
-                })
-                .map_err(|_| anyhow::anyhow!("TUI capability approval channel closed"))?;
-
-            response_rx.recv().map_err(|_| {
-                anyhow::anyhow!("TUI capability approval response channel closed")
-            })??;
-
-            let mut checked = checked_capabilities.lock().unwrap();
-            checked.extend(requested);
-            Ok(())
-        });
-    config.capabilities_security_callback = Some(capability_callback);
-
-    let (agent_selection_tx, agent_selection_rx) = mpsc::unbounded_channel();
-    let agent_selection_callback: AgentSelectionCallback =
-        Arc::new(move |agents: &[AgentOption]| {
-            let mut options: Vec<AgentSelectionItem> = agents
-                .iter()
-                .filter(|agent| agent.is_available())
-                .map(AgentSelectionItem::from_agent_option)
-                .collect();
-            options.push(AgentSelectionItem {
-                canonical: app::USE_BUILT_IN_AGENT.to_string(),
-                label: "Use built-in AI".to_string(),
-                is_available: true,
-            });
-
-            let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-            if agent_selection_tx
-                .send(AgentSelectionMessage {
-                    options,
-                    response_tx,
-                })
-                .is_err()
-            {
-                return None;
-            }
-
-            match response_rx.recv() {
-                Ok(Ok(selection)) => selection,
-                Ok(Err(_)) | Err(_) => None,
-            }
-        });
-    config.agent_selection_callback = Some(agent_selection_callback);
-
-    TuiRuntime {
-        approval_rx,
-        capability_approval_rx,
-        agent_selection_rx,
-    }
-}
-
-async fn run_tui_loop(mut app: App, mut engine: Engine, mut runtime: TuiRuntime) -> Result<()> {
-    let mut session = TuiSession::enter()?;
-    let mut terminal = session
-        .terminal
-        .take()
-        .expect("TUI session should always own a terminal");
-    terminal.clear()?;
-
-    let mut events = EventHandler::new(std::time::Duration::from_millis(500));
-    let result = run_event_loop(
-        &mut app,
-        &mut engine,
-        &mut terminal,
-        &mut events,
-        &mut runtime,
-    )
-    .await;
-
-    session.terminal = Some(terminal);
-    let restore_result = session.restore();
-
-    result?;
-    restore_result?;
-    Ok(())
-}
-
-struct ShellApprovalMessage {
-    request: ShellCommandExecutionRequest,
-    response_tx: std::sync::mpsc::SyncSender<Result<bool>>,
-}
-
-struct CapabilityApprovalMessage {
-    modules: Vec<LlrtSupportedModules>,
-    response_tx: std::sync::mpsc::SyncSender<Result<()>>,
-}
-
-struct AgentSelectionMessage {
-    options: Vec<AgentSelectionItem>,
-    response_tx: std::sync::mpsc::SyncSender<Result<Option<String>>>,
-}
-
-pub(crate) struct TuiRuntime {
-    approval_rx: mpsc::UnboundedReceiver<ShellApprovalMessage>,
-    capability_approval_rx: mpsc::UnboundedReceiver<CapabilityApprovalMessage>,
-    agent_selection_rx: mpsc::UnboundedReceiver<AgentSelectionMessage>,
-}
-
-async fn run_event_loop(
-    app: &mut App,
-    engine: &mut Engine,
-    terminal: &mut TuiTerminal,
-    events: &mut EventHandler,
-    runtime: &mut TuiRuntime,
-) -> Result<()> {
-    let mut pending_effects: VecDeque<AppEffect> = app.initial_effects().into();
-    let mut approval_queue: VecDeque<PendingShellApproval> = VecDeque::new();
-    let mut capability_approval_queue: VecDeque<PendingCapabilityApproval> = VecDeque::new();
-    let mut agent_selection_queue: VecDeque<PendingAgentSelection> = VecDeque::new();
-    let mut needs_redraw = true;
-
-    loop {
-        drain_shell_approvals(runtime, &mut approval_queue);
-        drain_capability_approvals(runtime, &mut capability_approval_queue);
-        drain_agent_selections(runtime, &mut agent_selection_queue);
-        if !app.has_shell_approval() && !app.has_capability_approval() && !app.has_agent_selection()
-        {
-            if let Some(next_approval) = approval_queue.pop_front() {
-                needs_redraw |= app.present_shell_approval(next_approval);
-            } else if let Some(next_approval) = capability_approval_queue.pop_front() {
-                needs_redraw |= app.present_capability_approval(next_approval);
-            } else if let Some(next_selection) = agent_selection_queue.pop_front() {
-                needs_redraw |= app.present_agent_selection(next_selection);
-            }
-        }
-
-        while let Some(effect) = pending_effects.pop_front() {
-            let should_refresh = effect.clone().should_refresh_after();
-            let effect_result = execute_effect(app, engine, effect).await;
-            needs_redraw |= app.apply_effect_result(effect_result);
-
-            if should_refresh {
-                pending_effects.push_back(AppEffect::Refresh);
-            }
-        }
-
-        if app.should_quit {
-            app.reject_shell_approval(Some(anyhow::anyhow!(
-                "TUI closed while shell command approval was pending"
-            )));
-            while let Some(pending) = approval_queue.pop_front() {
-                pending.fail(anyhow::anyhow!(
-                    "TUI closed while shell command approval was pending"
-                ));
-            }
-            app.reject_capability_approval(Some(anyhow::anyhow!(
-                "TUI closed while capability approval was pending"
-            )));
-            while let Some(pending) = capability_approval_queue.pop_front() {
-                pending.fail(anyhow::anyhow!(
-                    "TUI closed while capability approval was pending"
-                ));
-            }
-            app.reject_agent_selection(Some(anyhow::anyhow!(
-                "TUI closed while agent selection was pending"
-            )));
-            while let Some(pending) = agent_selection_queue.pop_front() {
-                pending.fail(anyhow::anyhow!(
-                    "TUI closed while agent selection was pending"
-                ));
-            }
-            break;
-        }
-
-        if needs_redraw {
-            terminal.draw(|frame| {
-                let area = frame.area();
-                render_screen_background(frame, area);
-                if let Some(request) = app.shell_approval_request() {
-                    screens::render_shell_approval_modal(frame, area, request);
-                    return;
-                }
-                if let Some(modules) = app.capability_approval_modules() {
-                    screens::render_capability_approval_modal(frame, area, modules);
-                    return;
-                }
-                if let Some(options) = app.agent_selection_options() {
-                    screens::render_agent_selection_modal(
-                        frame,
-                        area,
-                        options,
-                        app.agent_selection_cursor,
-                    );
-                    return;
-                }
-
-                match &app.screen {
-                    app::Screen::RunList => screens::run_list::render(
-                        frame,
-                        area,
-                        &app.workflow_runs,
-                        &mut app.run_list_state,
-                        app.status_line.as_ref(),
-                    ),
-                    app::Screen::TaskList { .. } => screens::task_list::render(
-                        frame,
-                        area,
-                        app.current_workflow_run.as_ref(),
-                        &app.tasks,
-                        &mut app.task_list_state,
-                        app.status_line.as_ref(),
-                        app.log_view.as_ref(),
-                        app.log_scroll,
-                        app.log_follow,
-                    ),
-                    app::Screen::Settings { .. } => screens::settings::render(
-                        frame,
-                        area,
-                        app.current_workflow_run.as_ref(),
-                        app.settings_cursor,
-                        app.session_overrides.dry_run,
-                        &app.session_overrides.capabilities,
-                        app.status_line.as_ref(),
-                    ),
-                }
-            })?;
-            needs_redraw = false;
-        }
-
-        let first_event = events.next().await?;
-        let mut event_batch = vec![first_event];
-        event_batch.extend(events.drain_pending(255));
-
-        for event in coalesce_events(event_batch) {
-            needs_redraw |= matches!(
-                event,
-                AppEvent::Key(_)
-                    | AppEvent::Mouse(_)
-                    | AppEvent::Scroll(_)
-                    | AppEvent::Resize(_, _)
-            ) || matches!(event, AppEvent::Tick) && app.has_live_updates();
-            pending_effects.extend(app.reduce(event));
-        }
-    }
-
-    Ok(())
-}
-
-fn coalesce_events(events: Vec<AppEvent>) -> Vec<AppEvent> {
-    let mut coalesced = Vec::new();
-    let mut pending_scroll = 0i32;
-    let mut pending_tick = false;
-    let mut pending_resize: Option<(u16, u16)> = None;
-
-    for event in events {
-        match event {
-            AppEvent::Mouse(mouse) => match mouse.kind {
-                crossterm::event::MouseEventKind::ScrollDown => {
-                    pending_scroll = pending_scroll.saturating_add(1);
-                }
-                crossterm::event::MouseEventKind::ScrollUp => {
-                    pending_scroll = pending_scroll.saturating_sub(1);
-                }
-                _ => {
-                    flush_coalesced_events(
-                        &mut coalesced,
-                        &mut pending_scroll,
-                        &mut pending_tick,
-                        &mut pending_resize,
-                    );
-                    coalesced.push(AppEvent::Mouse(mouse));
-                }
-            },
-            AppEvent::Tick => {
-                pending_tick = true;
-            }
-            AppEvent::Resize(width, height) => {
-                pending_resize = Some((width, height));
-            }
-            other => {
-                flush_coalesced_events(
-                    &mut coalesced,
-                    &mut pending_scroll,
-                    &mut pending_tick,
-                    &mut pending_resize,
-                );
-                coalesced.push(other);
-            }
-        }
-    }
-
-    flush_coalesced_events(
-        &mut coalesced,
-        &mut pending_scroll,
-        &mut pending_tick,
-        &mut pending_resize,
-    );
-    coalesced
-}
-
-fn flush_coalesced_events(
-    coalesced: &mut Vec<AppEvent>,
-    pending_scroll: &mut i32,
-    pending_tick: &mut bool,
-    pending_resize: &mut Option<(u16, u16)>,
-) {
-    if let Some((width, height)) = pending_resize.take() {
-        coalesced.push(AppEvent::Resize(width, height));
-    }
-    if *pending_scroll != 0 {
-        coalesced.push(AppEvent::Scroll(*pending_scroll));
-        *pending_scroll = 0;
-    }
-    if *pending_tick {
-        coalesced.push(AppEvent::Tick);
-        *pending_tick = false;
-    }
-}
-
-struct TuiSession {
-    terminal: Option<TuiTerminal>,
-    control: File,
-    restored: bool,
-}
-
-impl TuiSession {
+impl TerminalGuard {
     fn enter() -> Result<Self> {
-        let control = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-        let backend_tty = control.try_clone()?;
         enable_raw_mode()?;
-        let mut control_for_setup = control.try_clone()?;
-        execute!(
-            control_for_setup,
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            EnableBracketedPaste,
-            EnableFocusChange
-        )?;
-
-        let terminal = Terminal::new(CrosstermBackend::new(backend_tty))?;
-        Ok(Self {
-            terminal: Some(terminal),
-            control,
-            restored: false,
-        })
-    }
-
-    fn restore(&mut self) -> Result<()> {
-        if self.restored {
-            return Ok(());
-        }
-        disable_raw_mode()?;
-        execute!(
-            self.control,
-            DisableFocusChange,
-            DisableBracketedPaste,
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        )?;
-        if let Some(terminal) = self.terminal.as_mut() {
-            terminal.show_cursor()?;
-        }
-        self.restored = true;
-        Ok(())
+        io::stdout().execute(EnterAlternateScreen)?;
+        Ok(Self)
     }
 }
 
-impl Drop for TuiSession {
+impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        if self.restored {
-            return;
-        }
-
         let _ = disable_raw_mode();
-        let _ = execute!(
-            self.control,
-            DisableFocusChange,
-            DisableBracketedPaste,
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        );
-        if let Some(terminal) = self.terminal.as_mut() {
-            let _ = terminal.show_cursor();
-        }
-        self.restored = true;
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
 
-fn drain_shell_approvals(runtime: &mut TuiRuntime, queue: &mut VecDeque<PendingShellApproval>) {
-    while let Ok(message) = runtime.approval_rx.try_recv() {
-        queue.push_back(PendingShellApproval::new(
-            message.request,
-            message.response_tx,
-        ));
-    }
+fn log_modal_viewport_height(terminal_height: u16) -> u16 {
+    terminal_height
+        .saturating_mul(3)
+        .saturating_div(5)
+        .saturating_sub(2)
 }
 
-fn drain_capability_approvals(
-    runtime: &mut TuiRuntime,
-    queue: &mut VecDeque<PendingCapabilityApproval>,
-) {
-    while let Ok(message) = runtime.capability_approval_rx.try_recv() {
-        queue.push_back(PendingCapabilityApproval::new(
-            message.modules,
-            message.response_tx,
-        ));
-    }
+fn task_list_viewport_height(terminal_height: u16) -> usize {
+    terminal_height.saturating_sub(5) as usize
 }
 
-fn drain_agent_selections(runtime: &mut TuiRuntime, queue: &mut VecDeque<PendingAgentSelection>) {
-    while let Ok(message) = runtime.agent_selection_rx.try_recv() {
-        queue.push_back(PendingAgentSelection::new(
-            message.options,
-            message.response_tx,
-        ));
-    }
+fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER))
 }
 
-async fn execute_effect(app: &App, engine: &mut Engine, effect: AppEffect) -> EffectResult {
-    match effect {
-        AppEffect::Refresh => {
-            let (workflow_runs, current_workflow_run, tasks) = match app.current_workflow_run_id() {
-                Some(workflow_run_id) => {
-                    let workflow_run = match engine.get_workflow_run(workflow_run_id).await {
-                        Ok(workflow_run) => Some(workflow_run),
-                        Err(error) => {
-                            return EffectResult::Status(StatusLine {
-                                tone: StatusTone::Error,
-                                message: format!("Failed to load workflow run: {error}"),
-                            });
-                        }
-                    };
-                    let tasks = match engine.get_tasks(workflow_run_id).await {
-                        Ok(tasks) => tasks,
-                        Err(error) => {
-                            return EffectResult::Status(StatusLine {
-                                tone: StatusTone::Error,
-                                message: format!("Failed to load tasks: {error}"),
-                            });
-                        }
-                    };
-                    (Vec::new(), workflow_run, tasks)
-                }
-                None => match engine.list_workflow_runs(app.run_list_limit).await {
-                    Ok(workflow_runs) => (workflow_runs, None, Vec::new()),
-                    Err(error) => {
-                        return EffectResult::Status(StatusLine {
-                            tone: StatusTone::Error,
-                            message: format!("Failed to load workflow runs: {error}"),
-                        });
-                    }
-                },
+fn copy_text_to_clipboard(text: &str) -> Result<()> {
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(text.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCallback {
+    ProgressCallback {
+        callback: std::sync::Arc::new(Box::new(move |task_id, path, status, count, index| {
+            let Ok(task_id) = Uuid::parse_str(task_id) else {
+                return;
             };
 
-            EffectResult::Refreshed {
-                workflow_runs,
-                current_workflow_run,
-                tasks,
-            }
-        }
-        AppEffect::LoadLogs {
-            workflow_run_id,
-            task_id,
-        } => {
-            let task = engine
-                .get_tasks(workflow_run_id)
-                .await
-                .ok()
-                .and_then(|tasks| tasks.into_iter().find(|task| task.id == task_id));
-            EffectResult::LogsLoaded(task.as_ref().map(LogView::from_task))
-        }
-        AppEffect::TriggerTask {
-            workflow_run_id,
-            task_id,
-        } => {
-            apply_session_overrides(engine, &app.session_overrides);
-            match engine.resume_workflow(workflow_run_id, vec![task_id]).await {
-                Ok(()) => EffectResult::Noop,
-                Err(error) => EffectResult::Status(StatusLine {
-                    tone: StatusTone::Error,
-                    message: format!("Failed to trigger task {task_id}: {error}"),
-                }),
-            }
-        }
-        AppEffect::TriggerAll { workflow_run_id } => {
-            apply_session_overrides(engine, &app.session_overrides);
-            match engine.trigger_all(workflow_run_id).await {
-                Ok(true) | Ok(false) => EffectResult::Noop,
-                Err(error) => EffectResult::Status(StatusLine {
-                    tone: StatusTone::Error,
-                    message: format!("Failed to trigger all tasks: {error}"),
-                }),
-            }
-        }
-        AppEffect::RetryTask {
-            workflow_run_id,
-            task_id,
-        } => {
-            apply_session_overrides(engine, &app.session_overrides);
-            match engine.resume_workflow(workflow_run_id, vec![task_id]).await {
-                Ok(()) => EffectResult::Noop,
-                Err(error) => EffectResult::Status(StatusLine {
-                    tone: StatusTone::Error,
-                    message: format!("Failed to retry task {task_id}: {error}"),
-                }),
-            }
-        }
-        AppEffect::CancelWorkflow { workflow_run_id } => {
-            match engine.cancel_workflow(workflow_run_id).await {
-                Ok(()) => EffectResult::Noop,
-                Err(error) => EffectResult::Status(StatusLine {
-                    tone: StatusTone::Error,
-                    message: format!("Failed to cancel workflow: {error}"),
-                }),
-            }
+            let current_file = match status {
+                "processing" | "update" | "next" if !path.is_empty() => Some(path.to_string()),
+                _ => None,
+            };
+
+            let processed_files = match status {
+                "increment" | "finish" => *index,
+                "start" | "counting" => 0,
+                _ => *index,
+            };
+
+            publish_event(
+                workflow_run_id,
+                WorkflowEvent::TaskProgressUpdated {
+                    workflow_run_id,
+                    task_id,
+                    processed_files,
+                    total_files: count.cloned(),
+                    current_file,
+                    at: chrono::Utc::now(),
+                },
+            );
+        })),
+    }
+}
+
+pub async fn run_workflow_tui(
+    mut engine: Engine,
+    run_id: Option<Uuid>,
+    limit: usize,
+) -> Result<()> {
+    let _guard = TerminalGuard::enter()?;
+    engine.set_quiet(true);
+    engine
+        .workflow_run_config_mut()
+        .capture_stdout_in_quiet_mode = false;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    let mut state = TuiState::default();
+    state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
+
+    let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let mut runtime = TuiRuntime::new(ui_event_rx);
+
+    if let Some(run_id) = run_id {
+        attach_run(&mut engine, run_id, &mut state, &mut runtime).await?;
+    }
+
+    run_tui_loop(&mut engine, &mut terminal, &mut state, limit, &mut runtime).await
+}
+
+pub async fn run_workflow_tui_with_session(
+    mut engine: Engine,
+    session: WorkflowSession,
+    limit: usize,
+) -> Result<()> {
+    let _guard = TerminalGuard::enter()?;
+    engine.set_quiet(true);
+    engine
+        .workflow_run_config_mut()
+        .capture_stdout_in_quiet_mode = false;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    let mut state = TuiState::default();
+    state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
+
+    let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let mut runtime = TuiRuntime::new(ui_event_rx);
+    let run_id = session.handle().workflow_run_id();
+    engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
+        run_id,
+    ))));
+    bind_session(&session, &mut state, &mut runtime).await?;
+    runtime.session = Some(session);
+
+    run_tui_loop(&mut engine, &mut terminal, &mut state, limit, &mut runtime).await
+}
+
+struct TuiRuntime {
+    session: Option<WorkflowSession>,
+    receiver: Option<tokio::sync::broadcast::Receiver<WorkflowEvent>>,
+    snapshot_receiver: Option<mpsc::UnboundedReceiver<WorkflowSnapshot>>,
+    snapshot_task: Option<tokio::task::JoinHandle<()>>,
+    ui_event_rx: mpsc::UnboundedReceiver<AppEvent>,
+}
+
+impl TuiRuntime {
+    fn new(ui_event_rx: mpsc::UnboundedReceiver<AppEvent>) -> Self {
+        Self {
+            session: None,
+            receiver: None,
+            snapshot_receiver: None,
+            snapshot_task: None,
+            ui_event_rx,
         }
     }
 }
 
-fn apply_session_overrides(engine: &mut Engine, overrides: &app::SessionOverrides) {
-    engine.set_quiet(true);
-    engine.set_progress_callback(std::sync::Arc::new(None));
-    engine.set_dry_run(overrides.dry_run);
-    engine.set_capabilities(overrides.capabilities.clone());
+async fn run_tui_loop(
+    engine: &mut Engine,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut TuiState,
+    limit: usize,
+    runtime: &mut TuiRuntime,
+) -> Result<()> {
+    loop {
+        if let Some(rx) = runtime.receiver.as_mut() {
+            while let Ok(event) = rx.try_recv() {
+                state.reduce(AppEvent::Workflow(event));
+            }
+        }
+
+        if let Some(rx) = runtime.snapshot_receiver.as_mut() {
+            while let Ok(snapshot) = rx.try_recv() {
+                state.reduce(AppEvent::Snapshot(snapshot));
+            }
+        }
+
+        while let Ok(event) = runtime.ui_event_rx.try_recv() {
+            state.reduce(event);
+        }
+
+        if matches!(state.screen, Screen::RunDetail) {
+            let viewport_height = task_list_viewport_height(terminal.size()?.height);
+            state.sync_task_list_scroll(viewport_height);
+        }
+
+        terminal.draw(|frame| screens::render(frame, state))?;
+
+        if !poll(Duration::from_millis(100))? {
+            continue;
+        }
+
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        if state.approval.is_some() {
+            match key.code {
+                KeyCode::Char('y') => {
+                    if let (Some(session), Some(command)) =
+                        (runtime.session.as_ref(), state.approval_accept_command())
+                    {
+                        spawn_command(session.handle(), command);
+                    }
+                    state.clear_approval();
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    if let (Some(session), Some(command)) =
+                        (runtime.session.as_ref(), state.approval_reject_command())
+                    {
+                        spawn_command(session.handle(), command);
+                    }
+                    state.clear_approval();
+                }
+                KeyCode::Up | KeyCode::Char('k') => state.move_up(),
+                KeyCode::Down | KeyCode::Char('j') => state.move_down(),
+                KeyCode::Enter => {
+                    if matches!(state.approval, Some(ApprovalPrompt::AgentSelection { .. })) {
+                        if let (Some(session), Some(command)) =
+                            (runtime.session.as_ref(), state.approval_accept_command())
+                        {
+                            spawn_command(session.handle(), command);
+                        }
+                        state.clear_approval();
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        match state.screen {
+            Screen::Runs => match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Up | KeyCode::Char('k') => state.move_up(),
+                KeyCode::Down | KeyCode::Char('j') => state.move_down(),
+                KeyCode::Char('r') => {
+                    state.set_runs(engine.list_workflow_runs(limit).await.unwrap_or_default());
+                }
+                KeyCode::Enter => {
+                    if let Some(run_id) = state.selected_run_id() {
+                        attach_run(engine, run_id, state, runtime).await?;
+                    }
+                }
+                _ => {}
+            },
+            Screen::RunDetail => match key.code {
+                KeyCode::Char('c') | KeyCode::Char('C')
+                    if is_copy_shortcut(key.code, key.modifiers) =>
+                {
+                    if state.show_log_modal {
+                        match copy_text_to_clipboard(&state.selected_task_log_text()) {
+                            Ok(()) => state.set_log_modal_notice("Copied full log to clipboard"),
+                            Err(error) => state
+                                .set_log_modal_notice(format!("Clipboard copy failed: {error}")),
+                        }
+                    } else if let Some(session) = runtime.session.as_ref() {
+                        spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
+                    }
+                }
+                KeyCode::Char('q') => {
+                    if state.show_log_modal {
+                        state.close_log_modal();
+                    } else {
+                        break;
+                    }
+                }
+                KeyCode::Esc => {
+                    if state.show_log_modal {
+                        state.close_log_modal();
+                        continue;
+                    }
+                    if let Some(task) = runtime.snapshot_task.take() {
+                        task.abort();
+                    }
+                    runtime.receiver = None;
+                    runtime.snapshot_receiver = None;
+                    runtime.session = None;
+                    state.leave_run();
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if state.show_log_modal {
+                        state.scroll_logs_up(1);
+                    } else {
+                        state.move_up();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if state.show_log_modal {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.scroll_logs_down(viewport_height, 1);
+                    } else {
+                        state.move_down();
+                    }
+                }
+                KeyCode::Enter => {
+                    if state.show_log_modal {
+                        state.close_log_modal();
+                    } else {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.open_log_modal(viewport_height);
+                    }
+                }
+                KeyCode::Char('g') => {
+                    if state.show_log_modal {
+                        state.scroll_logs_to_top();
+                        continue;
+                    }
+                }
+                KeyCode::Char('t') => {
+                    if let (Some(session), Some(command)) = (
+                        runtime.session.as_ref(),
+                        state.selected_task_trigger_command(),
+                    ) {
+                        spawn_command(session.handle(), command);
+                    }
+                }
+                KeyCode::Char('G') => {
+                    if state.show_log_modal {
+                        let viewport_height = log_modal_viewport_height(terminal.size()?.height);
+                        state.scroll_logs_to_bottom(viewport_height);
+                    }
+                }
+                KeyCode::Char('T') => {
+                    if let Some(session) = runtime.session.as_ref() {
+                        let task_ids = state.visible_awaiting_task_ids();
+                        spawn_command(session.handle(), WorkflowCommand::TriggerTasks { task_ids });
+                    }
+                }
+                KeyCode::Char('c') => {
+                    if let Some(session) = runtime.session.as_ref() {
+                        spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests;
+fn spawn_command(
+    handle: butterflow_core::workflow_runtime::WorkflowSessionHandle,
+    command: WorkflowCommand,
+) {
+    tokio::spawn(async move {
+        let _ = handle.send(command).await;
+    });
+}
+
+async fn attach_run(
+    engine: &mut Engine,
+    run_id: Uuid,
+    state: &mut TuiState,
+    runtime: &mut TuiRuntime,
+) -> Result<()> {
+    if let Some(task) = runtime.snapshot_task.take() {
+        task.abort();
+    }
+    let session = WorkflowSession::attach(engine.clone(), run_id);
+    engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
+        run_id,
+    ))));
+    bind_session(&session, state, runtime).await?;
+    runtime.session = Some(session);
+    Ok(())
+}
+
+async fn bind_session(
+    session: &WorkflowSession,
+    state: &mut TuiState,
+    runtime: &mut TuiRuntime,
+) -> Result<()> {
+    let snapshot = session.handle().load_snapshot().await?;
+    let receiver = session.handle().subscribe();
+    let session_handle = session.handle();
+    let (snapshot_tx, snapshot_rx) = mpsc::unbounded_channel();
+    let snapshot_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match session_handle.load_snapshot().await {
+                Ok(snapshot) => {
+                    if snapshot_tx.send(snapshot).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    log::debug!("snapshot reconcile failed: {error}");
+                }
+            }
+        }
+    });
+    state.enter_run(snapshot);
+    runtime.receiver = Some(receiver);
+    runtime.snapshot_receiver = Some(snapshot_rx);
+    runtime.snapshot_task = Some(snapshot_task);
+    Ok(())
+}

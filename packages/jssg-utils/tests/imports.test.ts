@@ -591,6 +591,61 @@ function testAddImportAfterExisting() {
   assert(modIdx > otherIdx, "New import should be after existing import");
 }
 
+function testAddImportAfterExistingKeepsSeparateLines() {
+  const source = [
+    "import a from 'a';",
+    "import b from 'b';",
+    "import c from 'c';",
+    "console.log(a, b, c);",
+    "",
+  ].join("\n");
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "import a from 'a';",
+        "import b from 'b';",
+        "import c from 'c';",
+        "import foo from 'mod';",
+        "console.log(a, b, c);",
+        "",
+      ].join("\n"),
+    "New import should be inserted on its own line after existing imports",
+  );
+}
+
+function testAddImportAfterMixedImportsUsesLastSourcePosition() {
+  const source = ["const a = require('a');", "import b from 'b';", "console.log(a, b);", ""].join(
+    "\n",
+  );
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "default",
+    name: "foo",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result ===
+      [
+        "const a = require('a');",
+        "import b from 'b';",
+        "import foo from 'mod';",
+        "console.log(a, b);",
+        "",
+      ].join("\n"),
+    "New import should be inserted after the last import by source position",
+  );
+}
+
 // ============================================================================
 // removeImport tests
 // ============================================================================
@@ -717,6 +772,241 @@ function testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected() {
   assert(result.includes("require('mod')"), "Should leave the multi-declarator require intact");
 }
 
+/** Before removeImport supported `variable_declaration`, this returned null (only lexical_declaration was matched). */
+function testRemoveDefaultVarCJS() {
+  const program = parseProgram("javascript", "var foo = require('mod');\nconsole.log(foo);\n");
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit for var + require");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should remove var require statement");
+  assert(result.includes("console.log(foo)"), "Should keep usage");
+}
+
+/** Bare `require('mod')` has no binding, so getImport is null; removal required `removeSideEffectForms`. */
+function testRemoveBareRequireOnlyWithSideEffectFlag() {
+  const src = "require('mod');\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without removeSideEffectForms, bare require should not be removed (backward compatible)",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, bare require should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require('mod')"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Do not strip `require` when the module id only appears nested (not the direct specifier). */
+function testRemoveBareRequireNestedStringNotRemoved() {
+  const src = "require(getName('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Nested string literal must not be treated as require('mod')",
+  );
+  assert(program.text() === src, "Source must be unchanged");
+}
+
+/** Parenthesized string literal is still a direct specifier. */
+function testRemoveBareRequireParenthesizedLiteralStillRemoved() {
+  const src = "require(('mod'));\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "Parenthesized literal should still count as direct specifier");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("require"), "Should strip bare require");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** Side-effect `import 'mod'` — same as bare require: needs removeSideEffectForms. */
+function testRemoveSideEffectImportWithFlag() {
+  const src = "import 'mod';\nconsole.log(1);\n";
+  const program = parseProgram("javascript", src);
+  assert(
+    removeImport(program, { type: "default", from: "mod" }) === null,
+    "Without flag, side-effect import should not be removed",
+  );
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+  assert(edit !== null, "With removeSideEffectForms, side-effect import should be removed");
+  const result = program.commitEdits([edit!]);
+  assert(!result.includes("import 'mod'"), "Should strip side-effect import");
+  assert(result.includes("console.log(1)"), "Should keep other statements");
+}
+
+/** `import foo, { bar } from 'mod'` + remove default → must keep `{ bar }`. */
+function testRemoveDefault_MixedWithNamed_KeepsNamedSibling() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected default stripped but named kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, * as ns from 'mod'` + remove default → must keep `* as ns`. */
+function testRemoveDefault_MixedWithNamespace_KeepsNamespaceSibling() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, * as ns from 'mod';\nconsole.log(foo, ns);\n",
+  );
+  const edit = removeImport(program, { type: "default", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import * as ns from 'mod';\nconsole.log(foo, ns);\n",
+    `Expected default stripped but namespace kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar } from 'mod'` + remove last named ['bar'] → must keep `foo`. */
+function testRemoveNamed_LastInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected named clause stripped but default kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar } from 'mod'` + remove ['bar', 'unrelated'] → only `bar` is present; strip just the named clause. */
+function testRemoveNamed_PartiallyPresentInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar", "unrelated"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected only present specifier removed, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Removing ALL named specifiers from a mixed statement drops just the `{ ... }` chunk. */
+function testRemoveNamed_AllInMixed_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar", "baz"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, bar, baz);\n",
+    `Expected named clause stripped, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, { bar, baz } from 'mod'` + remove ['bar'] → keep default AND remaining named. */
+function testRemoveNamed_SubsetOfMixed_KeepsBoth() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, { bar, baz } from 'mod';\nconsole.log(foo, bar, baz);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["bar"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    /^import foo, \{\s*baz\s*\} from 'mod';\nconsole\.log\(foo, bar, baz\);\n$/.test(result),
+    `Expected bar removed but foo and baz kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Guard: options.specifiers may contain names not in the statement — must not delete bindings that were never requested. */
+function testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo, bar } from 'mod';\nconsole.log(foo, bar);\n",
+  );
+  // `unrelated` is not in the statement; only `foo` is actually being removed,
+  // so `bar` must survive.
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: ["foo", "unrelated"],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log(foo, bar);\n",
+    `Expected only foo removed, bar kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** `import foo, * as ns from 'mod'` + remove namespace → must keep `foo`. */
+function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
+  const program = parseProgram(
+    "javascript",
+    "import foo, * as ns from 'mod';\nconsole.log(foo, ns);\n",
+  );
+  const edit = removeImport(program, { type: "namespace", from: "mod" });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import foo from 'mod';\nconsole.log(foo, ns);\n",
+    `Expected namespace stripped but default kept, got: ${JSON.stringify(result)}`,
+  );
+}
+
+/** Only the module source string counts — not other string literals (e.g. import attributes). */
+function testRemoveSideEffectImportOnlyMatchesSourceField() {
+  const src = "import 'foo' assert { type: 'mod' };\nconsole.log(1);\n";
+  const program = parseProgram("typescript", src);
+  assert(
+    removeImport(program, {
+      type: "default",
+      from: "mod",
+      removeSideEffectForms: true,
+    }) === null,
+    "Package name only in import attributes must not remove the statement",
+  );
+  assert(program.text() === src, "Source must be unchanged");
+}
+
 function run() {
   // getAllImports tests
   testReturnsEmptyArrayWhenNoImports();
@@ -765,6 +1055,8 @@ function run() {
   testAddImportSkipsExistingNamed();
   testAddImportMergesNamedSpecifiers();
   testAddImportAfterExisting();
+  testAddImportAfterExistingKeepsSeparateLines();
+  testAddImportAfterMixedImportsUsesLastSourcePosition();
 
   // removeImport tests
   testRemoveDefaultImportESM();
@@ -777,6 +1069,20 @@ function run() {
   testRemoveDefault_MultiDeclarator_ReturnsNull();
   testRemoveDefault_MultiDeclarator_SourceCodeUnchanged();
   testRemoveDefault_MultiDeclarator_UnrelatedModuleUnaffected();
+  testRemoveDefaultVarCJS();
+  testRemoveBareRequireOnlyWithSideEffectFlag();
+  testRemoveBareRequireNestedStringNotRemoved();
+  testRemoveBareRequireParenthesizedLiteralStillRemoved();
+  testRemoveSideEffectImportWithFlag();
+  testRemoveSideEffectImportOnlyMatchesSourceField();
+  testRemoveDefault_MixedWithNamed_KeepsNamedSibling();
+  testRemoveDefault_MixedWithNamespace_KeepsNamespaceSibling();
+  testRemoveNamed_LastInMixed_KeepsDefault();
+  testRemoveNamed_PartiallyPresentInMixed_KeepsDefault();
+  testRemoveNamed_AllInMixed_KeepsDefault();
+  testRemoveNamed_SubsetOfMixed_KeepsBoth();
+  testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches();
+  testRemoveNamespace_MixedWithDefault_KeepsDefault();
 
   console.log("imports.test.ts: all assertions passed");
 }

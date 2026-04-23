@@ -9,14 +9,14 @@ This guide covers advanced JSSG features that enable you to build more sophistic
 Every JSSG codemod must export a default function with this exact signature:
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Your transformation logic
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### Transform Options
@@ -29,10 +29,10 @@ The `options` object provides execution context:
 - `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   const lang = options.language;
   const params = options.params;
   const preFilteredMatches = options.matches; // may be undefined if no selector
@@ -40,7 +40,7 @@ const transform: Transform<TSX> = async (root, options) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -54,10 +54,11 @@ Dynamic parsing allows you to parse and analyze different types of code within a
 Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import { parseAsync } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   // Find all styled-component template literals
   const styledComponents = root.root().findAll({
     rule: { pattern: "styled.$COMPONENT`$ARG`" }
@@ -101,7 +102,7 @@ const transform: Transform<TSX> = async (root) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### Return Semantics
@@ -123,10 +124,10 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Access user-configured parameters
   const library = options.params?.library || "next-intl";
   const shardingMethod = options.params?.shardingMethod || "directory";
@@ -138,7 +139,7 @@ const transform: Transform<TSX> = async (root, options) => {
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
 ```yaml workflow.yaml
@@ -195,10 +196,10 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";    
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Access matrix values passed from the workflow (if matrix strategy is used)
   const team = (options.matrixValues as any)?.team;
   const shardId = (options.matrixValues as any)?.shardId;
@@ -218,7 +219,7 @@ const transform: Transform<TSX> = async (root, options) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -305,11 +306,11 @@ import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
 State is shared across all files processed in parallel within a single step:
 
 ```ts codemod.ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { setState, getState, acquireLock } from "codemod:workflow";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
 
@@ -326,7 +327,7 @@ const transform: Transform<TSX> = async (root) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### When to Use Locks
@@ -377,11 +378,11 @@ nodes:
 ```
 
 ```ts scripts/scan.ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { setState, getState, acquireLock } from "codemod:workflow";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   // Collect file paths that match criteria
   const release = acquireLock("files");
   try {
@@ -394,7 +395,7 @@ const transform: Transform<TSX> = async (root) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ```ts scripts/process.ts
@@ -459,11 +460,11 @@ Use runtime hooks when you want to:
 ### Example: Report progress and fail explicitly
 
 ```ts codemod.ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import runtime from "codemod:runtime";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const relativeFile = root.filename();
 
   runtime.setCurrentUnit(relativeFile);
@@ -481,7 +482,7 @@ const transform: Transform<TSX> = async (root) => {
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### When to use hooks vs exceptions
@@ -500,10 +501,10 @@ export default transform;
 Use multi-repo orchestration when your codemod must coordinate changes across multiple repositories—such as updating shared libraries, enforcing consistency, or applying repo-specific logic. This approach streamlines large-scale migrations and ensures changes are applied uniformly.
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   const filePath = root.filename();
   const repoName = options.matrixValues?.repo_name;
   
@@ -515,7 +516,7 @@ const transform: Transform<TSX> = async (root, options) => {
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
 ## Multi-File Transforms
@@ -528,18 +529,18 @@ Use `jssgTransform()` to apply a transform function to another file from within 
 
 ```ts
 import { jssgTransform } from "codemod:ast-grep";
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import type CSS from "codemod:ast-grep/langs/css";
 
-const migrateStyles: Transform<CSS> = async (root) => {
+const migrateStyles: Codemod<CSS> = async (root) => {
   // Rename the file from .less to .css
   root.rename(root.filename().replace('.less', '.css'));
   // Optionally transform the content
   return transformedContent;
 };
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -564,7 +565,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -576,7 +577,7 @@ export default transform;
 Use `root.rename(newPath)` to rename the file currently being processed. This is useful for file extension conversions (`.js` → `.ts`, `.less` → `.css`, `.cjs` → `.mjs`).
 
 ```ts
-const transform: Transform<CSS> = async (root) => {
+const codemod: Codemod<CSS> = async (root) => {
   // Rename .less → .css
   root.rename(root.filename().replace('.less', '.css'));
 
@@ -676,8 +677,8 @@ Use `stopBy` to bound relational searches (e.g., to immediate neighbors or the e
 
 ### Consistent Patterns
 
-1. **Use `const transform: Transform<TSX> = async (root, options) => {}` with `export default transform`**
-2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `codemod:ast-grep`
+1. **Use `const codemod: Codemod<TSX> = async (root, options) => {}` with `export default codemod`**
+2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod:ast-grep`
 3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
 4. **Use early returns** - skip processing when possible, especially for sharding
 5. **Batch operations** - collect edits before committing

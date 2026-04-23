@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Kotlin from "codemod:ast-grep/langs/kotlin";
 
-async function transform(root: SgRoot<Kotlin>): Promise<string> {
+const codemod: Codemod<Kotlin> = async (root) => {
   const rootNode = root.root();
 
   // Find simple null checks followed by return
@@ -62,4 +62,4 @@ async function transform(root: SgRoot<Kotlin>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

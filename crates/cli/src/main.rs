@@ -16,7 +16,6 @@ mod engine;
 mod progress_bar;
 mod report_server;
 mod suitability;
-#[cfg(unix)]
 mod tui;
 mod utils;
 mod workflow_runner;
@@ -126,8 +125,7 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
-    /// Browse workflow runs in an interactive TUI
-    #[cfg(unix)]
+    /// Browse and interact with workflow runs in the terminal
     Tui(commands::workflow::tui::Command),
 }
 
@@ -444,7 +442,6 @@ async fn main() -> Result<()> {
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
             }
-            #[cfg(unix)]
             WorkflowCommands::Tui(args) => {
                 commands::workflow::tui::handler(args).await?;
             }

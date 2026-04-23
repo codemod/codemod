@@ -52,13 +52,13 @@ Use cardinality to capture context about what you're counting. For example, when
 This read-only codemod counts how many times each prop is used on `Button` components:
 
 ```typescript
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { useMetricAtom } from "codemod:metrics";
 
 const propUsageMetric = useMetricAtom("prop-usage");
 
-const codemod: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
 
   const jsxAttrs = rootNode.findAll({

@@ -77,6 +77,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 toml_edit = "0.22"
+arboard = "3.4"
 
 [dev-dependencies]
 portable-pty = "0.9"

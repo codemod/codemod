@@ -74,11 +74,11 @@ Returns `null` if the import is not found.
 ### Example
 
 ```typescript
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { getImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
 
   // Find the default import of "express"
@@ -93,6 +93,65 @@ const transform: Transform<TSX> = async (root) => {
   const useStateImport = getImport(rootNode, { type: "named", name: "useState", from: "react" });
   if (useStateImport) {
     console.log(`useState aliased as: ${useStateImport.alias}`);
+  }
+
+  return null;
+};
+
+export default codemod;
+```
+
+---
+
+## `getAllImports`
+
+Locate imports of a given module and return their alias/identifier nodes.
+
+### Parameters
+
+<ParamField body="program" type="SgNode<T, 'program'>" required>
+  The root program node to search within.
+</ParamField>
+
+<ParamField body="options" type="GetImportOptions" required>
+  What to look for:
+  - `{ type: "default", from: string }` — Find all default imports from a module.
+  - `{ type: "named", name: string, from: string }` — Find all instances of a specific named import from a module.
+</ParamField>
+
+### Returns
+
+`ResolvedImport<T>[]` — An array containing:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `alias` | `string` | The local name used at call sites (e.g., `baz` in `import { foo as baz }`) |
+| `isNamespace` | `boolean` | `true` if the import is `import * as xyz from '...'` |
+| `moduleType` | `"esm" \| "cjs"` | Whether the import is ESM (`import`) or CJS (`require()`) |
+| `node` | `SgNode<T, "identifier">` | The identifier AST node for the local binding |
+
+Returns an empty array if no imports are found.
+
+### Example
+
+```typescript
+import type { Transform } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { getAllImports } from "@jssg/utils/javascript/imports";
+
+const transform: Transform<TSX> = async (root) => {
+  const rootNode = root.root();
+
+  // Find all default imports of "express"
+  const expressImports = getAllImports(rootNode, { type: "default", from: "express" });
+  for (const imp of expressImports) {
+    console.log(`Express imported as: ${imp.alias} (${imp.moduleType})`);
+  }
+
+  // Find all named imports
+  const useStateImports = getAllImports(rootNode, { type: "named", name: "useState", from: "react" });
+  for (const imp of useStateImports) {
+    console.log(`useState aliased as: ${imp.alias}`);
   }
 
   return null;
@@ -131,11 +190,11 @@ Add an import to the program. Smart behavior:
 ### Example
 
 ```typescript
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { addImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -167,7 +226,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ---
@@ -200,11 +259,11 @@ Remove an import from the program. Smart behavior:
 ### Example
 
 ```typescript
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { removeImport } from "@jssg/utils/javascript/imports";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -219,7 +278,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ---

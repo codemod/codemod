@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type PHP from "codemod:ast-grep/langs/php";
 
-async function transform(root: SgRoot<PHP>): Promise<string> {
+const codemod: Codemod<PHP> = async (root) => {
   const rootNode = root.root();
 
   // Find all mysql_query function calls
@@ -77,4 +77,4 @@ async function transform(root: SgRoot<PHP>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

@@ -1,37 +1,92 @@
 ---
 title: "Security & Capabilities"
-description: "Understand JSSG's deny-by-default security model and how to enable capabilities for file system, network, and process operations"
+description: "Understand JSSG's deny-by-default security model, the sandboxed fs, and how to grant unrestricted access to network, disk, or process APIs"
 ---
 
-JSSG follows a **deny-by-default security model** for sensitive operations. This means potentially unsafe modules like file system access, network requests, and child processes are disabled by default and must be explicitly enabled.
+JSSG follows a **deny-by-default security model** for the most sensitive operations (network requests and spawning processes) and a **sandboxed-by-default** model for file system access. By default, codemods can work only with files under the target directory; anything else that could touch the outside world is either scoped down or gated behind an explicit capability.
 
-## Why deny-by-default?
+## Why defense in depth?
 
-Codemods run arbitrary code transformations on your codebase. By restricting capabilities by default, JSSG ensures:
+Codemods run arbitrary code transformations on your codebase. By restricting or scoping capabilities, JSSG ensures:
 
-- **Safe execution**: Untrusted codemods cannot access sensitive resources without explicit permission
-- **Audit trail**: The `capabilities` field in `codemod.yaml` provides a clear record of what permissions a codemod requires
-- **Principle of least privilege**: Codemods only get the minimum permissions they need
+- **Safe execution**: Untrusted codemods can't exfiltrate secrets, read files outside the project, reach the network, or run shell commands without explicit permission.
+- **Audit trail**: The `capabilities` field in `codemod.yaml` provides a clear record of what *extra* permissions a codemod requires.
+- **Principle of least privilege**: The default surface is the minimum a typical transformation needs — just the files under your target directory.
 
-## Unsafe modules (require explicit permission)
+## File system — sandboxed by default
 
-These modules require explicit opt-in via the `capabilities` field:
+Unlike `fetch` and `child_process`, the `fs` module is **always available** but is constrained to the workflow's **target directory** (the folder you're running the codemod against). Reads and writes inside that directory succeed transparently; paths that normalize outside it are rejected with a Node-style `EACCES` error.
+
+<CardGroup cols={2}>
+  <Card title="Inside target_dir" icon="folder-open">
+    **Allowed by default**
+
+    `readFileSync`, `writeFileSync`, `readdirSync`, `mkdirSync`, `statSync`, `existsSync`, `unlinkSync`, and their `fs/promises` equivalents all work.
+  </Card>
+  <Card title="Outside target_dir" icon="shield-halved">
+    **Rejected with `EACCES`**
+
+    Absolute paths outside the target or `..` traversals that escape it throw a Node-style error with `err.code === "EACCES"`.
+  </Card>
+</CardGroup>
+
+```ts scripts/codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import { readFileSync } from "fs";
+
+const codemod: Codemod = (root) => {
+  // ✅ Works — adjacent file inside target_dir
+  const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
+
+  try {
+    // ❌ Throws EACCES — outside the sandbox
+    readFileSync("/etc/passwd", "utf-8");
+  } catch (e) {
+    // e.code === "EACCES"
+  }
+};
+
+export default codemod;
+```
+
+<Info>
+  Path comparisons first normalize `.`/`..` segments and collapse redundant slashes before the prefix check. When the curated fs is backed by real disk (the CLI), the resolver additionally walks each path component with `symlink_metadata` and rejects any path that traverses a symlink — a pre-existing `target_dir/link-to-elsewhere/secret` won't slip past the guard even though its lexical form stays under `target_dir`.
+</Info>
+
+### Error codes
+
+The curated fs surfaces standard Node `err.code` strings so existing `catch` logic keeps working:
+
+| Code     | Meaning                                                     |
+| -------- | ----------------------------------------------------------- |
+| `EACCES` | Path is outside `target_dir`.                               |
+| `ENOENT` | Path is inside `target_dir` but the file doesn't exist.     |
+| `EIO`    | Backing storage failure (disk error, remote fetch failed).  |
+| `EINVAL` | Path couldn't be resolved.                                  |
+
+### Want unrestricted disk access?
+
+If a codemod *legitimately* needs to read or write outside the target directory (caches, home-directory config, scratch paths in `/tmp`), opt in explicitly — see [Unsafe capabilities](#unsafe-capabilities-require-explicit-permission) below. That swaps the curated fs for the unrestricted LLRT `fs` module and the path guard is no longer applied.
+
+## Unsafe capabilities — require explicit permission
+
+These still require opt-in via `capabilities`:
 
 <CardGroup cols={3}>
-  <Card title="fs" icon="folder">
-    **File system access**
+  <Card title="fs (unrestricted)" icon="folder">
+    **Full real-disk access**
 
-    Read, write, list, and delete files on disk
+    Upgrades from the sandboxed curated fs to LLRT's real-disk `fs` module. No `target_dir` prefix check. Use only when the codemod genuinely needs paths outside the target.
   </Card>
   <Card title="fetch" icon="globe">
     **Network requests**
 
-    Make HTTP/HTTPS requests
+    Make HTTP/HTTPS requests. Fully deny-by-default.
   </Card>
   <Card title="child_process" icon="terminal">
     **Process spawning**
 
-    Execute external commands
+    Execute external commands. Fully deny-by-default.
   </Card>
 </CardGroup>
 
@@ -40,12 +95,13 @@ These modules require explicit opt-in via the `capabilities` field:
 These modules are **always available** and require no special permissions:
 
 <AccordionGroup>
-  <Accordion title="Core utilities (13 modules)">
+  <Accordion title="Core utilities (14 modules)">
     - `assert` - Assertion testing
     - `buffer` - Binary data manipulation
     - `console` - Logging and debugging
     - `crypto` - Cryptographic operations
     - `events` - Event emitter patterns
+    - `fs` (sandboxed to `target_dir`)
     - `os` - Operating system information (read-only)
     - `path` - File path utilities
     - `perf_hooks` - Performance measurement
@@ -63,61 +119,85 @@ These modules are **always available** and require no special permissions:
 </AccordionGroup>
 
 <Info>
-  All default modules are considered safe because they don't perform file I/O, network requests, or process spawning.
+  Default modules don't perform network requests or spawn processes. `fs` is in this list because its default form is sandboxed to `target_dir`; adding `fs` to `capabilities` upgrades it to the unrestricted variant that can read and write anywhere on disk.
 </Info>
 
 ## Enabling capabilities
 
-To enable unsafe modules, add a `capabilities` field to your `codemod.yaml` file:
+To enable unsafe capabilities (or to upgrade `fs` from sandboxed to unrestricted), add a `capabilities` field to your `codemod.yaml` file:
 
 ```yaml codemod.yaml
 name: my-codemod
 version: 1.0.0
 capabilities:
-  - fs          # Enable file system access
-  - fetch       # Enable network requests
+  - fs             # Upgrade to unrestricted, real-disk fs (disables the target_dir guard)
+  - fetch          # Enable network requests
   - child_process  # Enable spawning processes
 ```
 
 <Warning>
-  Only enable capabilities that your codemod actually needs. Each capability increases the potential security risk if the codemod is untrusted.
+  Only request capabilities your codemod actually needs. Adding `fs` here **removes the target_dir guard** — the codemod can now read and write anywhere on disk. If you only need files in the repo, don't list it.
 </Warning>
 
 ### Capability names
 
 Use these exact strings in the `capabilities` array:
 
-| Capability      | Modules Enabled     | Use Case                                       |
-| --------------- | ------------------- | ---------------------------------------------- |
-| `fs`            | `fs`, `fs/promises` | Reading/writing files, checking file existence |
-| `fetch`         | `fetch` global      | Making HTTP requests to APIs                   |
-| `child_process` | `child_process`     | Running Git, npm, or other CLI tools           |
+| Capability      | What it changes                                                             | Use Case                                                  |
+| --------------- | --------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `fs`            | Swaps the default sandboxed `fs` for LLRT's unrestricted real-disk `fs`.    | Reading files outside `target_dir` (home config, caches). |
+| `fetch`         | Exposes the `fetch` global.                                                 | Making HTTP requests to APIs.                             |
+| `child_process` | Exposes the `child_process` module.                                         | Running Git, npm, or other CLI tools.                     |
 
 ## Usage examples
 
-### File system operations
+### Default (sandboxed) file system
+
+No `capabilities` entry needed — this just works:
+
+```ts scripts/codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import { readFileSync, writeFileSync } from "fs";
+
+const codemod: Codemod = (root) => {
+  // Read an adjacent config file inside the target directory
+  const config = JSON.parse(readFileSync("./config.json", "utf-8"));
+
+  // Write a generated artifact next to the source
+  writeFileSync("./generated.ts", "export const X = 1;\n", "utf-8");
+};
+
+export default codemod;
+```
+
+### Unrestricted file system
 
 <Steps>
-  <Step title="Enable fs capability">
+  <Step title="Enable the fs capability (real-disk)">
     ```yaml codemod.yaml
     capabilities:
       - fs
     ```
   </Step>
-  <Step title="Use fs in your transform">
+  <Step title="Use fs anywhere on disk">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
+    import type { Codemod } from "codemod:ast-grep";
     import { readFileSync } from "fs";
-    
-    const transform: Transform = (root) => {
-      // Read a configuration file
-      const config = JSON.parse(readFileSync("./config.json", "utf-8"));
-      
-      // ... use config in transformation
+
+    const codemod: Codemod = (root) => {
+      // With `capabilities: [fs]` the target_dir guard is gone — this works.
+      const globalConfig = JSON.parse(
+        readFileSync("/Users/me/.config/my-tool/config.json", "utf-8")
+      );
+      // ... use globalConfig in transformation
     };
-    
-    export default transform;
+
+    export default codemod;
     ```
+
+    <Warning>
+      Listing `fs` gives the codemod read/write access to every path the host user has permission for. Review untrusted codemods carefully before enabling it.
+    </Warning>
   </Step>
 </Steps>
 
@@ -132,17 +212,17 @@ Use these exact strings in the `capabilities` array:
   </Step>
   <Step title="Use fetch in your transform">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
-    
-    const transform: Transform = async (root) => {
+    import type { Codemod } from "codemod:ast-grep";
+
+    const codemod: Codemod = async (root) => {
       // Fetch latest API definitions
       const response = await fetch("https://api.example.com/schema.json");
       const schema = await response.json();
-      
+
       // ... use schema in transformation
     };
-    
-    export default transform;
+
+    export default codemod;
     ```
 
     <Info>
@@ -162,19 +242,19 @@ Use these exact strings in the `capabilities` array:
   </Step>
   <Step title="Spawn processes in your transform">
     ```ts scripts/codemod.ts
-    import type { Transform } from "codemod:ast-grep";
+    import type { Codemod } from "codemod:ast-grep";
     import { execSync } from "child_process";
-    
-    const transform: Transform = (root) => {
+
+    const codemod: Codemod = (root) => {
       // Get current git branch
       const branch = execSync("git rev-parse --abbrev-ref HEAD", {
         encoding: "utf-8"
       }).trim();
-      
+
       // ... use branch info in transformation
     };
-    
-    export default transform;
+
+    export default codemod;
     ```
 
     <Warning>
@@ -188,8 +268,10 @@ Use these exact strings in the `capabilities` array:
 You can also enable capabilities via CLI flags when running a codemod:
 
 ```bash
-# Enable specific capabilities
+# Upgrade fs to unrestricted (otherwise the default sandboxed fs is used)
 codemod jssg run --allow-fs path/to/codemod
+
+# Enable network + unrestricted fs
 codemod jssg run --allow-fetch --allow-fs path/to/codemod
 
 # Enable all capabilities (use with caution!)
@@ -200,22 +282,25 @@ codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/w
 ```
 
 <Info>
-  CLI flags take precedence over `codemod.yaml`. This is useful for testing or one-off runs where you trust the codemod source.
+  CLI flags take precedence over `codemod.yaml`. This is useful for testing or one-off runs where you trust the codemod source. `--allow-fs` swaps the sandboxed fs for the unrestricted variant — if your codemod only needs files inside the target directory, you don't need to pass it.
 </Info>
 
 ## Best practices
 
 <AccordionGroup>
+  <Accordion title="Prefer the default sandboxed fs">
+    If your codemod only reads/writes files inside the repo, don't add `fs` to `capabilities`. The default sandboxed `fs` already works and keeps the scope of your codemod tight for reviewers.
+  </Accordion>
   <Accordion title="Minimize required capabilities">
-    Only request capabilities your codemod truly needs. For example, if you only need to read files, document that your codemod won't write or delete files.
+    Only request capabilities your codemod truly needs. For example, if you only read config from the repo, you don't need any capabilities at all.
   </Accordion>
   <Accordion title="Document why capabilities are needed">
     In your README, explain why each capability is required and what operations use it.
 
     ```markdown README.md
     ## Required Capabilities
-    
-    - **fs**: Reads `package.json` to detect project dependencies
+
+    - **fs** (unrestricted): Reads `~/.config/my-tool/config.json` outside the repo
     - **fetch**: Calls an external API to get data
     ```
   </Accordion>
@@ -226,7 +311,7 @@ codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/w
     // ❌ BAD: Command injection vulnerability
     const userInput = options.branch;
     execSync(`git checkout ${userInput}`);
-    
+
     // ✅ GOOD: Validate input first
     const userInput = options.branch;
     if (!/^[a-zA-Z0-9_-]+$/.test(userInput)) {
@@ -243,7 +328,7 @@ codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/w
 ## Security considerations
 
 <Warning>
-  **Untrusted codemods**: Never run codemods from untrusted sources with capabilities enabled without reviewing the code first.
+  **Untrusted codemods**: Never run codemods from untrusted sources with `fs` (unrestricted), `fetch`, or `child_process` enabled without reviewing the code first. The default sandboxed fs is designed so that even a malicious codemod can't exfiltrate data outside the target directory.
 </Warning>
 
 ## Next steps

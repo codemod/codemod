@@ -613,7 +613,7 @@ The `from_state` field references an array in your workflow's [state schema](#sh
 
 In JSSG transforms via `options.matrixValues`:
 ```ts
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   const team = options.matrixValues?.team;
   const shardId = options.matrixValues?.shardId;
 };
