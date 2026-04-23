@@ -317,11 +317,35 @@ impl AccurateAnalyzer {
     }
 
     /// Process a file notification (updates the cache).
+    ///
+    /// Early-outs when the canonical path is already indexed AND the
+    /// cached content matches the incoming content. This is what makes
+    /// repeated `get_definition` / `find_references` queries on the
+    /// same file cheap — otherwise every cross-file query re-runs the
+    /// full oxc parse + semantic pass on the originating file, which
+    /// on a 7k-file workspace batch stacks up to seconds of redundant
+    /// work in the rayon par_iter.
+    ///
+    /// We match content by `(len, bytes)` rather than hashing because
+    /// the cache already holds the string — a byte-slice comparison
+    /// is O(n) but skips re-parsing which is much more expensive.
+    /// Mismatched content still triggers a re-parse, preserving the
+    /// "this notification is authoritative" contract for callers that
+    /// legitimately hand new content in (e.g. editor-driven LSP use).
     pub fn process_file(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
-        let file_symbols = parse_and_analyze(file_path, content)?;
         let canonical = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
+
+        if self.indexed_files.read().contains(&canonical) {
+            if let Some((_, cached_content)) = self.cache.get(&canonical) {
+                if cached_content.len() == content.len() && cached_content == content {
+                    return Ok(());
+                }
+            }
+        }
+
+        let file_symbols = parse_and_analyze(file_path, content)?;
         self.cache
             .insert(canonical.clone(), file_symbols, content.to_string());
         self.indexed_files.write().insert(canonical);
