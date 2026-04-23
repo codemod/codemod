@@ -151,7 +151,8 @@ jobs:
           WORKTREE_ROOT="$(mktemp -d)"
           BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
           CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
-          SHARED_TARGET_DIR="${WORKTREE_ROOT}/shared-target"
+          BASELINE_TARGET_DIR="${WORKTREE_ROOT}/baseline-target"
+          CANDIDATE_TARGET_DIR="${WORKTREE_ROOT}/candidate-target"
 
           cleanup() {
             git worktree remove --force "${BASELINE_WORKTREE}" >/dev/null 2>&1 || true
@@ -491,13 +492,13 @@ jobs:
             local worktree="$1"
             local outdir="$2"
             local ref="$3"
+            local target_dir="$4"
 
             (
               local suite_root
               local state_home
               local workflow_root
             local target_root
-            local target_dir
             local codemod_bin
             local completed_run_id=""
             local awaiting_run_id=""
@@ -511,7 +512,6 @@ jobs:
             state_home="${suite_root}/xdg-data"
             workflow_root="${suite_root}/workflows"
             target_root="${suite_root}/targets"
-            target_dir="${SHARED_TARGET_DIR}"
             codemod_bin="${target_dir}/debug/codemod"
 
             mkdir -p "${outdir}"
@@ -648,14 +648,14 @@ jobs:
           }
 
           log_phase "suite start kind=baseline ref=${BASELINE_REF}"
-          run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}"
+          run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
           log_phase "suite finish kind=baseline ref=${BASELINE_REF}"
 
           run_focused_perf_tests() {
             local worktree="$1"
             local outdir="$2"
             local ref="$3"
-            local target_dir="${SHARED_TARGET_DIR}"
+            local target_dir="$4"
             local results_md="${outdir}/focused-tests.md"
             local results_txt="${outdir}/focused-tests.txt"
 
@@ -704,9 +704,9 @@ jobs:
           }
 
           log_phase "suite start kind=candidate ref=${CANDIDATE_REF}"
-          run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
+          run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
           log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
-          run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}"
+          run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
 
           python3 scripts/compare_tui_perf.py \
             perf-results/baseline \
