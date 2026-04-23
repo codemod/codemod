@@ -527,7 +527,11 @@ impl TuiState {
                 bar.push('=');
             }
         } else {
-            let mut filled = processed.saturating_mul(inner_width) / total;
+            let mut filled = if processed == 0 {
+                0
+            } else {
+                processed.saturating_mul(inner_width).div_ceil(total)
+            };
             if filled >= inner_width {
                 filled = inner_width.saturating_sub(1);
             }
@@ -1581,6 +1585,38 @@ mod tests {
         );
 
         assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[===>]"));
+    }
+
+    #[test]
+    fn task_progress_bar_advances_for_partial_progress() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 100)".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 1,
+                total_files: Some(100),
+            },
+        );
+
+        assert_eq!(
+            state.task_progress_bar(&task, 12).as_deref(),
+            Some("[=>        ]")
+        );
     }
 
     #[test]
