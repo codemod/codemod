@@ -170,6 +170,24 @@ jobs:
             mkdir -p "${BASELINE_WORKTREE}/$(dirname "${BENCH_TEST_PATH}")"
             cp "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${BENCH_TEST_PATH}"
           fi
+          RENDER_BENCH_TEST_PATH="crates/cli/src/tui/render_latency_bench.rs"
+          if [ -f "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ]; then
+            cp "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${RENDER_BENCH_TEST_PATH}"
+            if ! grep -q "mod render_latency_bench;" "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs"; then
+              python3 - "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          marker = "pub mod event;\n"
+          if marker not in text:
+              raise SystemExit(f"missing insertion marker in {path}")
+          text = text.replace(marker, marker + "#[cfg(test)]\nmod render_latency_bench;\n", 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+            fi
+          fi
 
           extract_run_id() {
             local output_file="$1"
