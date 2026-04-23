@@ -6,13 +6,12 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use arboard::Clipboard;
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::workflow_runtime::{
     publish_event, WorkflowCommand, WorkflowEvent, WorkflowSession, WorkflowSnapshot,
 };
-use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -51,17 +50,6 @@ fn log_modal_viewport_height(terminal_height: u16) -> u16 {
 
 fn task_list_viewport_height(terminal_height: u16) -> usize {
     terminal_height.saturating_sub(5) as usize
-}
-
-fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
-    matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
-        && (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER))
-}
-
-fn copy_text_to_clipboard(text: &str) -> Result<()> {
-    let mut clipboard = Clipboard::new()?;
-    clipboard.set_text(text.to_string())?;
-    Ok(())
 }
 
 pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCallback {
@@ -264,19 +252,6 @@ async fn run_tui_loop(
                 _ => {}
             },
             Screen::RunDetail => match key.code {
-                KeyCode::Char('c') | KeyCode::Char('C')
-                    if is_copy_shortcut(key.code, key.modifiers) =>
-                {
-                    if state.show_log_modal {
-                        match copy_text_to_clipboard(&state.selected_task_log_text()) {
-                            Ok(()) => state.set_log_modal_notice("Copied full log to clipboard"),
-                            Err(error) => state
-                                .set_log_modal_notice(format!("Clipboard copy failed: {error}")),
-                        }
-                    } else if let Some(session) = runtime.session.as_ref() {
-                        spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
-                    }
-                }
                 KeyCode::Char('q') => {
                     if state.show_log_modal {
                         state.close_log_modal();
