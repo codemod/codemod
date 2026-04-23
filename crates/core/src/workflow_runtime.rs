@@ -239,11 +239,16 @@ impl WorkflowSessionInteractor {
             let request_id = Uuid::new_v4();
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             pending.pull_request.lock().unwrap().insert(request_id, tx);
-            let _ = sender.send(WorkflowEvent::PullRequestApprovalRequested {
+            if let Err(error) = sender.send(WorkflowEvent::PullRequestApprovalRequested {
                 request_id,
                 request: request.clone(),
                 at: Utc::now(),
-            });
+            }) {
+                pending.pull_request.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver pull request approval event: {error}"
+                ));
+            }
             rx.recv().map_err(|error| {
                 anyhow::anyhow!("pull request approval response channel closed: {error}")
             })?
@@ -1006,5 +1011,33 @@ mod tests {
             "unexpected error: {error:#}"
         );
         assert!(pending.selection.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pull_request_prompt_fails_fast_when_event_delivery_is_closed() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender, Arc::clone(&pending));
+        let callback = interactor.pull_request_callback();
+
+        let error = callback(&PullRequestCreationRequest {
+            title: "Draft PR".to_string(),
+            body: None,
+            draft: true,
+            head: "codemod-branch".to_string(),
+            base: Some("main".to_string()),
+            node_id: "apply-transforms".to_string(),
+            node_name: "Apply transforms".to_string(),
+            task_id: Uuid::new_v4().to_string(),
+        })
+        .expect_err("closed event delivery should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deliver pull request approval event"),
+            "unexpected error: {error:#}"
+        );
+        assert!(pending.pull_request.lock().unwrap().is_empty());
     }
 }

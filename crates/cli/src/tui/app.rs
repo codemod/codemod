@@ -232,6 +232,12 @@ impl TuiState {
             .unwrap_or_else(|| Self::workflow_status_text(run.status))
     }
 
+    fn sync_current_run_task_cache(&mut self) {
+        if let Some(run) = self.current_run.as_ref() {
+            self.run_tasks.insert(run.id, self.tasks.clone());
+        }
+    }
+
     pub fn display_workflow_name(&self) -> String {
         let Some(run) = self.current_run.as_ref() else {
             return "Workflow".to_string();
@@ -354,9 +360,7 @@ impl TuiState {
         self.screen = Screen::RunDetail;
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
-        if let Some(run) = self.current_run.as_ref() {
-            self.run_tasks.insert(run.id, self.tasks.clone());
-        }
+        self.sync_current_run_task_cache();
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
@@ -377,9 +381,7 @@ impl TuiState {
         }
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
-        if let Some(run) = self.current_run.as_ref() {
-            self.run_tasks.insert(run.id, self.tasks.clone());
-        }
+        self.sync_current_run_task_cache();
         self.task_progress
             .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
         if let Some(selected_task_id) = selected_task_id {
@@ -886,6 +888,7 @@ impl TuiState {
                 } else {
                     self.tasks.push(task);
                 }
+                self.sync_current_run_task_cache();
                 self.clamp_selected_task();
             }
             WorkflowEvent::TaskUpdated { task, .. } => {
@@ -898,11 +901,13 @@ impl TuiState {
                 } else {
                     self.tasks.push(task);
                 }
+                self.sync_current_run_task_cache();
                 self.clamp_selected_task();
             }
             WorkflowEvent::TaskLogAppended { task_id, line, .. } => {
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.logs.push(line);
+                    self.sync_current_run_task_cache();
                 }
             }
             WorkflowEvent::TaskProgressUpdated {
@@ -1320,7 +1325,28 @@ mod tests {
     fn reducer_updates_task_log_from_runtime_event() {
         let run_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
-        let mut state = TuiState::default();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            ..TuiState::default()
+        };
         state.tasks.push(Task {
             id: task_id,
             workflow_run_id: run_id,
@@ -1341,6 +1367,14 @@ mod tests {
             at: Utc::now(),
         }));
         assert_eq!(state.tasks[0].logs, vec!["hello".to_string()]);
+        assert_eq!(
+            state
+                .run_tasks
+                .get(&run_id)
+                .and_then(|tasks| tasks.first())
+                .map(|task| task.logs.as_slice()),
+            Some(&["hello".to_string()][..])
+        );
     }
 
     #[test]
