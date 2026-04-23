@@ -127,6 +127,7 @@ mod tests {
             terminal
                 .draw(|frame| render(frame, &state))
                 .expect("render should succeed");
+            std::thread::sleep(Duration::from_millis(20));
             samples_micros.push(started_at.elapsed());
         }
 
