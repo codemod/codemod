@@ -3761,6 +3761,7 @@ impl Engine {
                 .capabilities
                 .as_ref()
                 .map(|v| v.clone().into_iter().collect()),
+            target_directory: Some(&target_path),
         })
         .await
         {
@@ -5384,6 +5385,7 @@ impl Engine {
             resolver,
             input,
             capabilities: self.workflow_run_config.capabilities.clone(),
+            target_directory: Some(target_path),
         };
 
         let result = execute_shard_function_with_quickjs(options)

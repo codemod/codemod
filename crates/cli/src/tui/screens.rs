@@ -574,16 +574,21 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         height: size.height / 3,
     };
     frame.render_widget(Clear, area);
-    let body = match approval {
-        ApprovalPrompt::Shell { command, .. } => {
-            format!(
-                "Approve shell command?\n\n{}\n\n[y] approve  [n/esc] reject",
-                command
-            )
-        }
-        ApprovalPrompt::Capabilities { modules, .. } => format!(
-            "Approve capabilities?\n\n{}\n\n[y] approve  [n/esc] reject",
-            modules.join(", ")
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let (title, body, help_text) = match approval {
+        ApprovalPrompt::Shell { command, .. } => (
+            "Approval".to_string(),
+            format!("Approve shell command?\n\n{command}"),
+            "y approve  n/esc reject".to_string(),
+        ),
+        ApprovalPrompt::Capabilities { modules, .. } => (
+            "Approval".to_string(),
+            format!("Approve capabilities?\n\n{}", modules.join(", ")),
+            "y approve  n/esc reject".to_string(),
         ),
         ApprovalPrompt::AgentSelection {
             options, selected, ..
@@ -593,28 +598,54 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
                 .enumerate()
                 .map(|(index, (label, _))| {
                     if index == *selected {
-                        format!("> {label}")
+                        format!("▶ {label}")
                     } else {
                         format!("  {label}")
                     }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!(
-                "Select coding agent\n\n{}\n\n[Enter] choose  [n/esc] skip",
-                options_text
+            (
+                "Select Coding Agent".to_string(),
+                options_text,
+                "↑/↓ move  Enter choose  esc skip".to_string(),
+            )
+        }
+        ApprovalPrompt::Selection {
+            title,
+            options,
+            selected,
+            ..
+        } => {
+            let options_text = options
+                .iter()
+                .enumerate()
+                .map(|(index, (_, label))| {
+                    if index == *selected {
+                        format!("▶ {label}")
+                    } else {
+                        format!("  {label}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                title.clone(),
+                options_text,
+                "↑/↓ move  Enter choose  esc cancel".to_string(),
             )
         }
     };
     let modal = Paragraph::new(body).wrap(Wrap { trim: false }).block(
         Block::default().borders(Borders::ALL).title(Span::styled(
-            "Approval",
+            title,
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
     );
-    frame.render_widget(modal, area);
+    frame.render_widget(modal, chunks[0]);
+    render_help_bar(frame, chunks[1], &help_text);
 }
 
 #[cfg(test)]
