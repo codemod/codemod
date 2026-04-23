@@ -500,7 +500,7 @@ async fn run_tui_loop(
                 }
                 needs_redraw = true;
 
-                if state.approval.is_some() {
+                if matches!(state.screen, Screen::RunDetail) && state.approval.is_some() {
                     match key.code {
                         KeyCode::Char('y') => {
                             if let (Some(session), Some(command)) =
@@ -605,8 +605,6 @@ async fn run_tui_loop(
                                 state.close_log_modal();
                                 continue;
                             }
-                            runtime.receiver = None;
-                            runtime.session = None;
                             state.leave_run();
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
@@ -698,6 +696,33 @@ async fn attach_run(
     state: &mut TuiState,
     runtime: &mut TuiRuntime,
 ) -> Result<()> {
+    if runtime
+        .session
+        .as_ref()
+        .is_some_and(|session| session.handle().workflow_run_id() == run_id)
+    {
+        let handle = runtime
+            .session
+            .as_ref()
+            .expect("checked session presence")
+            .handle();
+        let snapshot = handle.load_snapshot().await?;
+        let receiver = handle.subscribe();
+        state.enter_run(snapshot);
+        runtime.receiver = Some(receiver);
+        return Ok(());
+    }
+
+    if let Some(session) = runtime.session.as_ref() {
+        let handle = session.handle();
+        for command in state.drain_approval_reject_commands() {
+            let _ = handle.send(command).await;
+        }
+        runtime.receiver = None;
+        runtime.session = None;
+        state.clear_approvals();
+    }
+
     let session = WorkflowSession::attach(engine.clone(), run_id);
     engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
         run_id,

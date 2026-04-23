@@ -362,7 +362,6 @@ impl TuiState {
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
-        self.approval = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
     }
@@ -402,9 +401,13 @@ impl TuiState {
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
-        self.approval = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
+    }
+
+    pub fn clear_approvals(&mut self) {
+        self.approval = None;
+        self.pending_approvals.clear();
     }
 
     pub fn selected_run_id(&self) -> Option<Uuid> {
@@ -1032,7 +1035,11 @@ impl TuiState {
     }
 
     pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
-        match self.approval.as_ref()? {
+        Self::approval_reject_command_for(self.approval.as_ref()?)
+    }
+
+    fn approval_reject_command_for(approval: &ApprovalPrompt) -> Option<WorkflowCommand> {
+        match approval {
             ApprovalPrompt::WorktreeConsent { .. } => None,
             ApprovalPrompt::PullRequestConsent { request_id, .. } => {
                 Some(WorkflowCommand::RespondPullRequestApproval {
@@ -1066,6 +1073,18 @@ impl TuiState {
                 })
             }
         }
+    }
+
+    pub fn drain_approval_reject_commands(&mut self) -> Vec<WorkflowCommand> {
+        let mut approvals = Vec::new();
+        if let Some(approval) = self.approval.take() {
+            approvals.push(approval);
+        }
+        approvals.extend(self.pending_approvals.drain(..));
+        approvals
+            .iter()
+            .filter_map(Self::approval_reject_command_for)
+            .collect()
     }
 
     pub fn clear_approval(&mut self) {
@@ -1195,13 +1214,8 @@ impl TuiState {
             return Some("Publishing branch and creating pull request".to_string());
         }
 
-        if let Some(error) = task.logs.iter().rev().find_map(|line| {
-            line.strip_prefix("Branch publication and pull request creation failed: ")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        }) {
-            let error = error.split_whitespace().collect::<Vec<_>>().join(" ");
-            return Some(format!("Publish failed: {error}  Press p to retry"));
+        if Self::task_publish_failed(task) {
+            return Some("Publish failed, press p to try again".to_string());
         }
 
         if Self::task_publish_deferred(task) {
@@ -2603,7 +2617,7 @@ mod tests {
         assert_eq!(state.task_status_text(task), "Publish failed");
         assert_eq!(
             state.selected_task_completion_detail().as_deref(),
-            Some("Publish failed: permission denied  Press p to retry")
+            Some("Publish failed, press p to try again")
         );
     }
 
@@ -2663,8 +2677,78 @@ mod tests {
 
         assert_eq!(
             state.selected_task_completion_detail().as_deref(),
-            Some("Publish failed: Runtime error: permission denied  Press p to retry")
+            Some("Publish failed, press p to try again")
         );
+    }
+
+    #[test]
+    fn leave_and_reenter_run_preserves_pending_pull_request_approval() {
+        let run_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            }),
+            approval: Some(super::ApprovalPrompt::PullRequestConsent {
+                request_id,
+                title: "Draft PR".to_string(),
+                head: "codemod-branch".to_string(),
+            }),
+            ..TuiState::default()
+        };
+
+        state.leave_run();
+        assert!(matches!(state.screen, Screen::Runs));
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
+        ));
+
+        state.enter_run(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            },
+            tasks: vec![],
+        });
+
+        assert!(matches!(state.screen, Screen::RunDetail));
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
+        ));
     }
 
     #[test]
@@ -2716,6 +2800,45 @@ mod tests {
             state.approval,
             Some(super::ApprovalPrompt::PullRequestConsent { request_id, .. })
                 if request_id == second_request_id
+        ));
+    }
+
+    #[test]
+    fn drain_approval_reject_commands_rejects_pending_engine_prompts() {
+        let first_request_id = Uuid::new_v4();
+        let second_request_id = Uuid::new_v4();
+        let mut state = TuiState {
+            approval: Some(super::ApprovalPrompt::PullRequestConsent {
+                request_id: first_request_id,
+                title: "First PR".to_string(),
+                head: "codemod-first".to_string(),
+            }),
+            ..TuiState::default()
+        };
+        state
+            .pending_approvals
+            .push_back(super::ApprovalPrompt::PullRequestConsent {
+                request_id: second_request_id,
+                title: "Second PR".to_string(),
+                head: "codemod-second".to_string(),
+            });
+
+        let commands = state.drain_approval_reject_commands();
+
+        assert!(state.approval.is_none());
+        assert!(state.pending_approvals.is_empty());
+        assert!(matches!(
+            commands.as_slice(),
+            [
+                WorkflowCommand::RespondPullRequestApproval {
+                    request_id: first,
+                    approved: false
+                },
+                WorkflowCommand::RespondPullRequestApproval {
+                    request_id: second,
+                    approved: false
+                }
+            ] if *first == first_request_id && *second == second_request_id
         ));
     }
 
