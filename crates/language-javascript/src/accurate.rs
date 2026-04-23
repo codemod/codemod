@@ -3,12 +3,14 @@
 use crate::cache::SymbolCache;
 use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
+use crate::vfs_fs::VfsFileSystem;
 use language_core::{
     filesystem, ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
     ReferencesResult, SemanticResult, SymbolLocation,
 };
 use oxc_resolver::{
-    ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+    Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
+    TsconfigOptions, TsconfigReferences,
 };
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -34,17 +36,57 @@ pub enum WorkspaceWalker {
     Vfs,
 }
 
+/// Module-resolution pair (primary + fallback) dispatched by the backing
+/// storage. The real-disk variant is the historical default; the VFS
+/// variant wires a [`VfsFileSystem`] into [`oxc_resolver::ResolverGeneric`]
+/// so tsconfig discovery, `extends` chains, path aliases, and target
+/// existence checks all observe the virtual filesystem instead of the
+/// real disk. Needed for pg_ast_grep, which runs the analyzer against a
+/// `MemoryFS` seeded from a database snapshot at a specific commit.
+enum DualResolver {
+    Physical {
+        primary: Resolver,
+        fallback: Resolver,
+    },
+    Vfs {
+        primary: ResolverGeneric<VfsFileSystem>,
+        fallback: ResolverGeneric<VfsFileSystem>,
+    },
+}
+
+impl DualResolver {
+    fn resolve_primary(
+        &self,
+        directory: &Path,
+        specifier: &str,
+    ) -> Result<Resolution, ResolveError> {
+        match self {
+            Self::Physical { primary, .. } => primary.resolve(directory, specifier),
+            Self::Vfs { primary, .. } => primary.resolve(directory, specifier),
+        }
+    }
+
+    fn resolve_fallback(
+        &self,
+        directory: &Path,
+        specifier: &str,
+    ) -> Result<Resolution, ResolveError> {
+        match self {
+            Self::Physical { fallback, .. } => fallback.resolve(directory, specifier),
+            Self::Vfs { fallback, .. } => fallback.resolve(directory, specifier),
+        }
+    }
+}
+
 /// Accurate semantic analyzer with workspace-wide lazy indexing.
 pub struct AccurateAnalyzer {
     /// Symbol cache for indexed files
     cache: SymbolCache,
     /// Workspace root directory
     workspace_root: PathBuf,
-    /// Module resolver (with tsconfig support)
-    resolver: Resolver,
-    /// Fallback resolver without tsconfig — used when the primary resolver
-    /// fails (e.g., tsconfig `extends` points to a missing package in node_modules)
-    fallback_resolver: Resolver,
+    /// Module resolver pair (primary with tsconfig, plus a tsconfig-free
+    /// fallback for relative imports when tsconfig `extends` is broken).
+    resolver: DualResolver,
     /// Files that have been fully indexed
     indexed_files: RwLock<HashSet<PathBuf>>,
     /// Files currently being indexed (to prevent cycles)
@@ -82,12 +124,36 @@ impl AccurateAnalyzer {
     /// Create a new accurate analyzer with a custom virtual filesystem and
     /// an explicit workspace walker strategy. Pick [`WorkspaceWalker::Vfs`]
     /// when `fs_root` is a MemoryFS (or any other virtual fs whose entries
-    /// aren't visible on disk).
+    /// aren't visible on disk). Under `Vfs`, tsconfig discovery and all
+    /// `oxc_resolver` file I/O go through `fs_root` as well — drop
+    /// tsconfig blobs into that VFS before instantiating the analyzer and
+    /// path aliases / `extends` chains will resolve correctly.
     pub fn new_with_fs_and_walker(
         workspace_root: PathBuf,
         fs_root: VfsPath,
         walker: WorkspaceWalker,
     ) -> Self {
+        let resolver = match walker {
+            WorkspaceWalker::Ignore => Self::build_physical_resolver(&workspace_root),
+            WorkspaceWalker::Vfs => Self::build_vfs_resolver(&workspace_root, &fs_root),
+        };
+
+        Self {
+            cache: SymbolCache::new(),
+            workspace_root,
+            resolver,
+            indexed_files: RwLock::new(HashSet::new()),
+            indexing_in_progress: RwLock::new(HashSet::new()),
+            fs_root,
+            walker,
+        }
+    }
+
+    /// Build the real-disk resolver pair. Keeps the historical behavior:
+    /// tsconfig is discovered on real disk via `PathBuf::exists`, and the
+    /// fallback strips tsconfig entirely so relative imports still
+    /// resolve even when `extends` points to a missing package.
+    fn build_physical_resolver(workspace_root: &Path) -> DualResolver {
         let tsconfig_path = workspace_root.join("tsconfig.json");
         let tsconfig = if tsconfig_path.exists() {
             Some(TsconfigDiscovery::Manual(TsconfigOptions {
@@ -98,67 +164,71 @@ impl AccurateAnalyzer {
             Some(TsconfigDiscovery::Auto)
         };
 
-        let resolve_options = ResolveOptions {
-            extensions: vec![
-                ".ts".to_string(),
-                ".tsx".to_string(),
-                ".js".to_string(),
-                ".jsx".to_string(),
-                ".mjs".to_string(),
-                ".cjs".to_string(),
-            ],
-            main_fields: vec!["module".to_string(), "main".to_string()],
-            condition_names: vec![
-                "import".to_string(),
-                "require".to_string(),
-                "node".to_string(),
-                "default".to_string(),
-            ],
+        let primary = Resolver::new(ResolveOptions {
             tsconfig,
-            ..Default::default()
-        };
+            ..default_resolve_options()
+        });
+        let fallback = Resolver::new(default_resolve_options());
 
-        let fallback_options = ResolveOptions {
-            extensions: vec![
-                ".ts".to_string(),
-                ".tsx".to_string(),
-                ".js".to_string(),
-                ".jsx".to_string(),
-                ".mjs".to_string(),
-                ".cjs".to_string(),
-            ],
-            main_fields: vec!["module".to_string(), "main".to_string()],
-            condition_names: vec![
-                "import".to_string(),
-                "require".to_string(),
-                "node".to_string(),
-                "default".to_string(),
-            ],
-            // No tsconfig — pure file-system resolution
-            ..Default::default()
-        };
+        DualResolver::Physical { primary, fallback }
+    }
 
-        Self {
-            cache: SymbolCache::new(),
-            workspace_root,
-            resolver: Resolver::new(resolve_options),
-            fallback_resolver: Resolver::new(fallback_options),
-            indexed_files: RwLock::new(HashSet::new()),
-            indexing_in_progress: RwLock::new(HashSet::new()),
-            fs_root,
-            walker,
-        }
+    /// Build a VFS-backed resolver pair. Tsconfig discovery checks the
+    /// passed-in `fs_root` rather than real disk; when a
+    /// `<workspace_root>/tsconfig.json` entry exists in the VFS, the
+    /// primary resolver is configured to parse it through
+    /// [`VfsFileSystem`]. The fallback remains VFS-backed too — any file
+    /// the analyzer touches must live somewhere in `fs_root`, including
+    /// package.json siblings consulted during module resolution.
+    fn build_vfs_resolver(workspace_root: &Path, fs_root: &VfsPath) -> DualResolver {
+        let tsconfig = vfs_tsconfig_discovery(workspace_root, fs_root);
+
+        let primary_opts = ResolveOptions {
+            tsconfig,
+            ..default_resolve_options()
+        };
+        let fallback_opts = default_resolve_options();
+
+        let primary = ResolverGeneric::new_with_file_system(
+            VfsFileSystem::with_root(fs_root.clone()),
+            primary_opts,
+        );
+        let fallback = ResolverGeneric::new_with_file_system(
+            VfsFileSystem::with_root(fs_root.clone()),
+            fallback_opts,
+        );
+
+        DualResolver::Vfs { primary, fallback }
     }
 
     /// Read file content using the virtual filesystem.
+    ///
+    /// Path handling is dispatched by [`Self::walker`] because the two
+    /// supported backings have opposite conventions:
+    ///
+    /// * [`WorkspaceWalker::Ignore`] pairs with a `PhysicalFS` rooted
+    ///   at `workspace_root`. PhysicalFS rebases every path to its
+    ///   root, so `/home/user/project/src/foo.ts` must be stripped
+    ///   down to `src/foo.ts` before being joined — otherwise
+    ///   PhysicalFS ends up reading `<root>/<root>/src/foo.ts`.
+    ///
+    /// * [`WorkspaceWalker::Vfs`] pairs with an in-memory VFS seeded
+    ///   by pg_ast_grep at absolute sandboxed paths (e.g.
+    ///   `/app/src/foo.ts`). Here the absolute form IS the storage
+    ///   key; stripping `workspace_root` would cause every cross-file
+    ///   `ensure_indexed` to miss, silently losing barrel re-export
+    ///   chains (the insights/CLI parity bug we're fixing).
     fn read_file(&self, file_path: &Path) -> Result<String, JsSemanticError> {
-        // For PhysicalFS, we need to convert absolute paths to paths relative to the workspace root.
-        // For MemoryFS, paths are virtual and should be used as-is.
-        let relative_path = file_path
-            .strip_prefix(&self.workspace_root)
-            .unwrap_or(file_path);
+        let path_str: std::borrow::Cow<str> = match self.walker {
+            WorkspaceWalker::Ignore => {
+                let relative_path = file_path
+                    .strip_prefix(&self.workspace_root)
+                    .unwrap_or(file_path);
+                relative_path.to_string_lossy().into_owned().into()
+            }
+            WorkspaceWalker::Vfs => file_path.to_string_lossy(),
+        };
 
-        let path_str = relative_path.to_string_lossy();
         let vfs_path = self
             .fs_root
             .join(&*path_str)
@@ -228,10 +298,10 @@ impl AccurateAnalyzer {
     ) -> Result<PathBuf, JsSemanticError> {
         let from_dir = from_path.parent().unwrap_or(&self.workspace_root);
 
-        match self.resolver.resolve(from_dir, specifier) {
+        match self.resolver.resolve_primary(from_dir, specifier) {
             Ok(resolution) => Ok(resolution.into_path_buf()),
             Err(_) if specifier.starts_with('.') || specifier.starts_with('/') => {
-                match self.fallback_resolver.resolve(from_dir, specifier) {
+                match self.resolver.resolve_fallback(from_dir, specifier) {
                     Ok(resolution) => Ok(resolution.into_path_buf()),
                     Err(_) => Err(JsSemanticError::ModuleResolution {
                         specifier: specifier.to_string(),
@@ -648,6 +718,63 @@ impl std::fmt::Debug for AccurateAnalyzer {
     }
 }
 
+/// Shared `oxc_resolver` settings used by both the physical- and
+/// VFS-backed resolver pairs. Kept in one place so the two variants
+/// behave identically for everything except filesystem access.
+fn default_resolve_options() -> ResolveOptions {
+    ResolveOptions {
+        extensions: vec![
+            ".ts".to_string(),
+            ".tsx".to_string(),
+            ".js".to_string(),
+            ".jsx".to_string(),
+            ".mjs".to_string(),
+            ".cjs".to_string(),
+        ],
+        main_fields: vec!["module".to_string(), "main".to_string()],
+        condition_names: vec![
+            "import".to_string(),
+            "require".to_string(),
+            "node".to_string(),
+            "default".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// VFS-side analogue of `let p = root.join("tsconfig.json"); if p.exists()`.
+/// Returns a `TsconfigDiscovery::Manual` pointing at the absolute path
+/// that the VFS-backed resolver will then read through `VfsFileSystem`.
+/// Falls back to `Auto` (resolver walks up from each file) when no root
+/// tsconfig exists — `Auto` still queries via `VfsFileSystem`, so
+/// per-package tsconfigs seeded into the VFS are still discovered.
+fn vfs_tsconfig_discovery(workspace_root: &Path, fs_root: &VfsPath) -> Option<TsconfigDiscovery> {
+    let rel = workspace_root.to_string_lossy();
+    let trimmed = rel.trim_start_matches('/');
+    let root_vp = if trimmed.is_empty() {
+        fs_root.clone()
+    } else {
+        match fs_root.join(trimmed) {
+            Ok(p) => p,
+            Err(_) => return Some(TsconfigDiscovery::Auto),
+        }
+    };
+
+    let candidate = match root_vp.join("tsconfig.json") {
+        Ok(p) => p,
+        Err(_) => return Some(TsconfigDiscovery::Auto),
+    };
+
+    if candidate.exists().unwrap_or(false) {
+        Some(TsconfigDiscovery::Manual(TsconfigOptions {
+            config_file: workspace_root.join("tsconfig.json"),
+            references: TsconfigReferences::Auto,
+        }))
+    } else {
+        Some(TsconfigDiscovery::Auto)
+    }
+}
+
 /// Recursively walk `start` (a VFS directory) and invoke `on_file` for
 /// every leaf whose extension is an indexable JS/TS flavor. `prefix` is
 /// the absolute path prefix we hand back to callers (typically the
@@ -982,6 +1109,139 @@ console.log(x);
             "Should resolve ~/components, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn test_vfs_resolver_respects_tsconfig_paths() {
+        use vfs::MemoryFS;
+
+        // Stand up a MemoryFS snapshot of what pg_ast_grep would seed:
+        // a single tsconfig at /app/tsconfig.json declaring a `~/*` alias
+        // onto `./src/*`, plus the target file the alias should resolve to.
+        // All paths are absolute under /app to mimic SANDBOX_ROOT usage.
+        let fs_root: VfsPath = MemoryFS::new().into();
+        fs_root.join("app/src").unwrap().create_dir_all().unwrap();
+
+        let tsconfig = r#"{
+            "compilerOptions": {
+                "baseUrl": ".",
+                "paths": {
+                    "~/*": ["./src/*"]
+                }
+            }
+        }"#;
+        {
+            use std::io::Write;
+            let mut w = fs_root
+                .join("app/tsconfig.json")
+                .unwrap()
+                .create_file()
+                .unwrap();
+            w.write_all(tsconfig.as_bytes()).unwrap();
+        }
+        {
+            use std::io::Write;
+            let mut w = fs_root
+                .join("app/src/utils.ts")
+                .unwrap()
+                .create_file()
+                .unwrap();
+            w.write_all(b"export const x = 1;").unwrap();
+        }
+
+        let analyzer = AccurateAnalyzer::new_with_fs_and_walker(
+            PathBuf::from("/app"),
+            fs_root,
+            WorkspaceWalker::Vfs,
+        );
+
+        // The analyzer should read tsconfig from the VFS, parse the `~`
+        // alias, and resolve `~/utils` to `/app/src/utils.ts` — all
+        // without touching the real disk.
+        let from = PathBuf::from("/app/src/App.ts");
+        let resolved = analyzer
+            .resolve_module("~/utils", &from)
+            .expect("~/utils should resolve via tsconfig.paths that was seeded into the VFS");
+        assert!(
+            resolved.to_string_lossy().contains("utils"),
+            "unexpected resolution: {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn test_vfs_walker_resolves_import_through_barrel() {
+        use vfs::MemoryFS;
+
+        // Mirrors pg_ast_grep's layout: `/app` is the workspace root
+        // and all files are stored at their absolute sandboxed paths in
+        // a MemoryFS. A consumer imports via a relative barrel
+        // (`./utils`), the barrel re-exports from a sibling module
+        // (`./math`), and the analyzer must successfully index the
+        // barrel. Before the `read_file` path-mapping fix, the
+        // analyzer's strip-prefix lookup couldn't find the barrel's
+        // content in the VFS and `get_definition` returned `None` —
+        // silently losing every cross-file query (the insights/CLI
+        // parity bug).
+        //
+        // The analyzer's own contract is to land the definition on the
+        // barrel's re-export site; downstream codemod logic (e.g.
+        // debarrel's `resolveSpecifier`) walks the re-export chain
+        // from there. So "success" here means: a definition is found,
+        // it lives in the barrel, and it's flagged as an external
+        // (cross-file) kind.
+        let fs_root: VfsPath = MemoryFS::new().into();
+        fs_root.join("app/utils").unwrap().create_dir_all().unwrap();
+
+        let files = [
+            (
+                "app/utils/math.ts",
+                "export function add(a: number, b: number): number { return a + b; }\n",
+            ),
+            ("app/utils/index.ts", "export { add } from './math';\n"),
+            (
+                "app/main.ts",
+                "import { add } from './utils';\nconst x = add(1, 2);\n",
+            ),
+        ];
+        for (path, content) in files {
+            use std::io::Write;
+            let mut w = fs_root.join(path).unwrap().create_file().unwrap();
+            w.write_all(content.as_bytes()).unwrap();
+        }
+
+        let analyzer = AccurateAnalyzer::new_with_fs_and_walker(
+            PathBuf::from("/app"),
+            fs_root,
+            WorkspaceWalker::Vfs,
+        );
+
+        let main_path = PathBuf::from("/app/main.ts");
+        let main_content = "import { add } from './utils';\nconst x = add(1, 2);\n";
+        let add_pos = main_content.find("add").unwrap();
+        analyzer
+            .process_file(&main_path, main_content)
+            .expect("process_file on main.ts must succeed");
+
+        let def = analyzer
+            .get_definition(
+                &main_path,
+                main_content,
+                ByteRange::new(add_pos as u32, (add_pos + 3) as u32),
+                DefinitionOptions::default(),
+            )
+            .expect("get_definition must not error")
+            .expect(
+                "get_definition must find a cross-file definition for `add` — \
+                 when this returns None the analyzer is unable to read the \
+                 barrel from the VFS (the path-mapping regression)",
+            );
+
+        let file_str = def.location.file_path.to_string_lossy().into_owned();
+        assert!(
+            file_str.contains("utils") && file_str.ends_with("index.ts"),
+            "expected definition in the barrel (utils/index.ts), got {file_str:?}"
+        );
+        assert_eq!(def.kind, DefinitionKind::External);
     }
 
     #[test]

@@ -22,6 +22,10 @@ parking_lot = "0.12"
 # Virtual filesystem
 vfs = { workspace = true }
 
+[features]
+default = ["yarn_pnp"]
+yarn_pnp = ["oxc_resolver/yarn_pnp"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 
