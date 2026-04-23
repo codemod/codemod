@@ -317,11 +317,33 @@ impl AccurateAnalyzer {
     }
 
     /// Process a file notification (updates the cache).
+    ///
+    /// Early-outs when the canonical path is already indexed AND the
+    /// cached content matches the incoming content. This is what makes
+    /// repeated `get_definition` / `find_references` queries on the
+    /// same file cheap — otherwise every cross-file query re-runs the
+    /// full oxc parse + semantic pass on the originating file, which
+    /// on a 7k-file workspace batch stacks up to seconds of redundant
+    /// work in the rayon par_iter.
+    ///
+    /// Content comparison uses [`SymbolCache::content_matches`] so the
+    /// byte check happens under the cache's read lock — no clone of
+    /// `FileSymbols` or the cached `String` on the hot path. Mismatched
+    /// content still triggers a re-parse, preserving the "this
+    /// notification is authoritative" contract for callers that
+    /// legitimately hand new content in (e.g. editor-driven LSP use).
     pub fn process_file(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
-        let file_symbols = parse_and_analyze(file_path, content)?;
         let canonical = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
+
+        if self.indexed_files.read().contains(&canonical)
+            && self.cache.content_matches(&canonical, content)
+        {
+            return Ok(());
+        }
+
+        let file_symbols = parse_and_analyze(file_path, content)?;
         self.cache
             .insert(canonical.clone(), file_symbols, content.to_string());
         self.indexed_files.write().insert(canonical);
@@ -894,6 +916,49 @@ console.log(PI);
 
         assert!(result.is_ok());
         assert!(!analyzer.cache.is_empty());
+    }
+
+    #[test]
+    fn test_accurate_process_file_early_out_on_same_content() {
+        let workspace = create_test_workspace();
+        let analyzer = AccurateAnalyzer::new(workspace.path().to_path_buf());
+
+        let path = workspace.path().join("utils.ts");
+
+        let canonical = path.canonicalize().unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+
+        analyzer.process_file(&path, &content).unwrap();
+        let after_first = analyzer
+            .cache
+            .get(&canonical)
+            .expect("cached after first call");
+
+        analyzer.process_file(&path, &content).unwrap();
+        let after_repeat = analyzer
+            .cache
+            .get(&canonical)
+            .expect("still cached after repeat");
+        assert_eq!(after_first.1, after_repeat.1, "content preserved on repeat");
+        assert_eq!(
+            after_first.0.symbols.len(),
+            after_repeat.0.symbols.len(),
+            "symbols preserved on repeat"
+        );
+
+        let modified = format!("{content}\nexport const added = 1;\n");
+        analyzer.process_file(&path, &modified).unwrap();
+        let after_mod = analyzer
+            .cache
+            .get(&canonical)
+            .expect("still cached after modify");
+        assert_eq!(after_mod.1, modified, "content replaced on modified input");
+        assert!(
+            after_mod.0.symbols.len() > after_first.0.symbols.len(),
+            "re-parsed symbols reflect the appended export (before={}, after={})",
+            after_first.0.symbols.len(),
+            after_mod.0.symbols.len(),
+        );
     }
 
     #[test]
