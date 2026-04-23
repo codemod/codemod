@@ -77,6 +77,25 @@ pub struct Command {
     format: String,
 }
 
+fn should_auto_launch_workflow_tui(
+    no_interactive: bool,
+    workflow_definition: &butterflow_core::Workflow,
+) -> bool {
+    !no_interactive && workflow_has_manual_steps(workflow_definition)
+}
+
+fn apply_workflow_run_mode_to_config(
+    cfg: &mut butterflow_core::config::WorkflowRunConfig,
+    auto_launch_tui: bool,
+) {
+    cfg.enable_managed_git = auto_launch_tui;
+    cfg.enable_worktrees = auto_launch_tui;
+    if auto_launch_tui {
+        cfg.quiet = true;
+        cfg.capture_stdout_in_quiet_mode = false;
+    }
+}
+
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve workflow file and bundle path
@@ -122,7 +141,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .unwrap_or_else(|| args.workflow.clone());
     let workflow_definition = utils::parse_workflow_file(&workflow_file_path)
         .context("Failed to parse workflow before run")?;
-    let auto_launch_tui = !args.no_interactive && workflow_has_manual_steps(&workflow_definition);
+    let auto_launch_tui =
+        should_auto_launch_workflow_tui(args.no_interactive, &workflow_definition);
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -153,17 +173,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     )?;
 
     engine.set_name(Some(workflow_label));
-    {
-        let cfg = engine.workflow_run_config_mut();
-        cfg.enable_managed_git = auto_launch_tui;
-        cfg.enable_worktrees = auto_launch_tui;
-    }
+    apply_workflow_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(std::sync::Arc::new(None));
-        engine
-            .workflow_run_config_mut()
-            .capture_stdout_in_quiet_mode = false;
     }
     let (_, seconds) = run_workflow(&mut engine, config).await?;
 
@@ -225,4 +238,77 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_workflow_run_mode_to_config, should_auto_launch_workflow_tui};
+    use butterflow_core::config::WorkflowRunConfig;
+    use butterflow_core::{Node, Step, Workflow};
+    use butterflow_models::node::NodeType;
+    use butterflow_models::step::{PullRequestConfig, StepAction};
+    use std::collections::HashMap;
+
+    fn workflow_with_manual_step() -> Workflow {
+        Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "manual-node".to_string(),
+                name: "Manual Node".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![Step {
+                    id: None,
+                    name: "noop".to_string(),
+                    action: StepAction::RunScript("echo hi".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn non_tui_workflow_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(true, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.enable_managed_git);
+        assert!(!cfg.enable_worktrees);
+        assert!(!cfg.quiet);
+        assert!(cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn interactive_manual_workflow_run_enables_tui_managed_git_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, &workflow);
+        assert!(auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(cfg.enable_managed_git);
+        assert!(cfg.enable_worktrees);
+        assert!(cfg.quiet);
+        assert!(!cfg.capture_stdout_in_quiet_mode);
+    }
 }

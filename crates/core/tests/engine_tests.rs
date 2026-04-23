@@ -259,6 +259,48 @@ fn create_test_workflow() -> Workflow {
     }
 }
 
+fn create_git_managed_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "apply-transforms".to_string(),
+            name: "Apply AST Transformations".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("step-1".to_string()),
+                name: "Mutate file".to_string(),
+                action: StepAction::RunScript("echo 'done'".to_string()),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: Some("codemod-test-branch".to_string()),
+            pull_request: Some(butterflow_models::step::PullRequestConfig {
+                title: "Managed git test PR".to_string(),
+                body: None,
+                draft: Some(true),
+                base: None,
+            }),
+        }],
+    }
+}
+
 fn create_single_run_script_workflow(command: String) -> Workflow {
     Workflow {
         version: "1".to_string(),
@@ -2326,6 +2368,102 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
             latest_states.lock().unwrap().clone()
         )
     });
+}
+
+#[tokio::test]
+#[serial]
+async fn non_tui_workflow_run_skips_worktree_and_pull_request_flow() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+    create_test_file(repo_dir.path(), "tracked.txt", "original\n");
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add tracked file"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        enable_managed_git: false,
+        enable_worktrees: false,
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_git_managed_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        matches!(status, WorkflowStatus::Completed)
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "apply-transforms")
+        .expect("managed git task should exist");
+
+    assert_eq!(task.status, TaskStatus::Completed);
+    let logs = task.logs.join("\n");
+    assert!(
+        !logs.contains("Creating git worktree for branch"),
+        "non-TUI run should not create git worktrees; logs were: {logs}"
+    );
+    assert!(
+        !logs.contains("Publishing branch and creating pull request"),
+        "non-TUI run should not attempt PR creation; logs were: {logs}"
+    );
+    assert!(
+        !logs.contains("Pull request created:"),
+        "non-TUI run should not create PRs; logs were: {logs}"
+    );
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        branch_output.status.success(),
+        "git rev-parse failed: {}",
+        String::from_utf8_lossy(&branch_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&branch_output.stdout).trim(),
+        "main"
+    );
+
+    let worktree_output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        worktree_output.status.success(),
+        "git worktree list failed: {}",
+        String::from_utf8_lossy(&worktree_output.stderr)
+    );
+    let worktree_stdout = String::from_utf8_lossy(&worktree_output.stdout);
+    let worktree_entries: Vec<_> = worktree_stdout
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .collect();
+    assert_eq!(
+        worktree_entries.len(),
+        1,
+        "expected only the main repo worktree, got {:?}",
+        worktree_entries
+    );
 }
 
 #[tokio::test]
