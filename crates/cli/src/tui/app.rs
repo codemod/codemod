@@ -540,6 +540,46 @@ impl TuiState {
         })
     }
 
+    pub fn task_publish_failed(task: &Task) -> bool {
+        task.status == TaskStatus::Completed
+            && task.logs.iter().any(|line| {
+                line.starts_with("Branch publication and pull request creation failed:")
+            })
+            && !task
+                .logs
+                .iter()
+                .any(|line| line.starts_with("Pull request created: "))
+    }
+
+    pub fn task_publish_deferred(task: &Task) -> bool {
+        task.status == TaskStatus::Completed
+            && task.logs.iter().any(|line| {
+                line.starts_with("Branch publication and pull request creation deferred;")
+            })
+            && !task
+                .logs
+                .iter()
+                .any(|line| line.starts_with("Pull request created: "))
+    }
+
+    pub fn task_status_text(&self, task: &Task) -> &'static str {
+        if Self::task_publish_failed(task) {
+            "Publish failed"
+        } else if Self::task_publish_deferred(task) {
+            "PR pending"
+        } else {
+            match task.status {
+                TaskStatus::AwaitingTrigger => "Awaiting trigger",
+                TaskStatus::Running => "Running",
+                TaskStatus::Failed => "Failed",
+                TaskStatus::Completed => "Completed",
+                TaskStatus::Pending => "Pending",
+                TaskStatus::Blocked => "Blocked",
+                TaskStatus::WontDo => "Won't do",
+            }
+        }
+    }
+
     pub fn task_progress_bar(&self, task: &Task, width: usize) -> Option<String> {
         if width < 3 {
             return None;
@@ -1124,6 +1164,20 @@ impl TuiState {
         let task = self.selected_task()?;
         if task.status != TaskStatus::Completed {
             return None;
+        }
+
+        if let Some(error) = task.logs.iter().rev().find_map(|line| {
+            line.strip_prefix("Branch publication and pull request creation failed: ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        }) {
+            return Some(format!("Publish failed: {error}  Press p to retry"));
+        }
+
+        if Self::task_publish_deferred(task) {
+            return Some(
+                "Pull request creation pending  Press p to publish and create PR".to_string(),
+            );
         }
 
         let pr_url = task.logs.iter().rev().find_map(|line| {
@@ -2490,6 +2544,37 @@ mod tests {
         });
 
         assert_eq!(state.selected_task_completion_detail(), None);
+    }
+
+    #[test]
+    fn completed_task_with_publish_failure_shows_retry_status_and_detail() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Branch publication and pull request creation failed: permission denied"
+                    .to_string(),
+                "Use create-pr to retry after fixing the remote or permissions".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        let task = state.selected_task().unwrap();
+        assert_eq!(state.task_status_text(task), "Publish failed");
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Publish failed: permission denied  Press p to retry")
+        );
     }
 
     #[test]
