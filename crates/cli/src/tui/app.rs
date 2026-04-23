@@ -15,6 +15,9 @@ pub enum Screen {
 
 #[derive(Clone, Debug)]
 pub enum ApprovalPrompt {
+    WorktreeConsent {
+        task_ids: Vec<Uuid>,
+    },
     Shell {
         request_id: Uuid,
         command: String,
@@ -648,6 +651,7 @@ impl TuiState {
                 self.selected_run = self.selected_run.saturating_sub(1);
             }
             Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::WorktreeConsent { .. }) => {}
                 Some(ApprovalPrompt::AgentSelection { selected, .. })
                 | Some(ApprovalPrompt::Selection { selected, .. }) => {
                     *selected = selected.saturating_sub(1);
@@ -667,6 +671,7 @@ impl TuiState {
                 }
             }
             Screen::RunDetail => match &mut self.approval {
+                Some(ApprovalPrompt::WorktreeConsent { .. }) => {}
                 Some(ApprovalPrompt::AgentSelection {
                     selected, options, ..
                 }) => {
@@ -837,6 +842,9 @@ impl TuiState {
 
     pub fn approval_accept_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
+            ApprovalPrompt::WorktreeConsent { task_ids } => Some(WorkflowCommand::TriggerTasks {
+                task_ids: task_ids.clone(),
+            }),
             ApprovalPrompt::Shell { request_id, .. } => {
                 Some(WorkflowCommand::RespondShellApproval {
                     request_id: *request_id,
@@ -886,6 +894,7 @@ impl TuiState {
 
     pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
         match self.approval.as_ref()? {
+            ApprovalPrompt::WorktreeConsent { .. } => None,
             ApprovalPrompt::Shell { request_id, .. } => {
                 Some(WorkflowCommand::RespondShellApproval {
                     request_id: *request_id,
@@ -915,6 +924,15 @@ impl TuiState {
 
     pub fn clear_approval(&mut self) {
         self.approval = None;
+    }
+
+    pub fn begin_trigger_all_confirmation(&mut self) -> bool {
+        let task_ids = self.visible_awaiting_task_ids();
+        if task_ids.is_empty() {
+            return false;
+        }
+        self.approval = Some(ApprovalPrompt::WorktreeConsent { task_ids });
+        true
     }
 
     pub fn selected_task_trigger_command(&self) -> Option<WorkflowCommand> {
@@ -2290,6 +2308,67 @@ mod tests {
                 selection: None,
             }) if actual_request_id == request_id
         ));
+    }
+
+    #[test]
+    fn trigger_all_opens_worktree_consent_modal() {
+        let run_id = Uuid::new_v4();
+        let bulk_task_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply transforms".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: None,
+                        pull_request: None,
+                    }],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: bulk_task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        assert!(state.begin_trigger_all_confirmation());
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::TriggerTasks { task_ids }) if task_ids == vec![bulk_task_id]
+        ));
+        assert!(state.approval_reject_command().is_none());
     }
 
     #[test]

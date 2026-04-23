@@ -513,7 +513,8 @@ async fn run_tui_loop(
                         KeyCode::Char('n')
                             if !matches!(
                                 state.approval,
-                                Some(ApprovalPrompt::AgentSelection { .. })
+                                Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) =>
                         {
@@ -532,12 +533,11 @@ async fn run_tui_loop(
                             }
                             state.clear_approval();
                         }
-                        KeyCode::Up | KeyCode::Char('k') => state.move_up(),
-                        KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                         KeyCode::Enter => {
                             if matches!(
                                 state.approval,
-                                Some(ApprovalPrompt::AgentSelection { .. })
+                                Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) {
                                 if let (Some(session), Some(command)) =
@@ -548,6 +548,8 @@ async fn run_tui_loop(
                                 state.clear_approval();
                             }
                         }
+                        KeyCode::Up | KeyCode::Char('k') => state.move_up(),
+                        KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                         _ => {}
                     }
                     continue;
@@ -650,13 +652,7 @@ async fn run_tui_loop(
                             }
                         }
                         KeyCode::Char('T') => {
-                            if let Some(session) = runtime.session.as_ref() {
-                                let task_ids = state.visible_awaiting_task_ids();
-                                spawn_command(
-                                    session.handle(),
-                                    WorkflowCommand::TriggerTasks { task_ids },
-                                );
-                            }
+                            state.begin_trigger_all_confirmation();
                         }
                         KeyCode::Char('c') => {
                             if let Some(session) = runtime.session.as_ref() {
