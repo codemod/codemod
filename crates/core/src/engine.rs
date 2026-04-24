@@ -126,6 +126,62 @@ struct ResolvedPullRequestConfig {
     branch: String,
 }
 
+const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+
+fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+    format!(
+        "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
+        serde_json::json!({
+            "title": pr.title,
+            "body": pr.body,
+            "draft": pr.draft,
+            "base": pr.base,
+            "branch": pr.branch,
+        })
+    )
+}
+
+fn pull_request_config_from_task_logs(
+    task: &Task,
+    fallback: ResolvedPullRequestConfig,
+) -> ResolvedPullRequestConfig {
+    let Some(metadata) = task.logs.iter().rev().find_map(|line| {
+        line.strip_prefix(PULL_REQUEST_METADATA_LOG_PREFIX)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    }) else {
+        return fallback;
+    };
+
+    ResolvedPullRequestConfig {
+        title: metadata
+            .get("title")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.title),
+        body: metadata
+            .get("body")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.body),
+        draft: metadata
+            .get("draft")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback.draft),
+        base: metadata
+            .get("base")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.base),
+        branch: metadata
+            .get("branch")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.branch),
+    }
+}
+
 fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
@@ -789,23 +845,53 @@ impl Engine {
             .ok_or_else(|| {
                 Error::Runtime("Task is not eligible for pull request creation".to_string())
             })?;
+        let pr = pull_request_config_from_task_logs(&task, pr);
+
+        let _ = self
+            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+            .await;
 
         let _ = self
             .append_task_log(task_id, "Publishing branch and creating pull request")
             .await;
 
-        crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
+        let pr_url = match async {
+            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
 
-        let pr_url = crate::git_ops::create_pull_request(
-            &pr.title,
-            pr.body.as_deref(),
-            pr.draft,
-            &pr.branch,
-            pr.base.as_deref(),
-            &task.id.to_string(),
-            &self.workflow_run_config.target_path,
-        )
-        .await?;
+            crate::git_ops::create_pull_request(
+                &pr.title,
+                pr.body.as_deref(),
+                pr.draft,
+                &pr.branch,
+                pr.base.as_deref(),
+                &task.id.to_string(),
+                &self.workflow_run_config.target_path,
+            )
+            .await
+        }
+        .await
+        {
+            Ok(pr_url) => pr_url,
+            Err(error) => {
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        format!("Branch publication and pull request creation failed: {error}"),
+                    )
+                    .await;
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        "Use create-pr to retry after fixing the remote or permissions",
+                    )
+                    .await;
+                self.emit_error(format!(
+                    "Task {} ({}) branch publication/PR creation failed: {}",
+                    task.id, node.id, error
+                ));
+                return Ok(None);
+            }
+        };
 
         match &pr_url {
             Some(pr_url) => {
@@ -3165,6 +3251,9 @@ impl Engine {
                                     "Task is not eligible for pull request creation".to_string(),
                                 )
                             })?;
+                        let _ = self
+                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+                            .await;
 
                         if let Some(approval_callback) =
                             &self.workflow_run_config.pull_request_approval_callback
@@ -3229,46 +3318,22 @@ impl Engine {
                     if let Err(e) = push_and_pr_result {
                         git_step_logger
                             .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-
-                        // Mark the task as failed
-                        let mut fields = HashMap::new();
-                        fields.insert(
-                            "status".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                            },
-                        );
-                        fields.insert(
-                            "ended_at".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(Utc::now())?),
-                            },
-                        );
-                        fields.insert(
-                            "error".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Add,
-                                value: Some(serde_json::to_value(format!(
-                                    "Push/PR creation failed: {}",
-                                    e
-                                ))?),
-                            },
-                        );
-                        let task_diff = TaskDiff { task_id, fields };
-                        self.state_adapter
-                            .lock()
-                            .await
-                            .apply_task_diff(&task_diff)
-                            .await?;
-                        self.emit_task_updated(task_id).await;
-
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Branch publication and pull request creation failed: {e}"),
+                            )
+                            .await;
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                "Use create-pr to retry after fixing the remote or permissions",
+                            )
+                            .await;
                         self.emit_error(format!(
-                            "Task {} ({}) push/PR creation failed: {}",
+                            "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
-                        return Err(e);
                     }
 
                     git_step_logger

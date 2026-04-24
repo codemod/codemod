@@ -69,6 +69,7 @@ pub struct TuiState {
     pub selected_run: usize,
     pub current_run: Option<WorkflowRun>,
     pub tasks: Vec<Task>,
+    pub run_tasks: HashMap<Uuid, Vec<Task>>,
     pub task_progress: HashMap<Uuid, TaskProgressView>,
     pub selected_task: usize,
     pub task_list_scroll: usize,
@@ -85,6 +86,20 @@ pub struct TaskProgressView {
     pub total_files: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskPublishState {
+    Publishing,
+    Failed,
+    Deferred,
+    Created,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TaskPullRequestMetadata {
+    title: String,
+    branch: String,
+}
+
 impl Default for TuiState {
     fn default() -> Self {
         Self {
@@ -93,6 +108,7 @@ impl Default for TuiState {
             selected_run: 0,
             current_run: None,
             tasks: Vec::new(),
+            run_tasks: HashMap::new(),
             task_progress: HashMap::new(),
             selected_task: 0,
             task_list_scroll: 0,
@@ -197,27 +213,19 @@ impl TuiState {
         self.tasks.iter().filter(|task| !task.is_master).collect()
     }
 
-    pub fn is_effectively_complete(&self) -> bool {
-        let Some(run) = self.current_run.as_ref() else {
-            return false;
-        };
-
-        if self.tasks.is_empty() {
+    fn run_is_effectively_complete(&self, run: &WorkflowRun, tasks: &[Task]) -> bool {
+        if tasks.is_empty() {
             return matches!(run.status, butterflow_models::WorkflowStatus::Completed);
         }
 
-        self.tasks.iter().all(|task| {
+        tasks.iter().all(|task| {
             Self::is_terminal_task_status(task.status)
                 || self.is_ignorable_pending_install_skill(task)
         })
     }
 
-    pub fn display_run_status(&self) -> String {
-        let Some(run) = self.current_run.as_ref() else {
-            return "Unknown".to_string();
-        };
-
-        if self.is_effectively_complete()
+    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, tasks: &[Task]) -> String {
+        if self.run_is_effectively_complete(run, tasks)
             && matches!(
                 run.status,
                 butterflow_models::WorkflowStatus::AwaitingTrigger
@@ -226,6 +234,26 @@ impl TuiState {
             "Completed (install-skill pending)".to_string()
         } else {
             Self::workflow_status_text(run.status)
+        }
+    }
+
+    pub fn display_run_status(&self) -> String {
+        let Some(run) = self.current_run.as_ref() else {
+            return "Unknown".to_string();
+        };
+        self.display_status_for_run_with_tasks(run, &self.tasks)
+    }
+
+    pub fn display_status_for_list_run(&self, run: &WorkflowRun) -> String {
+        self.run_tasks
+            .get(&run.id)
+            .map(|tasks| self.display_status_for_run_with_tasks(run, tasks))
+            .unwrap_or_else(|| Self::workflow_status_text(run.status))
+    }
+
+    fn sync_current_run_task_cache(&mut self) {
+        if let Some(run) = self.current_run.as_ref() {
+            self.run_tasks.insert(run.id, self.tasks.clone());
         }
     }
 
@@ -242,6 +270,53 @@ impl TuiState {
             .as_ref()
             .and_then(|run| run.target_path.as_ref())
             .map(|path| path.display().to_string())
+    }
+
+    pub fn display_run_params(&self) -> Option<String> {
+        let run = self.current_run.as_ref()?;
+        if run.params.is_empty() {
+            return None;
+        }
+
+        let mut entries = run.params.iter().collect::<Vec<_>>();
+        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+        let params = entries
+            .into_iter()
+            .map(|(key, value)| {
+                let value = if Self::is_sensitive_param_key(key) {
+                    "********".to_string()
+                } else {
+                    Self::format_param_value(value)
+                };
+                format!("{key}={value}")
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+
+        Some(format!("Params: {params}"))
+    }
+
+    fn is_sensitive_param_key(key: &str) -> bool {
+        let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+        normalized.contains("password")
+            || normalized.contains("passwd")
+            || normalized.contains("secret")
+            || normalized.contains("token")
+            || normalized.contains("access_token")
+            || normalized.contains("api_key")
+            || normalized.contains("apikey")
+            || normalized.contains("auth")
+    }
+
+    fn format_param_value(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(value) => value.clone(),
+            serde_json::Value::Bool(value) => value.to_string(),
+            serde_json::Value::Number(value) => value.to_string(),
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
+        }
     }
 
     pub fn workflow_status_text(status: butterflow_models::WorkflowStatus) -> String {
@@ -351,10 +426,10 @@ impl TuiState {
         self.screen = Screen::RunDetail;
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        self.sync_current_run_task_cache();
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
-        self.approval = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
     }
@@ -372,6 +447,7 @@ impl TuiState {
         }
         self.current_run = Some(snapshot.workflow_run);
         self.tasks = snapshot.tasks;
+        self.sync_current_run_task_cache();
         self.task_progress
             .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
         if let Some(selected_task_id) = selected_task_id {
@@ -394,9 +470,13 @@ impl TuiState {
         self.task_progress.clear();
         self.selected_task = 0;
         self.task_list_scroll = 0;
-        self.approval = None;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
+    }
+
+    pub fn clear_approvals(&mut self) {
+        self.approval = None;
+        self.pending_approvals.clear();
     }
 
     pub fn selected_run_id(&self) -> Option<Uuid> {
@@ -493,7 +573,9 @@ impl TuiState {
     pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
         if let Some(progress) = self.task_progress.get(&task.id) {
             if let Some(total) = progress.total_files {
-                let processed = if task.status == TaskStatus::Completed {
+                let processed = if task.status == TaskStatus::Completed
+                    || Self::task_transform_phase_finished(task)
+                {
                     total
                 } else {
                     progress.processed_files.min(total)
@@ -520,12 +602,98 @@ impl TuiState {
             .iter()
             .filter(|line| line.starts_with("Processing file: "))
             .count();
-        let processed = if task.status == TaskStatus::Completed {
-            total
-        } else {
-            processed.min(total)
-        };
+        let processed =
+            if task.status == TaskStatus::Completed || Self::task_transform_phase_finished(task) {
+                total
+            } else {
+                processed.min(total)
+            };
         Some((processed, total))
+    }
+
+    fn task_transform_phase_finished(task: &Task) -> bool {
+        task.logs.iter().any(|line| {
+            line == "Step execution finished; finalizing git state"
+                || line == "Publishing branch and creating pull request"
+                || line.starts_with("Branch publication and pull request creation deferred;")
+                || line.starts_with("Branch publication and pull request creation failed:")
+        })
+    }
+
+    fn task_publish_state(task: &Task) -> Option<TaskPublishState> {
+        task.logs.iter().rev().find_map(|line| {
+            if line.starts_with("Pull request created: ") {
+                Some(TaskPublishState::Created)
+            } else if line == "Publishing branch and creating pull request" {
+                Some(TaskPublishState::Publishing)
+            } else if line.starts_with("Branch publication and pull request creation failed:") {
+                Some(TaskPublishState::Failed)
+            } else if line.starts_with("Branch publication and pull request creation deferred;") {
+                Some(TaskPublishState::Deferred)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn task_pull_request_metadata(task: &Task) -> Option<TaskPullRequestMetadata> {
+        const PREFIX: &str = "Pull request metadata: ";
+        task.logs.iter().rev().find_map(|line| {
+            let metadata = line.strip_prefix(PREFIX)?;
+            let metadata = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+            let title = metadata
+                .get("title")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let branch = metadata
+                .get("branch")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            Some(TaskPullRequestMetadata {
+                title: title.to_string(),
+                branch: branch.to_string(),
+            })
+        })
+    }
+
+    pub fn task_publish_failed(task: &Task) -> bool {
+        task.status == TaskStatus::Completed
+            && Self::task_publish_state(task) == Some(TaskPublishState::Failed)
+    }
+
+    pub fn task_publish_deferred(task: &Task) -> bool {
+        task.status == TaskStatus::Completed
+            && Self::task_publish_state(task) == Some(TaskPublishState::Deferred)
+    }
+
+    pub fn task_publish_in_progress(task: &Task) -> bool {
+        task.status == TaskStatus::Completed
+            && Self::task_publish_state(task) == Some(TaskPublishState::Publishing)
+    }
+
+    pub fn task_status_text(&self, task: &Task) -> &'static str {
+        match Self::task_publish_state(task) {
+            Some(TaskPublishState::Publishing) if task.status == TaskStatus::Completed => {
+                "Publishing"
+            }
+            Some(TaskPublishState::Failed) if task.status == TaskStatus::Completed => {
+                "Publish failed"
+            }
+            Some(TaskPublishState::Deferred) if task.status == TaskStatus::Completed => {
+                "PR pending"
+            }
+            _ => match task.status {
+                TaskStatus::AwaitingTrigger => "Awaiting trigger",
+                TaskStatus::Running => "Running",
+                TaskStatus::Failed => "Failed",
+                TaskStatus::Completed => "Completed",
+                TaskStatus::Pending => "Pending",
+                TaskStatus::Blocked => "Blocked",
+                TaskStatus::WontDo => "Won't do",
+            },
+        }
     }
 
     pub fn task_progress_bar(&self, task: &Task, width: usize) -> Option<String> {
@@ -541,12 +709,16 @@ impl TuiState {
         let inner_width = width.saturating_sub(2);
         let mut bar = String::with_capacity(width);
         bar.push('[');
-        if task.status == TaskStatus::Completed {
+        if task.status == TaskStatus::Completed || Self::task_transform_phase_finished(task) {
             for _ in 0..inner_width {
                 bar.push('=');
             }
         } else {
-            let mut filled = processed.saturating_mul(inner_width) / total;
+            let mut filled = if processed == 0 {
+                0
+            } else {
+                processed.saturating_mul(inner_width).div_ceil(total)
+            };
             if filled >= inner_width {
                 filled = inner_width.saturating_sub(1);
             }
@@ -782,6 +954,7 @@ impl TuiState {
                 } else {
                     self.tasks.push(task);
                 }
+                self.sync_current_run_task_cache();
                 self.clamp_selected_task();
             }
             WorkflowEvent::TaskUpdated { task, .. } => {
@@ -794,11 +967,13 @@ impl TuiState {
                 } else {
                     self.tasks.push(task);
                 }
+                self.sync_current_run_task_cache();
                 self.clamp_selected_task();
             }
             WorkflowEvent::TaskLogAppended { task_id, line, .. } => {
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.logs.push(line);
+                    self.sync_current_run_task_cache();
                 }
             }
             WorkflowEvent::TaskProgressUpdated {
@@ -958,7 +1133,11 @@ impl TuiState {
     }
 
     pub fn approval_reject_command(&self) -> Option<WorkflowCommand> {
-        match self.approval.as_ref()? {
+        Self::approval_reject_command_for(self.approval.as_ref()?)
+    }
+
+    fn approval_reject_command_for(approval: &ApprovalPrompt) -> Option<WorkflowCommand> {
+        match approval {
             ApprovalPrompt::WorktreeConsent { .. } => None,
             ApprovalPrompt::PullRequestConsent { request_id, .. } => {
                 Some(WorkflowCommand::RespondPullRequestApproval {
@@ -992,6 +1171,18 @@ impl TuiState {
                 })
             }
         }
+    }
+
+    pub fn drain_approval_reject_commands(&mut self) -> Vec<WorkflowCommand> {
+        let mut approvals = Vec::new();
+        if let Some(approval) = self.approval.take() {
+            approvals.push(approval);
+        }
+        approvals.extend(self.pending_approvals.drain(..));
+        approvals
+            .iter()
+            .filter_map(Self::approval_reject_command_for)
+            .collect()
     }
 
     pub fn clear_approval(&mut self) {
@@ -1047,6 +1238,9 @@ impl TuiState {
         if node.pull_request.is_none() && node.branch_name.is_none() {
             return None;
         }
+        if Self::task_publish_in_progress(task) {
+            return None;
+        }
         if task
             .logs
             .iter()
@@ -1054,21 +1248,28 @@ impl TuiState {
         {
             return None;
         }
-        let branch_name = task.logs.iter().rev().find_map(|line| {
-            line.strip_prefix("Preparing git worktree for branch ")
-                .and_then(|value| value.split(" in ").next())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    line.strip_prefix("Creating git worktree for branch ")
+        let branch_name = Self::task_pull_request_metadata(task)
+            .map(|metadata| metadata.branch)
+            .or_else(|| {
+                task.logs.iter().rev().find_map(|line| {
+                    line.strip_prefix("Preparing git worktree for branch ")
                         .and_then(|value| value.split(" in ").next())
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .map(ToOwned::to_owned)
+                        .or_else(|| {
+                            line.strip_prefix("Creating git worktree for branch ")
+                                .and_then(|value| value.split(" in ").next())
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToOwned::to_owned)
+                        })
                 })
-        })?;
-        Some((task.id, node.name.clone(), branch_name))
+            })?;
+        let title = Self::task_pull_request_metadata(task)
+            .map(|metadata| metadata.title)
+            .unwrap_or_else(|| node.name.clone());
+        Some((task.id, title, branch_name))
     }
 
     pub fn begin_create_pr_confirmation(&mut self) -> bool {
@@ -1114,6 +1315,20 @@ impl TuiState {
             return None;
         }
 
+        if Self::task_publish_in_progress(task) {
+            return Some("Publishing branch and creating pull request".to_string());
+        }
+
+        if Self::task_publish_failed(task) {
+            return Some("Publish failed, press p to try again".to_string());
+        }
+
+        if Self::task_publish_deferred(task) {
+            return Some(
+                "Pull request creation pending  Press p to publish and create PR".to_string(),
+            );
+        }
+
         let pr_url = task.logs.iter().rev().find_map(|line| {
             line.strip_prefix("Pull request created: ")
                 .map(str::trim)
@@ -1155,6 +1370,8 @@ mod tests {
         Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
+    use serde_json::json;
+    use std::collections::HashMap;
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
@@ -1195,7 +1412,28 @@ mod tests {
     fn reducer_updates_task_log_from_runtime_event() {
         let run_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
-        let mut state = TuiState::default();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            ..TuiState::default()
+        };
         state.tasks.push(Task {
             id: task_id,
             workflow_run_id: run_id,
@@ -1216,6 +1454,14 @@ mod tests {
             at: Utc::now(),
         }));
         assert_eq!(state.tasks[0].logs, vec!["hello".to_string()]);
+        assert_eq!(
+            state
+                .run_tasks
+                .get(&run_id)
+                .and_then(|tasks| tasks.first())
+                .map(|task| task.logs.as_slice()),
+            Some(&["hello".to_string()][..])
+        );
     }
 
     #[test]
@@ -1341,9 +1587,14 @@ mod tests {
             },
         ];
 
-        assert!(state.is_effectively_complete());
         assert_eq!(
             state.display_run_status(),
+            "Completed (install-skill pending)"
+        );
+        let run = state.current_run.as_ref().unwrap().clone();
+        state.run_tasks.insert(run_id, state.tasks.clone());
+        assert_eq!(
+            state.display_status_for_list_run(&run),
             "Completed (install-skill pending)"
         );
     }
@@ -1385,7 +1636,6 @@ mod tests {
             error: None,
         }];
 
-        assert!(!state.is_effectively_complete());
         assert_eq!(state.display_run_status(), "Running");
     }
 
@@ -1426,7 +1676,6 @@ mod tests {
             error: Some("boom".to_string()),
         }];
 
-        assert!(state.is_effectively_complete());
         assert_eq!(state.display_run_status(), "Failed");
     }
 
@@ -1542,6 +1791,46 @@ mod tests {
     }
 
     #[test]
+    fn display_run_params_formats_values_and_redacts_sensitive_keys() {
+        let mut params = HashMap::new();
+        params.insert("env".to_string(), json!("prod"));
+        params.insert("dry_run".to_string(), json!(true));
+        params.insert("count".to_string(), json!(3));
+        params.insert("npmToken".to_string(), json!("secret-value"));
+        params.insert("options".to_string(), json!({"mode": "safe"}));
+
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params,
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
+
+        let params = state.display_run_params().unwrap();
+        assert!(params.starts_with("Params: "));
+        assert!(params.contains("count=3"));
+        assert!(params.contains("dry_run=true"));
+        assert!(params.contains("env=prod"));
+        assert!(params.contains(r#"options={"mode":"safe"}"#));
+        assert!(params.contains("npmToken=********"));
+        assert!(!params.contains("secret-value"));
+    }
+
+    #[test]
     fn task_progress_counts_parse_target_files_and_processed_files() {
         let task = Task {
             id: Uuid::new_v4(),
@@ -1593,6 +1882,38 @@ mod tests {
     }
 
     #[test]
+    fn task_progress_bar_fills_after_transform_finalization() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 100)".to_string(),
+                "Step execution finished; finalizing git state".to_string(),
+                "Publishing branch and creating pull request".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 0,
+                total_files: Some(100),
+            },
+        );
+
+        assert_eq!(state.task_progress_counts(&task), Some((100, 100)));
+        assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[====]"));
+    }
+
+    #[test]
     fn task_progress_bar_does_not_render_full_for_running_task() {
         let task = Task {
             id: Uuid::new_v4(),
@@ -1619,6 +1940,38 @@ mod tests {
         );
 
         assert_eq!(state.task_progress_bar(&task, 6).as_deref(), Some("[===>]"));
+    }
+
+    #[test]
+    fn task_progress_bar_advances_for_partial_progress() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now()),
+            ended_at: None,
+            logs: vec![
+                "Starting js-ast-grep file loop (explicit-files, target files: 100)".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        };
+        let mut state = TuiState::default();
+        state.task_progress.insert(
+            task.id,
+            TaskProgressView {
+                processed_files: 1,
+                total_files: Some(100),
+            },
+        );
+
+        assert_eq!(
+            state.task_progress_bar(&task, 12).as_deref(),
+            Some("[=>        ]")
+        );
     }
 
     #[test]
@@ -2449,6 +2802,167 @@ mod tests {
     }
 
     #[test]
+    fn completed_task_with_publish_failure_shows_retry_status_and_detail() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Branch publication and pull request creation failed: permission denied"
+                    .to_string(),
+                "Use create-pr to retry after fixing the remote or permissions".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        let task = state.selected_task().unwrap();
+        assert_eq!(state.task_status_text(task), "Publish failed");
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Publish failed, press p to try again")
+        );
+    }
+
+    #[test]
+    fn latest_publish_attempt_overrides_previous_publish_failure() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Branch publication and pull request creation failed: permission denied"
+                    .to_string(),
+                "Publishing branch and creating pull request".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        let task = state.selected_task().unwrap();
+        assert_eq!(state.task_status_text(task), "Publishing");
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Publishing branch and creating pull request")
+        );
+        assert!(!state.task_help_text().contains("p create-pr"));
+    }
+
+    #[test]
+    fn publish_failure_detail_is_single_line() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                "Branch publication and pull request creation failed: Runtime error:\npermission denied"
+                    .to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        assert_eq!(
+            state.selected_task_completion_detail().as_deref(),
+            Some("Publish failed, press p to try again")
+        );
+    }
+
+    #[test]
+    fn leave_and_reenter_run_preserves_pending_pull_request_approval() {
+        let run_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            }),
+            approval: Some(super::ApprovalPrompt::PullRequestConsent {
+                request_id,
+                title: "Draft PR".to_string(),
+                head: "codemod-branch".to_string(),
+            }),
+            ..TuiState::default()
+        };
+
+        state.leave_run();
+        assert!(matches!(state.screen, Screen::Runs));
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
+        ));
+
+        state.enter_run(WorkflowSnapshot {
+            workflow_run: WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: Some("workflow.yaml".to_string()),
+                target_path: None,
+            },
+            tasks: vec![],
+        });
+
+        assert!(matches!(state.screen, Screen::RunDetail));
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
+        ));
+    }
+
+    #[test]
     fn reducer_queues_pull_request_approvals() {
         let first_request_id = Uuid::new_v4();
         let second_request_id = Uuid::new_v4();
@@ -2497,6 +3011,45 @@ mod tests {
             state.approval,
             Some(super::ApprovalPrompt::PullRequestConsent { request_id, .. })
                 if request_id == second_request_id
+        ));
+    }
+
+    #[test]
+    fn drain_approval_reject_commands_rejects_pending_engine_prompts() {
+        let first_request_id = Uuid::new_v4();
+        let second_request_id = Uuid::new_v4();
+        let mut state = TuiState {
+            approval: Some(super::ApprovalPrompt::PullRequestConsent {
+                request_id: first_request_id,
+                title: "First PR".to_string(),
+                head: "codemod-first".to_string(),
+            }),
+            ..TuiState::default()
+        };
+        state
+            .pending_approvals
+            .push_back(super::ApprovalPrompt::PullRequestConsent {
+                request_id: second_request_id,
+                title: "Second PR".to_string(),
+                head: "codemod-second".to_string(),
+            });
+
+        let commands = state.drain_approval_reject_commands();
+
+        assert!(state.approval.is_none());
+        assert!(state.pending_approvals.is_empty());
+        assert!(matches!(
+            commands.as_slice(),
+            [
+                WorkflowCommand::RespondPullRequestApproval {
+                    request_id: first,
+                    approved: false
+                },
+                WorkflowCommand::RespondPullRequestApproval {
+                    request_id: second,
+                    approved: false
+                }
+            ] if *first == first_request_id && *second == second_request_id
         ));
     }
 
@@ -2567,6 +3120,76 @@ mod tests {
             state.approval_accept_command(),
             Some(WorkflowCommand::CreatePullRequest { task_id: actual_task_id })
                 if actual_task_id == task_id
+        ));
+    }
+
+    #[test]
+    fn manual_create_pr_prompt_uses_persisted_pull_request_metadata() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![butterflow_models::Node {
+                        id: "apply-transforms".to_string(),
+                        name: "Apply AST transformations".to_string(),
+                        description: None,
+                        r#type: NodeType::Manual,
+                        depends_on: vec![],
+                        trigger: None,
+                        strategy: None,
+                        runtime: None,
+                        steps: vec![],
+                        env: Default::default(),
+                        branch_name: Some("codemod-${{ task.id }}".to_string()),
+                        pull_request: Some(butterflow_models::step::PullRequestConfig {
+                            title: "Generic title".to_string(),
+                            body: None,
+                            draft: Some(true),
+                            base: None,
+                        }),
+                    }],
+                },
+                status: WorkflowStatus::AwaitingTrigger,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now(),
+                ended_at: None,
+                capabilities: None,
+                name: None,
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now()),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    r#"Pull request metadata: {"title":"[DRAFT] Debarrel backstage-auth-main","body":null,"draft":true,"base":"main","branch":"codemod-auth-main"}"#.to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        assert!(state.begin_create_pr_confirmation());
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::ManualPullRequestConsent { title, head, .. })
+                if title == "[DRAFT] Debarrel backstage-auth-main" && head == "codemod-auth-main"
         ));
     }
 

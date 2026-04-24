@@ -400,6 +400,7 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
 pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<()> {
     let max_retries = 3u32;
     let mut pushed = false;
+    let mut last_push_stderr: Option<String> = None;
 
     for attempt in 1..=max_retries {
         let push_output = Command::new("git")
@@ -434,17 +435,25 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
                 .rev()
                 .collect::<String>()
         );
+        let stderr_summary = String::from_utf8_lossy(&push_output.stderr)
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .unwrap_or("git push failed")
+            .to_string();
 
         if push_output.status.success() {
             pushed = true;
             break;
         }
 
+        last_push_stderr = Some(stderr_summary.clone());
+
         warn!(
-            "Push attempt {}/{} failed (exit code {:?})",
+            "Push attempt {}/{} failed (exit code {:?}): {}",
             attempt,
             max_retries,
-            push_output.status.code()
+            push_output.status.code(),
+            stderr_summary
         );
 
         if attempt < max_retries {
@@ -473,8 +482,26 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
         if verify.status.success() {
             info!("Push reported failure but branch exists on remote — continuing.");
         } else {
+            let remote = Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(working_dir)
+                .output()
+                .await
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|stdout| stdout.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| "origin".to_string());
             return Err(butterflow_models::Error::Runtime(
-                "Failed to push changes and branch does not exist on remote.".to_string(),
+                match last_push_stderr {
+                    Some(stderr) => format!(
+                        "Failed to push branch '{branch}' to {remote}: {stderr}"
+                    ),
+                    None => format!(
+                        "Failed to push branch '{branch}' to {remote}; branch does not exist on remote."
+                    ),
+                },
             ));
         }
     }

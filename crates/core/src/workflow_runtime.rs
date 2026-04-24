@@ -393,11 +393,15 @@ async fn handle_command(
             .cancel_workflow(workflow_run_id)
             .await
             .map_err(anyhow::Error::from),
-        WorkflowCommand::CreatePullRequest { task_id } => engine
-            .create_pull_request_for_task(task_id)
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::from),
+        WorkflowCommand::CreatePullRequest { task_id } => {
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                if let Err(error) = engine.create_pull_request_for_task(task_id).await {
+                    log::error!("failed to create pull request for task {task_id}: {error}");
+                }
+            });
+            Ok(())
+        }
         WorkflowCommand::RespondShellApproval {
             request_id,
             approved,
