@@ -249,6 +249,9 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let test_case_dir = logical_input_path
                     .parent()
                     .unwrap_or(logical_input_path.as_path());
+                let target_directory = workspace_root
+                    .clone()
+                    .unwrap_or_else(|| test_case_dir.to_path_buf());
                 let per_test_config =
                     TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
 
@@ -306,7 +309,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     cancellation_flag: None,
                     test_mode: true,
                     dry_run: false,
-                    target_directory: None,
+                    target_directory: &target_directory,
                 };
                 let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
 

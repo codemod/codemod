@@ -3999,7 +3999,7 @@ impl Engine {
                                     cancellation_flag: Some(cancellation_flag_for_execution),
                                     test_mode: false,
                                     dry_run,
-                                    target_directory: Some(&target_path_owned),
+                                    target_directory: &target_path_owned,
                                 })
                                 .await
                             });

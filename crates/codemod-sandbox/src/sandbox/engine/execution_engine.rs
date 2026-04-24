@@ -168,7 +168,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub dry_run: bool,
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
-    pub target_directory: Option<&'a Path>,
+    pub target_directory: &'a Path,
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -229,9 +229,7 @@ where
     // Install the curated `fs` when the caller gave us a target directory
     // and didn't explicitly opt into the unrestricted llrt fs.
     let curated_fs_target = if !fs_capability_enabled {
-        options
-            .target_directory
-            .map(|p| p.to_string_lossy().into_owned())
+        Some(options.target_directory.to_string_lossy().into_owned())
     } else {
         None
     };
@@ -317,13 +315,11 @@ where
         })?;
 
         // Store target directory in runtime userdata if provided
-        if let Some(target_dir) = options.target_directory {
-            ctx.store_userdata(TargetDirectory(target_dir.to_path_buf())).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store TargetDirectory: {:?}", e),
-                },
-            })?;
-        }
+        ctx.store_userdata(TargetDirectory(options.target_directory.to_path_buf())).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store TargetDirectory: {:?}", e),
+            },
+        })?;
 
         // Store metrics context in runtime userdata if provided (must be done inside async_with)
         if let Some(ref metrics_ctx) = metrics_context {
@@ -406,12 +402,17 @@ where
                 .unwrap_or_else(|_| options.file_path.to_path_buf())
                 .to_string_lossy()
                 .to_string();
+            let target_directory = options
+                .target_directory
+                .canonicalize()
+                .unwrap_or_else(|_| options.target_directory.to_path_buf());
             let parsed_content =
                 SgRootRjs::try_new_with_semantic(
                     ast_grep,
                     Some(file_path_str.clone()),
                     options.semantic_provider.clone(),
                     Some(file_path_str), // Pass current file path for write() validation
+                    Some(target_directory.as_path()),
                 ).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
@@ -446,6 +447,7 @@ where
             };
 
             let language_str = options.language.to_string();
+            let target_dir_str = target_directory.to_string_lossy().into_owned();
 
             let run_options_qjs = build_transform_options(
                 &ctx,
@@ -454,6 +456,7 @@ where
                 options.matrix_values,
                 matches,
                 options.dry_run,
+                &target_dir_str,
             )?;
 
             let func = namespace
@@ -968,7 +971,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -985,6 +988,71 @@ function example() {
                 other => panic!("Expected modified result, got: {:?}", other),
             },
             Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transform_options_include_target_dir_and_relative_filename() {
+        let codemod_content = r#"
+export default function transform(root, options) {
+  return JSON.stringify({
+    filename: root.filename(),
+    relativeFilename: root.relativeFilename(),
+    targetDir: options.targetDir ?? null,
+  });
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let target_dir = temp_dir.path().join("repo");
+        let file_path = target_dir.join("src/test.js");
+        fs::create_dir_all(file_path.parent().unwrap()).expect("Failed to create target directory");
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: &file_path,
+            content: "const x = 1;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: &target_dir,
+        };
+
+        let result = execute_codemod_with_quickjs(options)
+            .await
+            .expect("execution should succeed");
+        match result.primary {
+            ExecutionResult::Modified(modified) => {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&modified.content).expect("transform should return JSON");
+                let canonical_target_dir = target_dir
+                    .canonicalize()
+                    .expect("target dir should canonicalize");
+                let canonical_file_path = file_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| file_path.clone());
+                assert_eq!(
+                    payload["targetDir"],
+                    canonical_target_dir.to_string_lossy().as_ref()
+                );
+                assert_eq!(payload["relativeFilename"], "src/test.js");
+                assert_eq!(
+                    payload["filename"],
+                    canonical_file_path.to_string_lossy().as_ref()
+                );
+            }
+            other => panic!("Expected modified result, got: {:?}", other),
         }
     }
 
@@ -1020,7 +1088,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1072,7 +1140,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1124,7 +1192,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1168,7 +1236,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1217,7 +1285,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1327,7 +1395,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1406,7 +1474,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1453,7 +1521,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1500,7 +1568,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1547,7 +1615,7 @@ export default async function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            target_directory: None,
+            target_directory: Path::new("."),
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1585,7 +1653,7 @@ export default function shard(input) {
                 "state": {}
             }),
             capabilities: None,
-            target_directory: None,
+            target_directory: Some(Path::new(".")),
         };
 
         let result = execute_shard_function_with_quickjs(options).await;

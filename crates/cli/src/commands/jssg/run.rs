@@ -246,7 +246,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 cancellation_flag: None,
                 test_mode: false,
                 dry_run: false,
-                target_directory: Some(&target_directory),
+                target_directory: &target_directory,
             };
 
             // Execute the codemod on this file

@@ -27,6 +27,7 @@ The `options` object provides execution context:
 - `options.params?: Record<string, string>` — user parameters defined in the workflow. Drive behavior switches, defaults, and environment‑specific choices.
 - `options.matches?: any[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
 - `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
+- `options.targetDir: string` — absolute target directory for the current run. Use it when you need the root path for resolving sibling files or reporting paths.
 
 ```ts
 import type { Codemod } from "codemod:ast-grep";
@@ -37,6 +38,7 @@ const codemod: Codemod<TSX> = async (root, options) => {
   const params = options.params;
   const preFilteredMatches = options.matches; // may be undefined if no selector
   const matrix = options.matrixValues; // undefined without matrix strategy
+  const targetDir = options.targetDir;
   return null;
 };
 
@@ -45,6 +47,10 @@ export default codemod;
 
 <Info>
 `options.matches` contains nodes that matched your selector (when `getSelector` is exported). Use them to short‑circuit or to avoid recomputing broad queries.
+</Info>
+
+<Info>
+When you only need a stable repo-relative path for the current file, prefer `root.relativeFilename()` over manually stripping `options.targetDir`.
 </Info>
 
 ## Dynamic Parsing

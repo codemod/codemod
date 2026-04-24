@@ -212,6 +212,10 @@ npx codemod workflow run -w /path/to/codemod/workflow.yaml -t /path/to/target
   Path to the target directory containing files to transform.
 </ParamField>
 
+<Info>
+When semantic analysis returns an `SgRoot` for another file, you can use `root.relativeFilename()` to get that file's path relative to the active target directory.
+</Info>
+
 ### Via CLI Commands
 
 For quick testing or simple use cases, you can also use the `JSSG` CLI directly:
