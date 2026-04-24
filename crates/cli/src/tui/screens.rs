@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
+use crate::tui::app::{ApprovalPrompt, Screen, TuiState, WorktreeConsentScope};
 
 fn log_modal_copy_hint() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -14,11 +14,64 @@ fn log_modal_copy_hint() -> &'static str {
     }
 }
 
+fn workflow_status_text_style(status_text: &str) -> Style {
+    if status_text.starts_with("Completed") {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Awaiting trigger") {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Running") {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Failed") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+fn task_status_style(status: butterflow_models::TaskStatus) -> Style {
+    match status {
+        butterflow_models::TaskStatus::AwaitingTrigger => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Running => Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Failed => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        butterflow_models::TaskStatus::Completed => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
+
+fn task_row_status_style(task: &butterflow_models::Task) -> Style {
+    if TuiState::task_publish_in_progress(task) || TuiState::task_publish_failed(task) {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if TuiState::task_publish_deferred(task) {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        task_status_style(task.status)
+    }
+}
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
-    if let Some(approval) = &state.approval {
-        frame.render_widget(Clear, frame.area());
-        render_approval_modal(frame, approval);
-        return;
+    if matches!(state.screen, Screen::RunDetail) {
+        if let Some(approval) = &state.approval {
+            frame.render_widget(Clear, frame.area());
+            render_approval_modal(frame, approval);
+            return;
+        }
     }
 
     if state.show_log_modal {
@@ -127,23 +180,9 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
         .map(|(index, run)| {
             let is_selected = index == state.selected_run;
             let prefix = if is_selected { "▶" } else { " " };
-            let status_text = TuiState::workflow_status_text(run.status);
+            let status_text = state.display_status_for_list_run(run);
             let elapsed_text = TuiState::workflow_elapsed_text(run);
-            let status_style = match run.status {
-                butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::WorkflowStatus::Running => Style::default()
-                    .fg(Color::Rgb(255, 165, 0))
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::WorkflowStatus::Failed => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                butterflow_models::WorkflowStatus::Completed => Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                _ => Style::default(),
-            };
+            let status_style = workflow_status_text_style(&status_text);
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!("{prefix} ")),
                 Span::styled(
@@ -182,16 +221,30 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
 
 fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
+    let target_path = state.display_target_path();
+    let run_params = state.display_run_params();
+    let header_height = if state.current_run.is_some() {
+        let mut line_count = 1;
+        if target_path.is_some() {
+            line_count += 1;
+        }
+        if run_params.is_some() {
+            line_count += 1;
+        }
+        (line_count + 1).max(3)
+    } else {
+        3
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Min(1),
-            Constraint::Length(2),
+            Constraint::Length(3),
         ])
         .split(size);
 
-    let header = if let Some(run) = &state.current_run {
+    let header = if state.current_run.is_some() {
         let header_row_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -200,28 +253,21 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(chunks[0]);
-        let status_style = match run.status {
-            butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            butterflow_models::WorkflowStatus::Running => Style::default()
-                .fg(Color::Rgb(255, 165, 0))
-                .add_modifier(Modifier::BOLD),
-            butterflow_models::WorkflowStatus::Failed => {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-            }
-            butterflow_models::WorkflowStatus::Completed => Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default(),
-        };
+        let status_text = state.display_run_status();
+        let status_style = workflow_status_text_style(&status_text);
         let mut lines = vec![Line::from(vec![
             Span::raw(state.display_workflow_name()),
             Span::raw("  "),
-            Span::styled(state.display_run_status(), status_style),
+            Span::styled(status_text, status_style),
         ])];
-        if let Some(target_path) = state.display_target_path() {
+        if let Some(target_path) = target_path {
             lines.push(Line::from(target_path));
+        }
+        if let Some(params) = run_params {
+            lines.push(Line::from(Span::styled(
+                params,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
         frame.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::BOTTOM)),
@@ -347,27 +393,13 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
             let is_selected = visible_index == state.selected_task;
             let prefix = if is_selected { "▶" } else { " " };
             let step_name = state.task_display_name(task);
-            let status = compact_status_text(task.status, status_width);
+            let status = compact_status_text(state.task_status_text(task), status_width);
             let elapsed = state.task_elapsed_text(task);
             let truncated_name = truncate_text(&step_name, step_width);
             let progress_bar = state
                 .task_progress_bar(task, progress_width)
                 .unwrap_or_else(|| " ".repeat(progress_width));
-            let status_style = match task.status {
-                butterflow_models::TaskStatus::AwaitingTrigger => Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::TaskStatus::Running => Style::default()
-                    .fg(Color::Rgb(255, 165, 0))
-                    .add_modifier(Modifier::BOLD),
-                butterflow_models::TaskStatus::Failed => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                butterflow_models::TaskStatus::Completed => Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                _ => Style::default(),
-            };
+            let status_style = task_row_status_style(task);
 
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!(
@@ -421,6 +453,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(footer_chunks[0]);
+        let detail = truncate_text(&detail, detail_chunks[1].width as usize);
         frame.render_widget(
             Paragraph::new(detail).style(Style::default().fg(Color::DarkGray)),
             detail_chunks[1],
@@ -450,8 +483,14 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
 
     let title = state
         .selected_task()
-        .map(|task| format!("Logs: {} ({:?})", task.node_id, task.status))
-        .unwrap_or_else(|| "Logs".to_string());
+        .map(|task| {
+            Line::from(vec![
+                Span::raw(format!("Logs: {} (", task.node_id)),
+                Span::styled(format!("{:?}", task.status), task_status_style(task.status)),
+                Span::raw(")"),
+            ])
+        })
+        .unwrap_or_else(|| Line::from("Logs"));
 
     let logs = Paragraph::new(state.selected_task_log_text())
         .scroll((state.log_modal_scroll, 0))
@@ -545,17 +584,19 @@ fn truncate_text(text: &str, max_width: usize) -> String {
     truncated
 }
 
-fn compact_status_text(status: butterflow_models::TaskStatus, max_width: usize) -> String {
-    let candidates: &[&str] = match status {
-        butterflow_models::TaskStatus::AwaitingTrigger => {
-            &["Awaiting trigger", "Awaiting", "Await"]
-        }
-        butterflow_models::TaskStatus::Running => &["Running", "Run"],
-        butterflow_models::TaskStatus::Failed => &["Failed", "Fail"],
-        butterflow_models::TaskStatus::Completed => &["Completed", "Done"],
-        butterflow_models::TaskStatus::Pending => &["Pending", "Pend"],
-        butterflow_models::TaskStatus::Blocked => &["Blocked", "Block"],
-        butterflow_models::TaskStatus::WontDo => &["Won't do", "Skip"],
+fn compact_status_text(status: &str, max_width: usize) -> String {
+    let candidates: Vec<&str> = match status {
+        "Awaiting trigger" => vec!["Awaiting trigger", "Awaiting", "Await"],
+        "Publishing" => vec!["Publishing", "Publish", "Pub"],
+        "Publish failed" => vec!["Publish failed", "Pub failed", "Pub fail"],
+        "PR pending" => vec!["PR pending", "PR pend"],
+        "Running" => vec!["Running", "Run"],
+        "Failed" => vec!["Failed", "Fail"],
+        "Completed" => vec!["Completed", "Done"],
+        "Pending" => vec!["Pending", "Pend"],
+        "Blocked" => vec!["Blocked", "Block"],
+        "Won't do" => vec!["Won't do", "Skip"],
+        _ => vec![status],
     };
 
     candidates
@@ -580,6 +621,31 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         .split(area);
 
     let (title, body, help_text) = match approval {
+        ApprovalPrompt::WorktreeConsent { scope, .. } => match scope {
+            WorktreeConsentScope::Bulk => (
+                "Trigger All".to_string(),
+                "Trigger all pending tasks?\n\nThis will use git worktrees for the bulk run."
+                    .to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+            WorktreeConsentScope::SingleTask => (
+                "Trigger Task".to_string(),
+                "Trigger this task?\n\nThis will use a git worktree.".to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+        },
+        ApprovalPrompt::PullRequestConsent { title, head, .. } => (
+            "Publish Branch and Create Pull Request".to_string(),
+            format!(
+                "Publish branch and create pull request for completed task?\n\nTitle: {title}\nBranch: {head}"
+            ),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
+        ApprovalPrompt::ManualPullRequestConsent { title, head, .. } => (
+            "Publish Branch and Create Pull Request".to_string(),
+            format!("Publish branch and create pull request now?\n\nTitle: {title}\nBranch: {head}"),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
         ApprovalPrompt::Shell { command, .. } => (
             "Approval".to_string(),
             format!("Approve shell command?\n\n{command}"),
@@ -656,6 +722,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use serde_json::json;
     use uuid::Uuid;
 
     fn render_state(state: &TuiState, width: u16, height: u16) -> Vec<String> {
@@ -794,6 +861,257 @@ mod tests {
     }
 
     #[test]
+    fn render_run_detail_shows_workflow_params_in_header() {
+        let run_id = Uuid::new_v4();
+        let mut run = sample_run("debarrel", WorkflowStatus::Running, Utc::now());
+        run.id = run_id;
+        run.target_path = Some(std::path::PathBuf::from("/tmp/repo"));
+        run.params.insert("mode".to_string(), json!("safe"));
+        run.params
+            .insert("npmToken".to_string(), json!("secret-value"));
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(run),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let params_line = lines
+            .iter()
+            .find(|line| line.contains("Params:"))
+            .expect("expected params line in run detail header");
+
+        assert!(params_line.contains("mode=safe"));
+        assert!(params_line.contains("npmToken=********"));
+        assert!(!params_line.contains("secret-value"));
+    }
+
+    #[test]
+    fn render_run_detail_truncates_long_completion_detail() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Pull request created: https://github.com/example/repo/pull/1234567890/with/an/extra/long/path".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let detail_line = lines
+            .iter()
+            .find(|line| line.contains("Branch: codemod-1234"))
+            .expect("detail line should render");
+
+        assert!(detail_line.chars().count() <= 80);
+    }
+
+    #[test]
+    fn render_run_detail_shows_publish_failed_status_without_failed_task_status() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                    "Use create-pr to retry after fixing the remote or permissions".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms"))
+            .expect("task row should render");
+
+        assert!(task_row.contains("Publish failed"));
+        assert!(!task_row.contains("Failed"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publish failed, press p to try again")));
+    }
+
+    #[test]
+    fn render_run_detail_shows_publishing_status_for_retry_attempt() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                    "Publishing branch and creating pull request".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms"))
+            .expect("task row should render");
+
+        assert!(task_row.contains("Publishing"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publishing branch and creating pull request")));
+    }
+
+    #[test]
+    fn render_run_detail_keeps_last_visible_task_above_help_bar() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: Some(Utc::now() - Duration::seconds(index as i64)),
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                })
+                .collect(),
+            selected_task: 5,
+            task_list_scroll: 1,
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let last_task_line = lines
+            .iter()
+            .position(|line| line.contains("node-5"))
+            .unwrap();
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("Enter") && line.contains("logs"))
+            .unwrap();
+
+        assert!(last_task_line < hint_line);
+    }
+
+    #[test]
     fn log_modal_copy_hint_matches_platform() {
         if cfg!(target_os = "macos") {
             assert_eq!(log_modal_copy_hint(), "ctrl+c/cmd+c copy");
@@ -836,5 +1154,118 @@ mod tests {
             .unwrap();
 
         assert!(notice_line > hint_line);
+    }
+
+    #[test]
+    fn render_log_modal_title_includes_task_status() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Failed,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: Some(Utc::now()),
+            logs: vec!["boom".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: Some("boom".to_string()),
+        });
+        state.open_log_modal(6);
+
+        let lines = render_state(&state, 100, 20);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Logs: install-skill (Failed)")));
+    }
+
+    #[test]
+    fn render_selection_modal_places_help_bar_at_bottom() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::Selection {
+                request_id: Uuid::new_v4(),
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    ("project".to_string(), "project".to_string()),
+                    ("user".to_string(), "user (~/.claude/skills)".to_string()),
+                ],
+                selected: 0,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Choose install scope")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Enter") && line.contains("choose")));
+    }
+
+    #[test]
+    fn render_worktree_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::Bulk,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger All")));
+        assert!(lines.iter().any(|line| line.contains("git worktrees")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_single_task_worktree_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::SingleTask,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger Task")));
+        assert!(lines.iter().any(|line| line.contains("a git worktree")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_manual_pull_request_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::ManualPullRequestConsent {
+                task_id: Uuid::new_v4(),
+                title: "Draft PR".to_string(),
+                head: "codemod-branch".to_string(),
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publish Branch and Create Pull Request")));
+        assert!(lines.iter().any(|line| line.contains("codemod-branch")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
     }
 }
