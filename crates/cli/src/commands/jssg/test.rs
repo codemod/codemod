@@ -304,13 +304,16 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
-                let metrics_context = shared_metrics
-                    .lock()
-                    .expect("shared metrics lock poisoned")
-                    .entry(metrics_output_path.clone())
-                    .or_insert_with(|| SharedMetricsState::new(request.entrypoint_count))
-                    .metrics_context
-                    .clone();
+                let metrics_context = {
+                    let mut shared_metrics = shared_metrics
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
+                    shared_metrics
+                        .entry(metrics_output_path.clone())
+                        .or_insert_with(|| SharedMetricsState::new(request.entrypoint_count))
+                        .metrics_context
+                        .clone()
+                };
 
                 // For directory snapshot tests with --semantic-workspace,
                 // create a workspace-scoped provider using the temp dir

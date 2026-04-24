@@ -355,13 +355,11 @@ fn compute_relative_filename(
     target_directory: Option<&std::path::Path>,
 ) -> Option<String> {
     let filename = filename?;
-    let Some(target_directory) = target_directory else {
-        return None;
-    };
+    let target_directory = target_directory?;
 
     let file_path = std::path::Path::new(filename);
     if let Ok(relative) = file_path.strip_prefix(target_directory) {
-        return Some(relative.to_string_lossy().to_string());
+        return Some(relative.to_string_lossy().replace('\\', "/"));
     }
 
     let canonical_target = target_directory.canonicalize().ok()?;
@@ -378,7 +376,7 @@ fn compute_relative_filename(
     canonical_file
         .strip_prefix(&canonical_target)
         .ok()
-        .map(|relative| relative.to_string_lossy().to_string())
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 #[derive(Trace, Clone)]

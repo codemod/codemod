@@ -95,8 +95,7 @@ declare module "codemod:ast-grep" {
      */
     filename(): string;
     /**
-     * Returns the file path relative to the current target directory when one is available.
-     * Falls back to `filename()` when the root is not associated with a target directory.
+     * Returns the file path relative to the current target directory.
      */
     relativeFilename(): string;
     /**
