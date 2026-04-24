@@ -14,21 +14,23 @@ fn log_modal_copy_hint() -> &'static str {
     }
 }
 
-fn workflow_status_style(status: butterflow_models::WorkflowStatus) -> Style {
-    match status {
-        butterflow_models::WorkflowStatus::AwaitingTrigger => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-        butterflow_models::WorkflowStatus::Running => Style::default()
-            .fg(Color::Rgb(255, 165, 0))
-            .add_modifier(Modifier::BOLD),
-        butterflow_models::WorkflowStatus::Failed => {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        }
-        butterflow_models::WorkflowStatus::Completed => Style::default()
+fn workflow_status_text_style(status_text: &str) -> Style {
+    if status_text.starts_with("Completed") {
+        Style::default()
             .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        _ => Style::default(),
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Awaiting trigger") {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Running") {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Failed") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
     }
 }
 
@@ -180,7 +182,7 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
             let prefix = if is_selected { "▶" } else { " " };
             let status_text = state.display_status_for_list_run(run);
             let elapsed_text = TuiState::workflow_elapsed_text(run);
-            let status_style = workflow_status_style(run.status);
+            let status_style = workflow_status_text_style(&status_text);
             let item = ListItem::new(Line::from(vec![
                 Span::raw(format!("{prefix} ")),
                 Span::styled(
@@ -219,16 +221,30 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
 
 fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
+    let target_path = state.display_target_path();
+    let run_params = state.display_run_params();
+    let header_height = if state.current_run.is_some() {
+        let mut line_count = 1;
+        if target_path.is_some() {
+            line_count += 1;
+        }
+        if run_params.is_some() {
+            line_count += 1;
+        }
+        (line_count + 1).max(3)
+    } else {
+        3
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Min(1),
-            Constraint::Length(2),
+            Constraint::Length(3),
         ])
         .split(size);
 
-    let header = if let Some(run) = &state.current_run {
+    let header = if state.current_run.is_some() {
         let header_row_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -237,14 +253,21 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
                 Constraint::Length(1),
             ])
             .split(chunks[0]);
-        let status_style = workflow_status_style(run.status);
+        let status_text = state.display_run_status();
+        let status_style = workflow_status_text_style(&status_text);
         let mut lines = vec![Line::from(vec![
             Span::raw(state.display_workflow_name()),
             Span::raw("  "),
-            Span::styled(state.display_run_status(), status_style),
+            Span::styled(status_text, status_style),
         ])];
-        if let Some(target_path) = state.display_target_path() {
+        if let Some(target_path) = target_path {
             lines.push(Line::from(target_path));
+        }
+        if let Some(params) = run_params {
+            lines.push(Line::from(Span::styled(
+                params,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
         frame.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::BOTTOM)),
@@ -699,6 +722,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use serde_json::json;
     use uuid::Uuid;
 
     fn render_state(state: &TuiState, width: u16, height: u16) -> Vec<String> {
@@ -836,6 +860,33 @@ mod tests {
         assert!(task_row.contains(']'));
     }
 
+    #[test]
+    fn render_run_detail_shows_workflow_params_in_header() {
+        let run_id = Uuid::new_v4();
+        let mut run = sample_run("debarrel", WorkflowStatus::Running, Utc::now());
+        run.id = run_id;
+        run.target_path = Some(std::path::PathBuf::from("/tmp/repo"));
+        run.params.insert("mode".to_string(), json!("safe"));
+        run.params
+            .insert("npmToken".to_string(), json!("secret-value"));
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(run),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let params_line = lines
+            .iter()
+            .find(|line| line.contains("Params:"))
+            .expect("expected params line in run detail header");
+
+        assert!(params_line.contains("mode=safe"));
+        assert!(params_line.contains("npmToken=********"));
+        assert!(!params_line.contains("secret-value"));
+    }
+
+    #[test]
     fn render_run_detail_truncates_long_completion_detail() {
         let run_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
@@ -1001,6 +1052,63 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("Publishing branch and creating pull request")));
+    }
+
+    #[test]
+    fn render_run_detail_keeps_last_visible_task_above_help_bar() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: Some(Utc::now() - Duration::seconds(index as i64)),
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                })
+                .collect(),
+            selected_task: 5,
+            task_list_scroll: 1,
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let last_task_line = lines
+            .iter()
+            .position(|line| line.contains("node-5"))
+            .unwrap();
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("Enter") && line.contains("logs"))
+            .unwrap();
+
+        assert!(last_task_line < hint_line);
     }
 
     #[test]
