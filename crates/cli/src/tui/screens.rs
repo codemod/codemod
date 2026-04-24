@@ -221,10 +221,22 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
 
 fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
+    let header_height = if state.current_run.is_some() {
+        let mut line_count = 1;
+        if state.display_target_path().is_some() {
+            line_count += 1;
+        }
+        if state.display_run_params().is_some() {
+            line_count += 1;
+        }
+        line_count + 1
+    } else {
+        3
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Min(1),
             Constraint::Length(3),
         ])
@@ -248,6 +260,12 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
         ])];
         if let Some(target_path) = state.display_target_path() {
             lines.push(Line::from(target_path));
+        }
+        if let Some(params) = state.display_run_params() {
+            lines.push(Line::from(Span::styled(
+                params,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
         frame.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::BOTTOM)),
@@ -702,6 +720,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use serde_json::json;
     use uuid::Uuid;
 
     fn render_state(state: &TuiState, width: u16, height: u16) -> Vec<String> {
@@ -839,6 +858,33 @@ mod tests {
         assert!(task_row.contains(']'));
     }
 
+    #[test]
+    fn render_run_detail_shows_workflow_params_in_header() {
+        let run_id = Uuid::new_v4();
+        let mut run = sample_run("debarrel", WorkflowStatus::Running, Utc::now());
+        run.id = run_id;
+        run.target_path = Some(std::path::PathBuf::from("/tmp/repo"));
+        run.params.insert("mode".to_string(), json!("safe"));
+        run.params
+            .insert("npmToken".to_string(), json!("secret-value"));
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(run),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let params_line = lines
+            .iter()
+            .find(|line| line.contains("Params:"))
+            .expect("expected params line in run detail header");
+
+        assert!(params_line.contains("mode=safe"));
+        assert!(params_line.contains("npmToken=********"));
+        assert!(!params_line.contains("secret-value"));
+    }
+
+    #[test]
     fn render_run_detail_truncates_long_completion_detail() {
         let run_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
