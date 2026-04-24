@@ -272,6 +272,53 @@ impl TuiState {
             .map(|path| path.display().to_string())
     }
 
+    pub fn display_run_params(&self) -> Option<String> {
+        let run = self.current_run.as_ref()?;
+        if run.params.is_empty() {
+            return None;
+        }
+
+        let mut entries = run.params.iter().collect::<Vec<_>>();
+        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+        let params = entries
+            .into_iter()
+            .map(|(key, value)| {
+                let value = if Self::is_sensitive_param_key(key) {
+                    "********".to_string()
+                } else {
+                    Self::format_param_value(value)
+                };
+                format!("{key}={value}")
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+
+        Some(format!("Params: {params}"))
+    }
+
+    fn is_sensitive_param_key(key: &str) -> bool {
+        let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+        normalized.contains("password")
+            || normalized.contains("passwd")
+            || normalized.contains("secret")
+            || normalized.contains("token")
+            || normalized.contains("access_token")
+            || normalized.contains("api_key")
+            || normalized.contains("apikey")
+            || normalized.contains("auth")
+    }
+
+    fn format_param_value(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(value) => value.clone(),
+            serde_json::Value::Bool(value) => value.to_string(),
+            serde_json::Value::Number(value) => value.to_string(),
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
+        }
+    }
+
     pub fn workflow_status_text(status: butterflow_models::WorkflowStatus) -> String {
         match status {
             butterflow_models::WorkflowStatus::Pending => "Pending".to_string(),
@@ -1323,6 +1370,8 @@ mod tests {
         Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
+    use serde_json::json;
+    use std::collections::HashMap;
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
@@ -1739,6 +1788,46 @@ mod tests {
         };
 
         assert_eq!(TuiState::workflow_elapsed_text(&run), "02:05");
+    }
+
+    #[test]
+    fn display_run_params_formats_values_and_redacts_sensitive_keys() {
+        let mut params = HashMap::new();
+        params.insert("env".to_string(), json!("prod"));
+        params.insert("dry_run".to_string(), json!(true));
+        params.insert("count".to_string(), json!(3));
+        params.insert("npmToken".to_string(), json!("secret-value"));
+        params.insert("options".to_string(), json!({"mode": "safe"}));
+
+        let mut state = TuiState::default();
+        state.current_run = Some(WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params,
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: Some("workflow.yaml".to_string()),
+            target_path: None,
+        });
+
+        let params = state.display_run_params().unwrap();
+        assert!(params.starts_with("Params: "));
+        assert!(params.contains("count=3"));
+        assert!(params.contains("dry_run=true"));
+        assert!(params.contains("env=prod"));
+        assert!(params.contains(r#"options={"mode":"safe"}"#));
+        assert!(params.contains("npmToken=********"));
+        assert!(!params.contains("secret-value"));
     }
 
     #[test]
