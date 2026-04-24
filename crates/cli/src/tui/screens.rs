@@ -221,15 +221,17 @@ fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
 
 fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
+    let target_path = state.display_target_path();
+    let run_params = state.display_run_params();
     let header_height = if state.current_run.is_some() {
         let mut line_count = 1;
-        if state.display_target_path().is_some() {
+        if target_path.is_some() {
             line_count += 1;
         }
-        if state.display_run_params().is_some() {
+        if run_params.is_some() {
             line_count += 1;
         }
-        line_count + 1
+        (line_count + 1).max(3)
     } else {
         3
     };
@@ -258,10 +260,10 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
             Span::raw("  "),
             Span::styled(status_text, status_style),
         ])];
-        if let Some(target_path) = state.display_target_path() {
+        if let Some(target_path) = target_path {
             lines.push(Line::from(target_path));
         }
-        if let Some(params) = state.display_run_params() {
+        if let Some(params) = run_params {
             lines.push(Line::from(Span::styled(
                 params,
                 Style::default().fg(Color::DarkGray),
