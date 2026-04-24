@@ -2799,6 +2799,9 @@ impl Engine {
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
+                    let _ = self
+                        .append_task_log(task_id, format!("Step {} failed: {}", step.name, e))
+                        .await;
 
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
@@ -3641,7 +3644,7 @@ impl Engine {
             })?
         };
 
-        let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
@@ -3652,7 +3655,17 @@ impl Engine {
             target_directory: Some(&target_path),
         })
         .await
-        .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+        {
+            Ok(selector_config) => selector_config,
+            Err(e) => {
+                let message = format!("Failed to extract js-ast-grep selector: {e}");
+                if let Some(task_id) = task_log_task_id {
+                    let _ = self.append_task_log(task_id, &message).await;
+                }
+                slog!(logger, warn, "{}", message);
+                None
+            }
+        };
 
         let semantic_provider: Option<Arc<dyn SemanticProvider>> =
             match &js_ast_grep.semantic_analysis {
@@ -4968,8 +4981,15 @@ impl Engine {
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
             Some(
-                self.scan_eligible_files_with_jssg(shard_config, js_ast_grep, &target_path, logger)
-                    .await?,
+                self.scan_eligible_files_with_jssg(
+                    shard_config,
+                    js_ast_grep,
+                    &target_path,
+                    task.id,
+                    task.workflow_run_id,
+                    logger,
+                )
+                .await?,
             )
         } else {
             None
@@ -5079,6 +5099,8 @@ impl Engine {
         shard_config: &butterflow_models::step::UseShard,
         js_ast_grep: &butterflow_models::step::UseJSAstGrep,
         target_path: &Path,
+        task_id: Uuid,
+        workflow_run_id: Uuid,
         logger: &StructuredLogger,
     ) -> Result<Vec<String>> {
         // Clone the config and force dry_run mode
@@ -5102,7 +5124,7 @@ impl Engine {
             .map(|v| v.clone().into_iter().collect());
 
         self.execute_js_ast_grep_step(
-            "shard-scan".to_string(),
+            task_id.to_string(),
             "shard-scan".to_string(),
             &dry_run_config,
             None,
@@ -5116,7 +5138,7 @@ impl Engine {
                     .map(|callback| callback.clone()),
             },
             &None,
-            None,
+            Some(workflow_run_id),
             None,
             logger,
             Some(collector.clone()),

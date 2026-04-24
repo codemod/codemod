@@ -4234,6 +4234,79 @@ interface ApiResponse {
 }
 
 #[tokio::test]
+async fn test_execute_js_ast_grep_step_falls_back_when_selector_extraction_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export function getSelector() {
+  throw new Error("selector should not make the workflow fail");
+}
+
+export default function transform(ast) {
+  return ast
+    .findAll({ rule: { pattern: 'var $NAME = $VALUE' } })
+    .replace('let $NAME = $VALUE');
+}
+"#,
+    );
+
+    create_test_file(
+        temp_path,
+        "src/app.js",
+        r#"
+function main() {
+    var count = 0;
+}
+"#,
+    );
+
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "selector extraction is an optimization and should fall back to full-file execution: {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_js_ast_grep_step_dry_run() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
