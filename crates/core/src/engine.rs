@@ -133,7 +133,6 @@ fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
         "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
         serde_json::json!({
             "title": pr.title,
-            "body": pr.body,
             "draft": pr.draft,
             "base": pr.base,
             "branch": pr.branch,
@@ -6389,6 +6388,23 @@ export default function transform(ast) {
         assert!(message.contains("src/stale.ts"));
         assert!(message.contains("execution started"));
         assert!(message.contains("active units: 2"));
+    }
+
+    #[test]
+    fn pull_request_metadata_log_line_omits_body() {
+        let line = pull_request_metadata_log_line(&ResolvedPullRequestConfig {
+            title: "Create PR".to_string(),
+            body: Some("secret body".to_string()),
+            draft: true,
+            base: Some("main".to_string()),
+            branch: "codemod-branch".to_string(),
+        });
+
+        assert!(line.starts_with(PULL_REQUEST_METADATA_LOG_PREFIX));
+        assert!(line.contains(r#""title":"Create PR""#));
+        assert!(line.contains(r#""branch":"codemod-branch""#));
+        assert!(!line.contains("secret body"));
+        assert!(!line.contains(r#""body""#));
     }
 
     #[tokio::test]

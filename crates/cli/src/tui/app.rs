@@ -624,7 +624,9 @@ impl TuiState {
 
     fn task_publish_state(task: &Task) -> Option<TaskPublishState> {
         task.logs.iter().rev().find_map(|line| {
-            if line.starts_with("Pull request created: ") {
+            if line.starts_with("Pull request created: ")
+                || line == "Pull request created successfully"
+            {
                 Some(TaskPublishState::Created)
             } else if line == "Publishing branch and creating pull request" {
                 Some(TaskPublishState::Publishing)
@@ -2874,6 +2876,32 @@ mod tests {
     }
 
     #[test]
+    fn publish_success_without_url_overrides_publishing_state() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Completed,
+            started_at: Some(Utc::now()),
+            ended_at: Some(Utc::now()),
+            logs: vec![
+                "Publishing branch and creating pull request".to_string(),
+                "Pull request created successfully".to_string(),
+            ],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+        });
+
+        let task = state.selected_task().unwrap();
+        assert_eq!(state.task_status_text(task), "Completed");
+        assert_eq!(state.selected_task_completion_detail(), None);
+    }
+
+    #[test]
     fn publish_failure_detail_is_single_line() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
@@ -3159,7 +3187,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 ended_at: Some(Utc::now()),
                 logs: vec![
-                    r#"Pull request metadata: {"title":"[DRAFT] Debarrel backstage-auth-main","body":null,"draft":true,"base":"main","branch":"codemod-auth-main"}"#.to_string(),
+                    r#"Pull request metadata: {"title":"[DRAFT] Debarrel backstage-auth-main","draft":true,"base":"main","branch":"codemod-auth-main"}"#.to_string(),
                     "Branch publication and pull request creation failed: permission denied"
                         .to_string(),
                 ],

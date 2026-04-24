@@ -302,11 +302,13 @@ impl TuiRuntime {
 struct WorkflowReceiverDrain {
     applied_events: u64,
     needs_snapshot_reconcile: bool,
+    receiver_closed: bool,
 }
 
 enum TuiLoopWake {
     WorkflowEvent(WorkflowEvent),
     WorkflowLagged,
+    WorkflowClosed,
     UiEvent(AppEvent),
     TerminalEvent(Event),
 }
@@ -333,17 +335,25 @@ fn reduce_workflow_receiver(
                 state.reduce(AppEvent::Workflow(event));
                 applied_events += 1;
             }
-            Err(broadcast::error::TryRecvError::Empty)
-            | Err(broadcast::error::TryRecvError::Closed) => {
+            Err(broadcast::error::TryRecvError::Empty) => {
                 return WorkflowReceiverDrain {
                     applied_events,
                     needs_snapshot_reconcile: false,
+                    receiver_closed: false,
+                };
+            }
+            Err(broadcast::error::TryRecvError::Closed) => {
+                return WorkflowReceiverDrain {
+                    applied_events,
+                    needs_snapshot_reconcile: false,
+                    receiver_closed: true,
                 };
             }
             Err(broadcast::error::TryRecvError::Lagged(_)) => {
                 return WorkflowReceiverDrain {
                     applied_events,
                     needs_snapshot_reconcile: true,
+                    receiver_closed: false,
                 };
             }
         }
@@ -369,7 +379,7 @@ async fn wait_for_next_wake(
             match recv_result {
                 Ok(event) => Ok(Some(TuiLoopWake::WorkflowEvent(event))),
                 Err(broadcast::error::RecvError::Lagged(_)) => Ok(Some(TuiLoopWake::WorkflowLagged)),
-                Err(broadcast::error::RecvError::Closed) => Ok(None),
+                Err(broadcast::error::RecvError::Closed) => Ok(Some(TuiLoopWake::WorkflowClosed)),
             }
         }
         maybe_event = runtime.ui_event_rx.recv() => {
@@ -403,6 +413,7 @@ async fn run_tui_loop(
             WorkflowReceiverDrain {
                 applied_events: 0,
                 needs_snapshot_reconcile: false,
+                receiver_closed: false,
             }
         };
         state_changed |= workflow_drain.applied_events > 0;
@@ -416,6 +427,10 @@ async fn run_tui_loop(
                 state_changed = true;
                 perf_counters.inc_workflow_lag_reconciles();
             }
+        }
+        if workflow_drain.receiver_closed {
+            runtime.receiver = None;
+            state_changed = true;
         }
 
         while let Ok(event) = runtime.ui_event_rx.try_recv() {
@@ -484,6 +499,11 @@ async fn run_tui_loop(
                     needs_redraw = true;
                     perf_counters.inc_workflow_lag_reconciles();
                 }
+                continue;
+            }
+            TuiLoopWake::WorkflowClosed => {
+                runtime.receiver = None;
+                needs_redraw = true;
                 continue;
             }
             TuiLoopWake::UiEvent(event) => {
@@ -827,8 +847,21 @@ mod tests {
 
         assert_eq!(drain.applied_events, 1);
         assert!(!drain.needs_snapshot_reconcile);
+        assert!(!drain.receiver_closed);
         assert_eq!(state.runs.len(), 1);
         assert_eq!(state.runs[0].id, run_id);
+    }
+
+    #[test]
+    fn reduce_workflow_receiver_reports_closed_receiver() {
+        let (tx, mut rx) = broadcast::channel(1);
+        drop(tx);
+
+        let drain = reduce_workflow_receiver(&mut TuiState::default(), &mut rx);
+
+        assert_eq!(drain.applied_events, 0);
+        assert!(!drain.needs_snapshot_reconcile);
+        assert!(drain.receiver_closed);
     }
 
     #[test]
@@ -852,6 +885,7 @@ mod tests {
 
         assert_eq!(drain.applied_events, 0);
         assert!(drain.needs_snapshot_reconcile);
+        assert!(!drain.receiver_closed);
     }
 
     #[test]
