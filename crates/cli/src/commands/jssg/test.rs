@@ -9,7 +9,7 @@ use semantic_factory::LazySemanticProvider;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::CodemodLang;
@@ -30,6 +30,29 @@ use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabiliti
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 
 use super::config::{ResolvedTestConfig, TestConfig};
+
+#[derive(Clone)]
+struct PendingMetricsSnapshot {
+    metrics_context: MetricsContext,
+    output_path: PathBuf,
+    snapshot_path: Option<PathBuf>,
+}
+
+struct SharedMetricsState {
+    metrics_context: MetricsContext,
+    remaining_entrypoints: usize,
+    skip_snapshot: bool,
+}
+
+impl SharedMetricsState {
+    fn new(entrypoint_count: usize) -> Self {
+        Self {
+            metrics_context: MetricsContext::new(),
+            remaining_entrypoints: entrypoint_count.max(1),
+            skip_snapshot: false,
+        }
+    }
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct Command {
@@ -227,7 +250,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
-    let use_semantic_workspace = args.semantic_workspace;
+    let shared_metrics = Arc::new(Mutex::new(HashMap::<PathBuf, SharedMetricsState>::new()));
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
         Some(Arc::new(LazySemanticProvider::file_scope()));
     let update_snapshots = args.update_snapshots;
@@ -243,6 +266,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
+            let shared_metrics = shared_metrics.clone();
 
             Box::pin(async move {
                 let logical_input_path = logical_input_path.unwrap_or_else(|| input_path.clone());
@@ -252,11 +276,25 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let target_directory = workspace_root
                     .clone()
                     .unwrap_or_else(|| test_case_dir.to_path_buf());
+                let metrics_output_path = input_path
+                    .parent()
+                    .unwrap_or(input_path.as_path())
+                    .join("metrics.json");
                 let per_test_config =
-                    TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
+                    match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
+                    {
+                        Ok(config) => config,
+                        Err(error) => return Err(error),
+                    };
 
-                let test_config =
-                    ResolvedTestConfig::resolve(&args, &base_config, Some(&per_test_config))?;
+                let test_config = match ResolvedTestConfig::resolve(
+                    &args,
+                    &base_config,
+                    Some(&per_test_config),
+                ) {
+                    Ok(config) => config,
+                    Err(error) => return Err(error),
+                };
 
                 let language_str = test_config
                     .language
@@ -266,12 +304,18 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
-                let metrics_context = MetricsContext::new();
+                let metrics_context = shared_metrics
+                    .lock()
+                    .expect("shared metrics lock poisoned")
+                    .entry(metrics_output_path.clone())
+                    .or_insert_with(|| SharedMetricsState::new(request.entrypoint_count))
+                    .metrics_context
+                    .clone();
 
                 // For directory snapshot tests with --semantic-workspace,
                 // create a workspace-scoped provider using the temp dir
                 // and pre-index all files (matching jssg run behavior).
-                let semantic_provider = if use_semantic_workspace {
+                let semantic_provider = if test_config.semantic_workspace {
                     if let Some(ref ws_root) = workspace_root {
                         let provider: Arc<dyn SemanticProvider> =
                             Arc::new(LazySemanticProvider::workspace_scope(ws_root.clone()));
@@ -311,50 +355,24 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     dry_run: false,
                     target_directory: &target_directory,
                 };
-                let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
+                let execution_result = execute_codemod_with_quickjs(options)
+                    .await
+                    .map(|CodemodOutput { primary, .. }| map_execution_result(primary, input_code))
+                    .map_err(anyhow::Error::from);
 
-                // Handle metrics snapshot
-                let metrics_data = metrics_context.get_all();
-                let metrics_path = test_case_dir.join("metrics.json");
-
-                if !metrics_data.is_empty() {
-                    let actual_json = metrics_to_canonical_json(&metrics_data)?;
-
-                    if metrics_path.exists() {
-                        let expected_json = std::fs::read_to_string(&metrics_path)?;
-                        let normalized_expected_json = normalize_line_endings(&expected_json);
-                        let normalized_actual_json = normalize_line_endings(&actual_json);
-
-                        if normalized_actual_json != normalized_expected_json {
-                            if update_snapshots {
-                                std::fs::write(&metrics_path, &actual_json)?;
-                            } else {
-                                anyhow::bail!(
-                                    "Metrics mismatch:\n--- expected\n+++ actual\n{}",
-                                    generate_metrics_diff(
-                                        &normalized_expected_json,
-                                        &normalized_actual_json
-                                    )
-                                );
-                            }
-                        }
-                    } else {
-                        std::fs::write(&metrics_path, &actual_json)?;
+                if let Some(snapshot) = finish_metrics_collection(
+                    shared_metrics.as_ref(),
+                    &metrics_output_path,
+                    Some(test_case_dir.join("metrics.json")),
+                    execution_result.is_err(),
+                )? {
+                    if workspace_root.is_some() {
+                        write_metrics_output(&snapshot)?;
                     }
-                } else if metrics_path.exists() {
-                    // Codemod produced no metrics but a snapshot exists — stale snapshot
-                    if update_snapshots {
-                        std::fs::remove_file(&metrics_path)?;
-                    } else {
-                        anyhow::bail!(
-                            "Metrics snapshot exists at {} but codemod produced no metrics. \
-                             Run with --update-snapshots to remove the stale snapshot.",
-                            metrics_path.display()
-                        );
-                    }
+                    handle_metrics_snapshot(&snapshot, update_snapshots)?;
                 }
 
-                Ok(map_execution_result(primary, input_code))
+                execution_result
             })
                 as Pin<
                     Box<
@@ -377,6 +395,101 @@ async fn handler_impl(args: &Command) -> Result<()> {
 
     if !summary.is_success() {
         std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn finish_metrics_collection(
+    shared_metrics: &Mutex<HashMap<PathBuf, SharedMetricsState>>,
+    metrics_output_path: &Path,
+    snapshot_path: Option<PathBuf>,
+    should_skip_snapshot: bool,
+) -> Result<Option<PendingMetricsSnapshot>> {
+    let mut shared_metrics = shared_metrics
+        .lock()
+        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
+
+    let Some(state) = shared_metrics.get_mut(metrics_output_path) else {
+        return Ok(None);
+    };
+
+    state.skip_snapshot |= should_skip_snapshot;
+    state.remaining_entrypoints = state.remaining_entrypoints.saturating_sub(1);
+
+    if state.remaining_entrypoints > 0 {
+        return Ok(None);
+    }
+
+    let state = shared_metrics
+        .remove(metrics_output_path)
+        .expect("metrics state should exist when finalizing");
+
+    if state.skip_snapshot {
+        return Ok(None);
+    }
+
+    Ok(Some(PendingMetricsSnapshot {
+        metrics_context: state.metrics_context,
+        output_path: metrics_output_path.to_path_buf(),
+        snapshot_path,
+    }))
+}
+
+fn handle_metrics_snapshot(
+    snapshot: &PendingMetricsSnapshot,
+    update_snapshots: bool,
+) -> Result<()> {
+    let metrics_data = snapshot.metrics_context.get_all();
+    let metrics_path = snapshot
+        .snapshot_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("snapshot path missing for single-file metrics"))?;
+
+    if !metrics_data.is_empty() {
+        let actual_json = metrics_to_canonical_json(&metrics_data)?;
+
+        if metrics_path.exists() {
+            let expected_json = std::fs::read_to_string(metrics_path)?;
+            let normalized_expected_json = normalize_line_endings(&expected_json);
+            let normalized_actual_json = normalize_line_endings(&actual_json);
+
+            if normalized_actual_json != normalized_expected_json {
+                if update_snapshots {
+                    std::fs::write(metrics_path, &actual_json)?;
+                } else {
+                    anyhow::bail!(
+                        "Metrics mismatch:\n--- expected\n+++ actual\n{}",
+                        generate_metrics_diff(&normalized_expected_json, &normalized_actual_json)
+                    );
+                }
+            }
+        } else {
+            std::fs::write(metrics_path, &actual_json)?;
+        }
+    } else if metrics_path.exists() {
+        if update_snapshots {
+            std::fs::remove_file(metrics_path)?;
+        } else {
+            anyhow::bail!(
+                "Metrics snapshot exists at {} but codemod produced no metrics. \
+                 Run with --update-snapshots to remove the stale snapshot.",
+                metrics_path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn write_metrics_output(snapshot: &PendingMetricsSnapshot) -> Result<()> {
+    let metrics_data = snapshot.metrics_context.get_all();
+
+    if !metrics_data.is_empty() {
+        let actual_json = metrics_to_canonical_json(&metrics_data)?;
+        std::fs::write(&snapshot.output_path, actual_json)?;
+    } else if snapshot.output_path.exists() {
+        std::fs::remove_file(&snapshot.output_path)?;
     }
 
     Ok(())
@@ -481,12 +594,17 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_and_sanitize_error, generate_metrics_diff, metric_entry_sort_key,
-        metrics_to_canonical_json, normalize_line_endings,
+        classify_and_sanitize_error, finish_metrics_collection, generate_metrics_diff,
+        handle_metrics_snapshot, metric_entry_sort_key, metrics_to_canonical_json,
+        normalize_line_endings, write_metrics_output, PendingMetricsSnapshot, SharedMetricsState,
     };
+    use codemod_sandbox::metrics::Cardinality;
     use codemod_sandbox::metrics::MetricEntry;
-    use codemod_sandbox::MetricsData;
+    use codemod_sandbox::{MetricsContext, MetricsData};
     use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
 
     #[test]
     fn normalize_line_endings_converts_crlf_to_lf() {
@@ -595,5 +713,77 @@ mod tests {
         assert_eq!(category, "command_error");
         assert_eq!(message.len(), 203);
         assert!(message.ends_with("..."));
+    }
+
+    #[test]
+    fn directory_metrics_snapshot_finalizes_once_after_last_entrypoint() {
+        let fixture_root = PathBuf::from("/tmp/fixture");
+        let shared_metrics = Mutex::new(HashMap::from([(
+            fixture_root.clone(),
+            SharedMetricsState::new(2),
+        )]));
+
+        let metrics_context = {
+            let shared_metrics = shared_metrics.lock().unwrap();
+            shared_metrics
+                .get(&fixture_root)
+                .unwrap()
+                .metrics_context
+                .clone()
+        };
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 1);
+
+        let first = finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
+        assert!(first.is_none());
+
+        let second =
+            finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
+        let snapshot = second.expect("expected final snapshot on last entrypoint");
+        assert_eq!(snapshot.output_path, fixture_root);
+        assert!(snapshot.snapshot_path.is_none());
+        assert_eq!(snapshot.metrics_context.get("rename-metric")[0].count, 1);
+        assert!(shared_metrics.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_metrics_snapshot_writes_metrics_json() {
+        let tempdir = tempdir().unwrap();
+        let metrics_path = tempdir.path().join("metrics.json");
+        let metrics_context = MetricsContext::new();
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
+
+        handle_metrics_snapshot(
+            &PendingMetricsSnapshot {
+                metrics_context,
+                output_path: metrics_path.clone(),
+                snapshot_path: Some(metrics_path.clone()),
+            },
+            false,
+        )
+        .unwrap();
+
+        let written = std::fs::read_to_string(metrics_path).unwrap();
+        assert!(written.contains("\"rename-metric\""));
+        assert!(written.contains("\"count\": 2"));
+    }
+
+    #[test]
+    fn write_metrics_output_writes_aggregated_workspace_file() {
+        let tempdir = tempdir().unwrap();
+        let metrics_path = tempdir.path().join("src").join("metrics.json");
+        std::fs::create_dir_all(metrics_path.parent().unwrap()).unwrap();
+        let metrics_context = MetricsContext::new();
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
+
+        write_metrics_output(&PendingMetricsSnapshot {
+            metrics_context,
+            output_path: metrics_path.clone(),
+            snapshot_path: None,
+        })
+        .unwrap();
+
+        let written = std::fs::read_to_string(metrics_path).unwrap();
+        assert!(written.contains("\"rename-metric\""));
+        assert!(written.contains("\"count\": 2"));
     }
 }

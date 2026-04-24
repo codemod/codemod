@@ -56,6 +56,8 @@ pub struct ExecutionRequest {
     pub input_path: PathBuf,
     pub logical_input_path: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
+    pub test_case_root: PathBuf,
+    pub entrypoint_count: usize,
 }
 
 /// Execution function type - takes input code and file path, returns transformation result
@@ -279,6 +281,10 @@ impl TestRunner {
             .input_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("test_input"));
+        let test_case_root = input_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let execution_result = execution_fn(
             ExecutionRequest {
                 input_code: test_case.input_code.clone(),
@@ -288,6 +294,8 @@ impl TestRunner {
                     .clone()
                     .or_else(|| test_case.input_path.clone()),
                 workspace_root: None,
+                test_case_root,
+                entrypoint_count: 1,
             },
             capabilities.clone(),
         )
@@ -532,6 +540,7 @@ impl TestRunner {
             fixed_results: HashMap::new(),
             stopped_early: false,
         };
+        let entrypoint_counts = Self::directory_entrypoint_counts(test_case);
 
         let mut deferred_deletions: Vec<PathBuf> = Vec::new();
 
@@ -544,6 +553,7 @@ impl TestRunner {
                 execution_fn,
                 options,
                 capabilities.clone(),
+                &entrypoint_counts,
                 &mut deferred_deletions,
             )
             .await?
@@ -581,6 +591,7 @@ impl TestRunner {
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
+        entrypoint_counts: &HashMap<PathBuf, usize>,
         deferred_deletions: &mut Vec<PathBuf>,
     ) -> Result<Option<Result<()>>> {
         let actual_path = workspace_root.join(relative_path);
@@ -597,6 +608,12 @@ impl TestRunner {
             &options.expect_errors,
         );
 
+        let metrics_group = relative_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        let entrypoint_count = entrypoint_counts.get(&metrics_group).copied().unwrap_or(1);
+
         let execution_result = timeout(
             options.timeout,
             execution_fn(
@@ -605,6 +622,8 @@ impl TestRunner {
                     input_path: actual_path.clone(),
                     logical_input_path: Some(input_dir.join(relative_path)),
                     workspace_root: Some(workspace_root.to_path_buf()),
+                    test_case_root: test_case.path.clone(),
+                    entrypoint_count,
                 },
                 capabilities,
             ),
@@ -658,6 +677,18 @@ impl TestRunner {
                 .cloned(),
         );
         known_paths
+    }
+
+    fn directory_entrypoint_counts(test_case: &FileSystemTestCase) -> HashMap<PathBuf, usize> {
+        let mut counts = HashMap::new();
+        for relative_path in &test_case.entrypoint_files {
+            let key = relative_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf();
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        counts
     }
 
     fn evaluate_directory_assertion(
