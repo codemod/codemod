@@ -1,17 +1,12 @@
 import shard from "./{script_name}";
 
 export async function executeShard(input) {{
-    try {{
-        if (typeof shard !== "function") {{
-            throw new Error("Shard modules must export a default function. " + typeof shard + " found.");
-        }}
-        const result = await shard(input);
-        if (!Array.isArray(result)) {{
-            throw new Error("Shard function must return an array of shard results. " + typeof result + " found.");
-        }}
-        return result;
-    }} catch (e) {{
-        console.error(e);
-        throw e;
+    if (typeof shard !== "function") {{
+        throw new Error("Shard modules must export a default function. " + typeof shard + " found.");
     }}
+    const result = await shard(input);
+    if (!Array.isArray(result)) {{
+        throw new Error("Shard function must return an array of shard results. " + typeof result + " found.");
+    }}
+    return result;
 }}

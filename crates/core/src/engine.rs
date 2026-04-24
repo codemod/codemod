@@ -2799,6 +2799,9 @@ impl Engine {
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
+                    let _ = self
+                        .append_task_log(task_id, format!("Step {} failed: {}", step.name, e))
+                        .await;
 
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
@@ -3641,7 +3644,7 @@ impl Engine {
             })?
         };
 
-        let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
@@ -3652,7 +3655,17 @@ impl Engine {
             target_directory: Some(&target_path),
         })
         .await
-        .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+        {
+            Ok(selector_config) => selector_config,
+            Err(e) => {
+                let message = format!("Failed to extract js-ast-grep selector: {e}");
+                if let Some(task_id) = task_log_task_id {
+                    let _ = self.append_task_log(task_id, &message).await;
+                }
+                slog!(logger, warn, "{}", message);
+                None
+            }
+        };
 
         let semantic_provider: Option<Arc<dyn SemanticProvider>> =
             match &js_ast_grep.semantic_analysis {
@@ -4354,9 +4367,10 @@ impl Engine {
             }
         }
 
-        // Persist shared state to the workflow state adapter
+        // Persist shared state to the workflow state adapter. Dry-run executions
+        // use the shared state context in-memory only, including shard pre-scans.
         if let Some(wf_run_id) = workflow_run_id {
-            if !self.workflow_run_config.skip_state_writes {
+            if !self.workflow_run_config.skip_state_writes && !config.dry_run {
                 let persistable = shared_state_context.get_persistable();
                 let removals = shared_state_context.get_removals();
 
@@ -4968,8 +4982,15 @@ impl Engine {
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
             Some(
-                self.scan_eligible_files_with_jssg(shard_config, js_ast_grep, &target_path, logger)
-                    .await?,
+                self.scan_eligible_files_with_jssg(
+                    shard_config,
+                    js_ast_grep,
+                    &target_path,
+                    task.id,
+                    task.workflow_run_id,
+                    logger,
+                )
+                .await?,
             )
         } else {
             None
@@ -5079,6 +5100,8 @@ impl Engine {
         shard_config: &butterflow_models::step::UseShard,
         js_ast_grep: &butterflow_models::step::UseJSAstGrep,
         target_path: &Path,
+        task_id: Uuid,
+        workflow_run_id: Uuid,
         logger: &StructuredLogger,
     ) -> Result<Vec<String>> {
         // Clone the config and force dry_run mode
@@ -5102,7 +5125,7 @@ impl Engine {
             .map(|v| v.clone().into_iter().collect());
 
         self.execute_js_ast_grep_step(
-            "shard-scan".to_string(),
+            task_id.to_string(),
             "shard-scan".to_string(),
             &dry_run_config,
             None,
@@ -5116,7 +5139,7 @@ impl Engine {
                     .map(|callback| callback.clone()),
             },
             &None,
-            None,
+            Some(workflow_run_id),
             None,
             logger,
             Some(collector.clone()),
@@ -5817,6 +5840,85 @@ mod tests {
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[tokio::test]
+    async fn dry_run_js_ast_grep_does_not_persist_shared_state() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        std::fs::create_dir_all(temp_path.join("src")).unwrap();
+        std::fs::write(
+            temp_path.join("stateful-codemod.js"),
+            r#"
+import { setState } from "codemod:workflow";
+
+export default function transform(ast) {
+  setState("preScanMutation", "leaked");
+  return ast;
+}
+"#,
+        )
+        .unwrap();
+        std::fs::write(temp_path.join("src/app.js"), "const value = 1;\n").unwrap();
+
+        let workflow_run_id = Uuid::new_v4();
+        let config = WorkflowRunConfig {
+            bundle_path: temp_path.to_path_buf(),
+            target_path: temp_path.to_path_buf(),
+            ..WorkflowRunConfig::default()
+        };
+        let engine = Engine::with_state_adapter(
+            Box::new(LocalStateAdapter::with_base_dir(
+                temp_path.join("state-store"),
+            )),
+            config,
+        );
+
+        engine
+            .execute_js_ast_grep_step(
+                "test-node".to_string(),
+                "test-step".to_string(),
+                &UseJSAstGrep {
+                    js_file: "stateful-codemod.js".to_string(),
+                    base_path: Some("src".to_string()),
+                    include: Some(vec!["**/*.js".to_string()]),
+                    exclude: None,
+                    max_threads: None,
+                    dry_run: Some(true),
+                    language: Some("javascript".to_string()),
+                    capabilities: None,
+                    semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                        SemanticAnalysisMode::File,
+                    )),
+                },
+                None,
+                None,
+                &CapabilitiesData {
+                    capabilities: None,
+                    capabilities_security_callback: None,
+                },
+                &None,
+                Some(workflow_run_id),
+                None,
+                &StructuredLogger::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let state = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
+            .await
+            .unwrap();
+        assert!(
+            !state.contains_key("preScanMutation"),
+            "dry-run shard scans must not persist codemod workflow state"
+        );
     }
 
     #[test]
