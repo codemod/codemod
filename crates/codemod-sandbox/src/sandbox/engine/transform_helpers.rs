@@ -18,7 +18,7 @@ pub enum ModificationCheck<'a> {
 
 /// Build the JS `options` object passed to the transform function.
 ///
-/// Creates an object with: `{ params, language, matches, matrixValues }`
+/// Creates an object with: `{ params, language, matches, matrixValues, dryRun, targetDir }`
 pub fn build_transform_options<'js>(
     ctx: &Ctx<'js>,
     params: HashMap<String, serde_json::Value>,
@@ -26,6 +26,7 @@ pub fn build_transform_options<'js>(
     matrix_values: Option<HashMap<String, serde_json::Value>>,
     matches: Option<Vec<SgNodeRjs<'js>>>,
     dry_run: bool,
+    target_dir: &str,
 ) -> Result<Value<'js>, ExecutionError> {
     let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
         source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -78,6 +79,14 @@ pub fn build_transform_options<'js>(
 
     run_options
         .set("dryRun", dry_run)
+        .map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: e.to_string(),
+            },
+        })?;
+
+    run_options
+        .set("targetDir", target_dir)
         .map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: e.to_string(),

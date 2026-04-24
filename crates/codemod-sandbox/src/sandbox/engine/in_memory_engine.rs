@@ -90,6 +90,9 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     /// Optional file path for the source code
     pub file_path: Option<&'a str>,
+    /// Target directory exposed to the codemod via `options.targetDir`
+    /// and used to derive `root.relativeFilename()`.
+    pub target_directory: &'a str,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
@@ -243,7 +246,6 @@ where
     let shared_state_context = options.shared_state_context.clone();
     let process_sandbox = options.process_sandbox.clone();
     let fs_sandbox = options.fs_sandbox.clone();
-
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
     let result = async_with!(context => |ctx| {
@@ -336,8 +338,16 @@ where
                     },
                 })?;
 
+            let target_directory = std::path::PathBuf::from(options.target_directory);
+
             let parsed_content =
-                SgRootRjs::try_new_with_semantic(ast_grep, options.file_path.map(|p| p.to_string()), options.semantic_provider, options.file_path.map(|p| p.to_string())).map_err(|e| ExecutionError::Runtime {
+                SgRootRjs::try_new_with_semantic(
+                    ast_grep,
+                    options.file_path.map(|p| p.to_string()),
+                    options.semantic_provider,
+                    options.file_path.map(|p| p.to_string()),
+                    Some(target_directory.as_path()),
+                ).map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                         message: e.to_string(),
                     },
@@ -370,6 +380,7 @@ where
             };
 
             let language_str = options.language.to_string();
+            let target_dir_str = target_directory.to_string_lossy().into_owned();
 
             // Convert String params to serde_json::Value for the shared helper
             let params_json = params.into_iter()
@@ -383,6 +394,7 @@ where
                 options.matrix_values,
                 matches,
                 true,
+                &target_dir_str,
             )?;
 
             let func = namespace
@@ -485,6 +497,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: None,
+            target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -544,6 +557,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: None,
+            target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -558,6 +572,65 @@ export default function transform(root) {
                 ExecutionResult::Modified(modified) => {
                     assert!(modified.content.contains("logger.log('Hello, world!')"));
                     assert!(modified.rename_to.is_none());
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_in_memory_options_include_target_dir_and_relative_filename() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let codemod_content = r#"
+export default function transform(root, options) {
+  return JSON.stringify({
+    filename: root.filename(),
+    relativeFilename: root.relativeFilename(),
+    targetDir: options.targetDir ?? null,
+  });
+}
+        "#
+        .trim();
+
+        fs::write(
+            temp_dir.path().join("target_dir_codemod.js"),
+            codemod_content,
+        )
+        .expect("Failed to write codemod file");
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/src/main.ts"),
+            target_directory: "/app",
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: None,
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    let payload: serde_json::Value = serde_json::from_str(&modified.content)
+                        .expect("transform should return JSON");
+                    assert_eq!(payload["targetDir"], "/app");
+                    assert_eq!(payload["relativeFilename"], "src/main.ts");
+                    assert_eq!(payload["filename"], "/app/src/main.ts");
                 }
                 other => panic!("Expected modified result, got: {:?}", other),
             },
@@ -614,6 +687,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: None,
+            target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -715,6 +789,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -791,6 +866,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -866,6 +942,7 @@ export default function transform(root) {
                 params: None,
                 matrix_values: None,
                 file_path: Some(path.as_str()),
+                target_directory: "/app",
                 semantic_provider: None,
                 metrics_context: None,
                 shared_state_context: None,
@@ -936,6 +1013,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -1043,6 +1121,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -1133,6 +1212,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -1200,6 +1280,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,
@@ -1237,6 +1318,7 @@ export default function transform(root) {
             params: None,
             matrix_values: None,
             file_path: Some("/app/main.ts"),
+            target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
             shared_state_context: None,

@@ -13,6 +13,7 @@ title: "API Reference"
 ### Essential Methods
 - `root.root()` - Get root AST node
 - `root.filename()` - Get file path
+- `root.relativeFilename()` - Get file path relative to the target directory
 - `node.find(rule)` - Find first match
 - `node.findAll(rule)` - Find all matches
 - `node.replace(text)` - Create edit
@@ -55,12 +56,15 @@ Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript type
 - `undefined` - Same as null
 - Other types - Runtime error
 
+The `options` argument includes the execution context for the current run, including `params`, `matches`, `matrixValues`, `dryRun`, and `targetDir`.
+
 ## SgRoot API
 
 The root object provides access to the parsed file:
 
 <ParamField path="root()" type="SgNode">Get the root AST node of the file.</ParamField>
 <ParamField path="filename()" type="string">Get the file path or "anonymous" for ad-hoc parsing.</ParamField>
+<ParamField path="relativeFilename()" type="string">Get the file path relative to the target directory when available.</ParamField>
 <ParamField path="source()" type="string">Get the full source code of the file.</ParamField>
 <ParamField path="write(content)" type="void">Write content to this file. Only valid for files obtained via `definition()` or `references()` — cannot be called on the current file being processed.</ParamField>
 <ParamField path="rename(newPath)" type="void">Rename the current file to a new path. If relative, resolved against the file's parent directory. Can only be called once per file. See [File Renaming](#file-renaming) for details.</ParamField>
@@ -68,6 +72,7 @@ The root object provides access to the parsed file:
 ```ts
 const rootNode = root.root();
 const filePath = root.filename();
+const relativePath = root.relativeFilename();
 ```
 
 ## SgNode API
@@ -973,4 +978,3 @@ import runtime, {
 - Hooks are the preferred way to report semantic failures or progress to workflows and the TUI.
 - Uncaught exceptions still fail the task, but they provide less structured context.
 - `codemod:runtime` requires a runtime version that includes runtime-hook support.
-
