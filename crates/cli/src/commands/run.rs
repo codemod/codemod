@@ -287,7 +287,8 @@ pub async fn handler(
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
     let workflow_definition = butterflow_core::utils::parse_workflow_file(&workflow_path)
         .map_err(|e| anyhow::anyhow!("Failed to parse workflow before run: {}", e))?;
-    let auto_launch_tui = !args.no_interactive && workflow_has_manual_steps(&workflow_definition);
+    let auto_launch_tui =
+        should_auto_launch_package_run_tui(args.no_interactive, &workflow_definition);
 
     let capabilities = resolve_capabilities(
         ResolveCapabilitiesArgs {
@@ -331,17 +332,10 @@ pub async fn handler(
 
     // Set the package name so it's stored on the WorkflowRun
     engine.set_name(Some(args.package.clone()));
-    {
-        let cfg = engine.workflow_run_config_mut();
-        cfg.enable_managed_git = auto_launch_tui;
-        cfg.enable_worktrees = auto_launch_tui;
-    }
+    apply_package_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(Arc::new(None));
-        engine
-            .workflow_run_config_mut()
-            .capture_stdout_in_quiet_mode = false;
     }
 
     // For pro codemod dry-run: streamline execution — auto-trigger manual
@@ -547,6 +541,25 @@ fn should_prompt_for_skill_install_with_tty(
     stdout_is_tty: bool,
 ) -> bool {
     !no_interactive && stdin_is_tty && stdout_is_tty
+}
+
+fn should_auto_launch_package_run_tui(
+    no_interactive: bool,
+    workflow_definition: &butterflow_core::Workflow,
+) -> bool {
+    !no_interactive && workflow_has_manual_steps(workflow_definition)
+}
+
+fn apply_package_run_mode_to_config(
+    cfg: &mut butterflow_core::config::WorkflowRunConfig,
+    auto_launch_tui: bool,
+) {
+    cfg.enable_managed_git = auto_launch_tui;
+    cfg.enable_worktrees = auto_launch_tui;
+    if auto_launch_tui {
+        cfg.quiet = true;
+        cfg.capture_stdout_in_quiet_mode = false;
+    }
 }
 
 fn skill_install_command(package_id: &str) -> String {
@@ -1087,5 +1100,68 @@ nodes:
             skill_install_prompt_message(SkillInstallOfferContext::WorkflowAndSkillPostRun)
                 .contains("follow-up workflows")
         );
+    }
+
+    fn workflow_with_manual_step() -> butterflow_core::Workflow {
+        butterflow_core::Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![butterflow_core::Node {
+                id: "manual-node".to_string(),
+                name: "Manual Node".to_string(),
+                description: None,
+                r#type: butterflow_models::node::NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![butterflow_core::Step {
+                    id: None,
+                    name: "noop".to_string(),
+                    action: butterflow_models::step::StepAction::RunScript("echo hi".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(butterflow_models::step::PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn non_tui_package_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_package_run_tui(true, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
+        apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.enable_managed_git);
+        assert!(!cfg.enable_worktrees);
+        assert!(!cfg.quiet);
+        assert!(cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn interactive_manual_package_run_enables_tui_managed_git_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_package_run_tui(false, &workflow);
+        assert!(auto_launch_tui);
+
+        let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
+        apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(cfg.enable_managed_git);
+        assert!(cfg.enable_worktrees);
+        assert!(cfg.quiet);
+        assert!(!cfg.capture_stdout_in_quiet_mode);
     }
 }
