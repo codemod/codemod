@@ -118,6 +118,70 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
+struct ResolvedPullRequestConfig {
+    title: String,
+    body: Option<String>,
+    draft: bool,
+    base: Option<String>,
+    branch: String,
+}
+
+const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+
+fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+    format!(
+        "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
+        serde_json::json!({
+            "title": pr.title,
+            "body": pr.body,
+            "draft": pr.draft,
+            "base": pr.base,
+            "branch": pr.branch,
+        })
+    )
+}
+
+fn pull_request_config_from_task_logs(
+    task: &Task,
+    fallback: ResolvedPullRequestConfig,
+) -> ResolvedPullRequestConfig {
+    let Some(metadata) = task.logs.iter().rev().find_map(|line| {
+        line.strip_prefix(PULL_REQUEST_METADATA_LOG_PREFIX)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    }) else {
+        return fallback;
+    };
+
+    ResolvedPullRequestConfig {
+        title: metadata
+            .get("title")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.title),
+        body: metadata
+            .get("body")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.body),
+        draft: metadata
+            .get("draft")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback.draft),
+        base: metadata
+            .get("base")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .or(fallback.base),
+        branch: metadata
+            .get("branch")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback.branch),
+    }
+}
+
 fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
@@ -692,6 +756,159 @@ impl Engine {
         }
     }
 
+    fn resolve_pull_request_config(
+        &self,
+        workflow_run: &WorkflowRun,
+        task: &Task,
+        node: &Node,
+    ) -> Result<Option<ResolvedPullRequestConfig>> {
+        if !should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git) {
+            return Ok(None);
+        }
+
+        let task_expr_ctx = crate::git_ops::build_task_expression_context(&task.id.to_string());
+        let configured_branch = node.branch_name.as_ref().map(|tmpl| {
+            resolve_string_with_expression(
+                tmpl,
+                &workflow_run.params,
+                &HashMap::new(),
+                task.matrix_values.as_ref(),
+                None,
+                Some(&task_expr_ctx),
+            )
+            .unwrap_or_else(|_| format!("codemod-{}", task_expr_ctx.signature))
+        });
+        let branch = crate::git_ops::resolve_branch_name(
+            configured_branch.as_deref(),
+            &task_expr_ctx.signature,
+        );
+
+        let (title, body, draft, base) = if let Some(pr_config) = &node.pull_request {
+            let title = resolve_string_with_expression(
+                &pr_config.title,
+                &workflow_run.params,
+                &HashMap::new(),
+                task.matrix_values.as_ref(),
+                None,
+                Some(&task_expr_ctx),
+            )
+            .unwrap_or_else(|_| pr_config.title.clone());
+
+            let body = pr_config.body.as_ref().map(|b| {
+                resolve_string_with_expression(
+                    b,
+                    &workflow_run.params,
+                    &HashMap::new(),
+                    task.matrix_values.as_ref(),
+                    None,
+                    Some(&task_expr_ctx),
+                )
+                .unwrap_or_else(|_| b.clone())
+            });
+
+            (
+                title,
+                body,
+                pr_config.draft.unwrap_or(false),
+                pr_config.base.clone(),
+            )
+        } else {
+            (node.name.clone(), None, false, None)
+        };
+
+        Ok(Some(ResolvedPullRequestConfig {
+            title,
+            body,
+            draft,
+            base,
+            branch,
+        }))
+    }
+
+    pub async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
+        let task = self.state_adapter.lock().await.get_task(task_id).await?;
+        let workflow_run = self
+            .state_adapter
+            .lock()
+            .await
+            .get_workflow_run(task.workflow_run_id)
+            .await?;
+        let node = workflow_run
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == task.node_id)
+            .ok_or_else(|| Error::Runtime(format!("Node '{}' not found for task", task.node_id)))?;
+
+        let pr = self
+            .resolve_pull_request_config(&workflow_run, &task, node)?
+            .ok_or_else(|| {
+                Error::Runtime("Task is not eligible for pull request creation".to_string())
+            })?;
+        let pr = pull_request_config_from_task_logs(&task, pr);
+
+        let _ = self
+            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+            .await;
+
+        let _ = self
+            .append_task_log(task_id, "Publishing branch and creating pull request")
+            .await;
+
+        let pr_url = match async {
+            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
+
+            crate::git_ops::create_pull_request(
+                &pr.title,
+                pr.body.as_deref(),
+                pr.draft,
+                &pr.branch,
+                pr.base.as_deref(),
+                &task.id.to_string(),
+                &self.workflow_run_config.target_path,
+            )
+            .await
+        }
+        .await
+        {
+            Ok(pr_url) => pr_url,
+            Err(error) => {
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        format!("Branch publication and pull request creation failed: {error}"),
+                    )
+                    .await;
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        "Use create-pr to retry after fixing the remote or permissions",
+                    )
+                    .await;
+                self.emit_error(format!(
+                    "Task {} ({}) branch publication/PR creation failed: {}",
+                    task.id, node.id, error
+                ));
+                return Ok(None);
+            }
+        };
+
+        match &pr_url {
+            Some(pr_url) => {
+                let _ = self
+                    .append_task_log(task_id, format!("Pull request created: {}", pr_url))
+                    .await;
+            }
+            None => {
+                let _ = self
+                    .append_task_log(task_id, "Pull request created successfully")
+                    .await;
+            }
+        }
+
+        Ok(pr_url)
+    }
+
     fn emit_ai_instructions(
         &self,
         logger: &StructuredLogger,
@@ -1046,7 +1263,7 @@ impl Engine {
                                                 )
                                                 .await;
                                             match tokio::time::timeout(
-                                                tokio::time::Duration::from_secs(30),
+                                                tokio::time::Duration::from_secs(120),
                                                 crate::git_ops::create_worktree(
                                                     &repo_root,
                                                     &branch,
@@ -2605,7 +2822,7 @@ impl Engine {
             .params
             .as_ref()
             .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
-            .unwrap_or_else(|| workflow_run.params);
+            .unwrap_or_else(|| workflow_run.params.clone());
 
         let node = workflow_run
             .workflow
@@ -3018,62 +3235,69 @@ impl Engine {
 
                 // Push and create PR if any commits were made
                 if had_commit_checkpoint {
+                    enum PullRequestOutcome {
+                        Deferred,
+                        Created(Option<String>),
+                    }
+
                     let _ = self
                         .append_task_log(task_id, "Publishing branch and creating pull request")
                         .await;
-                    let push_and_pr_result: Result<Option<String>> = async {
+                    let push_and_pr_result: Result<PullRequestOutcome> = async {
+                        let pr = self
+                            .resolve_pull_request_config(&workflow_run, &task, node)?
+                            .ok_or_else(|| {
+                                Error::Runtime(
+                                    "Task is not eligible for pull request creation".to_string(),
+                                )
+                            })?;
+                        let _ = self
+                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+                            .await;
+
+                        if let Some(approval_callback) =
+                            &self.workflow_run_config.pull_request_approval_callback
+                        {
+                            let approved = approval_callback(&crate::config::PullRequestCreationRequest {
+                                title: pr.title.clone(),
+                                body: pr.body.clone(),
+                                draft: pr.draft,
+                                head: pr.branch.clone(),
+                                base: pr.base.clone(),
+                                node_id: node.id.clone(),
+                                node_name: node.name.clone(),
+                                task_id: task.id.to_string(),
+                            })
+                            .map_err(|error| Error::Runtime(error.to_string()))?;
+                            if !approved {
+                                let _ = self
+                                    .append_task_log(
+                                    task_id,
+                                        "Branch publication and pull request creation deferred; use create-pr to continue later",
+                                    )
+                                    .await;
+                                return Ok(PullRequestOutcome::Deferred);
+                            }
+                        }
+
                         crate::git_ops::push_branch(branch, target_path).await?;
 
-                        // Resolve PR config or use defaults from node name
-                        let (pr_title, pr_body, pr_draft, pr_base) =
-                            if let Some(pr_config) = &node.pull_request {
-                                let title = resolve_string_with_expression(
-                                    &pr_config.title,
-                                    &resolved_params,
-                                    &HashMap::new(),
-                                    task.matrix_values.as_ref(),
-                                    None,
-                                    task_expr_ctx.as_ref(),
-                                )
-                                .unwrap_or_else(|_| pr_config.title.clone());
-
-                                let body = pr_config.body.as_ref().map(|b| {
-                                    resolve_string_with_expression(
-                                        b,
-                                        &resolved_params,
-                                        &HashMap::new(),
-                                        task.matrix_values.as_ref(),
-                                        None,
-                                        task_expr_ctx.as_ref(),
-                                    )
-                                    .unwrap_or_else(|_| b.clone())
-                                });
-
-                                (
-                                    title,
-                                    body,
-                                    pr_config.draft.unwrap_or(false),
-                                    pr_config.base.clone(),
-                                )
-                            } else {
-                                (node.name.clone(), None, false, None)
-                            };
-
                         crate::git_ops::create_pull_request(
-                            &pr_title,
-                            pr_body.as_deref(),
-                            pr_draft,
-                            branch,
-                            pr_base.as_deref(),
+                            &pr.title,
+                            pr.body.as_deref(),
+                            pr.draft,
+                            &pr.branch,
+                            pr.base.as_deref(),
                             &task.id.to_string(),
                             target_path,
                         )
                         .await
+                        .map(PullRequestOutcome::Created)
                     }
                     .await;
 
                     match &push_and_pr_result {
-                        Ok(Some(pr_url)) => {
+                        Ok(PullRequestOutcome::Created(Some(pr_url))) => {
                             slog!(git_step_logger, info, "Pull request created: {}", pr_url);
                             let _ = self
                                 .append_task_log(
@@ -3082,8 +3306,11 @@ impl Engine {
                                 )
                                 .await;
                         }
-                        Ok(None) => {
+                        Ok(PullRequestOutcome::Created(None)) => {
                             slog!(git_step_logger, info, "Pull request created successfully");
+                        }
+                        Ok(PullRequestOutcome::Deferred) => {
+                            slog!(git_step_logger, info, "Pull request creation deferred");
                         }
                         _ => {}
                     }
@@ -3091,46 +3318,22 @@ impl Engine {
                     if let Err(e) = push_and_pr_result {
                         git_step_logger
                             .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-
-                        // Mark the task as failed
-                        let mut fields = HashMap::new();
-                        fields.insert(
-                            "status".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                            },
-                        );
-                        fields.insert(
-                            "ended_at".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(Utc::now())?),
-                            },
-                        );
-                        fields.insert(
-                            "error".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Add,
-                                value: Some(serde_json::to_value(format!(
-                                    "Push/PR creation failed: {}",
-                                    e
-                                ))?),
-                            },
-                        );
-                        let task_diff = TaskDiff { task_id, fields };
-                        self.state_adapter
-                            .lock()
-                            .await
-                            .apply_task_diff(&task_diff)
-                            .await?;
-                        self.emit_task_updated(task_id).await;
-
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Branch publication and pull request creation failed: {e}"),
+                            )
+                            .await;
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                "Use create-pr to retry after fixing the remote or permissions",
+                            )
+                            .await;
                         self.emit_error(format!(
-                            "Task {} ({}) push/PR creation failed: {}",
+                            "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
-                        return Err(e);
                     }
 
                     git_step_logger

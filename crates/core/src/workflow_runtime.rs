@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::ai_handoff::AgentOption;
 use crate::config::{
     AgentSelectionCallback, CapabilitiesSecurityCallback, DeferredInteractionError,
-    SelectionPrompt, SelectionPromptCallback, ShellCommandApprovalCallback,
-    ShellCommandExecutionRequest,
+    PullRequestApprovalCallback, PullRequestCreationRequest, SelectionPrompt,
+    SelectionPromptCallback, ShellCommandApprovalCallback, ShellCommandExecutionRequest,
 };
 use crate::engine::Engine;
 use crate::{Task, WorkflowRun, WorkflowStatus};
@@ -73,6 +73,11 @@ pub enum WorkflowEvent {
         request: ShellCommandExecutionRequest,
         at: DateTime<Utc>,
     },
+    PullRequestApprovalRequested {
+        request_id: Uuid,
+        request: PullRequestCreationRequest,
+        at: DateTime<Utc>,
+    },
     CapabilitiesApprovalRequested {
         request_id: Uuid,
         modules: Vec<LlrtSupportedModules>,
@@ -100,7 +105,14 @@ pub enum WorkflowCommand {
     },
     TriggerAll,
     CancelWorkflow,
+    CreatePullRequest {
+        task_id: Uuid,
+    },
     RespondShellApproval {
+        request_id: Uuid,
+        approved: bool,
+    },
+    RespondPullRequestApproval {
         request_id: Uuid,
         approved: bool,
     },
@@ -158,6 +170,7 @@ impl WorkflowEventSink for BroadcastEventSink {
 
 struct PendingApprovals {
     shell: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
+    pull_request: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     capabilities: Mutex<CapabilityApprovalState>,
     agent: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
     selection: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
@@ -167,6 +180,7 @@ impl PendingApprovals {
     fn with_approved(approved: HashSet<LlrtSupportedModules>) -> Self {
         Self {
             shell: Mutex::new(HashMap::new()),
+            pull_request: Mutex::new(HashMap::new()),
             capabilities: Mutex::new(CapabilityApprovalState {
                 approved,
                 pending_by_request: HashMap::new(),
@@ -214,6 +228,29 @@ impl WorkflowSessionInteractor {
             });
             rx.recv().map_err(|error| {
                 anyhow::anyhow!("shell approval response channel closed: {error}")
+            })?
+        })
+    }
+
+    fn pull_request_callback(&self) -> PullRequestApprovalCallback {
+        let sender = self.sender.clone();
+        let pending = Arc::clone(&self.pending);
+        Arc::new(move |request| {
+            let request_id = Uuid::new_v4();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            pending.pull_request.lock().unwrap().insert(request_id, tx);
+            if let Err(error) = sender.send(WorkflowEvent::PullRequestApprovalRequested {
+                request_id,
+                request: request.clone(),
+                at: Utc::now(),
+            }) {
+                pending.pull_request.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver pull request approval event: {error}"
+                ));
+            }
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("pull request approval response channel closed: {error}")
             })?
         })
     }
@@ -356,11 +393,29 @@ async fn handle_command(
             .cancel_workflow(workflow_run_id)
             .await
             .map_err(anyhow::Error::from),
+        WorkflowCommand::CreatePullRequest { task_id } => {
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                if let Err(error) = engine.create_pull_request_for_task(task_id).await {
+                    log::error!("failed to create pull request for task {task_id}: {error}");
+                }
+            });
+            Ok(())
+        }
         WorkflowCommand::RespondShellApproval {
             request_id,
             approved,
         } => {
             if let Some(tx) = pending.shell.lock().unwrap().remove(&request_id) {
+                let _ = tx.send(Ok(approved));
+            }
+            Ok(())
+        }
+        WorkflowCommand::RespondPullRequestApproval {
+            request_id,
+            approved,
+        } => {
+            if let Some(tx) = pending.pull_request.lock().unwrap().remove(&request_id) {
                 let _ = tx.send(Ok(approved));
             }
             Ok(())
@@ -459,6 +514,7 @@ impl WorkflowSession {
         config.agent_selection_callback = Some(interactor.agent_callback());
         config.selection_prompt_callback = Some(interactor.selection_callback());
         config.shell_command_approval_callback = Some(interactor.shell_callback());
+        config.pull_request_approval_callback = Some(interactor.pull_request_callback());
 
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<SessionCommandEnvelope>();
         let command_engine = engine.clone();
@@ -955,5 +1011,33 @@ mod tests {
             "unexpected error: {error:#}"
         );
         assert!(pending.selection.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pull_request_prompt_fails_fast_when_event_delivery_is_closed() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender, Arc::clone(&pending));
+        let callback = interactor.pull_request_callback();
+
+        let error = callback(&PullRequestCreationRequest {
+            title: "Draft PR".to_string(),
+            body: None,
+            draft: true,
+            head: "codemod-branch".to_string(),
+            base: Some("main".to_string()),
+            node_id: "apply-transforms".to_string(),
+            node_name: "Apply transforms".to_string(),
+            task_id: Uuid::new_v4().to_string(),
+        })
+        .expect_err("closed event delivery should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deliver pull request approval event"),
+            "unexpected error: {error:#}"
+        );
+        assert!(pending.pull_request.lock().unwrap().is_empty());
     }
 }

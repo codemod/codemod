@@ -148,7 +148,11 @@ fn log_modal_viewport_height(terminal_height: u16) -> u16 {
 }
 
 fn task_list_viewport_height(terminal_height: u16) -> usize {
-    terminal_height.saturating_sub(5) as usize
+    // Run detail reserves:
+    // - 3 rows for the header
+    // - 1 row for the task table header
+    // - 3 rows for completion detail / spacer / help bar
+    terminal_height.saturating_sub(7) as usize
 }
 
 fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
@@ -500,7 +504,7 @@ async fn run_tui_loop(
                 }
                 needs_redraw = true;
 
-                if state.approval.is_some() {
+                if matches!(state.screen, Screen::RunDetail) && state.approval.is_some() {
                     match key.code {
                         KeyCode::Char('y') => {
                             if let (Some(session), Some(command)) =
@@ -513,7 +517,10 @@ async fn run_tui_loop(
                         KeyCode::Char('n')
                             if !matches!(
                                 state.approval,
-                                Some(ApprovalPrompt::AgentSelection { .. })
+                                Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::PullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::ManualPullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) =>
                         {
@@ -532,12 +539,13 @@ async fn run_tui_loop(
                             }
                             state.clear_approval();
                         }
-                        KeyCode::Up | KeyCode::Char('k') => state.move_up(),
-                        KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                         KeyCode::Enter => {
                             if matches!(
                                 state.approval,
-                                Some(ApprovalPrompt::AgentSelection { .. })
+                                Some(ApprovalPrompt::WorktreeConsent { .. })
+                                    | Some(ApprovalPrompt::PullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::ManualPullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) {
                                 if let (Some(session), Some(command)) =
@@ -548,6 +556,8 @@ async fn run_tui_loop(
                                 state.clear_approval();
                             }
                         }
+                        KeyCode::Up | KeyCode::Char('k') => state.move_up(),
+                        KeyCode::Down | KeyCode::Char('j') => state.move_down(),
                         _ => {}
                     }
                     continue;
@@ -599,8 +609,6 @@ async fn run_tui_loop(
                                 state.close_log_modal();
                                 continue;
                             }
-                            runtime.receiver = None;
-                            runtime.session = None;
                             state.leave_run();
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
@@ -640,6 +648,8 @@ async fn run_tui_loop(
                                 state.selected_task_trigger_command(),
                             ) {
                                 spawn_command(session.handle(), command);
+                            } else {
+                                state.begin_selected_task_trigger_confirmation();
                             }
                         }
                         KeyCode::Char('G') => {
@@ -650,13 +660,10 @@ async fn run_tui_loop(
                             }
                         }
                         KeyCode::Char('T') => {
-                            if let Some(session) = runtime.session.as_ref() {
-                                let task_ids = state.visible_awaiting_task_ids();
-                                spawn_command(
-                                    session.handle(),
-                                    WorkflowCommand::TriggerTasks { task_ids },
-                                );
-                            }
+                            state.begin_trigger_all_confirmation();
+                        }
+                        KeyCode::Char('p') => {
+                            state.begin_create_pr_confirmation();
                         }
                         KeyCode::Char('c') => {
                             if let Some(session) = runtime.session.as_ref() {
@@ -693,6 +700,33 @@ async fn attach_run(
     state: &mut TuiState,
     runtime: &mut TuiRuntime,
 ) -> Result<()> {
+    if runtime
+        .session
+        .as_ref()
+        .is_some_and(|session| session.handle().workflow_run_id() == run_id)
+    {
+        let handle = runtime
+            .session
+            .as_ref()
+            .expect("checked session presence")
+            .handle();
+        let snapshot = handle.load_snapshot().await?;
+        let receiver = handle.subscribe();
+        state.enter_run(snapshot);
+        runtime.receiver = Some(receiver);
+        return Ok(());
+    }
+
+    if let Some(session) = runtime.session.as_ref() {
+        let handle = session.handle();
+        for command in state.drain_approval_reject_commands() {
+            let _ = handle.send(command).await;
+        }
+        runtime.receiver = None;
+        runtime.session = None;
+        state.clear_approvals();
+    }
+
     let session = WorkflowSession::attach(engine.clone(), run_id);
     engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
         run_id,
@@ -716,7 +750,9 @@ async fn bind_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{reduce_workflow_receiver, should_redraw, TuiPerfCounters};
+    use super::{
+        reduce_workflow_receiver, should_redraw, task_list_viewport_height, TuiPerfCounters,
+    };
     use crate::tui::app::{Screen, TuiState};
     use butterflow_core::workflow_runtime::WorkflowEvent;
     use butterflow_models::{workflow::Workflow, WorkflowRun, WorkflowStatus};
@@ -957,6 +993,12 @@ mod tests {
         ]);
 
         assert_eq!(draws, 2);
+    }
+
+    #[test]
+    fn task_list_viewport_height_matches_run_detail_layout() {
+        assert_eq!(task_list_viewport_height(24), 17);
+        assert_eq!(task_list_viewport_height(10), 3);
     }
 
     #[test]

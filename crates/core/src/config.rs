@@ -87,6 +87,21 @@ pub type ShellCommandApprovalCallback =
     Arc<dyn Fn(&ShellCommandExecutionRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
 
 #[derive(Clone, Debug)]
+pub struct PullRequestCreationRequest {
+    pub title: String,
+    pub body: Option<String>,
+    pub draft: bool,
+    pub head: String,
+    pub base: Option<String>,
+    pub node_id: String,
+    pub node_name: String,
+    pub task_id: String,
+}
+
+pub type PullRequestApprovalCallback =
+    Arc<dyn Fn(&PullRequestCreationRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
+
+#[derive(Clone, Debug)]
 pub struct ManagedGitWorktree {
     pub branch: String,
     pub path: PathBuf,
@@ -153,6 +168,8 @@ pub struct WorkflowRunConfig {
     pub capture_stdout_in_quiet_mode: bool,
     /// Optional interactive approval callback for shell-command workflow steps
     pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
+    /// Optional interactive approval callback for managed-git pull request creation
+    pub pull_request_approval_callback: Option<PullRequestApprovalCallback>,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
     /// Optional per-task git worktree used for managed git execution.
@@ -200,6 +217,7 @@ impl Default for WorkflowRunConfig {
             quiet: false,
             capture_stdout_in_quiet_mode: true,
             shell_command_approval_callback: None,
+            pull_request_approval_callback: None,
             install_skill_executor: None,
             managed_git_worktree: None,
             enable_managed_git: true,
