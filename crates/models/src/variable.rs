@@ -182,7 +182,19 @@ pub fn evaluate_condition(
     steps: Option<&HashMap<String, HashMap<String, String>>>,
     task_context: Option<&TaskExpressionContext>,
 ) -> Result<bool> {
-    let result = resolve_expressions(condition, params, state, matrix_values, steps, task_context)?;
+    let normalized_condition = expr_only_re()
+        .captures(condition.trim())
+        .and_then(|captures| captures.get(1).map(|m| m.as_str().trim()))
+        .unwrap_or(condition);
+
+    let result = resolve_expressions(
+        normalized_condition,
+        params,
+        state,
+        matrix_values,
+        steps,
+        task_context,
+    )?;
     match result {
         EvalValue::Boolean(v) => Ok(v),
         EvalValue::Empty => Ok(false),
@@ -1701,6 +1713,28 @@ mod tests {
         let params = HashMap::new();
         let state = HashMap::new();
         assert!(!evaluate_condition("false", &params, &state, None, None, None).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_condition_wrapped_expression_param_true() {
+        let mut params = HashMap::new();
+        params.insert("flag".to_string(), Value::Bool(true));
+        let state = HashMap::new();
+
+        assert!(
+            evaluate_condition("${{ params.flag }}", &params, &state, None, None, None).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_evaluate_condition_wrapped_expression_param_false() {
+        let mut params = HashMap::new();
+        params.insert("flag".to_string(), Value::Bool(false));
+        let state = HashMap::new();
+
+        assert!(
+            !evaluate_condition("${{ params.flag }}", &params, &state, None, None, None).unwrap()
+        );
     }
 
     // ── task.* graceful fallback for missing env vars ────────────────────

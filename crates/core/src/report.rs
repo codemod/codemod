@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -183,10 +183,7 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Vec<
     diffs
         .iter()
         .map(|d| {
-            let rel = Path::new(&d.path)
-                .strip_prefix(base)
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| d.path.clone());
+            let rel = normalize_report_diff_path(Path::new(&d.path), base);
             ReportFileDiff {
                 path: rel,
                 diff_text: Some(d.diff_text.clone()),
@@ -195,4 +192,85 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Vec<
             }
         })
         .collect()
+}
+
+fn normalize_report_diff_path(diff_path: &Path, target_path: &Path) -> String {
+    if let Ok(relative) = diff_path.strip_prefix(target_path) {
+        return relative.display().to_string();
+    }
+
+    if let Some(relative) = relativize_managed_worktree_path(diff_path) {
+        return relative.display().to_string();
+    }
+
+    diff_path.display().to_string()
+}
+
+fn relativize_managed_worktree_path(diff_path: &Path) -> Option<PathBuf> {
+    let components: Vec<Component<'_>> = diff_path.components().collect();
+    let worktree_root_index = components.iter().position(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .ends_with(".codemod-worktrees")
+    })?;
+
+    let relative_components = components
+        .into_iter()
+        .skip(worktree_root_index + 2)
+        .collect::<Vec<_>>();
+    if relative_components.is_empty() {
+        return None;
+    }
+
+    let mut relative_path = PathBuf::new();
+    for component in relative_components {
+        relative_path.push(component.as_os_str());
+    }
+    Some(relative_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{convert_diffs, normalize_report_diff_path};
+    use crate::diff::FileDiff;
+    use std::path::Path;
+
+    #[test]
+    fn convert_diffs_keeps_paths_relative_to_target() {
+        let diffs = vec![FileDiff {
+            path: "/tmp/repo/src/app.ts".to_string(),
+            diff_text: "@@".to_string(),
+            additions: 1,
+            deletions: 0,
+        }];
+
+        let report_diffs = convert_diffs(&diffs, "/tmp/repo");
+        assert_eq!(report_diffs[0].path, "src/app.ts");
+    }
+
+    #[test]
+    fn convert_diffs_relativizes_managed_worktree_paths() {
+        let diffs = vec![FileDiff {
+            path: "/Users/me/backstage.codemod-worktrees/codemod-123/src/plugins/catalog.ts"
+                .to_string(),
+            diff_text: "@@".to_string(),
+            additions: 4,
+            deletions: 2,
+        }];
+
+        let report_diffs = convert_diffs(&diffs, "/Users/me/backstage");
+        assert_eq!(report_diffs[0].path, "src/plugins/catalog.ts");
+    }
+
+    #[test]
+    fn normalize_report_diff_path_preserves_unrelated_paths() {
+        let path = Path::new("/outside/project/generated.txt");
+        let target = Path::new("/tmp/repo");
+
+        assert_eq!(
+            normalize_report_diff_path(path, target),
+            "/outside/project/generated.txt"
+        );
+    }
 }

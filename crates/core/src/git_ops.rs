@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use butterflow_models::variable::TaskExpressionContext;
 use butterflow_models::Result;
@@ -76,6 +77,11 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
     }
 }
 
+fn worktree_operation_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn sanitize_path_component(value: &str) -> String {
     let sanitized: String = value
         .chars()
@@ -130,6 +136,7 @@ pub fn worktree_path(repo_root: &Path, branch: &str, task_id: &str) -> PathBuf {
 }
 
 pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> Result<PathBuf> {
+    let _lock = worktree_operation_lock().lock().await;
     let worktree_path = worktree_path(repo_root, branch, task_id);
 
     if let Some(parent) = worktree_path.parent() {
@@ -171,6 +178,7 @@ pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> R
 }
 
 pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let _lock = worktree_operation_lock().lock().await;
     let output = Command::new("git")
         .args([
             "worktree",
@@ -392,6 +400,7 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
 pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<()> {
     let max_retries = 3u32;
     let mut pushed = false;
+    let mut last_push_stderr: Option<String> = None;
 
     for attempt in 1..=max_retries {
         let push_output = Command::new("git")
@@ -426,17 +435,25 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
                 .rev()
                 .collect::<String>()
         );
+        let stderr_summary = String::from_utf8_lossy(&push_output.stderr)
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .unwrap_or("git push failed")
+            .to_string();
 
         if push_output.status.success() {
             pushed = true;
             break;
         }
 
+        last_push_stderr = Some(stderr_summary.clone());
+
         warn!(
-            "Push attempt {}/{} failed (exit code {:?})",
+            "Push attempt {}/{} failed (exit code {:?}): {}",
             attempt,
             max_retries,
-            push_output.status.code()
+            push_output.status.code(),
+            stderr_summary
         );
 
         if attempt < max_retries {
@@ -465,8 +482,26 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
         if verify.status.success() {
             info!("Push reported failure but branch exists on remote — continuing.");
         } else {
+            let remote = Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(working_dir)
+                .output()
+                .await
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|stdout| stdout.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| "origin".to_string());
             return Err(butterflow_models::Error::Runtime(
-                "Failed to push changes and branch does not exist on remote.".to_string(),
+                match last_push_stderr {
+                    Some(stderr) => format!(
+                        "Failed to push branch '{branch}' to {remote}: {stderr}"
+                    ),
+                    None => format!(
+                        "Failed to push branch '{branch}' to {remote}; branch does not exist on remote."
+                    ),
+                },
             ));
         }
     }
