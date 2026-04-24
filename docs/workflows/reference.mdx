@@ -386,6 +386,21 @@ steps:
 
 In dry-run mode, this step is skipped. In non-interactive runs, it is also skipped by default unless the workflow is run with `--install-skill`. See [CLI reference](/cli#codemod-workflow).
 
+The target package must expose an authored `SKILL.md` with valid frontmatter and the authored-package markers:
+
+```md
+---
+name: "my-skill"
+description: "Project-specific migration guidance"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+```
+
+If you see `mcs-v1`, that is the marker for the built-in Codemod core skill profile, not for authored package skills installed by this workflow step.
+
 **Install Skill Step Parameters**:
 
 <ParamField path="name" type="string" required>
