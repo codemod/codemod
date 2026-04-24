@@ -8,6 +8,7 @@ use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
 use log::{error, info};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::tui::{create_tui_progress_callback, run_workflow_tui_with_session};
@@ -68,7 +69,8 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
     };
 
     if !auto_launch_tui && config.wait_for_completion {
-        wait_for_workflow_completion(engine, workflow_run_id.to_string()).await?;
+        wait_for_workflow_completion(engine, workflow_run_id.to_string(), config.no_interactive)
+            .await?;
     }
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;
@@ -78,27 +80,49 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
 }
 
 /// Wait for workflow to complete or pause
-pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: String) -> Result<()> {
+pub async fn wait_for_workflow_completion(
+    engine: &Engine,
+    workflow_run_id: String,
+    emit_heartbeat: bool,
+) -> Result<()> {
+    let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
+    let wait_started = Instant::now();
+    let mut last_heartbeat = Instant::now();
+
     loop {
         // Get workflow status
         let status = engine
-            .get_workflow_status(workflow_run_id.clone().parse::<Uuid>()?)
+            .get_workflow_status(workflow_run_uuid)
             .await
             .context("Failed to get workflow status")?;
 
         match status {
             WorkflowStatus::Completed => {
+                println!(
+                    "✅ Workflow completed successfully in {:.1}s",
+                    wait_started.elapsed().as_secs_f64()
+                );
                 info!("Workflow completed successfully");
                 break;
             }
             WorkflowStatus::Failed => {
+                let tasks = engine
+                    .get_tasks(workflow_run_uuid)
+                    .await
+                    .context("Failed to get tasks")?;
+                let summary = summarize_tasks(&tasks);
+                println!(
+                    "❌ Workflow failed after {:.1}s{}",
+                    wait_started.elapsed().as_secs_f64(),
+                    format_summary_suffix(&summary)
+                );
                 error!("Workflow failed");
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
             WorkflowStatus::AwaitingTrigger => {
                 // Get tasks awaiting trigger
                 let tasks = engine
-                    .get_tasks(workflow_run_id.clone().parse::<Uuid>()?)
+                    .get_tasks(workflow_run_uuid)
                     .await
                     .context("Failed to get tasks")?;
 
@@ -124,10 +148,27 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
                 break;
             }
             WorkflowStatus::Running => {
+                if emit_heartbeat && last_heartbeat.elapsed() >= Duration::from_secs(15) {
+                    let tasks = engine
+                        .get_tasks(workflow_run_uuid)
+                        .await
+                        .context("Failed to get tasks")?;
+                    let summary = summarize_tasks(&tasks);
+                    println!(
+                        "⏳ Workflow still running ({:.0}s elapsed{})",
+                        wait_started.elapsed().as_secs_f64(),
+                        format_summary_suffix(&summary)
+                    );
+                    last_heartbeat = Instant::now();
+                }
                 // Still running, wait a bit before checking again
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
             WorkflowStatus::Canceled => {
+                println!(
+                    "🛑 Workflow was canceled after {:.1}s",
+                    wait_started.elapsed().as_secs_f64()
+                );
                 info!("Workflow was canceled");
                 break;
             }
@@ -139,6 +180,89 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct TaskSummary {
+    running: usize,
+    pending: usize,
+    awaiting_trigger: usize,
+    blocked: usize,
+    completed: usize,
+    failed: usize,
+    wont_do: usize,
+    active_nodes: Vec<String>,
+}
+
+fn summarize_tasks(tasks: &[Task]) -> TaskSummary {
+    let mut summary = TaskSummary::default();
+
+    for task in tasks {
+        match task.status {
+            TaskStatus::Running => {
+                summary.running += 1;
+                summary.active_nodes.push(task.node_id.clone());
+            }
+            TaskStatus::Pending => summary.pending += 1,
+            TaskStatus::AwaitingTrigger => summary.awaiting_trigger += 1,
+            TaskStatus::Blocked => summary.blocked += 1,
+            TaskStatus::Completed => summary.completed += 1,
+            TaskStatus::Failed => summary.failed += 1,
+            TaskStatus::WontDo => summary.wont_do += 1,
+        }
+    }
+
+    summary.active_nodes.sort();
+    summary.active_nodes.dedup();
+    summary
+}
+
+fn format_summary_suffix(summary: &TaskSummary) -> String {
+    let mut parts = Vec::new();
+
+    if summary.running > 0 {
+        parts.push(format!("{} running", summary.running));
+    }
+    if summary.pending > 0 {
+        parts.push(format!("{} pending", summary.pending));
+    }
+    if summary.awaiting_trigger > 0 {
+        parts.push(format!("{} awaiting trigger", summary.awaiting_trigger));
+    }
+    if summary.blocked > 0 {
+        parts.push(format!("{} blocked", summary.blocked));
+    }
+    if summary.completed > 0 {
+        parts.push(format!("{} completed", summary.completed));
+    }
+    if summary.failed > 0 {
+        parts.push(format!("{} failed", summary.failed));
+    }
+    if summary.wont_do > 0 {
+        parts.push(format!("{} skipped", summary.wont_do));
+    }
+
+    if !summary.active_nodes.is_empty() {
+        let preview = summary
+            .active_nodes
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remainder = summary.active_nodes.len().saturating_sub(3);
+        if remainder > 0 {
+            parts.push(format!("active nodes: {preview} (+{remainder} more)"));
+        } else {
+            parts.push(format!("active nodes: {preview}"));
+        }
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", parts.join(", "))
+    }
 }
 
 /// Resolves the workflow source string into the actual workflow file path
@@ -198,5 +322,66 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             "Workflow source path is neither a file nor a directory: {}",
             source
         ))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{format_summary_suffix, summarize_tasks};
+    use butterflow_models::{Task, TaskStatus};
+    use uuid::Uuid;
+
+    fn task(node_id: &str, status: TaskStatus) -> Task {
+        Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: node_id.to_string(),
+            status,
+            is_master: false,
+            master_task_id: None,
+            matrix_values: None,
+            started_at: None,
+            ended_at: None,
+            error: None,
+            logs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn summarize_tasks_tracks_counts_and_active_nodes() {
+        let summary = summarize_tasks(&[
+            task("scan-js", TaskStatus::Running),
+            task("scan-js", TaskStatus::Running),
+            task("apply-fix", TaskStatus::Pending),
+            task("manual-review", TaskStatus::AwaitingTrigger),
+            task("publish", TaskStatus::Blocked),
+            task("cleanup", TaskStatus::Completed),
+            task("report", TaskStatus::Failed),
+            task("noop", TaskStatus::WontDo),
+        ]);
+
+        assert_eq!(summary.running, 2);
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.awaiting_trigger, 1);
+        assert_eq!(summary.blocked, 1);
+        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.wont_do, 1);
+        assert_eq!(summary.active_nodes, vec!["scan-js".to_string()]);
+    }
+
+    #[test]
+    fn format_summary_suffix_includes_active_node_preview() {
+        let summary = summarize_tasks(&[
+            task("a", TaskStatus::Running),
+            task("b", TaskStatus::Running),
+            task("c", TaskStatus::Running),
+            task("d", TaskStatus::Running),
+            task("pending", TaskStatus::Pending),
+        ]);
+
+        let suffix = format_summary_suffix(&summary);
+        assert!(suffix.contains("4 running"));
+        assert!(suffix.contains("1 pending"));
+        assert!(suffix.contains("active nodes: a, b, c (+1 more)"));
     }
 }
