@@ -432,6 +432,7 @@ impl TuiState {
         self.task_list_scroll = 0;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
+        self.clear_approvals();
     }
 
     pub fn reconcile_snapshot(&mut self, snapshot: WorkflowSnapshot) {
@@ -472,6 +473,7 @@ impl TuiState {
         self.task_list_scroll = 0;
         self.show_log_modal = false;
         self.log_modal_scroll = 0;
+        self.clear_approvals();
     }
 
     pub fn clear_approvals(&mut self) {
@@ -1245,6 +1247,13 @@ impl TuiState {
             .logs
             .iter()
             .any(|line| line.starts_with("Pull request created: "))
+        {
+            return None;
+        }
+        if task
+            .logs
+            .iter()
+            .any(|line| line == "No changes detected; no PR created")
         {
             return None;
         }
@@ -2893,7 +2902,7 @@ mod tests {
     }
 
     #[test]
-    fn leave_and_reenter_run_preserves_pending_pull_request_approval() {
+    fn leave_run_clears_pending_pull_request_approval() {
         let run_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let mut state = TuiState {
@@ -2927,39 +2936,8 @@ mod tests {
 
         state.leave_run();
         assert!(matches!(state.screen, Screen::Runs));
-        assert!(matches!(
-            state.approval,
-            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
-        ));
-
-        state.enter_run(WorkflowSnapshot {
-            workflow_run: WorkflowRun {
-                id: run_id,
-                workflow: Workflow {
-                    version: "1".to_string(),
-                    state: None,
-                    params: None,
-                    templates: vec![],
-                    nodes: vec![],
-                },
-                status: WorkflowStatus::Running,
-                params: Default::default(),
-                bundle_path: None,
-                tasks: vec![],
-                started_at: Utc::now(),
-                ended_at: None,
-                capabilities: None,
-                name: Some("workflow.yaml".to_string()),
-                target_path: None,
-            },
-            tasks: vec![],
-        });
-
-        assert!(matches!(state.screen, Screen::RunDetail));
-        assert!(matches!(
-            state.approval,
-            Some(super::ApprovalPrompt::PullRequestConsent { request_id: id, .. }) if id == request_id
-        ));
+        assert!(state.approval.is_none());
+        assert!(state.pending_approvals.is_empty());
     }
 
     #[test]
@@ -3121,6 +3099,14 @@ mod tests {
             Some(WorkflowCommand::CreatePullRequest { task_id: actual_task_id })
                 if actual_task_id == task_id
         ));
+
+        state.clear_approvals();
+        state.tasks[0]
+            .logs
+            .push("No changes detected; no PR created".to_string());
+
+        assert!(!state.task_help_text().contains("p create-pr"));
+        assert!(!state.begin_create_pr_confirmation());
     }
 
     #[test]

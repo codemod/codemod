@@ -609,6 +609,14 @@ async fn run_tui_loop(
                                 state.close_log_modal();
                                 continue;
                             }
+                            if let Some(session) = runtime.session.as_ref() {
+                                let handle = session.handle();
+                                for command in state.drain_approval_reject_commands() {
+                                    let _ = handle.send(command).await;
+                                }
+                            }
+                            runtime.receiver = None;
+                            runtime.session = None;
                             state.leave_run();
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
