@@ -1,17 +1,5 @@
 //! Curated filesystem module for codemod sandboxes.
 //!
-//! Exposes a Node.js-compatible `fs` (and `fs/promises`) API that is
-//! constrained to a caller-configured `target_dir` prefix. Any incoming path
-//! is lexically normalized (collapsing `.`/`..` and redundant slashes) and
-//! rejected with `EACCES` if the result would escape `target_dir`. When the
-//! VFS is backed by real disk (see [`CuratedFsConfig::with_physical_target_dir`]),
-//! the resolver additionally walks each path component with `symlink_metadata`
-//! and rejects any path that traverses a symlink, so symlinks inside the
-//! repo cannot be used to escape the sandbox. The actual storage is a
-//! [`vfs::VfsPath`] so callers can plug in either a `MemoryFS` (in-memory
-//! codemod execution, e.g. pg_ast_grep) or a `PhysicalFS` (CLI) without the
-//! module caring.
-//!
 //! When the caller opts the codemod into the `Fs` llrt capability explicitly,
 //! the llrt fs module is used instead and this curated module is not
 //! registered — see `in_memory_engine.rs` for the wiring.
@@ -36,11 +24,6 @@ use vfs::{VfsError, VfsFileType, VfsPath};
 /// the codemod. `Ok(None)` means the upstream store confirmed the file
 /// genuinely doesn't exist — the codemod sees `ENOENT`. `Err(msg)` means an
 /// infrastructure failure and surfaces as `EIO`.
-///
-/// Implementations should be cheap to call concurrently and are expected to
-/// dedup in-flight requests themselves (e.g. pg_ast_grep's fetcher uses a
-/// per-path `OnceCell` so 1000 workers asking for the same file block on a
-/// single SPI round-trip).
 pub trait FileFetcher: Send + Sync {
     fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String>;
 }
@@ -784,7 +767,7 @@ mod tests {
         assert!(cfg.resolve(&ok).is_ok());
     }
 
-    /// Without `physical_target_dir` (in-memory VFS backends like pg_ast_grep),
+    /// Without `physical_target_dir` (in-memory VFS backends),
     /// the symlink check is skipped — MemoryFS has no symlinks, and poking
     /// the host filesystem would be both wrong and slow.
     #[cfg(unix)]

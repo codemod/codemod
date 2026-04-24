@@ -3752,7 +3752,6 @@ impl Engine {
         let watchdog_done = Arc::new(AtomicBool::new(false));
         let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let has_selector = selector_config.is_some();
-        let first_file_dispatch_logged = Arc::new(AtomicBool::new(false));
 
         // Collect deferred file deletions from renames — applied after all transforms complete
         let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
@@ -3844,43 +3843,8 @@ impl Engine {
         let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
 
-        if let Some(task_id) = task_log_task_id {
-            let execution_mode = if config.explicit_files.is_some() {
-                "explicit-files"
-            } else {
-                "walker"
-            };
-            let target_file_count = config
-                .explicit_files
-                .as_ref()
-                .map(|files| files.len().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let _ = self
-                .append_task_log(
-                    task_id,
-                    format!(
-                        "Starting js-ast-grep file loop ({execution_mode}, target files: {target_file_count})"
-                    ),
-                )
-                .await;
-        }
-
         let execute_result = config
             .execute(move |file_path, config| {
-                if !first_file_dispatch_logged.swap(true, Ordering::AcqRel) {
-                    if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                        publish_event(
-                            run_id,
-                            WorkflowEvent::TaskLogAppended {
-                                workflow_run_id: run_id,
-                                task_id,
-                                line: "First file dispatch entered".to_string(),
-                                at: Utc::now(),
-                            },
-                        );
-                    }
-                }
-
                 if canceled_flag_for_closure.load(Ordering::Acquire)
                     || idle_timed_out_for_closure.load(Ordering::Acquire)
                 {
@@ -3902,18 +3866,6 @@ impl Engine {
                     &relative_path,
                     StepPhase::FileQueued,
                 );
-
-                if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                    publish_event(
-                        run_id,
-                        WorkflowEvent::TaskLogAppended {
-                            workflow_run_id: run_id,
-                            task_id,
-                            line: format!("Processing file: {relative_path}"),
-                            at: Utc::now(),
-                        },
-                    );
-                }
 
                 // Read file content synchronously
                 let content = match std::fs::read_to_string(file_path) {
@@ -4047,7 +3999,7 @@ impl Engine {
                                     cancellation_flag: Some(cancellation_flag_for_execution),
                                     test_mode: false,
                                     dry_run,
-                                    target_directory: Some(&target_path_owned),
+                                    target_directory: &target_path_owned,
                                 })
                                 .await
                             });

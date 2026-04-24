@@ -43,6 +43,7 @@ mod error;
 mod lightweight;
 mod oxc_adapter;
 mod provider;
+mod vfs_fs;
 
 pub use accurate::WorkspaceWalker;
 pub use error::JsSemanticError;

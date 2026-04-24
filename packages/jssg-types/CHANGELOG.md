@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.6.0
+
+### Minor Changes
+
+- 41218f1: Add relativeFilename to SgRoot
+
 ## 1.5.2
 
 ### Patch Changes

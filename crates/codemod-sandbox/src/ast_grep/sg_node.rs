@@ -39,6 +39,8 @@ type TSDoc = WasmDoc;
 pub(crate) struct SgRootInner {
     pub(crate) grep: AstGrep<TSDoc>,
     filename: Option<String>,
+    relative_filename: Option<String>,
+    target_directory: Option<std::path::PathBuf>,
     /// Optional rename target path set by root.rename()
     pub(crate) rename_to: Mutex<Option<String>>,
     /// Optional semantic provider for symbol indexing (native only)
@@ -86,6 +88,15 @@ impl<'js> SgRootRjs<'js> {
 
     pub fn filename(&self) -> Result<String> {
         Ok(self.inner.filename.clone().unwrap_or_default())
+    }
+
+    #[qjs(rename = "relativeFilename")]
+    pub fn relative_filename(&self) -> Result<String> {
+        Ok(self
+            .inner
+            .relative_filename
+            .clone()
+            .unwrap_or_else(|| self.inner.filename.clone().unwrap_or_default()))
     }
 
     pub fn source(&self) -> Result<String> {
@@ -214,6 +225,7 @@ impl<'js> SgRootRjs<'js> {
         lang_str: String,
         src: String,
         filename: Option<String>,
+        target_directory: Option<&std::path::Path>,
     ) -> std::result::Result<Self, String> {
         #[cfg(feature = "wasm")]
         {
@@ -232,6 +244,11 @@ impl<'js> SgRootRjs<'js> {
             Ok(SgRootRjs {
                 inner: Arc::new(SgRootInner {
                     grep: unsafe { std::mem::transmute(doc) },
+                    relative_filename: compute_relative_filename(
+                        filename.as_deref(),
+                        target_directory,
+                    ),
+                    target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
                 }),
@@ -247,6 +264,11 @@ impl<'js> SgRootRjs<'js> {
             Ok(SgRootRjs {
                 inner: Arc::new(SgRootInner {
                     grep,
+                    relative_filename: compute_relative_filename(
+                        filename.as_deref(),
+                        target_directory,
+                    ),
+                    target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
                     #[cfg(feature = "native")]
@@ -266,6 +288,11 @@ impl<'js> SgRootRjs<'js> {
             Ok(SgRootRjs {
                 inner: Arc::new(SgRootInner {
                     grep,
+                    relative_filename: compute_relative_filename(
+                        filename.as_deref(),
+                        target_directory,
+                    ),
+                    target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
                     #[cfg(feature = "native")]
@@ -281,10 +308,13 @@ impl<'js> SgRootRjs<'js> {
     pub fn try_new_from_ast_grep(
         grep: AstGrep<TSDoc>,
         filename: Option<String>,
+        target_directory: Option<&std::path::Path>,
     ) -> std::result::Result<Self, String> {
         Ok(SgRootRjs {
             inner: Arc::new(SgRootInner {
                 grep,
+                relative_filename: compute_relative_filename(filename.as_deref(), target_directory),
+                target_directory: target_directory.map(|path| path.to_path_buf()),
                 filename,
                 rename_to: Mutex::new(None),
                 #[cfg(feature = "native")]
@@ -303,10 +333,13 @@ impl<'js> SgRootRjs<'js> {
         filename: Option<String>,
         semantic_provider: Option<Arc<dyn SemanticProvider>>,
         current_file_path: Option<String>,
+        target_directory: Option<&std::path::Path>,
     ) -> std::result::Result<Self, String> {
         Ok(SgRootRjs {
             inner: Arc::new(SgRootInner {
                 grep,
+                relative_filename: compute_relative_filename(filename.as_deref(), target_directory),
+                target_directory: target_directory.map(|path| path.to_path_buf()),
                 filename,
                 rename_to: Mutex::new(None),
                 semantic_provider,
@@ -315,6 +348,35 @@ impl<'js> SgRootRjs<'js> {
             _phantom: PhantomData,
         })
     }
+}
+
+fn compute_relative_filename(
+    filename: Option<&str>,
+    target_directory: Option<&std::path::Path>,
+) -> Option<String> {
+    let filename = filename?;
+    let target_directory = target_directory?;
+
+    let file_path = std::path::Path::new(filename);
+    if let Ok(relative) = file_path.strip_prefix(target_directory) {
+        return Some(relative.to_string_lossy().replace('\\', "/"));
+    }
+
+    let canonical_target = target_directory.canonicalize().ok()?;
+    let canonical_file = file_path.canonicalize().ok().or_else(|| {
+        file_path.parent().and_then(|parent| {
+            let file_name = file_path.file_name()?;
+            parent
+                .canonicalize()
+                .ok()
+                .map(|canonical_parent| canonical_parent.join(file_name))
+        })
+    })?;
+
+    canonical_file
+        .strip_prefix(&canonical_target)
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 #[derive(Trace, Clone)]
@@ -898,6 +960,7 @@ impl<'js> SgNodeRjs<'js> {
                             Some(def_result.location.file_path.to_string_lossy().to_string()),
                             self.root.semantic_provider.clone(),
                             self.root.current_file_path.clone(),
+                            self.root.target_directory.as_deref(),
                         ) {
                             let root_node = new_root.inner.grep.root();
                             if let Some(node) = find_node_at_range(
@@ -1024,6 +1087,7 @@ impl<'js> SgNodeRjs<'js> {
                                 Some(file_refs.file_path.to_string_lossy().to_string()),
                                 self.root.semantic_provider.clone(),
                                 self.root.current_file_path.clone(),
+                                self.root.target_directory.as_deref(),
                             ) {
                                 file_obj.set("root", new_root.clone())?;
 

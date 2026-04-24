@@ -178,6 +178,8 @@ JavaScript ast-grep (JSSG) is a TypeScript-based codemod framework that leverage
 - **Language Support**: JavaScript, TypeScript, JSX, TSX, Python, Go, Rust, and more
 - **Semantic Analysis**: Find symbol definitions and references across files (JavaScript/TypeScript and Python)
 
+Transform functions receive `(root, options)`, where `options` includes execution context such as `params`, `matches`, `matrixValues`, `dryRun`, and `targetDir`.
+
 ## Project Structure
 
 A typical JSSG codemod project follows this structure:
@@ -209,6 +211,7 @@ import type TSX from "codemod:ast-grep/langs/tsx";
 // SgRoot - represents the entire file
 const root: SgRoot<TSX> = /* provided by framework */;
 const filename = root.filename(); // Get file path
+const relativeFilename = root.relativeFilename(); // Path relative to the target directory
 const rootNode = root.root(); // Get root AST node
 
 // SgNode - represents any AST node
@@ -782,6 +785,7 @@ class SgNode<
 class SgRoot<M> {
   root(): SgNode<M>;
   filename(): string;
+  relativeFilename(): string;
   /** Write content to this file (only for files from definition()/references()) */
   write(content: string): void;
   /** Rename the current file. Relative paths resolve against the file's directory. */
