@@ -8,6 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use butterflow_models::step::UseInstallSkill;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use thiserror::Error;
 
 use crate::{
     ai_handoff::AgentOption,
@@ -39,6 +40,40 @@ pub struct DryRunChange {
 pub type DryRunCallback = Arc<dyn Fn(DryRunChange) + Send + Sync>;
 
 #[derive(Clone, Debug)]
+pub struct SelectionPromptOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectionPrompt {
+    pub title: String,
+    pub options: Vec<SelectionPromptOption>,
+    pub default_index: usize,
+}
+
+pub type SelectionPromptCallback =
+    Arc<dyn Fn(SelectionPrompt) -> Result<Option<String>, anyhow::Error> + Send + Sync>;
+
+#[derive(Clone, Debug, Error)]
+#[error("{message}")]
+pub struct DeferredInteractionError {
+    message: String,
+}
+
+impl DeferredInteractionError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ShellCommandExecutionRequest {
     pub command: String,
     pub node_id: String,
@@ -52,18 +87,36 @@ pub type ShellCommandApprovalCallback =
     Arc<dyn Fn(&ShellCommandExecutionRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
 
 #[derive(Clone, Debug)]
+pub struct PullRequestCreationRequest {
+    pub title: String,
+    pub body: Option<String>,
+    pub draft: bool,
+    pub head: String,
+    pub base: Option<String>,
+    pub node_id: String,
+    pub node_name: String,
+    pub task_id: String,
+}
+
+pub type PullRequestApprovalCallback =
+    Arc<dyn Fn(&PullRequestCreationRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
+
+#[derive(Clone, Debug)]
 pub struct ManagedGitWorktree {
     pub branch: String,
     pub path: PathBuf,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InstallSkillExecutionRequest {
     pub install_skill: UseInstallSkill,
     pub no_interactive: bool,
+    pub quiet: bool,
+    pub bundle_path: Option<PathBuf>,
     pub target_path: PathBuf,
     pub env: HashMap<String, String>,
     pub output_format: OutputFormat,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
 }
 
 #[async_trait]
@@ -91,6 +144,7 @@ pub struct WorkflowRunConfig {
     pub agent: Option<String>,
     /// Callback for presenting agent selection UI when no agent is specified
     pub agent_selection_callback: Option<AgentSelectionCallback>,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
     /// Callback for reporting changes in dry-run mode
     pub dry_run_callback: Option<DryRunCallback>,
     /// Skip executing install-skill steps at runtime (used by package run UX)
@@ -114,6 +168,8 @@ pub struct WorkflowRunConfig {
     pub capture_stdout_in_quiet_mode: bool,
     /// Optional interactive approval callback for shell-command workflow steps
     pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
+    /// Optional interactive approval callback for managed-git pull request creation
+    pub pull_request_approval_callback: Option<PullRequestApprovalCallback>,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
     /// Optional per-task git worktree used for managed git execution.
@@ -149,6 +205,7 @@ impl Default for WorkflowRunConfig {
             no_interactive: false,
             agent: None,
             agent_selection_callback: None,
+            selection_prompt_callback: None,
             dry_run_callback: None,
             skip_install_skill_steps: false,
             auto_trigger_manual_steps: false,
@@ -160,6 +217,7 @@ impl Default for WorkflowRunConfig {
             quiet: false,
             capture_stdout_in_quiet_mode: true,
             shell_command_approval_callback: None,
+            pull_request_approval_callback: None,
             install_skill_executor: None,
             managed_git_worktree: None,
             enable_managed_git: true,

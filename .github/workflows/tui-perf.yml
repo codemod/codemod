@@ -1,0 +1,1003 @@
+name: TUI Perf
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to compare (uses PR base vs head automatically)
+        required: false
+        type: string
+      baseline_ref:
+        description: Baseline git ref override when not using a PR number
+        required: false
+        default: "main"
+        type: string
+      candidate_ref:
+        description: Candidate git ref override when not using a PR number (defaults to the workflow commit)
+        required: false
+        default: ""
+        type: string
+      duration_secs:
+        description: Seconds to keep each TUI session open before auto-exit
+        required: false
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: tui-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tui-perf:
+    name: TUI Perf Comparison
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config bsdutils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify deterministic TUI perf baseline
+        if: github.event_name != 'pull_request'
+        run: |
+          cargo test -p codemod should_redraw_is_false_for_static_idle_ui_without_changes -- --nocapture
+          cargo test -p codemod draw_counter_counts_only_initial_draw_for_static_idle_screen -- --nocapture
+          cargo test -p codemod draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events -- --nocapture
+          cargo test -p codemod draw_counter_counts_deadline_tick_for_running_screen -- --nocapture
+          cargo test -p codemod reduce_workflow_receiver_requests_snapshot_after_receiver_lag -- --nocapture
+
+      - name: Run baseline and candidate TUI perf scenarios
+        env:
+          CODEMOD_TUI_PERF_METRICS: "1"
+          GH_TOKEN: ${{ github.token }}
+          DURATION_SECS_INPUT: ${{ inputs.duration_secs }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          log_phase() {
+            printf '[tui-perf] %s %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
+          }
+
+          mkdir -p perf-results
+          AUTO_EXIT_SECS="${DURATION_SECS_INPUT:-}"
+          if [ -z "${AUTO_EXIT_SECS}" ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ]; then
+              AUTO_EXIT_SECS="3"
+            else
+              AUTO_EXIT_SECS="10"
+            fi
+          fi
+          export CODEMOD_TUI_PERF_AUTO_EXIT_SECS="${AUTO_EXIT_SECS}"
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            BASELINE_REF="${PR_BASE_SHA}"
+            CANDIDATE_REF="${PR_HEAD_SHA}"
+            echo "Comparing PR event: ${PR_TITLE}"
+            echo "${PR_EVENT_NUMBER}" > perf-results/pr-number.txt
+          elif [ -n "${PR_NUMBER}" ]; then
+            PR_JSON="$(
+              gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+                --jq '{base: .base.sha, head: .head.sha, title: .title}'
+            )"
+            BASELINE_REF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["base"])' <<<"${PR_JSON}")"
+            CANDIDATE_REF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])' <<<"${PR_JSON}")"
+            RESOLVED_PR_TITLE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])' <<<"${PR_JSON}")"
+            echo "Comparing PR #${PR_NUMBER}: ${RESOLVED_PR_TITLE}"
+            echo "${PR_NUMBER}" > perf-results/pr-number.txt
+          else
+            CANDIDATE_REF="${CANDIDATE_REF_INPUT:-$GITHUB_SHA_VALUE}"
+          fi
+
+          ref_supports_tui_perf_harness() {
+            local ref="$1"
+            git show "${ref}:crates/cli/src/tui/mod.rs" 2>/dev/null | grep -q 'CODEMOD_TUI_PERF_AUTO_EXIT_SECS'
+          }
+
+          echo "0" > perf-results/baseline-unavailable.txt
+          resolve_supported_baseline_ref() {
+            local preferred_ref="$1"
+            local candidate_ref="$2"
+            if ref_supports_tui_perf_harness "${preferred_ref}"; then
+              printf '%s' "${preferred_ref}"
+              return 0
+            fi
+
+            local fallback_ref=""
+            fallback_ref="$(git rev-list "${candidate_ref}" --max-count=50 --skip=1 | while read -r ref; do
+              if ref_supports_tui_perf_harness "${ref}"; then
+                printf '%s\n' "${ref}"
+                break
+              fi
+            done)"
+
+            if [ -z "${fallback_ref}" ]; then
+              echo "Baseline ref ${preferred_ref} and recent ancestors lack TUI perf harness support; using candidate as its own baseline" >&2
+              echo "1" > perf-results/baseline-unavailable.txt
+              printf '%s' "${candidate_ref}"
+              return 0
+            fi
+
+            echo "Baseline ref ${preferred_ref} lacks TUI perf harness support; falling back to ${fallback_ref}" >&2
+            printf '%s' "${fallback_ref}"
+          }
+
+          BASELINE_REF="$(resolve_supported_baseline_ref "${BASELINE_REF}" "${CANDIDATE_REF}")"
+          echo "${BASELINE_REF}" > perf-results/resolved-baseline-ref.txt
+          echo "${CANDIDATE_REF}" > perf-results/resolved-candidate-ref.txt
+          WORKTREE_ROOT="$(mktemp -d)"
+          BASELINE_WORKTREE="${WORKTREE_ROOT}/baseline"
+          CANDIDATE_WORKTREE="${WORKTREE_ROOT}/candidate"
+          BASELINE_TARGET_DIR="${WORKTREE_ROOT}/baseline-target"
+          CANDIDATE_TARGET_DIR="${WORKTREE_ROOT}/candidate-target"
+
+          cleanup() {
+            git worktree remove --force "${BASELINE_WORKTREE}" >/dev/null 2>&1 || true
+            git worktree remove --force "${CANDIDATE_WORKTREE}" >/dev/null 2>&1 || true
+            rm -rf "${WORKTREE_ROOT}"
+          }
+          trap cleanup EXIT
+
+          git worktree add "${BASELINE_WORKTREE}" "${BASELINE_REF}"
+          git worktree add "${CANDIDATE_WORKTREE}" "${CANDIDATE_REF}"
+          git -C "${BASELINE_WORKTREE}" submodule update --init --recursive
+          git -C "${CANDIDATE_WORKTREE}" submodule update --init --recursive
+          BENCH_TEST_PATH="crates/core/tests/jssg_wait_latency_bench.rs"
+          if [ -f "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" ]; then
+            mkdir -p "${BASELINE_WORKTREE}/$(dirname "${BENCH_TEST_PATH}")"
+            cp "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${BENCH_TEST_PATH}"
+          fi
+          RENDER_BENCH_TEST_PATH="crates/cli/src/tui/render_latency_bench.rs"
+          if [ ! -f "${BASELINE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ] && [ -f "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ]; then
+            cp "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${RENDER_BENCH_TEST_PATH}"
+            if ! grep -q "mod render_latency_bench;" "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs"; then
+              python3 - "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          marker = "pub mod event;\n"
+          if marker not in text:
+              raise SystemExit(f"missing insertion marker in {path}")
+          text = text.replace(marker, marker + "#[cfg(test)]\nmod render_latency_bench;\n", 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+            fi
+          fi
+
+          extract_run_id() {
+            local output_file="$1"
+            grep -oE 'Workflow started with ID: [0-9a-f-]+' "${output_file}" | tail -n 1 | awk '{print $5}'
+          }
+
+          wait_for_run_id() {
+            local output_file="$1"
+            local waited=0
+            local run_id=""
+            log_phase "wait-for-run-id start output=${output_file}"
+            while [ "${waited}" -lt 60 ]; do
+              if [ -f "${output_file}" ]; then
+                run_id="$(extract_run_id "${output_file}" || true)"
+                if [ -n "${run_id}" ]; then
+                  log_phase "wait-for-run-id finish output=${output_file} run_id=${run_id}"
+                  printf '%s' "${run_id}"
+                  return 0
+                fi
+              fi
+              sleep 1
+              waited=$((waited + 1))
+            done
+            echo "Timed out waiting for workflow run id in ${output_file}" >&2
+            return 1
+          }
+
+          write_workflow_fixtures() {
+            local workflow_root="$1"
+            mkdir -p "${workflow_root}"
+
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: completed' \
+              '    name: Completed' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: complete-quickly' \
+              '        name: Complete quickly' \
+              '        run: |' \
+              '          echo "done"' \
+              > "${workflow_root}/completed.yaml"
+
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: prepare' \
+              '    name: Prepare' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: prepare' \
+              '        name: Prepare' \
+              '        run: |' \
+              '          echo "ready"' \
+              '  - id: manual' \
+              '    name: Manual Trigger' \
+              '    type: automatic' \
+              '    depends_on: ["prepare"]' \
+              '    trigger:' \
+              '      type: manual' \
+              '    steps:' \
+              '      - id: wait-for-manual-trigger' \
+              '        name: Wait for manual trigger' \
+              '        run: |' \
+              '          echo "manual"' \
+              > "${workflow_root}/awaiting.yaml"
+
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: active' \
+              '    name: Active' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: stay-running' \
+              '        name: Stay running' \
+              '        run: |' \
+              '          echo "running"' \
+              '          sleep 120' \
+              > "${workflow_root}/active.yaml"
+
+            printf '%s\n' \
+              'version: "1"' \
+              'nodes:' \
+              '  - id: active-busy' \
+              '    name: Active Busy' \
+              '    type: automatic' \
+              '    steps:' \
+              '      - id: stay-busy' \
+              '        name: Stay busy' \
+              '        run: |' \
+              '          i=0' \
+              '          while [ "$i" -lt 20 ]; do' \
+              '            echo "tick-$i"' \
+              '            i=$((i + 1))' \
+              '            sleep 0.2' \
+              '          done' \
+              '          sleep 120' \
+              > "${workflow_root}/active-busy.yaml"
+          }
+
+          run_workflow_and_capture_id() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local target="$4"
+            local output_file="$5"
+            local codemod_bin="$6"
+
+            mkdir -p "$(dirname "${output_file}")"
+            log_phase "workflow-run start workflow=${workflow} target=${target}"
+            if ! (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                "${codemod_bin}" workflow run \
+                  --workflow "${workflow}" \
+                  --target "${target}" \
+                  --allow-child-process \
+                  --no-interactive
+            ) > "${output_file}" 2>&1; then
+              echo "workflow run failed for ${workflow}" >&2
+              cat "${output_file}" >&2 || true
+              return 1
+            fi
+
+            local run_id
+            run_id="$(extract_run_id "${output_file}" || true)"
+            if [ -z "${run_id}" ]; then
+              echo "workflow run did not print a run id for ${workflow}" >&2
+              cat "${output_file}" >&2 || true
+              return 1
+            fi
+            log_phase "workflow-run finish workflow=${workflow} run_id=${run_id}"
+            printf '%s' "${run_id}"
+          }
+
+          start_active_workflow() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local target="$4"
+            local output_file="$5"
+            local codemod_bin="$6"
+
+            mkdir -p "$(dirname "${output_file}")"
+            log_phase "workflow-run active-start workflow=${workflow} target=${target}"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                "${codemod_bin}" workflow run \
+                  --workflow "${workflow}" \
+                  --target "${target}" \
+                  --allow-child-process \
+                  --no-interactive
+            ) > "${output_file}" 2>&1 &
+            echo $!
+          }
+
+          cancel_workflow_if_present() {
+            local worktree="$1"
+            local state_home="$2"
+            local run_id="${3:-}"
+            local codemod_bin="$4"
+            if [ -z "${run_id}" ]; then
+              return 0
+            fi
+            log_phase "workflow-cancel run_id=${run_id}"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                "${codemod_bin}" workflow cancel --id "${run_id}"
+            ) >/dev/null 2>&1 || true
+          }
+
+          resume_workflow_if_present() {
+            local worktree="$1"
+            local state_home="$2"
+            local workflow="$3"
+            local run_id="${4:-}"
+            local target="$5"
+            local codemod_bin="$6"
+            if [ -z "${run_id}" ]; then
+              return 0
+            fi
+            log_phase "workflow-resume run_id=${run_id}"
+            (
+              cd "${worktree}"
+              XDG_DATA_HOME="${state_home}" \
+                "${codemod_bin}" workflow resume \
+                  --workflow "${workflow}" \
+                  --id "${run_id}" \
+                  --target "${target}" \
+                  --trigger-all \
+                  --allow-child-process \
+                  --no-interactive
+            ) >/dev/null 2>&1
+          }
+
+          run_scenario() {
+            local worktree="$1"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
+            local codemod_bin="$6"
+            local output="${outdir}/${name}.log"
+            local timeout_secs=$((CODEMOD_TUI_PERF_AUTO_EXIT_SECS + 20))
+            mkdir -p "${outdir}"
+            log_phase "tui-scenario start name=${name} run_id=${run_id} timeout=${timeout_secs}s"
+            if ! WORKTREE="${worktree}" \
+              STATE_HOME="${state_home}" \
+              CODEMOD_BIN="${codemod_bin}" \
+              RUN_ID="${run_id}" \
+              OUTPUT_PATH="${output}" \
+              TIMEOUT_SECS="${timeout_secs}" \
+              python3 -c 'import textwrap; exec(textwrap.dedent("""
+                import os
+                import pty
+                import select
+                import signal
+                import subprocess
+                import sys
+                import time
+
+                worktree = os.environ["WORKTREE"]
+                state_home = os.environ["STATE_HOME"]
+                codemod_bin = os.environ["CODEMOD_BIN"]
+                run_id = os.environ["RUN_ID"]
+                output_path = os.environ["OUTPUT_PATH"]
+                timeout_secs = int(os.environ["TIMEOUT_SECS"])
+                send_terminal_activity = os.environ.get("SEND_TERMINAL_ACTIVITY") == "1"
+
+                master_fd, slave_fd = pty.openpty()
+                env = os.environ.copy()
+                env["XDG_DATA_HOME"] = state_home
+
+                proc = subprocess.Popen(
+                    [codemod_bin, "workflow", "tui", "--id", run_id],
+                    cwd=worktree,
+                    env=env,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                )
+                os.close(slave_fd)
+
+                deadline = time.monotonic() + timeout_secs
+                started_at = time.monotonic()
+                sent_key = False
+                sent_resize = False
+                timed_out = False
+
+                with open(output_path, "wb") as output_file:
+                    while True:
+                        if proc.poll() is not None:
+                            break
+                        elapsed = time.monotonic() - started_at
+                        if send_terminal_activity and not sent_key and elapsed >= 0.5:
+                            os.write(master_fd, b"j")
+                            sent_key = True
+                        if send_terminal_activity and not sent_resize and elapsed >= 1.0:
+                            import fcntl
+                            import struct
+                            import termios
+
+                            fcntl.ioctl(
+                                master_fd,
+                                termios.TIOCSWINSZ,
+                                struct.pack("HHHH", 32, 100, 0, 0),
+                            )
+                            proc.send_signal(signal.SIGWINCH)
+                            sent_resize = True
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            proc.send_signal(signal.SIGTERM)
+                            try:
+                                proc.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait()
+                            break
+
+                        ready, _, _ = select.select([master_fd], [], [], 0.2)
+                        if master_fd in ready:
+                            try:
+                                chunk = os.read(master_fd, 65536)
+                            except OSError:
+                                chunk = b""
+                            if chunk:
+                                output_file.write(chunk)
+                                output_file.flush()
+
+                    while True:
+                        try:
+                            chunk = os.read(master_fd, 65536)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        output_file.write(chunk)
+
+                os.close(master_fd)
+
+                if timed_out:
+                    print(f"TUI scenario exceeded timeout of {timeout_secs}s", file=sys.stderr)
+                    sys.exit(124)
+
+                sys.exit(proc.returncode or 0)
+              """))'; then
+              echo "tui scenario command failed for ${name} run ${run_id}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            if ! grep "TUI perf counters:" "${output}" | tail -n 1 >"${outdir}/${name}.counters"; then
+              echo "missing TUI perf counters for ${name} run ${run_id}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            log_phase "tui-scenario finish name=${name} run_id=${run_id}"
+            printf "%s " "${name}" >>"${outdir}/summary.txt"
+            cat "${outdir}/${name}.counters" >>"${outdir}/summary.txt"
+          }
+
+          run_scenario_with_terminal_activity() {
+            local worktree="$1"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
+            local codemod_bin="$6"
+
+            SEND_TERMINAL_ACTIVITY=1 \
+              run_scenario "${worktree}" "${state_home}" "${outdir}" "${name}" "${run_id}" "${codemod_bin}"
+          }
+
+          run_scenario_with_resume() {
+            local worktree="$1"
+            local state_home="$2"
+            local outdir="$3"
+            local name="$4"
+            local run_id="$5"
+            local workflow="$6"
+            local target="$7"
+            local codemod_bin="$8"
+            (
+              sleep 1
+              resume_workflow_if_present "${worktree}" "${state_home}" "${workflow}" "${run_id}" "${target}" "${codemod_bin}"
+            ) &
+            local resume_pid=$!
+            run_scenario "${worktree}" "${state_home}" "${outdir}" "${name}" "${run_id}" "${codemod_bin}"
+            wait "${resume_pid}" >/dev/null 2>&1 || true
+          }
+
+          run_suite() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+
+            (
+              local suite_root
+              local state_home
+              local workflow_root
+            local target_root
+            local codemod_bin
+            local completed_run_id=""
+            local awaiting_run_id=""
+            local awaiting_resume_run_id=""
+            local active_run_id=""
+            local active_busy_run_id=""
+            local active_pid=""
+            local active_busy_pid=""
+
+            suite_root="$(mktemp -d)"
+            state_home="${suite_root}/xdg-data"
+            workflow_root="${suite_root}/workflows"
+            target_root="${suite_root}/targets"
+            codemod_bin="${target_dir}/debug/codemod"
+
+            mkdir -p "${outdir}"
+            mkdir -p "${state_home}" \
+              "${target_root}/completed" \
+              "${target_root}/awaiting" \
+              "${target_root}/awaiting-resume" \
+              "${target_root}/active" \
+              "${target_root}/active-busy"
+            write_workflow_fixtures "${workflow_root}"
+
+            log_phase "suite-build start ref=${ref}"
+            if ! (
+              cd "${worktree}"
+              CARGO_TARGET_DIR="${target_dir}" cargo build -q -p codemod --bin codemod
+            ) >"${outdir}/build.log" 2>&1; then
+              echo "failed to build codemod binary for ${ref}" >&2
+              cat "${outdir}/build.log" >&2 || true
+              return 1
+            fi
+            if [ ! -x "${codemod_bin}" ]; then
+              echo "built codemod binary missing for ${ref}" >&2
+              cat "${outdir}/build.log" >&2 || true
+              return 1
+            fi
+            log_phase "suite-build finish ref=${ref}"
+
+            cleanup_suite() {
+              log_phase "suite-cleanup start ref=${ref}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${active_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${active_busy_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_run_id:-}" "${codemod_bin}"
+              cancel_workflow_if_present "${worktree}" "${state_home}" "${awaiting_resume_run_id:-}" "${codemod_bin}"
+              if [ -n "${active_pid:-}" ]; then
+                kill "${active_pid}" >/dev/null 2>&1 || true
+                wait "${active_pid}" >/dev/null 2>&1 || true
+              fi
+              if [ -n "${active_busy_pid:-}" ]; then
+                kill "${active_busy_pid}" >/dev/null 2>&1 || true
+                wait "${active_busy_pid}" >/dev/null 2>&1 || true
+              fi
+              rm -rf "${suite_root}"
+              log_phase "suite-cleanup finish ref=${ref}"
+            }
+
+              trap cleanup_suite EXIT
+
+              completed_run_id="$(
+                run_workflow_and_capture_id \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/completed.yaml" \
+                "${target_root}/completed" \
+                "${outdir}/completed-run-command.log" \
+                "${codemod_bin}"
+            )"
+
+              awaiting_run_id="$(
+                run_workflow_and_capture_id \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/awaiting.yaml" \
+                "${target_root}/awaiting" \
+                "${outdir}/awaiting-run-command.log" \
+                "${codemod_bin}"
+            )"
+
+              awaiting_resume_run_id="$(
+                run_workflow_and_capture_id \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/awaiting.yaml" \
+                "${target_root}/awaiting-resume" \
+                "${outdir}/awaiting-resume-run-command.log" \
+                "${codemod_bin}"
+            )"
+
+              active_pid="$(
+                start_active_workflow \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/active.yaml" \
+                "${target_root}/active" \
+                "${outdir}/active-run-command.log" \
+                "${codemod_bin}"
+            )"
+            active_run_id="$(wait_for_run_id "${outdir}/active-run-command.log")"
+
+              active_busy_pid="$(
+                start_active_workflow \
+                "${worktree}" \
+                "${state_home}" \
+                "${workflow_root}/active-busy.yaml" \
+                "${target_root}/active-busy" \
+                "${outdir}/active-busy-run-command.log" \
+                "${codemod_bin}"
+            )"
+            active_busy_run_id="$(wait_for_run_id "${outdir}/active-busy-run-command.log")"
+
+              {
+                echo "ref=${ref}"
+                echo "completed_run_id=${completed_run_id}"
+              } >"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" completed "${completed_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "terminal_activity_run_id=${completed_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario_with_terminal_activity \
+              "${worktree}" \
+              "${state_home}" \
+              "${outdir}" \
+              terminal_activity \
+              "${completed_run_id}" \
+              "${codemod_bin}"
+            {
+              echo
+              echo "awaiting_trigger_run_id=${awaiting_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" awaiting_trigger "${awaiting_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "active_run_id=${active_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" active "${active_run_id}" "${codemod_bin}"
+            {
+              echo
+              echo "awaiting_trigger_resume_run_id=${awaiting_resume_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario_with_resume \
+              "${worktree}" \
+              "${state_home}" \
+              "${outdir}" \
+              awaiting_trigger_resume \
+              "${awaiting_resume_run_id}" \
+              "${workflow_root}/awaiting.yaml" \
+              "${target_root}/awaiting-resume" \
+              "${codemod_bin}"
+            {
+              echo
+              echo "active_busy_run_id=${active_busy_run_id}"
+            } >>"${outdir}/summary.txt"
+            run_scenario "${worktree}" "${state_home}" "${outdir}" active_busy "${active_busy_run_id}" "${codemod_bin}"
+          )
+          }
+
+          log_phase "suite start kind=baseline ref=${BASELINE_REF}"
+          run_suite "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
+          log_phase "suite finish kind=baseline ref=${BASELINE_REF}"
+
+          run_focused_perf_tests() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+            local results_md="${outdir}/focused-tests.md"
+            local results_txt="${outdir}/focused-tests.txt"
+
+            mkdir -p "${outdir}"
+            : > "${results_txt}"
+
+            run_focused_test() {
+              local label="$1"
+              shift
+              log_phase "focused-test start ref=${ref} label=${label}"
+              if (
+                cd "${worktree}"
+                CARGO_TARGET_DIR="${target_dir}" "$@"
+              ) >> "${results_txt}" 2>&1; then
+                printf '| `%s` | PASS |\n' "${label}" >> "${results_md}"
+              else
+                printf '| `%s` | FAIL |\n' "${label}" >> "${results_md}"
+                echo "focused perf test failed: ${label}" >&2
+                cat "${results_txt}" >&2 || true
+                return 1
+              fi
+              log_phase "focused-test finish ref=${ref} label=${label}"
+            }
+
+            {
+              echo "## Focused Perf Regression Tests"
+              echo
+              echo "| Test | Result |"
+              echo "| --- | --- |"
+            } > "${results_md}"
+
+            run_focused_test "should_redraw_is_false_for_static_idle_ui_without_changes" \
+              cargo test -q -p codemod should_redraw_is_false_for_static_idle_ui_without_changes -- --nocapture
+            run_focused_test "draw_counter_counts_only_initial_draw_for_static_idle_screen" \
+              cargo test -q -p codemod draw_counter_counts_only_initial_draw_for_static_idle_screen -- --nocapture
+            run_focused_test "draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events" \
+              cargo test -q -p codemod draw_counter_counts_one_redraw_for_burst_of_drained_workflow_events -- --nocapture
+            run_focused_test "draw_counter_counts_deadline_tick_for_running_screen" \
+              cargo test -q -p codemod draw_counter_counts_deadline_tick_for_running_screen -- --nocapture
+            run_focused_test "reduce_workflow_receiver_requests_snapshot_after_receiver_lag" \
+              cargo test -q -p codemod reduce_workflow_receiver_requests_snapshot_after_receiver_lag -- --nocapture
+            run_focused_test "await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay" \
+              cargo test -q -p butterflow-core await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay -- --nocapture
+            run_focused_test "await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal" \
+              cargo test -q -p butterflow-core await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal -- --nocapture
+          }
+
+          run_timed_benchmark() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+            local label="$5"
+            local package="$6"
+            local test_args="$7"
+            local marker="$8"
+            local output="${outdir}/${label}.log"
+
+            mkdir -p "${outdir}"
+            log_phase "timed-benchmark start ref=${ref} label=${label}"
+            if ! (
+              cd "${worktree}"
+              CARGO_TARGET_DIR="${target_dir}" \
+                cargo test -q -p "${package}" ${test_args} -- --ignored --nocapture
+            ) >"${output}" 2>&1; then
+              echo "timed benchmark ${label} failed for ${ref}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            if ! grep "${marker}" "${output}" | tail -n 1 >"${outdir}/${label}.metrics"; then
+              echo "timed benchmark ${label} did not emit metrics for ${ref}" >&2
+              cat "${output}" >&2 || true
+              return 1
+            fi
+            log_phase "timed-benchmark finish ref=${ref} label=${label}"
+          }
+
+          run_timed_benchmarks() {
+            local worktree="$1"
+            local outdir="$2"
+            local ref="$3"
+            local target_dir="$4"
+
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "jssg-wait-latency" \
+              "butterflow-core" \
+              "--test jssg_wait_latency_bench await_js_ast_grep_execution_task_completion_latency_benchmark" \
+              "JSSG_WAIT_LATENCY_MICROS"
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "tui-render-latency" \
+              "codemod" \
+              "large_task_list_render_latency_benchmark" \
+              "TUI_RENDER_LATENCY_MICROS"
+          }
+
+          compare_timed_benchmarks() {
+            python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+
+          def read_metric(path):
+              text = open(path, encoding="utf-8").read()
+              values = {key: int(value) for key, value in re.findall(r"(median|min|max)=([0-9]+)", text)}
+              if "median" not in values:
+                  raise SystemExit(f"missing median in {path}: {text}")
+              return values
+
+
+          benchmarks = [
+              ("jssg-wait-latency", "jssg_wait_completion_latency", 50_000),
+              ("tui-render-latency", "large_task_list_render_latency", 2_000),
+          ]
+          failed = False
+          with open("perf-results/timed-benchmarks.md", "w", encoding="utf-8") as output:
+              output.write("## Timed Perf Benchmarks\n\n")
+              output.write("| Benchmark | Baseline median | Candidate median | Delta | Ratio | Result |\n")
+              output.write("| --- | ---: | ---: | ---: | ---: | --- |\n")
+              for file_stem, label, absolute_floor in benchmarks:
+                  baseline = read_metric(f"perf-results/baseline/{file_stem}.metrics")
+                  candidate = read_metric(f"perf-results/candidate/{file_stem}.metrics")
+                  baseline_median = baseline["median"]
+                  candidate_median = candidate["median"]
+                  delta = candidate_median - baseline_median
+                  ratio = (candidate_median / baseline_median) if baseline_median else 0.0
+                  regressed = candidate_median > baseline_median * 1.25 and delta > absolute_floor
+                  failed = failed or regressed
+                  status = "FAIL" if regressed else "PASS"
+                  output.write(
+                      f"| `{label}` "
+                      f"| {baseline_median} us "
+                      f"| {candidate_median} us "
+                      f"| {delta:+} us "
+                      f"| {ratio:.2f}x "
+                      f"| {status} |\n"
+                  )
+              output.write("\n")
+              output.write(
+                  "_Fails only when candidate median is more than 25% slower and exceeds the benchmark-specific absolute floor._\n"
+              )
+
+          with open("perf-results/timed-benchmarks-failed.txt", "w", encoding="utf-8") as marker:
+              marker.write("1\n" if failed else "0\n")
+          if failed:
+              print("Timed benchmark regression detected", file=sys.stderr)
+          PY
+          }
+
+          log_phase "suite start kind=candidate ref=${CANDIDATE_REF}"
+          run_suite "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          log_phase "suite finish kind=candidate ref=${CANDIDATE_REF}"
+          run_focused_perf_tests "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          run_timed_benchmarks "${BASELINE_WORKTREE}" "perf-results/baseline" "${BASELINE_REF}" "${BASELINE_TARGET_DIR}"
+          run_timed_benchmarks "${CANDIDATE_WORKTREE}" "perf-results/candidate" "${CANDIDATE_REF}" "${CANDIDATE_TARGET_DIR}"
+          compare_timed_benchmarks
+
+          python3 scripts/compare_tui_perf.py \
+            perf-results/baseline \
+            perf-results/candidate \
+            > perf-results/comparison.md
+          if [ "$(cat perf-results/baseline-unavailable.txt)" = "1" ]; then
+            {
+              echo "> Baseline comparison unavailable: the PR base does not contain the TUI perf harness, so this run compares the candidate against itself and reports candidate-side regression tests."
+              echo
+              cat perf-results/comparison.md
+            } > perf-results/comparison.md.tmp
+            mv perf-results/comparison.md.tmp perf-results/comparison.md
+          fi
+          if [ "$(cat perf-results/timed-benchmarks-failed.txt)" = "1" ]; then
+            echo "Timed benchmark regression detected" >&2
+            exit 1
+          fi
+
+      - name: Publish TUI perf comparison
+        if: always()
+        run: |
+          if [ -f perf-results/candidate/focused-tests.md ]; then
+            cat perf-results/candidate/focused-tests.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f perf-results/timed-benchmarks.md ]; then
+            cat perf-results/timed-benchmarks.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cat perf-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment TUI perf comparison on PR
+        if: ${{ always() && (github.event_name == 'pull_request' || inputs.pr_number != '') }}
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          RESOLVED_BASELINE_REF: ${{ github.event.pull_request.base.sha || '' }}
+          RESOLVED_CANDIDATE_REF: ${{ github.event.pull_request.head.sha || '' }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("node:fs");
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = Number(process.env.PR_NUMBER || fs.readFileSync("perf-results/pr-number.txt", "utf8").trim());
+            const summaryMarker = "<!-- codemod:tui-perf -->";
+            const comparisonBody = fs.readFileSync("perf-results/comparison.md", "utf8").trim();
+            const focusedTestsBody = fs.existsSync("perf-results/candidate/focused-tests.md")
+              ? fs.readFileSync("perf-results/candidate/focused-tests.md", "utf8").trim()
+              : "";
+            const timedBenchmarksBody = fs.existsSync("perf-results/timed-benchmarks.md")
+              ? fs.readFileSync("perf-results/timed-benchmarks.md", "utf8").trim()
+              : "";
+            const baselineRef = fs.readFileSync("perf-results/resolved-baseline-ref.txt", "utf8").trim();
+            const candidateRef = fs.readFileSync("perf-results/resolved-candidate-ref.txt", "utf8").trim();
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const summaryBody = [
+              summaryMarker,
+              "## TUI Perf Comparison",
+              "",
+              `- Workflow run: ${runUrl}`,
+              `- Baseline ref: \`${baselineRef}\``,
+              `- Candidate ref: \`${candidateRef}\``,
+              `- Updated at: ${new Date().toISOString()}`,
+              "",
+              focusedTestsBody,
+              focusedTestsBody ? "" : null,
+              timedBenchmarksBody,
+              timedBenchmarksBody ? "" : null,
+              comparisonBody,
+            ].filter(Boolean).join("\n");
+
+            try {
+              const issueComments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100,
+              });
+
+              const existingSummary = [...issueComments]
+                .reverse()
+                .find(
+                  (comment) =>
+                    comment.user?.login === "github-actions[bot]" &&
+                    comment.body?.includes(summaryMarker)
+                );
+
+              if (existingSummary) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existingSummary.id,
+                  body: summaryBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  body: summaryBody,
+                });
+              }
+            } catch (error) {
+              core.warning(`Unable to post TUI perf PR comment with the current token; results remain available in the workflow summary and artifact. ${error.message}`);
+            }
+
+      - name: Upload TUI perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-perf-results
+          path: perf-results/

@@ -10,8 +10,9 @@ use uuid::Uuid;
 
 use crate::ai_handoff::AgentOption;
 use crate::config::{
-    AgentSelectionCallback, CapabilitiesSecurityCallback, ShellCommandApprovalCallback,
-    ShellCommandExecutionRequest,
+    AgentSelectionCallback, CapabilitiesSecurityCallback, DeferredInteractionError,
+    PullRequestApprovalCallback, PullRequestCreationRequest, SelectionPrompt,
+    SelectionPromptCallback, ShellCommandApprovalCallback, ShellCommandExecutionRequest,
 };
 use crate::engine::Engine;
 use crate::{Task, WorkflowRun, WorkflowStatus};
@@ -72,6 +73,11 @@ pub enum WorkflowEvent {
         request: ShellCommandExecutionRequest,
         at: DateTime<Utc>,
     },
+    PullRequestApprovalRequested {
+        request_id: Uuid,
+        request: PullRequestCreationRequest,
+        at: DateTime<Utc>,
+    },
     CapabilitiesApprovalRequested {
         request_id: Uuid,
         modules: Vec<LlrtSupportedModules>,
@@ -80,6 +86,11 @@ pub enum WorkflowEvent {
     AgentSelectionRequested {
         request_id: Uuid,
         options: Vec<AgentSelectionOption>,
+        at: DateTime<Utc>,
+    },
+    SelectionRequested {
+        request_id: Uuid,
+        prompt: SelectionPrompt,
         at: DateTime<Utc>,
     },
 }
@@ -94,7 +105,14 @@ pub enum WorkflowCommand {
     },
     TriggerAll,
     CancelWorkflow,
+    CreatePullRequest {
+        task_id: Uuid,
+    },
     RespondShellApproval {
+        request_id: Uuid,
+        approved: bool,
+    },
+    RespondPullRequestApproval {
         request_id: Uuid,
         approved: bool,
     },
@@ -103,6 +121,10 @@ pub enum WorkflowCommand {
         approved: bool,
     },
     RespondAgentSelection {
+        request_id: Uuid,
+        selection: Option<String>,
+    },
+    RespondSelection {
         request_id: Uuid,
         selection: Option<String>,
     },
@@ -148,20 +170,24 @@ impl WorkflowEventSink for BroadcastEventSink {
 
 struct PendingApprovals {
     shell: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
+    pull_request: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     capabilities: Mutex<CapabilityApprovalState>,
     agent: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
+    selection: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
 }
 
 impl PendingApprovals {
     fn with_approved(approved: HashSet<LlrtSupportedModules>) -> Self {
         Self {
             shell: Mutex::new(HashMap::new()),
+            pull_request: Mutex::new(HashMap::new()),
             capabilities: Mutex::new(CapabilityApprovalState {
                 approved,
                 pending_by_request: HashMap::new(),
                 in_flight_by_key: HashMap::new(),
             }),
             agent: Mutex::new(HashMap::new()),
+            selection: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -202,6 +228,29 @@ impl WorkflowSessionInteractor {
             });
             rx.recv().map_err(|error| {
                 anyhow::anyhow!("shell approval response channel closed: {error}")
+            })?
+        })
+    }
+
+    fn pull_request_callback(&self) -> PullRequestApprovalCallback {
+        let sender = self.sender.clone();
+        let pending = Arc::clone(&self.pending);
+        Arc::new(move |request| {
+            let request_id = Uuid::new_v4();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            pending.pull_request.lock().unwrap().insert(request_id, tx);
+            if let Err(error) = sender.send(WorkflowEvent::PullRequestApprovalRequested {
+                request_id,
+                request: request.clone(),
+                at: Utc::now(),
+            }) {
+                pending.pull_request.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver pull request approval event: {error}"
+                ));
+            }
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("pull request approval response channel closed: {error}")
             })?
         })
     }
@@ -295,6 +344,30 @@ impl WorkflowSessionInteractor {
             rx.recv().ok().flatten()
         })
     }
+
+    fn selection_callback(&self) -> SelectionPromptCallback {
+        let sender = self.sender.clone();
+        let pending = Arc::clone(&self.pending);
+        Arc::new(move |prompt| {
+            let request_id = Uuid::new_v4();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            pending.selection.lock().unwrap().insert(request_id, tx);
+            if let Err(error) = sender.send(WorkflowEvent::SelectionRequested {
+                request_id,
+                prompt: prompt.clone(),
+                at: Utc::now(),
+            }) {
+                pending.selection.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver selection prompt event: {error}"
+                ));
+            }
+            rx.recv()
+                .map_err(|error| anyhow::anyhow!("selection response channel closed: {error}"))?
+                .ok_or_else(|| DeferredInteractionError::new("selection prompt canceled").into())
+                .map(Some)
+        })
+    }
 }
 
 async fn handle_command(
@@ -320,11 +393,29 @@ async fn handle_command(
             .cancel_workflow(workflow_run_id)
             .await
             .map_err(anyhow::Error::from),
+        WorkflowCommand::CreatePullRequest { task_id } => {
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                if let Err(error) = engine.create_pull_request_for_task(task_id).await {
+                    log::error!("failed to create pull request for task {task_id}: {error}");
+                }
+            });
+            Ok(())
+        }
         WorkflowCommand::RespondShellApproval {
             request_id,
             approved,
         } => {
             if let Some(tx) = pending.shell.lock().unwrap().remove(&request_id) {
+                let _ = tx.send(Ok(approved));
+            }
+            Ok(())
+        }
+        WorkflowCommand::RespondPullRequestApproval {
+            request_id,
+            approved,
+        } => {
+            if let Some(tx) = pending.pull_request.lock().unwrap().remove(&request_id) {
                 let _ = tx.send(Ok(approved));
             }
             Ok(())
@@ -361,6 +452,15 @@ async fn handle_command(
             selection,
         } => {
             if let Some(tx) = pending.agent.lock().unwrap().remove(&request_id) {
+                let _ = tx.send(selection);
+            }
+            Ok(())
+        }
+        WorkflowCommand::RespondSelection {
+            request_id,
+            selection,
+        } => {
+            if let Some(tx) = pending.selection.lock().unwrap().remove(&request_id) {
                 let _ = tx.send(selection);
             }
             Ok(())
@@ -412,7 +512,9 @@ impl WorkflowSession {
         let config = engine.workflow_run_config_mut();
         config.capabilities_security_callback = Some(interactor.capabilities_callback());
         config.agent_selection_callback = Some(interactor.agent_callback());
+        config.selection_prompt_callback = Some(interactor.selection_callback());
         config.shell_command_approval_callback = Some(interactor.shell_callback());
+        config.pull_request_approval_callback = Some(interactor.pull_request_callback());
 
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<SessionCommandEnvelope>();
         let command_engine = engine.clone();
@@ -607,6 +709,7 @@ pub struct WorkflowSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SelectionPromptOption;
     use crate::execution::CodemodExecutionConfig;
     use codemod_llrt_capabilities::types::LlrtSupportedModules;
     use std::collections::HashSet;
@@ -882,5 +985,59 @@ mod tests {
             rx.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[tokio::test]
+    async fn selection_prompt_fails_fast_when_event_delivery_is_closed() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender, Arc::clone(&pending));
+        let callback = interactor.selection_callback();
+
+        let error = callback(SelectionPrompt {
+            title: "Choose install scope".to_string(),
+            options: vec![SelectionPromptOption {
+                value: "project".to_string(),
+                label: "project".to_string(),
+            }],
+            default_index: 0,
+        })
+        .expect_err("closed event delivery should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deliver selection prompt event"),
+            "unexpected error: {error:#}"
+        );
+        assert!(pending.selection.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pull_request_prompt_fails_fast_when_event_delivery_is_closed() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender, Arc::clone(&pending));
+        let callback = interactor.pull_request_callback();
+
+        let error = callback(&PullRequestCreationRequest {
+            title: "Draft PR".to_string(),
+            body: None,
+            draft: true,
+            head: "codemod-branch".to_string(),
+            base: Some("main".to_string()),
+            node_id: "apply-transforms".to_string(),
+            node_name: "Apply transforms".to_string(),
+            task_id: Uuid::new_v4().to_string(),
+        })
+        .expect_err("closed event delivery should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deliver pull request approval event"),
+            "unexpected error: {error:#}"
+        );
+        assert!(pending.pull_request.lock().unwrap().is_empty());
     }
 }
