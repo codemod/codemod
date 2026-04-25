@@ -140,6 +140,15 @@ fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
     )
 }
 
+fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, serde_json::Value> {
+    workflow_run
+        .workflow
+        .params
+        .as_ref()
+        .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
+        .unwrap_or_else(|| workflow_run.params.clone())
+}
+
 fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
@@ -716,9 +725,9 @@ impl Engine {
 
     fn resolve_pull_request_config(
         &self,
-        workflow_run: &WorkflowRun,
         task: &Task,
         node: &Node,
+        params: &HashMap<String, serde_json::Value>,
     ) -> Result<Option<ResolvedPullRequestConfig>> {
         if !should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git) {
             return Ok(None);
@@ -728,7 +737,7 @@ impl Engine {
         let configured_branch = node.branch_name.as_ref().map(|tmpl| {
             resolve_string_with_expression(
                 tmpl,
-                &workflow_run.params,
+                params,
                 &HashMap::new(),
                 task.matrix_values.as_ref(),
                 None,
@@ -744,7 +753,7 @@ impl Engine {
         let (title, body, draft, base) = if let Some(pr_config) = &node.pull_request {
             let title = resolve_string_with_expression(
                 &pr_config.title,
-                &workflow_run.params,
+                params,
                 &HashMap::new(),
                 task.matrix_values.as_ref(),
                 None,
@@ -755,7 +764,7 @@ impl Engine {
             let body = pr_config.body.as_ref().map(|b| {
                 resolve_string_with_expression(
                     b,
-                    &workflow_run.params,
+                    params,
                     &HashMap::new(),
                     task.matrix_values.as_ref(),
                     None,
@@ -797,9 +806,10 @@ impl Engine {
             .iter()
             .find(|node| node.id == task.node_id)
             .ok_or_else(|| Error::Runtime(format!("Node '{}' not found for task", task.node_id)))?;
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
 
         let pr = self
-            .resolve_pull_request_config(&workflow_run, &task, node)?
+            .resolve_pull_request_config(&task, node, &resolved_params)?
             .ok_or_else(|| {
                 Error::Runtime("Task is not eligible for pull request creation".to_string())
             })?;
@@ -1147,13 +1157,15 @@ impl Engine {
                                         engine.workflow_run_config.enable_managed_git,
                                     )
                                 {
+                                    let resolved_params =
+                                        resolve_workflow_run_params(&workflow_run);
                                     let ctx =
                                         crate::git_ops::build_task_expression_context(&task.id.to_string());
                                     let configured_branch =
                                         node.branch_name.as_ref().map(|tmpl| {
                                             resolve_string_with_expression(
                                                 tmpl,
-                                                &workflow_run.params,
+                                                &resolved_params,
                                                 &HashMap::new(),
                                                 task.matrix_values.as_ref(),
                                                 None,
@@ -2774,12 +2786,7 @@ impl Engine {
             .get_workflow_run(task.workflow_run_id)
             .await?;
 
-        let resolved_params = workflow_run
-            .workflow
-            .params
-            .as_ref()
-            .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
-            .unwrap_or_else(|| workflow_run.params.clone());
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
 
         let node = workflow_run
             .workflow
@@ -3202,7 +3209,7 @@ impl Engine {
                         .await;
                     let push_and_pr_result: Result<PullRequestOutcome> = async {
                         let pr = self
-                            .resolve_pull_request_config(&workflow_run, &task, node)?
+                            .resolve_pull_request_config(&task, node, &resolved_params)?
                             .ok_or_else(|| {
                                 Error::Runtime(
                                     "Task is not eligible for pull request creation".to_string(),
@@ -3291,6 +3298,7 @@ impl Engine {
                             "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
+                        return Err(e);
                     } else {
                         git_step_logger
                             .step_end("success", git_step_start.elapsed().as_millis() as u64);
@@ -6405,6 +6413,87 @@ export default function transform(ast) {
         assert!(line.contains(r#""branch":"codemod-branch""#));
         assert!(!line.contains("secret body"));
         assert!(!line.contains(r#""body""#));
+    }
+
+    #[tokio::test]
+    async fn pull_request_config_uses_defaulted_workflow_params() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_state_adapter(
+            Box::new(LocalStateAdapter::with_base_dir(
+                temp_dir.path().join("state"),
+            )),
+            WorkflowRunConfig {
+                enable_managed_git: true,
+                ..WorkflowRunConfig::default()
+            },
+        );
+
+        let node = Node {
+            id: "apply".to_string(),
+            name: "Apply".to_string(),
+            description: None,
+            r#type: butterflow_models::node::NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![],
+            env: HashMap::new(),
+            branch_name: Some("codemod-${{ params.target }}".to_string()),
+            pull_request: Some(butterflow_models::step::PullRequestConfig {
+                title: "Update ${{ params.target }}".to_string(),
+                body: Some("Body ${{ params.target }}".to_string()),
+                draft: Some(true),
+                base: None,
+            }),
+        };
+        let workflow_run_id = Uuid::new_v4();
+        let task = Task::new(workflow_run_id, node.id.clone(), false);
+        let workflow_run = WorkflowRun {
+            id: workflow_run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: Some(butterflow_models::workflow::WorkflowParams {
+                    schema: butterflow_models::SimpleSchema {
+                        properties: HashMap::from([(
+                            "target".to_string(),
+                            butterflow_models::SimpleSchemaProperty {
+                                name: None,
+                                description: None,
+                                schema: butterflow_models::SimpleSchemaType::String {
+                                    one_of: None,
+                                    default: Some("default-target".to_string()),
+                                    multi_line: None,
+                                    secret: None,
+                                },
+                            },
+                        )]),
+                    },
+                }),
+                templates: vec![],
+                nodes: vec![node.clone()],
+            },
+            status: WorkflowStatus::Running,
+            params: HashMap::new(),
+            tasks: vec![task.id],
+            started_at: Utc::now(),
+            ended_at: None,
+            bundle_path: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        };
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
+
+        let pr = engine
+            .resolve_pull_request_config(&task, &node, &resolved_params)
+            .unwrap()
+            .expect("managed git node should resolve PR metadata");
+
+        assert_eq!(pr.branch, "codemod-default-target");
+        assert_eq!(pr.title, "Update default-target");
+        assert_eq!(pr.body.as_deref(), Some("Body default-target"));
     }
 
     #[tokio::test]
