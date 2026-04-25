@@ -3272,6 +3272,9 @@ impl Engine {
                         }
                         Ok(PullRequestOutcome::Created(None)) => {
                             slog!(git_step_logger, info, "Pull request created successfully");
+                            let _ = self
+                                .append_task_log(task_id, "Pull request created successfully")
+                                .await;
                         }
                         Ok(PullRequestOutcome::Deferred) => {
                             slog!(git_step_logger, info, "Pull request creation deferred");
