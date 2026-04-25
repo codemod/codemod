@@ -111,6 +111,12 @@ impl InstallSkillExecutor for CliInstallSkillExecutor {
     async fn execute(&self, request: InstallSkillExecutionRequest) -> Result<String> {
         let (format, emit_output) =
             workflow_install_output_behavior(request.output_format, request.quiet);
+        let selection_prompt_callback = request.selection_prompt_callback;
+        let no_interactive = workflow_install_no_interactive(
+            request.no_interactive,
+            request.quiet,
+            selection_prompt_callback.is_some(),
+        );
         let scope = request.install_skill.scope.clone();
         let install_request = PackageSkillInstallRequest {
             package_id: request.install_skill.package,
@@ -119,13 +125,13 @@ impl InstallSkillExecutor for CliInstallSkillExecutor {
             scope: scope_from_step(scope.clone()),
             scope_was_explicit: scope.is_some(),
             force: request.install_skill.force.unwrap_or(false),
-            no_interactive: request.no_interactive,
+            no_interactive,
             format,
             emit_output,
             package_dir_hint: request.bundle_path,
             working_directory: Some(request.target_path),
             environment: Some(request.env),
-            selection_prompt_callback: request.selection_prompt_callback,
+            selection_prompt_callback,
         };
 
         install_package_skill(&install_request, &self.telemetry).await
@@ -525,6 +531,14 @@ fn workflow_install_output_behavior(
         WorkflowOutputFormat::Text => (OutputFormat::Logs, !quiet),
         WorkflowOutputFormat::Jsonl => (OutputFormat::Logs, false),
     }
+}
+
+fn workflow_install_no_interactive(
+    no_interactive: bool,
+    quiet: bool,
+    has_selection_prompt_callback: bool,
+) -> bool {
+    no_interactive || (quiet && !has_selection_prompt_callback)
 }
 
 async fn send_package_skill_install_event(
@@ -1366,6 +1380,21 @@ nodes:
             workflow_install_output_behavior(WorkflowOutputFormat::Jsonl, false),
             (OutputFormat::Logs, false)
         );
+    }
+
+    #[test]
+    fn workflow_install_no_interactive_treats_quiet_without_callback_as_non_interactive() {
+        assert!(workflow_install_no_interactive(false, true, false));
+    }
+
+    #[test]
+    fn workflow_install_no_interactive_keeps_tui_callback_runs_interactive() {
+        assert!(!workflow_install_no_interactive(false, true, true));
+    }
+
+    #[test]
+    fn workflow_install_no_interactive_preserves_explicit_no_interactive() {
+        assert!(workflow_install_no_interactive(true, false, true));
     }
 
     #[test]
