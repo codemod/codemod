@@ -3291,10 +3291,10 @@ impl Engine {
                             "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
+                    } else {
+                        git_step_logger
+                            .step_end("success", git_step_start.elapsed().as_millis() as u64);
                     }
-
-                    git_step_logger
-                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
                 } else {
                     let _ = self
                         .append_task_log(task_id, "No changes detected; no PR created")

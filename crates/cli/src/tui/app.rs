@@ -1245,11 +1245,10 @@ impl TuiState {
         if Self::task_publish_in_progress(task) {
             return None;
         }
-        if task
-            .logs
-            .iter()
-            .any(|line| line.starts_with("Pull request created: "))
-        {
+        if task.logs.iter().any(|line| {
+            line.starts_with("Pull request created: ")
+                || line == "Pull request created successfully"
+        }) {
             return None;
         }
         if task
@@ -2899,6 +2898,7 @@ mod tests {
         let task = state.selected_task().unwrap();
         assert_eq!(state.task_status_text(task), "Completed");
         assert_eq!(state.selected_task_completion_detail(), None);
+        assert!(!state.task_help_text().contains("p create-pr"));
     }
 
     #[test]
