@@ -1059,15 +1059,17 @@ impl TuiState {
             WorkflowEvent::SelectionRequested {
                 request_id, prompt, ..
             } => {
+                let options: Vec<_> = prompt
+                    .options
+                    .into_iter()
+                    .map(|option| (option.value, option.label))
+                    .collect();
+                let selected = prompt.default_index.min(options.len().saturating_sub(1));
                 self.enqueue_approval(ApprovalPrompt::Selection {
                     request_id,
                     title: prompt.title,
-                    options: prompt
-                        .options
-                        .into_iter()
-                        .map(|option| (option.value, option.label))
-                        .collect(),
-                    selected: prompt.default_index,
+                    options,
+                    selected,
                 });
             }
         }
@@ -1127,12 +1129,10 @@ impl TuiState {
                 options,
                 selected,
                 ..
-            } => options
-                .get(*selected)
-                .map(|(value, _)| WorkflowCommand::RespondSelection {
-                    request_id: *request_id,
-                    selection: Some(value.clone()),
-                }),
+            } => Some(WorkflowCommand::RespondSelection {
+                request_id: *request_id,
+                selection: options.get(*selected).map(|(value, _)| value.clone()),
+            }),
         }
     }
 
@@ -3236,6 +3236,61 @@ mod tests {
                 request_id: actual_request_id,
                 selection: Some(selection),
             }) if actual_request_id == request_id && selection == "user"
+        ));
+    }
+
+    #[test]
+    fn selection_prompt_clamps_invalid_default_index() {
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
+            request_id,
+            prompt: butterflow_core::config::SelectionPrompt {
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    butterflow_core::config::SelectionPromptOption {
+                        value: "project".to_string(),
+                        label: "project".to_string(),
+                    },
+                    butterflow_core::config::SelectionPromptOption {
+                        value: "user".to_string(),
+                        label: "user".to_string(),
+                    },
+                ],
+                default_index: 99,
+            },
+            at: Utc::now(),
+        }));
+
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::RespondSelection {
+                request_id: actual_request_id,
+                selection: Some(selection),
+            }) if actual_request_id == request_id && selection == "user"
+        ));
+    }
+
+    #[test]
+    fn selection_prompt_accept_rejects_empty_options() {
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
+            request_id,
+            prompt: butterflow_core::config::SelectionPrompt {
+                title: "Choose install scope".to_string(),
+                options: vec![],
+                default_index: 99,
+            },
+            at: Utc::now(),
+        }));
+
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::RespondSelection {
+                request_id: actual_request_id,
+                selection: None,
+            }) if actual_request_id == request_id
         ));
     }
 
