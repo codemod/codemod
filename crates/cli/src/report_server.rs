@@ -16,7 +16,10 @@ const REPORT_HTML: &str = include_str!("../report-ui/dist/index.html");
 /// In debug builds, try to read the built SPA from disk at runtime
 #[cfg(debug_assertions)]
 fn get_report_html() -> String {
+    let compile_time_manifest_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("report-ui/dist/index.html");
     let candidates = [
+        compile_time_manifest_dir,
         std::path::PathBuf::from("crates/cli/report-ui/dist/index.html"),
         std::path::PathBuf::from("report-ui/dist/index.html"),
     ];

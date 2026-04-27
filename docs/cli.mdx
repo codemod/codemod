@@ -91,7 +91,7 @@ For Opencode, install writes `opencode.json` using the Opencode-specific `mcp` s
 
 MCP config paths by harness and scope:
 - `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
-- `goose`: `./.goose/mcp.json` (project), `~/.goose/mcp.json` (user)
+- `goose`: `./.goose/mcp.json` (project), `~/.config/goose/mcp.json` (user)
 - `opencode`: `./opencode.json` (project), `~/.config/opencode/opencode.json` (user)
 - `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
 - `codex` (CLI + macOS app): `./.codex/config.toml` (project), `~/.codex/config.toml` (user) under `[mcp_servers.codemod]`
@@ -100,7 +100,8 @@ If a conflicting Codemod MCP entry already exists, re-run with `--force` to over
 
 `ai` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
 - `claude`: `CLAUDE.md`
-- `goose`, `cursor`: `AGENTS.md` and `CLAUDE.md`
+- `goose`: `AGENTS.md` and `.goosehints`
+- `cursor`: `AGENTS.md`
 - `opencode`: `AGENTS.md`
 - `codex`: `AGENTS.md`
 `ai` also installs `/codemod` where the harness has a native command or workflow file surface:
@@ -115,7 +116,7 @@ The installed `/codemod` command routes by intent:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
 - `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
-- `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.goosehints` (user) as fallback guidance
+- `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.config/goose/.goosehints` (user) as fallback guidance
 - `codex`: `notify = ["sh", "<runner>"]` in `./.codex/config.toml` (project) or `~/.codex/config.toml` (user)
 Managed update policy is install-flag driven and shared by install-time reconciliation and periodic checks:
 - `--update-policy <manual|notify|auto-safe>` (default: `auto-safe`)
@@ -141,7 +142,7 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
-This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `CLAUDE.md` for Goose/Cursor, `AGENTS.md` for OpenCode/Codex) without duplication, then prompts you to restart/reload the harness session.
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `.goosehints` for Goose, `AGENTS.md` for Cursor/OpenCode/Codex) without duplication, then prompts you to restart/reload the harness session.
 
 ```bash
 npx codemod <package-id>
@@ -596,12 +597,18 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--skill" type="boolean">
   Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+
+  The generated `SKILL.md` uses the authored package skill markers:
+  - `codemod-compatibility: skill-package-v1`
+  - `codemod-skill-version: 0.1.0`
   
   Mutually exclusive with `--with-skill` and `--project-type`.
 </ResponseField>
 
 <ResponseField name="--with-skill" type="boolean">
   Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+
+  The generated authored skill uses `skill-package-v1`, not the built-in `mcs-v1` core skill marker.
   
   Mutually exclusive with `--skill`.
 </ResponseField>

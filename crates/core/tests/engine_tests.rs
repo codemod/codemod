@@ -1,17 +1,25 @@
 use async_trait::async_trait;
 use butterflow_core::config::{
-    InstallSkillExecutionRequest, InstallSkillExecutor, ShellCommandApprovalCallback,
-    ShellCommandExecutionRequest, WorkflowRunConfig,
+    DeferredInteractionError, InstallSkillExecutionRequest, InstallSkillExecutor,
+    ShellCommandApprovalCallback, ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use butterflow_state::mock_adapter::MockStateAdapter;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tokio::sync::Notify;
 
-use butterflow_core::engine::{CapabilitiesData, Engine};
+use butterflow_core::engine::{
+    await_js_ast_grep_execution_task, build_js_ast_grep_idle_timeout_message, finish_unit_progress,
+    js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
+    select_shard_scan_eligible_files, CapabilitiesData, Engine, StepPhase, StepProgressState,
+    UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
+};
 use butterflow_core::structured_log::StructuredLogger;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
 use butterflow_core::{
@@ -26,6 +34,7 @@ use butterflow_models::step::{
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult};
 
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
 use butterflow_state::local_adapter::LocalStateAdapter;
@@ -256,6 +265,48 @@ fn create_test_workflow() -> Workflow {
                 pull_request: None,
             },
         ],
+    }
+}
+
+fn create_git_managed_workflow() -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "apply-transforms".to_string(),
+            name: "Apply AST Transformations".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("step-1".to_string()),
+                name: "Mutate file".to_string(),
+                action: StepAction::RunScript("echo 'done'".to_string()),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: Some("codemod-test-branch".to_string()),
+            pull_request: Some(butterflow_models::step::PullRequestConfig {
+                title: "Managed git test PR".to_string(),
+                body: None,
+                draft: Some(true),
+                base: None,
+            }),
+        }],
     }
 }
 
@@ -622,6 +673,27 @@ fn create_manual_matrix_install_skill_workflow() -> Workflow {
     workflow
 }
 
+fn create_manual_install_skill_workflow() -> Workflow {
+    let mut workflow = create_manual_trigger_workflow();
+    if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
+        node.steps = vec![Step {
+            id: Some("install-skill-step".to_string()),
+            name: "Install Skill".to_string(),
+            action: StepAction::InstallSkill(UseInstallSkill {
+                package: "@codemod/test-skill".to_string(),
+                path: None,
+                harness: None,
+                scope: None,
+                force: None,
+            }),
+            env: None,
+            condition: None,
+            commit: None,
+        }];
+    }
+    workflow
+}
+
 fn create_manual_matrix_install_skill_git_workflow() -> Workflow {
     let mut workflow = create_manual_matrix_install_skill_workflow();
     if let Some(node) = workflow.nodes.iter_mut().find(|node| node.id == "node2") {
@@ -645,6 +717,36 @@ struct FailingInstallSkillExecutor;
 impl InstallSkillExecutor for FailingInstallSkillExecutor {
     async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
         Err(anyhow::anyhow!("failing install skill executor"))
+    }
+}
+
+struct DeferredThenSuccessInstallSkillExecutor {
+    attempts: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl InstallSkillExecutor for DeferredThenSuccessInstallSkillExecutor {
+    async fn execute(&self, _request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        let mut attempts = self.attempts.lock().unwrap();
+        *attempts += 1;
+        if *attempts == 1 {
+            Err(DeferredInteractionError::new("selection prompt canceled").into())
+        } else {
+            Ok("installed".to_string())
+        }
+    }
+}
+
+struct RecordingInstallSkillExecutor {
+    requests: Arc<Mutex<Vec<InstallSkillExecutionRequest>>>,
+    output: String,
+}
+
+#[async_trait]
+impl InstallSkillExecutor for RecordingInstallSkillExecutor {
+    async fn execute(&self, request: InstallSkillExecutionRequest) -> anyhow::Result<String> {
+        self.requests.lock().unwrap().push(request);
+        Ok(self.output.clone())
     }
 }
 
@@ -1845,8 +1947,8 @@ async fn test_panicking_task_thread_fails_child_and_reconciles_matrix_master() {
                     child
                         .logs
                         .iter()
-                        .any(|line| line.contains("helper thread panicked")),
-                    "expected panic log in child logs, got {:?}",
+                        .all(|line| !line.contains("Marking task complete")),
+                    "failed child should not log completion, got {:?}",
                     child.logs
                 );
                 return;
@@ -2023,6 +2125,374 @@ async fn test_failing_install_skill_child_reconciles_matrix_master() {
             latest_state.lock().unwrap().clone()
         )
     });
+}
+
+#[tokio::test]
+async fn test_install_skill_executor_receives_workflow_bundle_path() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let bundle_dir = TempDir::new().unwrap();
+    let config_bundle_dir = TempDir::new().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        bundle_path: config_bundle_dir.path().to_path_buf(),
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "installed".to_string(),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(bundle_dir.path().to_path_buf()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            if requests.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill executor should be invoked");
+
+    let recorded = requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].bundle_path.as_deref(), Some(bundle_dir.path()));
+}
+
+#[tokio::test]
+async fn test_quiet_install_skill_request_stays_interactive() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "installed".to_string(),
+        })),
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            if requests.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill executor should be invoked");
+
+    let recorded = requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert!(recorded[0].quiet);
+    assert!(!recorded[0].no_interactive);
+}
+
+#[tokio::test]
+async fn test_deferred_single_install_skill_can_be_retriggered() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let attempts = Arc::new(Mutex::new(0usize));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
+            attempts: Arc::clone(&attempts),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task_id = tasks
+        .iter()
+        .find(|task| task.node_id == "node2")
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![task_id])
+        .await
+        .unwrap();
+
+    type DeferredTaskSnapshot = Vec<(
+        String,
+        TaskStatus,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Vec<String>,
+    )>;
+    let latest_state: Arc<Mutex<DeferredTaskSnapshot>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            *latest_state_for_loop.lock().unwrap() = tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.node_id.clone(),
+                        task.status,
+                        task.started_at,
+                        task.logs.clone(),
+                    )
+                })
+                .collect();
+            let task = tasks.iter().find(|task| task.id == task_id).unwrap();
+            if task.status == TaskStatus::AwaitingTrigger && task.started_at.is_none() {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "single install-skill task should return to awaiting trigger after defer; attempts={} latest state={:?}",
+            *attempts.lock().unwrap(),
+            latest_state.lock().unwrap().clone()
+        )
+    });
+
+    engine
+        .resume_workflow(workflow_run_id, vec![task_id])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let task = tasks.iter().find(|task| task.id == task_id).unwrap();
+            if task.status == TaskStatus::Completed {
+                assert!(
+                    task.logs.iter().any(|line| line.contains("installed")),
+                    "expected successful install output in task logs, got {:?}",
+                    task.logs
+                );
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("single install-skill task should complete after retrigger");
+
+    assert_eq!(*attempts.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let attempts = Arc::new(Mutex::new(0usize));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
+            attempts: Arc::clone(&attempts),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    type MatrixDeferredSnapshot = Vec<(
+        uuid::Uuid,
+        bool,
+        TaskStatus,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Vec<String>,
+    )>;
+    let latest_state: Arc<Mutex<MatrixDeferredSnapshot>> = Arc::new(Mutex::new(Vec::new()));
+    let latest_state_for_loop = Arc::clone(&latest_state);
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            *latest_state_for_loop.lock().unwrap() = tasks
+                .iter()
+                .filter(|task| task.node_id == "node2")
+                .map(|task| {
+                    (
+                        task.id,
+                        task.is_master,
+                        task.status,
+                        task.started_at,
+                        task.logs.clone(),
+                    )
+                })
+                .collect();
+            let task = tasks.iter().find(|task| task.id == child_task).unwrap();
+            if task.status == TaskStatus::AwaitingTrigger && task.started_at.is_none() {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "matrix triggered child should return to awaiting trigger after defer; attempts={} latest state={:?}",
+            *attempts.lock().unwrap(),
+            latest_state.lock().unwrap().clone()
+        )
+    });
+}
+
+#[tokio::test]
+async fn test_install_skill_success_output_is_appended_to_task_logs() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config = WorkflowRunConfig {
+        install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
+            requests: Arc::clone(&requests),
+            output: "Installed package skill `debarrel` for `claude` (project)".to_string(),
+        })),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_manual_matrix_install_skill_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::AwaitingTrigger
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let master_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.is_master)
+        .unwrap()
+        .id;
+    let child_task = tasks
+        .iter()
+        .find(|task| task.node_id == "node2" && task.master_task_id == Some(master_task))
+        .unwrap()
+        .id;
+
+    engine
+        .resume_workflow(workflow_run_id, vec![child_task])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+            let child = tasks.iter().find(|task| task.id == child_task).unwrap();
+            if child.status == TaskStatus::Completed {
+                assert!(
+                    child
+                        .logs
+                        .iter()
+                        .any(|line| line.contains("Installed package skill `debarrel`")),
+                    "expected install output in child logs, got {:?}",
+                    child.logs
+                );
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("install-skill task should complete");
 }
 
 #[tokio::test]
@@ -2247,6 +2717,7 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
     let state_adapter = Box::new(MockStateAdapter::new());
     let config = WorkflowRunConfig {
         target_path: repo_dir.path().to_path_buf(),
+        enable_managed_git: true,
         enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
@@ -2331,6 +2802,102 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
 
 #[tokio::test]
 #[serial]
+async fn non_tui_workflow_run_skips_worktree_and_pull_request_flow() {
+    let repo_dir = TempDir::new().unwrap();
+    init_test_git_repo(repo_dir.path());
+    create_test_file(repo_dir.path(), "tracked.txt", "original\n");
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add tracked file"])
+        .current_dir(repo_dir.path())
+        .status()
+        .unwrap();
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: repo_dir.path().to_path_buf(),
+        enable_managed_git: false,
+        enable_worktrees: false,
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = create_git_managed_workflow();
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        matches!(status, WorkflowStatus::Completed)
+    })
+    .await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "apply-transforms")
+        .expect("managed git task should exist");
+
+    assert_eq!(task.status, TaskStatus::Completed);
+    let logs = task.logs.join("\n");
+    assert!(
+        !logs.contains("Creating git worktree for branch"),
+        "non-TUI run should not create git worktrees; logs were: {logs}"
+    );
+    assert!(
+        !logs.contains("Publishing branch and creating pull request"),
+        "non-TUI run should not attempt PR creation; logs were: {logs}"
+    );
+    assert!(
+        !logs.contains("Pull request created:"),
+        "non-TUI run should not create PRs; logs were: {logs}"
+    );
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        branch_output.status.success(),
+        "git rev-parse failed: {}",
+        String::from_utf8_lossy(&branch_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&branch_output.stdout).trim(),
+        "main"
+    );
+
+    let worktree_output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        worktree_output.status.success(),
+        "git worktree list failed: {}",
+        String::from_utf8_lossy(&worktree_output.stderr)
+    );
+    let worktree_stdout = String::from_utf8_lossy(&worktree_output.stdout);
+    let worktree_entries: Vec<_> = worktree_stdout
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .collect();
+    assert_eq!(
+        worktree_entries.len(),
+        1,
+        "expected only the main repo worktree, got {:?}",
+        worktree_entries
+    );
+}
+
+#[tokio::test]
+#[serial]
 async fn test_workflow_session_capabilities_approval_unblocks_manual_matrix_children() {
     let repo_dir = TempDir::new().unwrap();
     init_test_git_repo(repo_dir.path());
@@ -2370,6 +2937,7 @@ export default function transform(ast) {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: repo_dir.path().to_path_buf(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_managed_git: true,
         enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
@@ -2519,6 +3087,8 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_managed_git: true,
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -2651,6 +3221,8 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
+        enable_managed_git: true,
+        enable_worktrees: true,
         ..WorkflowRunConfig::default()
     };
     let engine = Engine::with_state_adapter(state_adapter, config);
@@ -4230,6 +4802,79 @@ interface ApiResponse {
     assert!(
         result.is_ok(),
         "TypeScript JS AST grep step should execute successfully: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_falls_back_when_selector_extraction_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export function getSelector() {
+  throw new Error("selector should not make the workflow fail");
+}
+
+export default function transform(ast) {
+  return ast
+    .findAll({ rule: { pattern: 'var $NAME = $VALUE' } })
+    .replace('let $NAME = $VALUE');
+}
+"#,
+    );
+
+    create_test_file(
+        temp_path,
+        "src/app.js",
+        r#"
+function main() {
+    var count = 0;
+}
+"#,
+    );
+
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "selector extraction is an optimization and should fall back to full-file execution: {result:?}"
     );
 }
 
@@ -5831,6 +6476,12 @@ fn create_conditional_workflow() -> Workflow {
     }
 }
 
+fn create_wrapped_conditional_workflow() -> Workflow {
+    let mut workflow = create_conditional_workflow();
+    workflow.nodes[0].steps[1].condition = Some("${{ params.my_cond }}".to_string());
+    workflow
+}
+
 // Helper function to create a workflow with non-existent variable references
 fn create_nonexistent_variable_workflow() -> Workflow {
     Workflow {
@@ -5980,6 +6631,76 @@ async fn test_workflow_condition_with_params_false() {
 }
 
 #[tokio::test]
+async fn test_workflow_condition_with_wrapped_params_true() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_wrapped_conditional_workflow();
+
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(true));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, params, None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        assert!(log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
+async fn test_workflow_condition_with_wrapped_params_false() {
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_wrapped_conditional_workflow();
+
+    let mut params = HashMap::new();
+    params.insert("my_cond".to_string(), serde_json::Value::Bool(false));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, params, None, None)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let conditional_task = tasks
+        .iter()
+        .find(|t| t.node_id == "conditional-node")
+        .unwrap();
+
+    assert!(
+        conditional_task.status == TaskStatus::Completed
+            || conditional_task.status == TaskStatus::Running
+    );
+
+    if conditional_task.status == TaskStatus::Completed {
+        let log_output = conditional_task.logs.join("\n");
+        assert!(log_output.contains("This step always runs"));
+        assert!(!log_output.contains("This step runs conditionally"));
+    }
+}
+
+#[tokio::test]
 async fn test_workflow_condition_with_params_missing() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
@@ -6085,3 +6806,292 @@ async fn test_expression_resolution_nonexistent_variable() {
 // TODO: test_cycle_detection_direct_cycle
 // TODO: test_find_cycle_in_chain
 // TODO: test_runtime_cycle_detection
+
+#[test]
+fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
+    let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+    assert_eq!(
+        js_ast_grep_idle_timeout(),
+        Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+    );
+
+    std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+    assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+}
+
+#[test]
+fn shard_scan_falls_back_to_selector_matches_when_dry_run_finds_no_edits() {
+    let eligible = select_shard_scan_eligible_files(
+        Vec::new(),
+        vec!["src/a.ts".to_string(), "src/b.ts".to_string()],
+    );
+
+    assert_eq!(eligible, vec!["src/a.ts", "src/b.ts"]);
+}
+
+#[test]
+fn shard_scan_prefers_modified_files_when_available() {
+    let eligible = select_shard_scan_eligible_files(
+        vec!["src/changed.ts".to_string()],
+        vec!["src/selector-only.ts".to_string()],
+    );
+
+    assert_eq!(eligible, vec!["src/changed.ts"]);
+}
+
+#[test]
+fn record_unit_progress_updates_global_and_active_units() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    let before = state.lock().unwrap().global_last_progress_at;
+
+    std::thread::sleep(Duration::from_millis(5));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::ExecutionStarted);
+    assert!(snapshot.global_last_progress_at > before);
+    let unit = snapshot.active_units.get("src/example.ts").unwrap();
+    assert_eq!(unit.phase, StepPhase::ExecutionStarted);
+    assert!(unit.last_progress_at > before);
+    assert!(snapshot.output_active_units.contains("src/example.ts"));
+}
+
+#[test]
+fn record_output_progress_refreshes_executing_units() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+    let before = state
+        .lock()
+        .unwrap()
+        .active_units
+        .get("src/example.ts")
+        .unwrap()
+        .last_progress_at;
+
+    std::thread::sleep(Duration::from_millis(5));
+    record_output_progress(&state);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::Output);
+    let unit = snapshot.active_units.get("src/example.ts").unwrap();
+    assert_eq!(unit.phase, StepPhase::Output);
+    assert!(unit.last_progress_at > before);
+}
+
+#[test]
+fn finish_unit_progress_removes_active_unit() {
+    let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&state, "src/example.ts", StepPhase::ExecutionStarted);
+    finish_unit_progress(&state, "src/example.ts", StepPhase::ExecutionFinished);
+
+    let snapshot = state.lock().unwrap();
+    assert_eq!(snapshot.global_phase, StepPhase::ExecutionFinished);
+    assert!(!snapshot.active_units.contains_key("src/example.ts"));
+    assert!(!snapshot.output_active_units.contains("src/example.ts"));
+}
+
+#[test]
+fn build_idle_timeout_message_uses_stalest_active_unit() {
+    let now = Instant::now();
+    let mut state = StepProgressState::new();
+    state.global_last_progress_at = now - Duration::from_secs(90);
+    state.global_phase = StepPhase::Output;
+    state.active_units.insert(
+        "src/fresh.ts".to_string(),
+        UnitProgressState {
+            last_progress_at: now - Duration::from_secs(10),
+            phase: StepPhase::Output,
+        },
+    );
+    state.active_units.insert(
+        "src/stale.ts".to_string(),
+        UnitProgressState {
+            last_progress_at: now - Duration::from_secs(75),
+            phase: StepPhase::ExecutionStarted,
+        },
+    );
+
+    let message = build_js_ast_grep_idle_timeout_message(&state, Duration::from_secs(60));
+    assert!(message.contains("src/stale.ts"));
+    assert!(message.contains("execution started"));
+    assert!(message.contains("active units: 2"));
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(
+        &progress_state,
+        "src/stalled.ts",
+        StepPhase::ExecutionStarted,
+    );
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let idle_timed_out_for_task = Arc::clone(&idle_timed_out);
+    let idle_notify_for_task = Arc::clone(&idle_notify);
+    let idle_failure_message_for_task = Arc::clone(&idle_failure_message);
+    let progress_state_for_task = Arc::clone(&progress_state);
+    let result = local
+            .run_until(async move {
+                let trigger = tokio::spawn({
+                    let idle_timed_out = Arc::clone(&idle_timed_out_for_task);
+                    let idle_notify = Arc::clone(&idle_notify_for_task);
+                    let idle_failure_message = Arc::clone(&idle_failure_message_for_task);
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        idle_timed_out.store(true, Ordering::Release);
+                        if let Ok(mut message) = idle_failure_message.lock() {
+                            *message = Some(
+                                "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"
+                                    .to_string(),
+                            );
+                        }
+                        idle_notify.notify_waiters();
+                    }
+                });
+
+                let execution_task = tokio::task::spawn_local(async move {
+                    futures_util::future::pending::<
+                        std::result::Result<
+                            CodemodOutput,
+                            codemod_sandbox::sandbox::errors::ExecutionError,
+                        >,
+                    >()
+                    .await
+                });
+
+                let result = await_js_ast_grep_execution_task(
+                    execution_task,
+                    idle_timed_out_for_task,
+                    idle_notify_for_task,
+                    idle_failure_message_for_task,
+                    progress_state_for_task,
+                    Duration::from_secs(1),
+                    "src/stalled.ts",
+                )
+                .await;
+                trigger.await.unwrap();
+                result
+            })
+            .await;
+
+    let error = result.expect_err("pending execution should time out");
+    let message = error.to_string();
+    assert!(message.contains("No progress observed"));
+    assert!(message.contains("src/stalled.ts"));
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_returns_prompt_completion_without_polling_delay() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
+
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
+
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            wait_task.await.expect("wait task should join")
+        }),
+    )
+    .await
+    .expect("completed execution should not wait for a polling interval");
+
+    let output = result
+        .expect("helper should return successfully")
+        .expect("execution should complete successfully");
+    assert!(matches!(output.primary, ExecutionResult::Unmodified));
+    assert!(output.secondary.is_empty());
+}
+
+#[tokio::test]
+async fn await_js_ast_grep_execution_task_prefers_completed_result_over_later_idle_signal() {
+    let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
+    record_unit_progress(&progress_state, "src/fast.ts", StepPhase::ExecutionStarted);
+    let idle_timed_out = Arc::new(AtomicBool::new(false));
+    let idle_notify = Arc::new(Notify::new());
+    let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+
+    let local = tokio::task::LocalSet::new();
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        local.run_until(async move {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let idle_timed_out_for_trigger = Arc::clone(&idle_timed_out);
+            let idle_notify_for_trigger = Arc::clone(&idle_notify);
+            let idle_failure_message_for_trigger = Arc::clone(&idle_failure_message);
+
+            let trigger = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                idle_timed_out_for_trigger.store(true, Ordering::Release);
+                if let Ok(mut message) = idle_failure_message_for_trigger.lock() {
+                    *message = Some("unexpected timeout".to_string());
+                }
+                idle_notify_for_trigger.notify_waiters();
+            });
+
+            let execution_task = tokio::task::spawn_local(async move {
+                let _ = release_rx.await;
+                Ok(CodemodOutput {
+                    primary: ExecutionResult::Unmodified,
+                    secondary: vec![],
+                })
+            });
+
+            let wait_task = tokio::task::spawn_local(await_js_ast_grep_execution_task(
+                execution_task,
+                Arc::clone(&idle_timed_out),
+                Arc::clone(&idle_notify),
+                Arc::clone(&idle_failure_message),
+                Arc::clone(&progress_state),
+                Duration::from_secs(1),
+                "src/fast.ts",
+            ));
+
+            tokio::task::yield_now().await;
+            release_tx
+                .send(())
+                .expect("completion signal should be sent");
+            let result = wait_task.await.expect("wait task should join");
+            trigger.await.expect("idle trigger should join");
+            result
+        }),
+    )
+    .await
+    .expect("completed execution should resolve before a later idle timeout signal");
+
+    let output = result
+        .expect("helper should return successfully")
+        .expect("execution should complete successfully");
+    assert!(matches!(output.primary, ExecutionResult::Unmodified));
+    assert!(output.secondary.is_empty());
+}
