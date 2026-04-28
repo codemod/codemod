@@ -106,6 +106,12 @@ struct PackageJsonLite {
 }
 
 #[derive(Debug, Default)]
+struct PackageJsonLoadResult {
+    package_json: PackageJsonLite,
+    invalid: bool,
+}
+
+#[derive(Debug, Default)]
 struct TransformRiskSummary {
     risky_regex_lines: Vec<usize>,
 }
@@ -303,7 +309,8 @@ impl PackageValidationHandler {
                 .any(|marker| content.contains(marker))
         });
         let test_cases = summarize_test_cases(&tests_path);
-        let package_json = load_package_json(&package_root);
+        let package_json_result = load_package_json(&package_root);
+        let package_json = package_json_result.package_json;
         let preferred_package_manager = preferred_package_manager(&package_root, &package_json);
 
         let scripts = PackageScriptSummary {
@@ -347,6 +354,15 @@ impl PackageValidationHandler {
                 "codemod_yaml_invalid",
                 "codemod.yaml failed to parse; falling back to workflow.yaml.",
                 Some(package_root.join("codemod.yaml")),
+            ));
+        }
+
+        if files.package_json && package_json_result.invalid {
+            issues.push(issue(
+                "error",
+                "invalid_package_json",
+                "package.json failed to parse.",
+                Some(package_root.join("package.json")),
             ));
         }
 
@@ -501,22 +517,31 @@ fn infer_validation_package_kind(
     let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
     let has_authored_skill = package_root.join("agents/skill").is_dir();
 
+    if has_rules && (files.scripts_codemod_ts || files.package_json) {
+        return ValidationPackageKind::Hybrid;
+    }
+
+    if files.scripts_codemod_ts {
+        return ValidationPackageKind::Jssg;
+    }
+
+    if has_rules {
+        return ValidationPackageKind::AstGrepYaml;
+    }
+
     if has_shell_scripts {
         return ValidationPackageKind::Shell;
     }
 
-    match (
-        files.scripts_codemod_ts || files.package_json,
-        has_rules,
-        has_shell_scripts,
-    ) {
-        (true, true, _) => ValidationPackageKind::Hybrid,
-        (true, false, _) => ValidationPackageKind::Jssg,
-        (false, true, _) => ValidationPackageKind::AstGrepYaml,
-        (false, false, true) => ValidationPackageKind::Shell,
-        (false, false, false) if has_authored_skill => ValidationPackageKind::SkillOnly,
-        _ => ValidationPackageKind::Unknown,
+    if files.package_json {
+        return ValidationPackageKind::Jssg;
     }
+
+    if has_authored_skill {
+        return ValidationPackageKind::SkillOnly;
+    }
+
+    ValidationPackageKind::Unknown
 }
 
 fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
@@ -664,13 +689,15 @@ fn contains_named_fixture_pair(dir: &Path) -> bool {
     has_input && has_expected
 }
 
-fn load_package_json(package_root: &Path) -> PackageJsonLite {
+fn load_package_json(package_root: &Path) -> PackageJsonLoadResult {
     let package_json_path = package_root.join("package.json");
     let Some(content) = read_file_if_exists(&package_json_path) else {
-        return PackageJsonLite::default();
+        return PackageJsonLoadResult::default();
     };
 
-    let parsed = serde_json::from_str::<serde_json::Value>(&content).ok();
+    let parsed = serde_json::from_str::<serde_json::Value>(&content);
+    let invalid = parsed.is_err();
+    let parsed = parsed.ok();
     let scripts = parsed
         .as_ref()
         .and_then(|value| value.get("scripts"))
@@ -693,9 +720,12 @@ fn load_package_json(package_root: &Path) -> PackageJsonLite {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
 
-    PackageJsonLite {
-        scripts,
-        package_manager,
+    PackageJsonLoadResult {
+        package_json: PackageJsonLite {
+            scripts,
+            package_manager,
+        },
+        invalid,
     }
 }
 
@@ -1184,6 +1214,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hybrid_packages_are_not_misclassified_as_shell() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("rules")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("package.json"), "{\"scripts\":{}}\n").unwrap();
+        fs::write(dir.join("README.md"), "# Hybrid package\n").unwrap();
+        fs::write(dir.join("scripts/transform.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("rules/config.yml"), "id: sample\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "missing_transform_script"));
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "missing_tests_dir"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn yaml_packages_do_not_require_jssg_package_files() {
         let dir = unique_temp_dir();
         fs::create_dir_all(dir.join("rules")).unwrap();
@@ -1370,6 +1435,43 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "codemod_yaml_invalid"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_package_json_is_reported_without_being_treated_as_valid() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("package.json"), "{ invalid json }\n").unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_package_json"));
+        assert!(!response.ready);
 
         fs::remove_dir_all(dir).unwrap();
     }
