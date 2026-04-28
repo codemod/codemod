@@ -255,6 +255,16 @@ impl CodemodMcpServer {
         });
     }
 
+    async fn instruction_tool_response(
+        &self,
+        uri: &str,
+        event: &str,
+    ) -> Result<CallToolResult, McpError> {
+        self.log_usage(event);
+        let content = self.resource_content(uri).await?;
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
     fn resources(&self) -> Vec<Resource> {
         vec![
             self._create_resource_text(
@@ -448,6 +458,137 @@ impl CodemodMcpServer {
             .validate_codemod_package(params)
             .await
     }
+
+    #[tool(
+        description = "Deprecated compatibility alias for jssg instructions. Prefer the jssg-instructions resource."
+    )]
+    async fn get_jssg_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response("jssg://instructions", "tool:get_jssg_instructions")
+            .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for jssg gotchas. Prefer the jssg-gotchas resource."
+    )]
+    async fn get_jssg_gotchas(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response("jssg-gotchas://instructions", "tool:get_jssg_gotchas")
+            .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for ast-grep gotchas. Prefer the ast-grep-gotchas resource."
+    )]
+    async fn get_ast_grep_gotchas(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "ast-grep-gotchas://instructions",
+            "tool:get_ast_grep_gotchas",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for jssg utils instructions. Prefer the jssg-utils-instructions resource."
+    )]
+    async fn get_jssg_utils_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "jssg-utils://instructions",
+            "tool:get_jssg_utils_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for JSSG runtime capabilities instructions. Prefer the jssg-runtime-capabilities-instructions resource."
+    )]
+    async fn get_jssg_runtime_capabilities_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "jssg-runtime-capabilities://instructions",
+            "tool:get_jssg_runtime_capabilities_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for codemod CLI instructions. Prefer the codemod-cli-instructions resource."
+    )]
+    async fn get_codemod_cli_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-cli://instructions",
+            "tool:get_codemod_cli_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for sharding instructions. Prefer the sharding-instructions resource."
+    )]
+    async fn get_sharding_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response("sharding://instructions", "tool:get_sharding_instructions")
+            .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for codemod troubleshooting instructions. Prefer the codemod-troubleshooting-instructions resource."
+    )]
+    async fn get_codemod_troubleshooting_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-troubleshooting://instructions",
+            "tool:get_codemod_troubleshooting_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for codemod creation workflow instructions. Prefer the codemod-creation-workflow-instructions resource."
+    )]
+    async fn get_codemod_creation_workflow_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-creation-workflow://instructions",
+            "tool:get_codemod_creation_workflow_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for codemod maintainer monorepo instructions. Prefer the codemod-maintainer-monorepo-instructions resource."
+    )]
+    async fn get_codemod_maintainer_monorepo_instructions(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-maintainer-monorepo://instructions",
+            "tool:get_codemod_maintainer_monorepo_instructions",
+        )
+        .await
+    }
 }
 
 #[tool_handler]
@@ -584,11 +725,26 @@ mod tests {
         let instructions = info.instructions.as_deref().unwrap_or_default();
         assert!(instructions.contains("validate_codemod_package"));
         assert!(!instructions.contains("scaffold_codemod_package"));
-        assert!(!instructions.contains("get_jssg_instructions"));
         assert!(instructions.contains("jssg-gotchas"));
         assert!(instructions.contains("codemod-creation-workflow-instructions"));
         assert!(instructions.contains("direct codemod init"));
         assert!(instructions.contains("auth-derived author"));
+    }
+
+    #[tokio::test]
+    async fn test_instruction_alias_tool_returns_resource_content() {
+        let server = CodemodMcpServer::default();
+        let result = server
+            .get_jssg_instructions(rmcp::handler::server::wrapper::Parameters(()))
+            .await
+            .expect("expected compatibility tool result");
+
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.content.len(), 1);
+        let text = result.content[0]
+            .as_text()
+            .expect("expected text content from compatibility tool");
+        assert!(text.text.contains("JSSG"));
     }
 
     #[tokio::test]
