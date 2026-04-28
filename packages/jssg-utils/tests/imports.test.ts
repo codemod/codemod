@@ -58,7 +58,10 @@ function testSingleDefaultESMImport() {
 }
 
 function testSingleDefaultDynamicImport() {
-  const program = parseProgram("javascript", "import('foo').then(test => {\n const example = test('bar');\n });");
+  const program = parseProgram(
+    "javascript",
+    "import('foo').then(test => {\n const example = test('bar');\n });",
+  );
 
   const res = getAllImports(program, { type: "default", from: "foo" });
   assert(res.length === 1, "Should return exactly one result");
@@ -68,9 +71,12 @@ function testSingleDefaultDynamicImport() {
 }
 
 function testSingleNamedDynamicImport() {
-  const program = parseProgram("javascript", "import('test').then(({fn}) => {\n const pair = fn('test');\n });");
+  const program = parseProgram(
+    "javascript",
+    "import('test').then(({fn}) => {\n const pair = fn('test');\n });",
+  );
 
-  const res = getAllImports(program, { type: "named", name: 'fn' , from: "test" });
+  const res = getAllImports(program, { type: "named", name: "fn", from: "test" });
   assert(res.length === 1, "Should return exactly one result");
   assert(res[0]!.isNamespace === false, "isNamespace should be false");
   assert(res[0]!.moduleType === "esm", "moduleType should be esm");
@@ -78,15 +84,17 @@ function testSingleNamedDynamicImport() {
 }
 
 function testSingleNamedDynamicImportWithAlias() {
-  const program = parseProgram("javascript", "import('test').then(({fn: test}) => {\n const pair = fn('test');\n });");
+  const program = parseProgram(
+    "javascript",
+    "import('test').then(({fn: test}) => {\n const pair = fn('test');\n });",
+  );
 
-  const res = getAllImports(program, { type: "named", name: 'fn' , from: "test" });
+  const res = getAllImports(program, { type: "named", name: "fn", from: "test" });
   assert(res.length === 1, "Should return exactly one result");
   assert(res[0]!.node.text() === "test", "Node should reflect identifier");
   assert(res[0]!.moduleType === "esm", "moduleType should be esm for dynamic()");
   assert(res[0]!.alias === "test", "Alias should be the import name");
 }
-
 
 function testSingleDefaultCJSImport() {
   const program = parseProgram("javascript", "const bar = require('mod');\nconsole.log(bar);\n");
@@ -550,9 +558,15 @@ function testGetImport_DynamicThenDestructuredFunctionExpression() {
 }
 
 function testGetImport_DynamicThenDestructuredAliasedFunctionExpression() {
-  const program = parseProgram("javascript", "import('mod').then(function({fn: myFn}) { myFn(); });\n");
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(function({fn: myFn}) { myFn(); });\n",
+  );
   const res = getImport(program, { type: "named", name: "fn", from: "mod" });
-  assert(res !== null, "Should find named from destructured .then() function expression with alias");
+  assert(
+    res !== null,
+    "Should find named from destructured .then() function expression with alias",
+  );
   assert(res!.alias === "myFn", "Alias should be the renamed binding");
 }
 
@@ -1126,7 +1140,7 @@ function run() {
   testNamespaceNotReturnedAlongsideTypedResults_getAllImports();
   testSingleDefaultDynamicImport();
   testSingleNamedDynamicImport();
-  testSingleNamedDynamicImportWithAlias()
+  testSingleNamedDynamicImportWithAlias();
 
   // getImport tests
   testReturnsNullWhenNoMatches();
