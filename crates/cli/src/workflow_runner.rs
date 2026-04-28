@@ -305,29 +305,60 @@ pub fn resolve_workflow_source_with_name(
         ))?;
 
         let manifest_path = bundle_path.join("codemod.yaml");
-        if manifest_path.is_file() {
+        let manifest = if manifest_path.is_file() {
             let manifest_content = std::fs::read_to_string(&manifest_path).context(format!(
                 "Failed to read manifest {}",
                 manifest_path.display()
             ))?;
-            let manifest: crate::utils::manifest::CodemodManifest =
-                serde_yaml::from_str(&manifest_content).context(format!(
-                    "Failed to parse manifest {}",
-                    manifest_path.display()
-                ))?;
-            let entry = manifest.find_workflow(workflow_name)?;
-            let workflow_file_path = bundle_path.join(&entry.path);
-            if !workflow_file_path.is_file() {
-                return Err(anyhow::anyhow!(
-                    "Workflow `{}` declared in codemod.yaml is missing at {}",
-                    entry.name,
-                    workflow_file_path.display()
-                ));
+            match serde_yaml::from_str::<crate::utils::manifest::CodemodManifest>(&manifest_content)
+            {
+                Ok(m) => Some(m),
+                Err(error) => {
+                    if workflow_name.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "Failed to parse manifest {}: {error}",
+                            manifest_path.display()
+                        ));
+                    }
+                    log::warn!(
+                        "Ignoring unparseable codemod.yaml at {}: {error}",
+                        manifest_path.display()
+                    );
+                    None
+                }
             }
-            return Ok((workflow_file_path, bundle_path));
-        }
+        } else {
+            None
+        };
 
-        if workflow_name.is_some() {
+        if let Some(manifest) = manifest {
+            match manifest.find_workflow(workflow_name) {
+                Ok(entry) => {
+                    let workflow_file_path = bundle_path.join(&entry.path);
+                    if workflow_file_path.is_file() {
+                        return Ok((workflow_file_path, bundle_path));
+                    }
+                    if workflow_name.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "Workflow `{}` declared in codemod.yaml is missing at {}",
+                            entry.name,
+                            workflow_file_path.display()
+                        ));
+                    }
+                    log::warn!(
+                        "Workflow `{}` declared in codemod.yaml is missing at {}; falling back to default workflow discovery",
+                        entry.name,
+                        workflow_file_path.display()
+                    );
+                }
+                Err(error) => {
+                    if workflow_name.is_some() {
+                        return Err(error);
+                    }
+                    log::warn!("{error}");
+                }
+            }
+        } else if workflow_name.is_some() {
             return Err(anyhow::anyhow!(
                 "Cannot select a named workflow without a codemod.yaml in {}",
                 bundle_path.display()
@@ -384,12 +415,15 @@ pub fn resolve_workflow_source_with_name(
 #[cfg(test)]
 mod tests {
     use super::{
-        format_summary_suffix, node_requires_manual_tui, summarize_tasks, workflow_has_manual_steps,
+        format_summary_suffix, node_requires_manual_tui, resolve_workflow_source_with_name,
+        summarize_tasks, workflow_has_manual_steps,
     };
     use butterflow_models::node::NodeType;
     use butterflow_models::step::{PullRequestConfig, Step, StepAction};
     use butterflow_models::{Node, Task, TaskStatus, Workflow};
     use std::collections::HashMap;
+    use std::fs;
+    use tempfile::tempdir;
     use uuid::Uuid;
 
     fn task(node_id: &str, status: TaskStatus) -> Task {
@@ -543,5 +577,174 @@ mod tests {
 
         assert!(node_requires_manual_tui(&workflow.nodes[0]));
         assert!(workflow_has_manual_steps(&workflow));
+    }
+
+    fn write_manifest(dir: &std::path::Path, body: &str) {
+        fs::write(dir.join("codemod.yaml"), body).unwrap();
+    }
+
+    fn write_workflow(dir: &std::path::Path, name: &str) {
+        fs::write(dir.join(name), "version: \"1\"\nnodes: []\n").unwrap();
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_picks_manifest_default() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+        fs::create_dir_all(dir.path().join("workflows")).unwrap();
+        write_workflow(&dir.path().join("workflows"), "sharded.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_resolves_named_workflow() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+        fs::create_dir_all(dir.path().join("workflows")).unwrap();
+        write_workflow(&dir.path().join("workflows"), "sharded.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("sharded"))
+                .unwrap();
+        assert_eq!(file, bundle.join("workflows/sharded.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_on_unknown_name() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflow: workflow.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("missing"))
+            .unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("not found"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_when_named_file_missing() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: sharded
+    path: workflows/sharded.yaml
+    default: true
+capabilities: []
+"#,
+        );
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("sharded"))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("workflows/sharded.yaml") && msg.contains("missing"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_for_named_workflow_without_manifest() {
+        let dir = tempdir().unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("anything"))
+            .unwrap_err();
+        assert!(err.to_string().contains("codemod.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_falls_back_when_manifest_unparseable() {
+        let dir = tempdir().unwrap();
+        // Corrupt the manifest with content that can't be parsed as
+        // CodemodManifest. With no name requested, the resolver should
+        // log a warning and continue to default workflow discovery.
+        fs::write(dir.path().join("codemod.yaml"), ":::not yaml:::").unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_falls_back_when_manifest_workflow_missing_on_disk() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflow: nope.yaml
+capabilities: []
+"#,
+        );
+        // Manifest points at `nope.yaml` which doesn't exist, but a default
+        // `workflow.yaml` is present. With no name requested we should land
+        // on the default file rather than hard-failing.
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_for_named_workflow_when_manifest_is_invalid() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("codemod.yaml"), ":::not yaml:::").unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("main"))
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to parse manifest"));
     }
 }
