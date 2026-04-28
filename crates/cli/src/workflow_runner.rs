@@ -19,7 +19,7 @@ pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
 }
 
 fn node_requires_manual_tui(node: &butterflow_models::Node) -> bool {
-    node_has_manual_gate(node) && !node.steps.is_empty()
+    node_has_manual_gate(node) && !is_pull_request_only_manual_publish_node(node)
 }
 
 fn node_has_manual_gate(node: &butterflow_models::Node) -> bool {
@@ -28,6 +28,10 @@ fn node_has_manual_gate(node: &butterflow_models::Node) -> bool {
             .trigger
             .as_ref()
             .is_some_and(|trigger| trigger.r#type == TriggerType::Manual)
+}
+
+fn is_pull_request_only_manual_publish_node(node: &butterflow_models::Node) -> bool {
+    node.steps.is_empty() && node.pull_request.is_some()
 }
 
 /// Run a workflow with the given configuration
@@ -460,6 +464,33 @@ mod tests {
                     draft: Some(true),
                     base: None,
                 }),
+            }],
+        };
+
+        assert!(node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(workflow_has_manual_steps(&workflow));
+    }
+
+    #[test]
+    fn manual_gate_without_steps_still_requires_tui_when_not_pr_only() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "checkpoint".to_string(),
+                name: "Checkpoint".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             }],
         };
 

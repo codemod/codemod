@@ -467,6 +467,10 @@ fn should_stream_agent_output_live(quiet: bool, logger: &StructuredLogger) -> bo
     !quiet && !logger.is_jsonl()
 }
 
+fn should_relog_captured_agent_output(logger: &StructuredLogger) -> bool {
+    logger.is_jsonl()
+}
+
 fn write_agent_stream_line_live(stream: &str, line: &str) {
     use std::io::Write;
 
@@ -781,8 +785,10 @@ impl Engine {
         }
         drop(log_tx);
         let _ = log_persist_task.await;
-        for line in captured_output {
-            logger.log("info", &line);
+        if should_relog_captured_agent_output(logger) {
+            for line in captured_output {
+                logger.log("info", &line);
+            }
         }
 
         if status.success() {
@@ -6533,6 +6539,15 @@ export default function transform(ast) {
         assert!(should_stream_agent_output_live(false, &text_logger));
         assert!(!should_stream_agent_output_live(true, &text_logger));
         assert!(!should_stream_agent_output_live(false, &jsonl_logger));
+    }
+
+    #[test]
+    fn captured_agent_output_is_only_relogged_in_jsonl_mode() {
+        let text_logger = StructuredLogger::default();
+        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
+
+        assert!(!should_relog_captured_agent_output(&text_logger));
+        assert!(should_relog_captured_agent_output(&jsonl_logger));
     }
 
     #[tokio::test]
