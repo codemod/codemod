@@ -21,7 +21,8 @@ use crate::ai_handoff::{
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
 use crate::config::{
-    CapabilitiesSecurityCallback, DryRunChange, InstallSkillExecutionRequest, ManagedGitWorktree,
+    CapabilitiesSecurityCallback, DeferredInteractionError, DryRunChange,
+    InstallSkillExecutionRequest, InstallSkillExecutor, ManagedGitWorktree,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
@@ -117,6 +118,37 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
+struct ResolvedPullRequestConfig {
+    title: String,
+    body: Option<String>,
+    draft: bool,
+    base: Option<String>,
+    branch: String,
+}
+
+const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+
+fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+    format!(
+        "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
+        serde_json::json!({
+            "title": pr.title,
+            "draft": pr.draft,
+            "base": pr.base,
+            "branch": pr.branch,
+        })
+    )
+}
+
+fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, serde_json::Value> {
+    workflow_run
+        .workflow
+        .params
+        .as_ref()
+        .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
+        .unwrap_or_else(|| workflow_run.params.clone())
+}
+
 fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
@@ -128,18 +160,41 @@ where
     }
 }
 
+async fn execute_install_skill_in_isolated_runtime(
+    executor: Arc<dyn InstallSkillExecutor>,
+    request: InstallSkillExecutionRequest,
+) -> std::result::Result<String, anyhow::Error> {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|error| anyhow::anyhow!("failed to build install-skill runtime: {error}"))?;
+        rt.block_on(executor.execute(request))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        if error.is_panic() {
+            std::panic::resume_unwind(error.into_panic());
+        }
+        Err(anyhow::anyhow!(
+            "install-skill executor task failed to join: {error}"
+        ))
+    })
+}
+
 struct PreparedStepExecution {
     env: HashMap<String, String>,
     state_outputs_path: PathBuf,
     state_input_path: PathBuf,
 }
 
-const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StepPhase {
+pub enum StepPhase {
     Starting,
     FileQueued,
     FileLoaded,
@@ -165,9 +220,9 @@ impl std::fmt::Display for StepPhase {
 }
 
 #[derive(Debug)]
-struct UnitProgressState {
-    last_progress_at: Instant,
-    phase: StepPhase,
+pub struct UnitProgressState {
+    pub last_progress_at: Instant,
+    pub phase: StepPhase,
 }
 
 impl UnitProgressState {
@@ -181,15 +236,21 @@ impl UnitProgressState {
 }
 
 #[derive(Debug)]
-struct StepProgressState {
-    global_last_progress_at: Instant,
-    global_phase: StepPhase,
-    active_units: HashMap<String, UnitProgressState>,
-    output_active_units: HashSet<String>,
+pub struct StepProgressState {
+    pub global_last_progress_at: Instant,
+    pub global_phase: StepPhase,
+    pub active_units: HashMap<String, UnitProgressState>,
+    pub output_active_units: HashSet<String>,
+}
+
+impl Default for StepProgressState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StepProgressState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             global_last_progress_at: Instant::now(),
             global_phase: StepPhase::Starting,
@@ -199,7 +260,7 @@ impl StepProgressState {
     }
 }
 
-fn js_ast_grep_idle_timeout() -> Duration {
+pub fn js_ast_grep_idle_timeout() -> Duration {
     let override_ms = std::env::var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -207,7 +268,7 @@ fn js_ast_grep_idle_timeout() -> Duration {
     Duration::from_millis(override_ms.unwrap_or(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT))
 }
 
-fn select_shard_scan_eligible_files(
+pub fn select_shard_scan_eligible_files(
     modified_files: Vec<String>,
     selector_matched_files: Vec<String>,
 ) -> Vec<String> {
@@ -219,13 +280,11 @@ fn select_shard_scan_eligible_files(
 }
 
 fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
-    if crate::git_ops::is_cloud_mode() {
-        return true;
-    }
-    enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some())
+    crate::git_ops::is_cloud_mode()
+        || (enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some()))
 }
 
-fn record_unit_progress(
+pub fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -246,7 +305,7 @@ fn record_unit_progress(
     }
 }
 
-fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
+pub fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     if let Ok(mut state) = state.lock() {
         let now = Instant::now();
         state.global_last_progress_at = now;
@@ -262,7 +321,7 @@ fn record_output_progress(state: &Arc<std::sync::Mutex<StepProgressState>>) {
     }
 }
 
-fn finish_unit_progress(
+pub fn finish_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
     phase: StepPhase,
@@ -275,7 +334,7 @@ fn finish_unit_progress(
     }
 }
 
-fn build_js_ast_grep_idle_timeout_message(
+pub fn build_js_ast_grep_idle_timeout_message(
     state: &StepProgressState,
     idle_timeout: Duration,
 ) -> String {
@@ -330,7 +389,7 @@ fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
     message
 }
 
-async fn await_js_ast_grep_execution_task(
+pub async fn await_js_ast_grep_execution_task(
     execution_task: tokio::task::JoinHandle<
         std::result::Result<CodemodOutput, codemod_sandbox::sandbox::errors::ExecutionError>,
     >,
@@ -664,6 +723,159 @@ impl Engine {
         }
     }
 
+    fn resolve_pull_request_config(
+        &self,
+        task: &Task,
+        node: &Node,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Option<ResolvedPullRequestConfig>> {
+        if !should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git) {
+            return Ok(None);
+        }
+
+        let task_expr_ctx = crate::git_ops::build_task_expression_context(&task.id.to_string());
+        let configured_branch = node.branch_name.as_ref().map(|tmpl| {
+            resolve_string_with_expression(
+                tmpl,
+                params,
+                &HashMap::new(),
+                task.matrix_values.as_ref(),
+                None,
+                Some(&task_expr_ctx),
+            )
+            .unwrap_or_else(|_| format!("codemod-{}", task_expr_ctx.signature))
+        });
+        let branch = crate::git_ops::resolve_branch_name(
+            configured_branch.as_deref(),
+            &task_expr_ctx.signature,
+        );
+
+        let (title, body, draft, base) = if let Some(pr_config) = &node.pull_request {
+            let title = resolve_string_with_expression(
+                &pr_config.title,
+                params,
+                &HashMap::new(),
+                task.matrix_values.as_ref(),
+                None,
+                Some(&task_expr_ctx),
+            )
+            .unwrap_or_else(|_| pr_config.title.clone());
+
+            let body = pr_config.body.as_ref().map(|b| {
+                resolve_string_with_expression(
+                    b,
+                    params,
+                    &HashMap::new(),
+                    task.matrix_values.as_ref(),
+                    None,
+                    Some(&task_expr_ctx),
+                )
+                .unwrap_or_else(|_| b.clone())
+            });
+
+            (
+                title,
+                body,
+                pr_config.draft.unwrap_or(false),
+                pr_config.base.clone(),
+            )
+        } else {
+            (node.name.clone(), None, false, None)
+        };
+
+        Ok(Some(ResolvedPullRequestConfig {
+            title,
+            body,
+            draft,
+            base,
+            branch,
+        }))
+    }
+
+    pub async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
+        let task = self.state_adapter.lock().await.get_task(task_id).await?;
+        let workflow_run = self
+            .state_adapter
+            .lock()
+            .await
+            .get_workflow_run(task.workflow_run_id)
+            .await?;
+        let node = workflow_run
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == task.node_id)
+            .ok_or_else(|| Error::Runtime(format!("Node '{}' not found for task", task.node_id)))?;
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
+
+        let pr = self
+            .resolve_pull_request_config(&task, node, &resolved_params)?
+            .ok_or_else(|| {
+                Error::Runtime("Task is not eligible for pull request creation".to_string())
+            })?;
+
+        let _ = self
+            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+            .await;
+
+        let _ = self
+            .append_task_log(task_id, "Publishing branch and creating pull request")
+            .await;
+
+        let pr_url = match async {
+            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
+
+            crate::git_ops::create_pull_request(
+                &pr.title,
+                pr.body.as_deref(),
+                pr.draft,
+                &pr.branch,
+                pr.base.as_deref(),
+                &task.id.to_string(),
+                &self.workflow_run_config.target_path,
+            )
+            .await
+        }
+        .await
+        {
+            Ok(pr_url) => pr_url,
+            Err(error) => {
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        format!("Branch publication and pull request creation failed: {error}"),
+                    )
+                    .await;
+                let _ = self
+                    .append_task_log(
+                        task_id,
+                        "Use create-pr to retry after fixing the remote or permissions",
+                    )
+                    .await;
+                self.emit_error(format!(
+                    "Task {} ({}) branch publication/PR creation failed: {}",
+                    task.id, node.id, error
+                ));
+                return Ok(None);
+            }
+        };
+
+        match &pr_url {
+            Some(pr_url) => {
+                let _ = self
+                    .append_task_log(task_id, format!("Pull request created: {}", pr_url))
+                    .await;
+            }
+            None => {
+                let _ = self
+                    .append_task_log(task_id, "Pull request created successfully")
+                    .await;
+            }
+        }
+
+        Ok(pr_url)
+    }
+
     fn emit_ai_instructions(
         &self,
         logger: &StructuredLogger,
@@ -945,13 +1157,15 @@ impl Engine {
                                         engine.workflow_run_config.enable_managed_git,
                                     )
                                 {
+                                    let resolved_params =
+                                        resolve_workflow_run_params(&workflow_run);
                                     let ctx =
                                         crate::git_ops::build_task_expression_context(&task.id.to_string());
                                     let configured_branch =
                                         node.branch_name.as_ref().map(|tmpl| {
                                             resolve_string_with_expression(
                                                 tmpl,
-                                                &workflow_run.params,
+                                                &resolved_params,
                                                 &HashMap::new(),
                                                 task.matrix_values.as_ref(),
                                                 None,
@@ -1018,7 +1232,7 @@ impl Engine {
                                                 )
                                                 .await;
                                             match tokio::time::timeout(
-                                                tokio::time::Duration::from_secs(30),
+                                                tokio::time::Duration::from_secs(120),
                                                 crate::git_ops::create_worktree(
                                                     &repo_root,
                                                     &branch,
@@ -1104,6 +1318,18 @@ impl Engine {
                             debug!("Task {} completed successfully", task_id);
                             cleanup_guard.mark_sent();
                         }
+                        Ok(Err(Error::Deferred(message))) => {
+                            let _ = engine
+                                .append_task_log(
+                                    task_id,
+                                    format!(
+                                        "Task returned to awaiting trigger: {message}"
+                                    ),
+                                )
+                                .await;
+                            let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
+                            cleanup_guard.mark_sent();
+                        }
                         Ok(Err(e)) => {
                             let needs_fallback_failure_mark = match engine
                                 .state_adapter
@@ -1114,7 +1340,10 @@ impl Engine {
                             {
                                 Ok(current_task) => !matches!(
                                     current_task.status,
-                                    TaskStatus::Failed | TaskStatus::Completed | TaskStatus::WontDo
+                                    TaskStatus::Failed
+                                        | TaskStatus::Completed
+                                        | TaskStatus::WontDo
+                                        | TaskStatus::AwaitingTrigger
                                 ),
                                 Err(_) => true,
                             };
@@ -1232,7 +1461,61 @@ impl Engine {
             .await?;
         self.emit_task_updated(task_id).await;
 
-        if let Ok(task) = self.state_adapter.lock().await.get_task(task_id).await {
+        let task_result = {
+            let adapter = self.state_adapter.lock().await;
+            adapter.get_task(task_id).await
+        };
+        if let Ok(task) = task_result {
+            self.update_parent_matrix_master_for_task(&task).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn mark_task_as_awaiting_trigger(&self, task_id: Uuid) -> Result<()> {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
+            },
+        );
+        fields.insert(
+            "ended_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        fields.insert(
+            "started_at".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        fields.insert(
+            "error".to_string(),
+            FieldDiff {
+                operation: DiffOperation::Update,
+                value: Some(serde_json::Value::Null),
+            },
+        );
+        let task_diff = TaskDiff { task_id, fields };
+
+        self.state_adapter
+            .lock()
+            .await
+            .apply_task_diff(&task_diff)
+            .await?;
+        self.emit_task_updated(task_id).await;
+
+        let task_result = {
+            let adapter = self.state_adapter.lock().await;
+            adapter.get_task(task_id).await
+        };
+        if let Ok(task) = task_result {
             self.update_parent_matrix_master_for_task(&task).await?;
         }
 
@@ -2370,6 +2653,21 @@ impl Engine {
                         )))
                     });
                 if let Err(e) = execution_result {
+                    let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
+                    if current_task.status == TaskStatus::AwaitingTrigger {
+                        continue;
+                    }
+                    if let Error::Deferred(message) = &e {
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Task returned to awaiting trigger: {message}"),
+                            )
+                            .await;
+                        let _ = self.mark_task_as_awaiting_trigger(task_id).await;
+                        continue;
+                    }
+
                     self.emit_error(format!("Task execution failed: {e}"));
                     let _ = self.mark_task_as_failed(task_id, &e.to_string()).await;
                 }
@@ -2488,12 +2786,7 @@ impl Engine {
             .get_workflow_run(task.workflow_run_id)
             .await?;
 
-        let resolved_params = workflow_run
-            .workflow
-            .params
-            .as_ref()
-            .map(|p| resolve_values_with_default(&p.schema, &workflow_run.params))
-            .unwrap_or_else(|| workflow_run.params);
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
 
         let node = workflow_run
             .workflow
@@ -2797,8 +3090,15 @@ impl Engine {
                         }
                     }
                 }
+                Err(Error::Deferred(message)) => {
+                    step_logger.step_end("deferred", step_start_time.elapsed().as_millis() as u64);
+                    return Err(Error::Deferred(message));
+                }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
+                    let _ = self
+                        .append_task_log(task_id, format!("Step {} failed: {}", step.name, e))
+                        .await;
 
                     // Create a task diff to update the status
                     let mut fields = HashMap::new();
@@ -2899,62 +3199,69 @@ impl Engine {
 
                 // Push and create PR if any commits were made
                 if had_commit_checkpoint {
+                    enum PullRequestOutcome {
+                        Deferred,
+                        Created(Option<String>),
+                    }
+
                     let _ = self
                         .append_task_log(task_id, "Publishing branch and creating pull request")
                         .await;
-                    let push_and_pr_result: Result<Option<String>> = async {
+                    let push_and_pr_result: Result<PullRequestOutcome> = async {
+                        let pr = self
+                            .resolve_pull_request_config(&task, node, &resolved_params)?
+                            .ok_or_else(|| {
+                                Error::Runtime(
+                                    "Task is not eligible for pull request creation".to_string(),
+                                )
+                            })?;
+                        let _ = self
+                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
+                            .await;
+
+                        if let Some(approval_callback) =
+                            &self.workflow_run_config.pull_request_approval_callback
+                        {
+                            let approved = approval_callback(&crate::config::PullRequestCreationRequest {
+                                title: pr.title.clone(),
+                                body: pr.body.clone(),
+                                draft: pr.draft,
+                                head: pr.branch.clone(),
+                                base: pr.base.clone(),
+                                node_id: node.id.clone(),
+                                node_name: node.name.clone(),
+                                task_id: task.id.to_string(),
+                            })
+                            .map_err(|error| Error::Runtime(error.to_string()))?;
+                            if !approved {
+                                let _ = self
+                                    .append_task_log(
+                                    task_id,
+                                        "Branch publication and pull request creation deferred; use create-pr to continue later",
+                                    )
+                                    .await;
+                                return Ok(PullRequestOutcome::Deferred);
+                            }
+                        }
+
                         crate::git_ops::push_branch(branch, target_path).await?;
 
-                        // Resolve PR config or use defaults from node name
-                        let (pr_title, pr_body, pr_draft, pr_base) =
-                            if let Some(pr_config) = &node.pull_request {
-                                let title = resolve_string_with_expression(
-                                    &pr_config.title,
-                                    &resolved_params,
-                                    &HashMap::new(),
-                                    task.matrix_values.as_ref(),
-                                    None,
-                                    task_expr_ctx.as_ref(),
-                                )
-                                .unwrap_or_else(|_| pr_config.title.clone());
-
-                                let body = pr_config.body.as_ref().map(|b| {
-                                    resolve_string_with_expression(
-                                        b,
-                                        &resolved_params,
-                                        &HashMap::new(),
-                                        task.matrix_values.as_ref(),
-                                        None,
-                                        task_expr_ctx.as_ref(),
-                                    )
-                                    .unwrap_or_else(|_| b.clone())
-                                });
-
-                                (
-                                    title,
-                                    body,
-                                    pr_config.draft.unwrap_or(false),
-                                    pr_config.base.clone(),
-                                )
-                            } else {
-                                (node.name.clone(), None, false, None)
-                            };
-
                         crate::git_ops::create_pull_request(
-                            &pr_title,
-                            pr_body.as_deref(),
-                            pr_draft,
-                            branch,
-                            pr_base.as_deref(),
+                            &pr.title,
+                            pr.body.as_deref(),
+                            pr.draft,
+                            &pr.branch,
+                            pr.base.as_deref(),
                             &task.id.to_string(),
                             target_path,
                         )
                         .await
+                        .map(PullRequestOutcome::Created)
                     }
                     .await;
 
                     match &push_and_pr_result {
-                        Ok(Some(pr_url)) => {
+                        Ok(PullRequestOutcome::Created(Some(pr_url))) => {
                             slog!(git_step_logger, info, "Pull request created: {}", pr_url);
                             let _ = self
                                 .append_task_log(
@@ -2963,8 +3270,14 @@ impl Engine {
                                 )
                                 .await;
                         }
-                        Ok(None) => {
+                        Ok(PullRequestOutcome::Created(None)) => {
                             slog!(git_step_logger, info, "Pull request created successfully");
+                            let _ = self
+                                .append_task_log(task_id, "Pull request created successfully")
+                                .await;
+                        }
+                        Ok(PullRequestOutcome::Deferred) => {
+                            slog!(git_step_logger, info, "Pull request creation deferred");
                         }
                         _ => {}
                     }
@@ -2972,50 +3285,27 @@ impl Engine {
                     if let Err(e) = push_and_pr_result {
                         git_step_logger
                             .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-
-                        // Mark the task as failed
-                        let mut fields = HashMap::new();
-                        fields.insert(
-                            "status".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                            },
-                        );
-                        fields.insert(
-                            "ended_at".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(serde_json::to_value(Utc::now())?),
-                            },
-                        );
-                        fields.insert(
-                            "error".to_string(),
-                            FieldDiff {
-                                operation: DiffOperation::Add,
-                                value: Some(serde_json::to_value(format!(
-                                    "Push/PR creation failed: {}",
-                                    e
-                                ))?),
-                            },
-                        );
-                        let task_diff = TaskDiff { task_id, fields };
-                        self.state_adapter
-                            .lock()
-                            .await
-                            .apply_task_diff(&task_diff)
-                            .await?;
-                        self.emit_task_updated(task_id).await;
-
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                format!("Branch publication and pull request creation failed: {e}"),
+                            )
+                            .await;
+                        let _ = self
+                            .append_task_log(
+                                task_id,
+                                "Use create-pr to retry after fixing the remote or permissions",
+                            )
+                            .await;
                         self.emit_error(format!(
-                            "Task {} ({}) push/PR creation failed: {}",
+                            "Task {} ({}) branch publication/PR creation failed: {}",
                             task_id, node.id, e
                         ));
                         return Err(e);
+                    } else {
+                        git_step_logger
+                            .step_end("success", git_step_start.elapsed().as_millis() as u64);
                     }
-
-                    git_step_logger
-                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
                 } else {
                     let _ = self
                         .append_task_log(task_id, "No changes detected; no PR created")
@@ -3318,51 +3608,50 @@ impl Engine {
                             .to_string(),
                     ));
                 };
+                let install_skill_executor = Arc::clone(install_skill_executor);
 
                 let prepared =
                     self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
                 let request = InstallSkillExecutionRequest {
                     install_skill: install_skill.clone(),
-                    no_interactive: self.workflow_run_config.no_interactive
-                        || self.workflow_run_config.quiet,
+                    no_interactive: self.workflow_run_config.no_interactive,
+                    quiet: self.workflow_run_config.quiet,
+                    bundle_path: bundle_path.clone(),
                     target_path: self.workflow_run_config.target_path.clone(),
                     env: prepared.env.clone(),
                     output_format: self.workflow_run_config.output_format,
+                    selection_prompt_callback: self
+                        .workflow_run_config
+                        .selection_prompt_callback
+                        .clone(),
                 };
-                let install_skill_executor = Arc::clone(install_skill_executor);
-                let install_thread = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
+                let output =
+                    execute_install_skill_in_isolated_runtime(install_skill_executor, request)
+                        .await
                         .map_err(|error| {
-                            Error::Runtime(format!(
-                                "Failed to build install-skill runtime: {error}"
-                            ))
-                        })?;
-                    rt.block_on(install_skill_executor.execute(request))
-                        .map_err(|error| {
-                            Error::Runtime(format!("Failed to execute install-skill step: {error}"))
-                        })
-                });
+                            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>()
+                            {
+                                Error::Deferred(deferred.message().to_string())
+                            } else {
+                                Error::Runtime(format!(
+                                    "Failed to execute install-skill step: {error}"
+                                ))
+                            }
+                        });
 
-                let output = match install_thread.join() {
-                    Ok(result) => result,
-                    Err(panic_payload) => {
-                        let panic_message = panic_payload_message(panic_payload.as_ref());
-                        let _ = self
-                            .append_task_log(
-                                task.id,
-                                format!(
-                                    "Install-skill wrapper: helper thread panicked: {panic_message}"
-                                ),
-                            )
-                            .await;
-                        Err(Error::Runtime(format!(
-                            "install-skill step panicked: {panic_message}"
-                        )))
-                    }
-                }?;
+                let output = match output {
+                    Ok(output) => output,
+                    Err(Error::Deferred(message)) => return Err(Error::Deferred(message)),
+                    Err(error) => return Err(error),
+                };
 
+                for line in output
+                    .lines()
+                    .map(str::trim_end)
+                    .filter(|line| !line.is_empty())
+                {
+                    let _ = self.append_task_log(task.id, line.to_string()).await;
+                }
                 log_step_output(logger, &output);
                 self.finalize_step_execution(task, output, prepared).await
             }
@@ -3641,7 +3930,7 @@ impl Engine {
             })?
         };
 
-        let selector_config = extract_selector_with_quickjs(SelectorEngineOptions {
+        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
@@ -3652,7 +3941,17 @@ impl Engine {
             target_directory: Some(&target_path),
         })
         .await
-        .map_err(|e| Error::StepExecution(format!("Failed to extract selector: {e}")))?;
+        {
+            Ok(selector_config) => selector_config,
+            Err(e) => {
+                let message = format!("Failed to extract js-ast-grep selector: {e}");
+                if let Some(task_id) = task_log_task_id {
+                    let _ = self.append_task_log(task_id, &message).await;
+                }
+                slog!(logger, warn, "{}", message);
+                None
+            }
+        };
 
         let semantic_provider: Option<Arc<dyn SemanticProvider>> =
             match &js_ast_grep.semantic_analysis {
@@ -3999,7 +4298,7 @@ impl Engine {
                                     cancellation_flag: Some(cancellation_flag_for_execution),
                                     test_mode: false,
                                     dry_run,
-                                    target_directory: Some(&target_path_owned),
+                                    target_directory: &target_path_owned,
                                 })
                                 .await
                             });
@@ -4354,9 +4653,10 @@ impl Engine {
             }
         }
 
-        // Persist shared state to the workflow state adapter
+        // Persist shared state to the workflow state adapter. Dry-run executions
+        // use the shared state context in-memory only, including shard pre-scans.
         if let Some(wf_run_id) = workflow_run_id {
-            if !self.workflow_run_config.skip_state_writes {
+            if !self.workflow_run_config.skip_state_writes && !config.dry_run {
                 let persistable = shared_state_context.get_persistable();
                 let removals = shared_state_context.get_removals();
 
@@ -4968,8 +5268,15 @@ impl Engine {
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
             Some(
-                self.scan_eligible_files_with_jssg(shard_config, js_ast_grep, &target_path, logger)
-                    .await?,
+                self.scan_eligible_files_with_jssg(
+                    shard_config,
+                    js_ast_grep,
+                    &target_path,
+                    task.id,
+                    task.workflow_run_id,
+                    logger,
+                )
+                .await?,
             )
         } else {
             None
@@ -5079,6 +5386,8 @@ impl Engine {
         shard_config: &butterflow_models::step::UseShard,
         js_ast_grep: &butterflow_models::step::UseJSAstGrep,
         target_path: &Path,
+        task_id: Uuid,
+        workflow_run_id: Uuid,
         logger: &StructuredLogger,
     ) -> Result<Vec<String>> {
         // Clone the config and force dry_run mode
@@ -5102,7 +5411,7 @@ impl Engine {
             .map(|v| v.clone().into_iter().collect());
 
         self.execute_js_ast_grep_step(
-            "shard-scan".to_string(),
+            task_id.to_string(),
             "shard-scan".to_string(),
             &dry_run_config,
             None,
@@ -5116,7 +5425,7 @@ impl Engine {
                     .map(|callback| callback.clone()),
             },
             &None,
-            None,
+            Some(workflow_run_id),
             None,
             logger,
             Some(collector.clone()),
@@ -5757,11 +6066,16 @@ impl Clone for Engine {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
+    };
+    use anyhow::Result as AnyhowResult;
     use serial_test::serial;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -5817,6 +6131,85 @@ mod tests {
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[tokio::test]
+    async fn dry_run_js_ast_grep_does_not_persist_shared_state() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        std::fs::create_dir_all(temp_path.join("src")).unwrap();
+        std::fs::write(
+            temp_path.join("stateful-codemod.js"),
+            r#"
+import { setState } from "codemod:workflow";
+
+export default function transform(ast) {
+  setState("preScanMutation", "leaked");
+  return ast;
+}
+"#,
+        )
+        .unwrap();
+        std::fs::write(temp_path.join("src/app.js"), "const value = 1;\n").unwrap();
+
+        let workflow_run_id = Uuid::new_v4();
+        let config = WorkflowRunConfig {
+            bundle_path: temp_path.to_path_buf(),
+            target_path: temp_path.to_path_buf(),
+            ..WorkflowRunConfig::default()
+        };
+        let engine = Engine::with_state_adapter(
+            Box::new(LocalStateAdapter::with_base_dir(
+                temp_path.join("state-store"),
+            )),
+            config,
+        );
+
+        engine
+            .execute_js_ast_grep_step(
+                "test-node".to_string(),
+                "test-step".to_string(),
+                &UseJSAstGrep {
+                    js_file: "stateful-codemod.js".to_string(),
+                    base_path: Some("src".to_string()),
+                    include: Some(vec!["**/*.js".to_string()]),
+                    exclude: None,
+                    max_threads: None,
+                    dry_run: Some(true),
+                    language: Some("javascript".to_string()),
+                    capabilities: None,
+                    semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                        SemanticAnalysisMode::File,
+                    )),
+                },
+                None,
+                None,
+                &CapabilitiesData {
+                    capabilities: None,
+                    capabilities_security_callback: None,
+                },
+                &None,
+                Some(workflow_run_id),
+                None,
+                &StructuredLogger::default(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let state = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
+            .await
+            .unwrap();
+        assert!(
+            !state.contains_key("preScanMutation"),
+            "dry-run shard scans must not persist codemod workflow state"
+        );
     }
 
     #[test]
@@ -5886,6 +6279,89 @@ mod tests {
         assert!(unit.last_progress_at > before);
     }
 
+    struct PromptingInstallSkillExecutor;
+
+    #[async_trait::async_trait]
+    impl InstallSkillExecutor for PromptingInstallSkillExecutor {
+        async fn execute(&self, request: InstallSkillExecutionRequest) -> AnyhowResult<String> {
+            let callback = request
+                .selection_prompt_callback
+                .as_ref()
+                .expect("selection callback should be configured");
+            let selection = callback(SelectionPrompt {
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    SelectionPromptOption {
+                        value: "project".to_string(),
+                        label: "project".to_string(),
+                    },
+                    SelectionPromptOption {
+                        value: "user".to_string(),
+                        label: "user".to_string(),
+                    },
+                ],
+                default_index: 0,
+            })?
+            .expect("selection should be provided");
+
+            Ok(format!("installed {selection}"))
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_skill_isolated_runtime_unblocks_current_thread_prompt_flow() {
+        let (selection_tx, mut selection_rx) =
+            mpsc::unbounded_channel::<std::sync::mpsc::SyncSender<Option<String>>>();
+        let callback = Arc::new(move |_prompt: SelectionPrompt| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            selection_tx
+                .send(tx)
+                .expect("selection request should reach the test task");
+            rx.recv()
+                .map_err(|error| anyhow::anyhow!("selection response channel closed: {error}"))
+        });
+        let request = InstallSkillExecutionRequest {
+            install_skill: butterflow_models::step::UseInstallSkill {
+                package: "debarrel".to_string(),
+                path: None,
+                harness: None,
+                scope: None,
+                force: None,
+            },
+            no_interactive: false,
+            quiet: true,
+            bundle_path: None,
+            target_path: PathBuf::from("."),
+            env: HashMap::new(),
+            output_format: crate::structured_log::OutputFormat::Text,
+            selection_prompt_callback: Some(callback),
+        };
+
+        let execution = tokio::spawn(async move {
+            execute_install_skill_in_isolated_runtime(
+                Arc::new(PromptingInstallSkillExecutor),
+                request,
+            )
+            .await
+        });
+
+        let responder = tokio::time::timeout(Duration::from_secs(5), selection_rx.recv())
+            .await
+            .expect("selection request should be emitted")
+            .expect("selection responder should be provided");
+        responder
+            .send(Some("user".to_string()))
+            .expect("selection response should be delivered");
+
+        let output = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("isolated install-skill execution should finish")
+            .expect("join handle should complete")
+            .expect("install-skill execution should succeed");
+
+        assert_eq!(output, "installed user");
+    }
+
     #[test]
     fn finish_unit_progress_removes_active_unit() {
         let state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
@@ -5925,6 +6401,104 @@ mod tests {
         assert!(message.contains("active units: 2"));
     }
 
+    #[test]
+    fn pull_request_metadata_log_line_omits_body() {
+        let line = pull_request_metadata_log_line(&ResolvedPullRequestConfig {
+            title: "Create PR".to_string(),
+            body: Some("secret body".to_string()),
+            draft: true,
+            base: Some("main".to_string()),
+            branch: "codemod-branch".to_string(),
+        });
+
+        assert!(line.starts_with(PULL_REQUEST_METADATA_LOG_PREFIX));
+        assert!(line.contains(r#""title":"Create PR""#));
+        assert!(line.contains(r#""branch":"codemod-branch""#));
+        assert!(!line.contains("secret body"));
+        assert!(!line.contains(r#""body""#));
+    }
+
+    #[tokio::test]
+    async fn pull_request_config_uses_defaulted_workflow_params() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_state_adapter(
+            Box::new(LocalStateAdapter::with_base_dir(
+                temp_dir.path().join("state"),
+            )),
+            WorkflowRunConfig {
+                enable_managed_git: true,
+                ..WorkflowRunConfig::default()
+            },
+        );
+
+        let node = Node {
+            id: "apply".to_string(),
+            name: "Apply".to_string(),
+            description: None,
+            r#type: butterflow_models::node::NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![],
+            env: HashMap::new(),
+            branch_name: Some("codemod-${{ params.target }}".to_string()),
+            pull_request: Some(butterflow_models::step::PullRequestConfig {
+                title: "Update ${{ params.target }}".to_string(),
+                body: Some("Body ${{ params.target }}".to_string()),
+                draft: Some(true),
+                base: None,
+            }),
+        };
+        let workflow_run_id = Uuid::new_v4();
+        let task = Task::new(workflow_run_id, node.id.clone(), false);
+        let workflow_run = WorkflowRun {
+            id: workflow_run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: Some(butterflow_models::workflow::WorkflowParams {
+                    schema: butterflow_models::SimpleSchema {
+                        properties: HashMap::from([(
+                            "target".to_string(),
+                            butterflow_models::SimpleSchemaProperty {
+                                name: None,
+                                description: None,
+                                schema: butterflow_models::SimpleSchemaType::String {
+                                    one_of: None,
+                                    default: Some("default-target".to_string()),
+                                    multi_line: None,
+                                    secret: None,
+                                },
+                            },
+                        )]),
+                    },
+                }),
+                templates: vec![],
+                nodes: vec![node.clone()],
+            },
+            status: WorkflowStatus::Running,
+            params: HashMap::new(),
+            tasks: vec![task.id],
+            started_at: Utc::now(),
+            ended_at: None,
+            bundle_path: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        };
+        let resolved_params = resolve_workflow_run_params(&workflow_run);
+
+        let pr = engine
+            .resolve_pull_request_config(&task, &node, &resolved_params)
+            .unwrap()
+            .expect("managed git node should resolve PR metadata");
+
+        assert_eq!(pr.branch, "codemod-default-target");
+        assert_eq!(pr.title, "Update default-target");
+        assert_eq!(pr.body.as_deref(), Some("Body default-target"));
+    }
+
     #[tokio::test]
     async fn await_js_ast_grep_execution_task_returns_idle_timeout_error() {
         let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
@@ -5951,6 +6525,7 @@ mod tests {
                     async move {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         idle_timed_out.store(true, Ordering::Release);
+                        idle_notify.notify_waiters();
                         if let Ok(mut message) = idle_failure_message.lock() {
                             *message = Some(
                                 "No progress observed for 1s while processing src/stalled.ts (execution started, active units: 1)"

@@ -2,6 +2,7 @@
   "name": "{name}",
   "version": "0.1.0",
   "description": "{description}",
+  "packageManager": "{package_manager}",
   "type": "module",
   "scripts": {
     "test": "{codemod_command} jssg test -l typescript ./scripts/codemod.ts",

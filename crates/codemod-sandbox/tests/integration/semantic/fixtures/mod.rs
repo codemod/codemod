@@ -242,7 +242,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         cancellation_flag: None,
         test_mode: false,
         dry_run: false,
-        target_directory: None,
+        target_directory: target_path.parent().unwrap_or(target_path.as_path()),
     };
 
     let result = execute_codemod_with_quickjs(options).await;

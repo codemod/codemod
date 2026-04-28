@@ -2,7 +2,7 @@ use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
-use crate::metrics::MetricsModule;
+use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
@@ -159,6 +159,16 @@ where
                 })?;
         }
 
+        // Selector extraction may evaluate the codemod's full module graph.
+        // Install a disposable metrics context so modules that import
+        // `codemod:metrics` can initialize without requiring transform execution.
+        ctx.store_userdata(MetricsContext::new())
+            .map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+
         let execution = async {
             let module = Module::declare(ctx.clone(), "__selector_extractor.js", js_code)
                 .catch(&ctx)
@@ -273,4 +283,117 @@ where
         execution.await
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::engine::codemod_lang::CodemodLang;
+    use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn selector_extraction_propagates_get_selector_errors() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            export function getSelector() {
+                throw new Error("selector exploded");
+            }
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "typescript".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await;
+
+        let error = match result {
+            Ok(_) => panic!("selector errors should fail extraction"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("selector exploded"),
+            "expected selector error to propagate, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_extraction_supports_const_arrow_get_selector_exports() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            export const getSelector = () => ({
+                rule: { kind: "string_fragment" },
+            });
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "tsx".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            result.is_some(),
+            "const arrow getSelector exports should be supported"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_extraction_supports_top_level_metrics_imports() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            import { useMetricAtom } from "codemod:metrics";
+
+            const selectorMetric = useMetricAtom("selector_metric");
+
+            export const getSelector = () => {
+                selectorMetric.increment();
+                return { rule: { kind: "string_fragment" } };
+            };
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "tsx".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            result.is_some(),
+            "selector extraction should support top-level metrics imports"
+        );
+    }
 }

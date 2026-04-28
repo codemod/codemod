@@ -108,6 +108,26 @@ registry:
 
 For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
 
+Authored package skills used by `install-skill` must include a `SKILL.md` with:
+- YAML frontmatter containing at least `name`, `description`, and `allowed-tools`
+- `codemod-compatibility: skill-package-v1`
+- `codemod-skill-version: <version>`
+
+Example:
+
+```md
+---
+name: "my-skill"
+description: "Project-specific migration guidance"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+```
+
+The `mcs-v1` compatibility marker is used by the built-in Codemod core skill and other agent-facing resources, not by authored package skills installed via `install-skill`.
+
 **Available fields:**
 
 <ParamField path="schema_version" type="string" required default="1.0">

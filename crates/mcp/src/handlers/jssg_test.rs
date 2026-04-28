@@ -241,6 +241,11 @@ impl JssgTestHandler {
                 let resolver = resolver.clone();
                 let input_code = request.input_code;
                 let input_path = request.input_path;
+                let target_directory = request
+                    .workspace_root
+                    .clone()
+                    .or_else(|| input_path.parent().map(|path| path.to_path_buf()))
+                    .unwrap_or_else(|| PathBuf::from("."));
                 let metrics_context = MetricsContext::new();
 
                 Box::pin(async move {
@@ -261,7 +266,7 @@ impl JssgTestHandler {
                         cancellation_flag: None,
                         test_mode: true,
                         dry_run: false,
-                        target_directory: None,
+                        target_directory: &target_directory,
                     };
                     let CodemodOutput { primary, .. } =
                         execute_codemod_with_quickjs(options).await?;

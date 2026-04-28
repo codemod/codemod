@@ -115,6 +115,45 @@ struct TransformRiskSummary {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValidationPackageKind {
+    Jssg,
+    Hybrid,
+    AstGrepYaml,
+    Shell,
+    SkillOnly,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidationRequirements {
+    package_json: bool,
+    scripts_codemod_ts: bool,
+    tests_dir: bool,
+}
+
+impl ValidationPackageKind {
+    fn requirements(self) -> ValidationRequirements {
+        match self {
+            Self::Jssg | Self::Hybrid => ValidationRequirements {
+                package_json: true,
+                scripts_codemod_ts: true,
+                tests_dir: true,
+            },
+            Self::AstGrepYaml => ValidationRequirements {
+                package_json: false,
+                scripts_codemod_ts: false,
+                tests_dir: true,
+            },
+            Self::Shell | Self::SkillOnly | Self::Unknown => ValidationRequirements {
+                package_json: false,
+                scripts_codemod_ts: false,
+                tests_dir: false,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageManager {
     Npm,
     Yarn,
@@ -242,6 +281,7 @@ impl PackageValidationHandler {
         let package_root = canonicalize_package_root(request.package_path.as_deref())?;
         let workflow_path = workflow_path_for_package(&package_root)?;
         let files = collect_file_presence(&package_root, &workflow_path);
+        let package_kind = infer_validation_package_kind(&package_root, &files);
         let workflow_valid = validate_workflow_at_path(&workflow_path).is_ok();
         let transform_path = package_root.join("scripts/codemod.ts");
         let readme_path = package_root.join("README.md");
@@ -298,7 +338,13 @@ impl PackageValidationHandler {
         };
 
         let mut issues = Vec::new();
-        push_missing_file_issues(&files, &package_root, &workflow_path, &mut issues);
+        push_missing_file_issues(
+            &files,
+            package_kind,
+            &package_root,
+            &workflow_path,
+            &mut issues,
+        );
 
         if !workflow_valid && files.workflow_yaml {
             issues.push(issue(
@@ -336,7 +382,10 @@ impl PackageValidationHandler {
             ));
         }
 
-        if test_cases.total_case_dirs == 0 && files.tests_dir {
+        if package_kind.requirements().tests_dir
+            && test_cases.total_case_dirs == 0
+            && files.tests_dir
+        {
             issues.push(issue(
                 "error",
                 "missing_real_test_cases",
@@ -429,6 +478,28 @@ fn collect_file_presence(package_root: &Path, workflow_path: &Path) -> PackageFi
         readme_md: package_root.join("README.md").is_file(),
         scripts_codemod_ts: package_root.join("scripts/codemod.ts").is_file(),
         tests_dir: package_root.join("tests").is_dir(),
+    }
+}
+
+fn infer_validation_package_kind(
+    package_root: &Path,
+    files: &PackageFilePresence,
+) -> ValidationPackageKind {
+    let has_rules = package_root.join("rules").is_dir();
+    let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
+    let has_authored_skill = package_root.join("agents/skill").is_dir();
+
+    match (
+        files.scripts_codemod_ts || files.package_json,
+        has_rules,
+        has_shell_scripts,
+    ) {
+        (true, true, _) => ValidationPackageKind::Hybrid,
+        (true, false, _) => ValidationPackageKind::Jssg,
+        (false, true, _) => ValidationPackageKind::AstGrepYaml,
+        (false, false, true) => ValidationPackageKind::Shell,
+        (false, false, false) if has_authored_skill => ValidationPackageKind::SkillOnly,
+        _ => ValidationPackageKind::Unknown,
     }
 }
 
@@ -598,10 +669,12 @@ fn load_package_json(package_root: &Path) -> PackageJsonLite {
 
 fn push_missing_file_issues(
     files: &PackageFilePresence,
+    package_kind: ValidationPackageKind,
     package_root: &Path,
     workflow_path: &Path,
     issues: &mut Vec<ValidationIssue>,
 ) {
+    let requirements = package_kind.requirements();
     let checks = [
         (
             files.codemod_yaml,
@@ -616,7 +689,7 @@ fn push_missing_file_issues(
             workflow_path.to_path_buf(),
         ),
         (
-            files.package_json,
+            !requirements.package_json || files.package_json,
             "missing_package_json",
             "package.json is missing.",
             package_root.join("package.json"),
@@ -628,13 +701,13 @@ fn push_missing_file_issues(
             package_root.join("README.md"),
         ),
         (
-            files.scripts_codemod_ts,
+            !requirements.scripts_codemod_ts || files.scripts_codemod_ts,
             "missing_transform_script",
             "scripts/codemod.ts is missing.",
             package_root.join("scripts/codemod.ts"),
         ),
         (
-            files.tests_dir,
+            !requirements.tests_dir || files.tests_dir,
             "missing_tests_dir",
             "tests/ directory is missing.",
             package_root.join("tests"),
@@ -959,6 +1032,78 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn shell_packages_do_not_require_jssg_artifacts() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("README.md"), "# Shell package\n").unwrap();
+        fs::write(dir.join("scripts/setup.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("scripts/transform.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("scripts/cleanup.sh"), "#!/usr/bin/env bash\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_package_json"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_transform_script"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_tests_dir"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn yaml_packages_do_not_require_jssg_package_files() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("rules")).unwrap();
+        fs::create_dir_all(dir.join("tests/input")).unwrap();
+        fs::create_dir_all(dir.join("tests/expected")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("README.md"), "# YAML package\n").unwrap();
+        fs::write(dir.join("rules/config.yml"), "id: sample\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_package_json"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_transform_script"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn raw_source_rewrite_is_flagged_but_ast_node_replace_is_not() {
         let risky = detect_transform_risks(Some(
@@ -996,6 +1141,20 @@ mod tests {
         };
 
         let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn package_manager_from_manifest_prevents_fresh_package_false_positive() {
+        let package_json = PackageJsonLite {
+            scripts: BTreeMap::from([(
+                "test".to_string(),
+                "pnpm dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+            )]),
+            package_manager: Some("pnpm".to_string()),
+        };
+
+        let issues = detect_package_manager_drift_in_scripts(&package_json, "pnpm");
         assert!(issues.is_empty());
     }
 

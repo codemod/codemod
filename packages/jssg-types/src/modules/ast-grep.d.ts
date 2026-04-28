@@ -95,6 +95,10 @@ declare module "codemod:ast-grep" {
      */
     filename(): string;
     /**
+     * Returns the file path relative to the current target directory.
+     */
+    relativeFilename(): string;
+    /**
      * Returns the source code of the file.
      */
     source(): string;
@@ -543,6 +547,7 @@ declare module "codemod:ast-grep" {
     language: string;
     matrixValues?: Record<string, any>;
     dryRun?: boolean;
+    targetDir: string;
   };
 
   /**

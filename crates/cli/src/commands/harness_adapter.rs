@@ -51,6 +51,7 @@ const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME: &str = ".goosehints";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_BEGIN: &str = "<!-- codemod-periodic-update:begin -->";
 const CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_END: &str = "<!-- codemod-periodic-update:end -->";
 const GOOSE_CONFIG_RELATIVE_PATH: &str = ".config/goose/config.yaml";
+const GOOSE_GLOBAL_ROOT_RELATIVE_DIR: &str = ".config/goose";
 const GOOSE_GLOBAL_RECIPES_RELATIVE_DIR: &str = ".config/goose/recipes";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOKS_FILE_NAME: &str = "hooks.json";
 const CODEMOD_PERIODIC_TRIGGER_CURSOR_HOOK_EVENT_NAME: &str = "afterAgentResponse";
@@ -344,6 +345,8 @@ pub enum HarnessAdapterError {
     UnsupportedHarness(String),
     #[error("Invalid skill package: {0}")]
     InvalidSkillPackage(String),
+    #[error("Deferred interaction: {0}")]
+    Deferred(String),
     #[error("Skill install failed: {0}")]
     InstallFailed(String),
     #[error("Unknown skill package id: {0}")]
@@ -357,6 +360,7 @@ impl HarnessAdapterError {
         match self {
             Self::UnsupportedHarness(_) => "E_UNSUPPORTED_HARNESS",
             Self::InvalidSkillPackage(_) => "E_SKILL_INVALID",
+            Self::Deferred(_) => "E_DEFERRED_INTERACTION",
             Self::InstallFailed(_) => "E_SKILL_INSTALL_FAILED",
             Self::SkillPackageNotFound(_) => "E_SKILL_PACKAGE_NOT_FOUND",
             Self::SkillPackageInstallFailed(_) => "E_SKILL_PACKAGE_INSTALL_FAILED",
@@ -367,6 +371,7 @@ impl HarnessAdapterError {
         match self {
             Self::UnsupportedHarness(_) => 20,
             Self::InvalidSkillPackage(_) => 21,
+            Self::Deferred(_) => 22,
             Self::InstallFailed(_) => 22,
             Self::SkillPackageNotFound(_) => 27,
             Self::SkillPackageInstallFailed(_) => 28,
@@ -381,6 +386,7 @@ impl HarnessAdapterError {
             Self::InvalidSkillPackage(_) => {
                 "Retry with `codemod ai --force` and inspect installed entries via `codemod ai list --format json`."
             }
+            Self::Deferred(_) => "Re-run the step when you're ready to choose an option.",
             Self::InstallFailed(_) => "Retry with --force or check filesystem permissions.",
             Self::SkillPackageNotFound(_) => {
                 "Run `codemod search <migration> --format json` to locate a valid package id."
@@ -660,6 +666,12 @@ pub fn install_restart_hint(harness: Harness) -> String {
         ));
     }
 
+    if harness == Harness::Goose {
+        message.push_str(
+            " Goose skills also require the Summon extension to be enabled before they appear in sessions.",
+        );
+    }
+
     message
 }
 
@@ -784,7 +796,7 @@ fn harness_root_for_scope(
             .as_ref()
             .map(|home| match harness {
                 Harness::Claude => home.join(".claude"),
-                Harness::Goose => home.join(".goose"),
+                Harness::Goose => home.join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR),
                 Harness::Opencode => home.join(".opencode"),
                 Harness::Cursor => home.join(".cursor"),
                 Harness::Codex => home.join(CODEX_CONFIG_DIR_NAME),
@@ -892,7 +904,10 @@ fn goose_hints_path_for_scope(
         InstallScope::User => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home| home.join(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME))
+            .map(|home| {
+                home.join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+                    .join(CODEMOD_PERIODIC_TRIGGER_GOOSE_HINTS_FILE_NAME)
+            })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -1546,32 +1561,45 @@ fn discovery_guide_paths_with_runtime(
     scope: InstallScope,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<PathBuf>> {
-    let docs_root = match scope {
-        InstallScope::Project => runtime_paths.cwd.clone(),
-        InstallScope::User => runtime_paths.home_dir.clone().ok_or_else(|| {
+    let docs_root = match (harness, scope) {
+        (_, InstallScope::Project) => runtime_paths.cwd.clone(),
+        (Harness::Goose, InstallScope::User) => runtime_paths
+            .home_dir
+            .clone()
+            .map(|home| home.join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR))
+            .ok_or_else(|| {
+                HarnessAdapterError::InstallFailed(
+                    "Could not determine home directory for --user install".to_string(),
+                )
+            })?,
+        (_, InstallScope::User) => runtime_paths.home_dir.clone().ok_or_else(|| {
             HarnessAdapterError::InstallFailed(
                 "Could not determine home directory for --user install".to_string(),
             )
         })?,
     };
 
-    let file_names = match harness {
-        Harness::Claude => vec![CLAUDE_GUIDE_FILE_NAME],
-        Harness::Opencode => vec![AGENTS_GUIDE_FILE_NAME],
-        Harness::Goose | Harness::Cursor => vec![AGENTS_GUIDE_FILE_NAME, CLAUDE_GUIDE_FILE_NAME],
-        Harness::Codex | Harness::Antigravity => vec![AGENTS_GUIDE_FILE_NAME],
+    let paths = match harness {
+        Harness::Claude => vec![docs_root.join(CLAUDE_GUIDE_FILE_NAME)],
+        Harness::Opencode => vec![docs_root.join(AGENTS_GUIDE_FILE_NAME)],
+        Harness::Goose => vec![
+            docs_root.join(AGENTS_GUIDE_FILE_NAME),
+            goose_hints_path_for_scope(scope, runtime_paths)?,
+        ],
+        Harness::Cursor => vec![docs_root.join(AGENTS_GUIDE_FILE_NAME)],
+        Harness::Codex | Harness::Antigravity => vec![docs_root.join(AGENTS_GUIDE_FILE_NAME)],
         Harness::Auto => {
             return Err(HarnessAdapterError::UnsupportedHarness("auto".to_string()));
         }
     };
 
-    Ok(file_names
-        .into_iter()
-        .map(|file_name| docs_root.join(file_name))
-        .collect())
+    Ok(paths)
 }
 
-fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterResult<String> {
+pub(crate) fn skill_root_hint_for_scope(
+    harness: Harness,
+    scope: InstallScope,
+) -> AdapterResult<String> {
     Ok(match scope {
         InstallScope::Project => match harness {
             Harness::Claude => ".claude/skills".to_string(),
@@ -1586,7 +1614,7 @@ fn skill_root_hint_for_scope(harness: Harness, scope: InstallScope) -> AdapterRe
         },
         InstallScope::User => match harness {
             Harness::Claude => "~/.claude/skills".to_string(),
-            Harness::Goose => "~/.goose/skills".to_string(),
+            Harness::Goose => "~/.config/goose/skills".to_string(),
             Harness::Opencode => "~/.opencode/skills".to_string(),
             Harness::Cursor => "~/.cursor/skills".to_string(),
             Harness::Codex => "~/.agents/skills".to_string(),
@@ -1620,6 +1648,7 @@ This section is managed by `codemod` CLI.
 
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
+- Marker note: the core Codemod skill uses `codemod-compatibility: mcs-v1`; authored package skills for workflow `install-skill` use `codemod-compatibility: skill-package-v1`.
 {mcp_line}{command_line}- List installed Codemod skills: `npx codemod ai list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
@@ -1817,7 +1846,7 @@ fn managed_state_path_for_harness(
             .as_ref()
             .map(|home| match harness {
                 Harness::Claude => home.join(".claude"),
-                Harness::Goose => home.join(".goose"),
+                Harness::Goose => home.join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR),
                 Harness::Opencode => home.join(".opencode"),
                 Harness::Cursor => home.join(".cursor"),
                 Harness::Codex => home.join(CODEX_CONFIG_DIR_NAME),
@@ -2372,10 +2401,18 @@ fn validate_skill_content_for_install(content: &str) -> AdapterResult<()> {
         ))
     })?;
 
-    if !content.contains(SKILL_PACKAGE_COMPATIBILITY_MARKER) {
-        return Err(HarnessAdapterError::SkillPackageInstallFailed(
-            "Authored package SKILL.md is missing compatibility marker".to_string(),
-        ));
+    match authored_skill_compatibility_marker(content) {
+        None => {
+            return Err(HarnessAdapterError::SkillPackageInstallFailed(
+                "Authored package SKILL.md is missing compatibility marker".to_string(),
+            ));
+        }
+        Some(marker) if marker != SKILL_PACKAGE_COMPATIBILITY_MARKER => {
+            return Err(HarnessAdapterError::SkillPackageInstallFailed(format!(
+                "Authored package SKILL.md has unsupported compatibility marker `{marker}`; expected `{SKILL_PACKAGE_COMPATIBILITY_MARKER}`"
+            )));
+        }
+        Some(_) => {}
     }
 
     if !content.contains(CODEMOD_VERSION_MARKER_PREFIX) {
@@ -2385,6 +2422,13 @@ fn validate_skill_content_for_install(content: &str) -> AdapterResult<()> {
     }
 
     Ok(())
+}
+
+fn authored_skill_compatibility_marker(content: &str) -> Option<&str> {
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(CODEMOD_COMPATIBILITY_MARKER_PREFIX))
 }
 
 fn install_mcp_server_config(
@@ -2466,7 +2510,11 @@ fn mcp_config_path_for_harness(
         (Harness::Goose, InstallScope::User) => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home_dir| home_dir.join(".goose/mcp.json"))
+            .map(|home_dir| {
+                home_dir
+                    .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+                    .join("mcp.json")
+            })
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -3058,12 +3106,14 @@ enum SkillValidationProfile {
 }
 
 fn detect_skill_validation_profile(content: &str) -> SkillValidationProfile {
-    if content.contains(MCS_COMPATIBILITY_MARKER) {
-        return SkillValidationProfile::Mcs;
-    }
-
-    if content.contains(CODEMOD_COMPATIBILITY_MARKER_PREFIX) {
-        return SkillValidationProfile::PackageSkill;
+    match authored_skill_compatibility_marker(content) {
+        Some(MCS_COMPATIBILITY_MARKER) => {
+            return SkillValidationProfile::Mcs;
+        }
+        Some(SKILL_PACKAGE_COMPATIBILITY_MARKER) => {
+            return SkillValidationProfile::PackageSkill;
+        }
+        Some(_) | None => {}
     }
 
     SkillValidationProfile::Unknown
@@ -3243,7 +3293,7 @@ fn skills_root_for_harness(
             .as_ref()
             .map(|home| match harness {
                 Harness::Claude => home.join(".claude/skills"),
-                Harness::Goose => home.join(".goose/skills"),
+                Harness::Goose => home.join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR).join("skills"),
                 Harness::Opencode => home.join(".opencode/skills"),
                 Harness::Cursor => home.join(".cursor/skills"),
                 Harness::Codex => home.join(".agents/skills"),
@@ -3792,7 +3842,11 @@ mod tests {
             },
             Harness::Goose => match scope {
                 InstallScope::Project => runtime_paths.cwd.join(".goose"),
-                InstallScope::User => runtime_paths.home_dir.as_ref().unwrap().join(".goose"),
+                InstallScope::User => runtime_paths
+                    .home_dir
+                    .as_ref()
+                    .unwrap()
+                    .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR),
             },
             Harness::Opencode => match scope {
                 InstallScope::Project => runtime_paths.cwd.join(".opencode"),
@@ -3954,6 +4008,18 @@ mod tests {
     }
 
     fn create_authored_skill_source(base_dir: &Path, package_id: &str) -> PathBuf {
+        create_authored_skill_source_with_marker(
+            base_dir,
+            package_id,
+            SKILL_PACKAGE_COMPATIBILITY_MARKER,
+        )
+    }
+
+    fn create_authored_skill_source_with_marker(
+        base_dir: &Path,
+        package_id: &str,
+        compatibility_marker: &str,
+    ) -> PathBuf {
         let source_dir = base_dir
             .join("authored-skill")
             .join(skill_directory_name_for_package_id(package_id));
@@ -3968,7 +4034,7 @@ allowed-tools:
 {compatibility_marker}
 codemod-skill-version: 0.1.0
 "#,
-            compatibility_marker = SKILL_PACKAGE_COMPATIBILITY_MARKER
+            compatibility_marker = compatibility_marker
         );
         fs::write(source_dir.join("SKILL.md"), skill_md).unwrap();
         fs::write(
@@ -4157,6 +4223,13 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn install_restart_hint_for_goose_mentions_summon_extension() {
+        let hint = install_restart_hint(Harness::Goose);
+        assert!(hint.contains("Codemod MCP"));
+        assert!(hint.contains("Summon extension"));
+    }
+
+    #[test]
     fn upsert_skill_discovery_guides_is_idempotent_without_duplication() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let claude_path = runtime_paths.cwd.join("CLAUDE.md");
@@ -4188,7 +4261,29 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn upsert_skill_discovery_guides_writes_user_scope_files_under_home() {
+    fn upsert_skill_discovery_guides_for_cursor_only_writes_agents_file() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Cursor,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 1);
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        let claude_path = runtime_paths.cwd.join("CLAUDE.md");
+        assert!(agents_path.exists());
+        assert!(!claude_path.exists());
+
+        let content = fs::read_to_string(&agents_path).unwrap();
+        assert!(content.contains(".cursor/skills/codemod/SKILL.md"));
+        assert!(content.contains("npx codemod ai list --harness cursor --format json"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_for_cursor_user_scope_only_writes_agents_file() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
 
         let updated_files = upsert_skill_discovery_guides_with_runtime(
@@ -4198,12 +4293,89 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        assert_eq!(updated_files.len(), 2);
+        assert_eq!(updated_files.len(), 1);
         let agents_path = runtime_paths.home_dir.as_ref().unwrap().join("AGENTS.md");
+        let claude_path = runtime_paths.home_dir.as_ref().unwrap().join("CLAUDE.md");
+        assert!(agents_path.exists());
+        assert!(!claude_path.exists());
         let content = fs::read_to_string(&agents_path).unwrap();
         assert!(content.contains("~/.cursor/skills/codemod/SKILL.md"));
         assert!(content.contains("npx codemod ai list --harness cursor --format json"));
         assert!(content.contains("/codemod"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_for_goose_writes_agents_and_goosehints_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Goose,
+            InstallScope::Project,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 2);
+        let agents_path = runtime_paths.cwd.join("AGENTS.md");
+        let goosehints_path = runtime_paths.cwd.join(".goosehints");
+        assert!(agents_path.exists());
+        assert!(goosehints_path.exists());
+        assert!(!runtime_paths.cwd.join("CLAUDE.md").exists());
+
+        let agents_content = fs::read_to_string(&agents_path).unwrap();
+        assert!(agents_content.contains(".goose/skills/codemod/SKILL.md"));
+        assert!(agents_content.contains("npx codemod ai list --harness goose --format json"));
+        assert!(agents_content.contains("/codemod"));
+
+        let goosehints_content = fs::read_to_string(&goosehints_path).unwrap();
+        assert!(goosehints_content.contains(".goose/skills/codemod/SKILL.md"));
+        assert!(goosehints_content.contains("npx codemod ai list --harness goose --format json"));
+        assert!(goosehints_content.contains("/codemod"));
+    }
+
+    #[test]
+    fn upsert_skill_discovery_guides_for_goose_user_scope_writes_agents_and_goosehints_files() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let updated_files = upsert_skill_discovery_guides_with_runtime(
+            Harness::Goose,
+            InstallScope::User,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(updated_files.len(), 2);
+        let agents_path = runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+            .join("AGENTS.md");
+        let goosehints_path = runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+            .join(".goosehints");
+        assert!(agents_path.exists());
+        assert!(goosehints_path.exists());
+        assert!(!runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+            .join("CLAUDE.md")
+            .exists());
+
+        let agents_content = fs::read_to_string(&agents_path).unwrap();
+        assert!(agents_content.contains("~/.config/goose/skills/codemod/SKILL.md"));
+        assert!(agents_content.contains("npx codemod ai list --harness goose --format json"));
+        assert!(agents_content.contains("/codemod"));
+
+        let goosehints_content = fs::read_to_string(&goosehints_path).unwrap();
+        assert!(goosehints_content.contains("~/.config/goose/skills/codemod/SKILL.md"));
+        assert!(goosehints_content.contains("npx codemod ai list --harness goose --format json"));
+        assert!(goosehints_content.contains("/codemod"));
     }
 
     #[test]
@@ -5188,6 +5360,40 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn install_package_skill_bundle_supports_goose_user_scope() {
+        let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::User,
+            force: false,
+        };
+        let source_dir = create_authored_skill_source(temp_dir.path(), "debarrel");
+        let package_skill = SkillPackageInstallSpec {
+            id: "debarrel".to_string(),
+            version: "0.4.0".to_string(),
+            description: "Debarrel skill".to_string(),
+            source_dir,
+        };
+
+        let installed = install_package_skill_bundle_with_runtime(
+            Harness::Goose,
+            &package_skill,
+            &install_request,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert_eq!(
+            installed[0].path,
+            runtime_paths
+                .home_dir
+                .as_ref()
+                .unwrap()
+                .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+                .join("skills/debarrel/SKILL.md")
+        );
+    }
+
+    #[test]
     fn skill_only_package_validate_then_install_flow_works_across_harnesses() {
         let package_temp_dir = tempdir().unwrap();
         let (manifest, skill_source_dir) =
@@ -5413,6 +5619,31 @@ codemod-skill-version: 0.1.0
 
         let validation = validate_skill_package_install_spec(&package_skill);
         assert!(validation.is_ok());
+    }
+
+    #[test]
+    fn validate_skill_package_install_spec_rejects_unsupported_compatibility_marker() {
+        let temp_dir = tempdir().unwrap();
+        let source_dir = create_authored_skill_source_with_marker(
+            temp_dir.path(),
+            "debarrel",
+            MCS_COMPATIBILITY_MARKER,
+        );
+        let package_skill = SkillPackageInstallSpec {
+            id: "debarrel".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Debarrel skill".to_string(),
+            source_dir,
+        };
+
+        let error = validate_skill_package_install_spec(&package_skill).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Skill package install failed: Authored package SKILL.md has unsupported compatibility marker `{}`; expected `{}`",
+                MCS_COMPATIBILITY_MARKER, SKILL_PACKAGE_COMPATIBILITY_MARKER
+            )
+        );
     }
 
     #[test]
@@ -5937,6 +6168,14 @@ codemod-skill-version: 0.1.0
     #[test]
     fn skills_root_for_harness_supports_all_concrete_harnesses() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let project_goose =
+            skills_root_for_harness(Harness::Goose, InstallScope::Project, &runtime_paths).unwrap();
+        assert!(project_goose.ends_with(".goose/skills"));
+
+        let user_goose =
+            skills_root_for_harness(Harness::Goose, InstallScope::User, &runtime_paths).unwrap();
+        assert!(user_goose.ends_with(".config/goose/skills"));
 
         let project_opencode =
             skills_root_for_harness(Harness::Opencode, InstallScope::Project, &runtime_paths)

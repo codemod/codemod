@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 /// promptly when the owning step completes. The helper is intentionally
 /// minimal: side effects (setting flags, notifying waiters, publishing
 /// events) live inside `tick` so each caller can fire however it needs.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn spawn_periodic<F, Fut>(
     period: Duration,
     done: Arc<AtomicBool>,

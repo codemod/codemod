@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use butterflow_models::variable::TaskExpressionContext;
 use butterflow_models::Result;
@@ -76,6 +77,11 @@ pub fn resolve_branch_name(configured_branch_name: Option<&str>, task_signature:
     }
 }
 
+fn worktree_operation_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn sanitize_path_component(value: &str) -> String {
     let sanitized: String = value
         .chars()
@@ -91,6 +97,36 @@ fn sanitize_path_component(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn redact_git_credentials(value: &str) -> String {
+    let mut redacted = String::with_capacity(value.len());
+    let mut remaining = value;
+
+    while let Some(scheme_index) = remaining.find("://") {
+        let authority_start = scheme_index + 3;
+        redacted.push_str(&remaining[..authority_start]);
+
+        let after_scheme = &remaining[authority_start..];
+        let url_end = after_scheme
+            .find(|ch: char| {
+                ch.is_whitespace() || ch == '\'' || ch == '"' || ch == '<' || ch == '>'
+            })
+            .unwrap_or(after_scheme.len());
+        let url_without_scheme = &after_scheme[..url_end];
+
+        if let Some(userinfo_end) = url_without_scheme.rfind('@') {
+            redacted.push_str("<redacted>@");
+            redacted.push_str(&url_without_scheme[userinfo_end + 1..]);
+        } else {
+            redacted.push_str(url_without_scheme);
+        }
+
+        remaining = &after_scheme[url_end..];
+    }
+
+    redacted.push_str(remaining);
+    redacted
 }
 
 pub async fn repo_root(working_dir: &Path) -> Result<PathBuf> {
@@ -130,6 +166,7 @@ pub fn worktree_path(repo_root: &Path, branch: &str, task_id: &str) -> PathBuf {
 }
 
 pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> Result<PathBuf> {
+    let _lock = worktree_operation_lock().lock().await;
     let worktree_path = worktree_path(repo_root, branch, task_id);
 
     if let Some(parent) = worktree_path.parent() {
@@ -171,6 +208,7 @@ pub async fn create_worktree(repo_root: &Path, branch: &str, task_id: &str) -> R
 }
 
 pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let _lock = worktree_operation_lock().lock().await;
     let output = Command::new("git")
         .args([
             "worktree",
@@ -392,6 +430,7 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
 pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<()> {
     let max_retries = 3u32;
     let mut pushed = false;
+    let mut last_push_stderr: Option<String> = None;
 
     for attempt in 1..=max_retries {
         let push_output = Command::new("git")
@@ -411,13 +450,12 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
             .await
             .map_err(|e| butterflow_models::Error::Runtime(format!("git push failed: {e}")))?;
 
-        debug!(
-            "Push stdout: {}",
-            String::from_utf8_lossy(&push_output.stdout)
-        );
+        let push_stdout = redact_git_credentials(&String::from_utf8_lossy(&push_output.stdout));
+        let push_stderr = redact_git_credentials(&String::from_utf8_lossy(&push_output.stderr));
+        debug!("Push stdout: {}", push_stdout);
         debug!(
             "Push stderr (last 2000 chars): {}",
-            String::from_utf8_lossy(&push_output.stderr)
+            push_stderr
                 .chars()
                 .rev()
                 .take(2000)
@@ -426,17 +464,25 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
                 .rev()
                 .collect::<String>()
         );
+        let stderr_summary = push_stderr
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .unwrap_or("git push failed")
+            .to_string();
 
         if push_output.status.success() {
             pushed = true;
             break;
         }
 
+        last_push_stderr = Some(stderr_summary.clone());
+
         warn!(
-            "Push attempt {}/{} failed (exit code {:?})",
+            "Push attempt {}/{} failed (exit code {:?}): {}",
             attempt,
             max_retries,
-            push_output.status.code()
+            push_output.status.code(),
+            stderr_summary
         );
 
         if attempt < max_retries {
@@ -465,8 +511,26 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
         if verify.status.success() {
             info!("Push reported failure but branch exists on remote — continuing.");
         } else {
+            let remote = Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(working_dir)
+                .output()
+                .await
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|stdout| redact_git_credentials(stdout.trim()))
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| "origin".to_string());
             return Err(butterflow_models::Error::Runtime(
-                "Failed to push changes and branch does not exist on remote.".to_string(),
+                match last_push_stderr {
+                    Some(stderr) => format!(
+                        "Failed to push branch '{branch}' to {remote}: {stderr}"
+                    ),
+                    None => format!(
+                        "Failed to push branch '{branch}' to {remote}; branch does not exist on remote."
+                    ),
+                },
             ));
         }
     }
@@ -626,7 +690,7 @@ async fn create_pull_request_via_gh(
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_path_component, worktree_path};
+    use super::{redact_git_credentials, sanitize_path_component, worktree_path};
     use std::path::Path;
 
     #[test]
@@ -644,6 +708,24 @@ mod tests {
         assert_eq!(
             worktree,
             Path::new("/tmp/example-repo.codemod-worktrees/worktree-worktree")
+        );
+    }
+
+    #[test]
+    fn redact_git_credentials_removes_url_userinfo() {
+        assert_eq!(
+            redact_git_credentials("https://token@example.com/org/repo.git"),
+            "https://<redacted>@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_git_credentials(
+                "fatal: could not read from https://user:secret@example.com/org/repo.git"
+            ),
+            "fatal: could not read from https://<redacted>@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_git_credentials("git@github.com:org/repo.git"),
+            "git@github.com:org/repo.git"
         );
     }
 }

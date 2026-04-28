@@ -955,11 +955,13 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
 }
 
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let codemod_command = codemod_cli_command_for_package_manager(selected_package_manager(config));
+    let package_manager = selected_package_manager(config);
+    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
     // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
+        .replace("{package_manager}", package_manager)
         .replace("{codemod_command}", codemod_command);
 
     fs::write(project_path.join("package.json"), package_json)?;
@@ -1111,6 +1113,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
   "name": "{}",
   "version": "1.0.0",
   "description": "{}",
+  "packageManager": "{}",
   "main": "scripts/codemod.ts",
   "scripts": {{
     "test": "node scripts/codemod.ts"
@@ -1123,7 +1126,9 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
     "typescript": "^5.0.0"
   }}
 }}"#,
-        config.name, config.description
+        config.name,
+        config.description,
+        selected_package_manager(config)
     );
 
     let tsconfig_content = r#"{
@@ -1999,6 +2004,7 @@ mod tests {
         let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
+        assert!(package_json.contains("\"packageManager\": \"yarn\""));
         assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
         assert!(readme.contains("yarn test"));
         assert!(!readme.contains("npm test"));
@@ -2092,6 +2098,9 @@ mod tests {
         assert!(workflow.contains("include:"));
         assert!(workflow.contains("\"**/*.{ts,tsx}\""));
         assert!(workflow.contains("\"**/node_modules/**\""));
+
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        assert!(package_json.contains("\"packageManager\": \"pnpm\""));
 
         let gitignore = fs::read_to_string(project_path.join(".gitignore")).unwrap();
         assert!(gitignore.contains("*.tgz\n"));
