@@ -257,10 +257,7 @@ function findRawImportMatches<T extends Language>(
                     kind: "formal_parameters",
                     stopBy: "end",
                     inside: {
-                      any: [
-                        { kind: "arrow_function" },
-                        { kind: "function_expression" },
-                      ],
+                      any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
                     },
                   },
                 },
@@ -281,10 +278,7 @@ function findRawImportMatches<T extends Language>(
                   kind: "formal_parameters",
                   stopBy: "end",
                   inside: {
-                    any: [
-                      { kind: "arrow_function" },
-                      { kind: "function_expression" },
-                    ],
+                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
                   },
                 },
               },
@@ -305,10 +299,7 @@ function findRawImportMatches<T extends Language>(
                   kind: "formal_parameters",
                   stopBy: "end",
                   inside: {
-                    any: [
-                      { kind: "arrow_function" },
-                      { kind: "function_expression" },
-                    ],
+                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
                   },
                 },
               },
