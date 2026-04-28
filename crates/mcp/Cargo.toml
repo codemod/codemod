@@ -26,3 +26,6 @@ codemod-llrt-capabilities.workspace = true
 reqwest.workspace = true
 butterflow-core.workspace = true
 walkdir.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

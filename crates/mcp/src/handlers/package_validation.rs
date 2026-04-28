@@ -878,6 +878,7 @@ fn detect_package_manager_drift_in_scripts(
 
 fn package_manager_commands_in_script(command: &str) -> Vec<String> {
     const PACKAGE_MANAGER_COMMANDS: [&str; 6] = ["npm", "npx", "yarn", "pnpm", "bun", "bunx"];
+    const COMMAND_WRAPPERS: [&str; 4] = ["corepack", "cross-env", "cross-env-shell", "env"];
     let mut commands = Vec::new();
     let mut token = String::new();
     let mut at_command_start = true;
@@ -896,6 +897,9 @@ fn package_manager_commands_in_script(command: &str) -> Vec<String> {
             let lower = token.to_ascii_lowercase();
             if PACKAGE_MANAGER_COMMANDS.contains(&lower.as_str()) {
                 commands.push(lower);
+            } else if COMMAND_WRAPPERS.contains(&lower.as_str()) {
+                token.clear();
+                return;
             }
         }
 
@@ -1084,9 +1088,24 @@ async fn collect_output(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Vec<u
     }
 }
 
-fn configure_command_for_timeout_cleanup(_command: &mut Command) {}
+fn configure_command_for_timeout_cleanup(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+}
 
 async fn kill_child_process_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(process_id) = child.id() {
+            let process_group_id = -(process_id as i32);
+            unsafe {
+                libc::kill(process_group_id, libc::SIGKILL);
+            }
+        }
+    }
+
     let _ = child.start_kill();
 }
 
@@ -1561,6 +1580,16 @@ mod tests {
     }
 
     #[test]
+    fn package_manager_command_detection_handles_wrapped_commands() {
+        assert_eq!(
+            package_manager_commands_in_script(
+                "corepack pnpm test && cross-env NODE_ENV=test yarn lint"
+            ),
+            vec!["pnpm".to_string(), "yarn".to_string()]
+        );
+    }
+
+    #[test]
     fn package_manager_drift_ignores_non_command_tokens() {
         let package_json = PackageJsonLite {
             scripts: BTreeMap::from([(
@@ -1572,6 +1601,20 @@ mod tests {
 
         let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Yarn);
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn package_manager_drift_detects_wrapped_commands() {
+        let package_json = PackageJsonLite {
+            scripts: BTreeMap::from([(
+                "test".to_string(),
+                "corepack pnpm dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+            )]),
+            package_manager: Some("yarn".to_string()),
+        };
+
+        let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Yarn);
+        assert_eq!(issues, vec!["test".to_string()]);
     }
 
     #[tokio::test]
@@ -1657,6 +1700,56 @@ mod tests {
         assert!(!result.success);
         assert!(result.stderr_tail.contains("Timed out after 0s"));
         assert!(start.elapsed() < Duration::from_secs(3));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_package_script_kills_descendant_processes() {
+        let npm_available = Command::new("npm")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !npm_available {
+            return;
+        }
+
+        let dir = unique_temp_dir();
+        let script = r#"sh -c 'sleep 30 & child=$!; echo $child > child.pid; wait $child'"#;
+        fs::write(
+            dir.join("package.json"),
+            format!(
+                r#"{{
+  "name": "timeout-tree-test",
+  "scripts": {{
+    "test": "{script}"
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let result = run_package_script(&dir, PackageManager::Npm, "test", 1).await;
+        assert!(result.timed_out);
+
+        let child_pid = fs::read_to_string(dir.join("child.pid"))
+            .expect("expected child pid file")
+            .trim()
+            .parse::<i32>()
+            .expect("expected numeric child pid");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let child_still_running = unsafe { libc::kill(child_pid, 0) == 0 };
+        assert!(
+            !child_still_running,
+            "expected descendant process {child_pid} to be terminated"
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
