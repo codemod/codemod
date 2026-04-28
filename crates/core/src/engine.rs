@@ -664,42 +664,49 @@ impl Engine {
         })?;
         let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
         let stream_live = should_stream_agent_output_live(self.workflow_run_config.quiet, logger);
+        let capture_output_for_relog = should_relog_captured_agent_output(logger);
         let stdout_reader = child.stdout.take().map(|stdout| {
             let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
             std::thread::spawn(move || -> Vec<String> {
-                BufReader::new(stdout)
+                let mut captured_output = Vec::new();
+                for line in BufReader::new(stdout)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
-                    .map(|line| {
-                        let formatted = format_agent_stream_line(&canonical, "stdout", line);
-                        let _ = log_tx.send(formatted.clone());
-                        if stream_live {
-                            write_agent_stream_line_live("stdout", &formatted);
-                        }
-                        formatted
-                    })
-                    .collect()
+                {
+                    let formatted = format_agent_stream_line(&canonical, "stdout", line);
+                    let _ = log_tx.send(formatted.clone());
+                    if stream_live {
+                        write_agent_stream_line_live("stdout", &formatted);
+                    }
+                    if capture_output_for_relog {
+                        captured_output.push(formatted);
+                    }
+                }
+                captured_output
             })
         });
         let stderr_reader = child.stderr.take().map(|stderr| {
             let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
             std::thread::spawn(move || -> Vec<String> {
-                BufReader::new(stderr)
+                let mut captured_output = Vec::new();
+                for line in BufReader::new(stderr)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
-                    .map(|line| {
-                        let formatted = format_agent_stream_line(&canonical, "stderr", line);
-                        let _ = log_tx.send(formatted.clone());
-                        if stream_live {
-                            write_agent_stream_line_live("stderr", &formatted);
-                        }
-                        formatted
-                    })
-                    .collect()
+                {
+                    let formatted = format_agent_stream_line(&canonical, "stderr", line);
+                    let _ = log_tx.send(formatted.clone());
+                    if stream_live {
+                        write_agent_stream_line_live("stderr", &formatted);
+                    }
+                    if capture_output_for_relog {
+                        captured_output.push(formatted);
+                    }
+                }
+                captured_output
             })
         });
         if canonical == "claude-code" || canonical == "codex" {
@@ -776,18 +783,25 @@ impl Engine {
             }
         };
 
-        let mut captured_output = Vec::new();
-        if let Some(reader) = stdout_reader {
-            captured_output.extend(reader.join().unwrap_or_default());
-        }
-        if let Some(reader) = stderr_reader {
-            captured_output.extend(reader.join().unwrap_or_default());
-        }
         drop(log_tx);
         let _ = log_persist_task.await;
-        if should_relog_captured_agent_output(logger) {
+        if capture_output_for_relog {
+            let mut captured_output = Vec::new();
+            if let Some(reader) = stdout_reader {
+                captured_output.extend(reader.join().unwrap_or_default());
+            }
+            if let Some(reader) = stderr_reader {
+                captured_output.extend(reader.join().unwrap_or_default());
+            }
             for line in captured_output {
                 logger.log("info", &line);
+            }
+        } else {
+            if let Some(reader) = stdout_reader {
+                let _ = reader.join();
+            }
+            if let Some(reader) = stderr_reader {
+                let _ = reader.join();
             }
         }
 
