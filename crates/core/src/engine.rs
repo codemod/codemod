@@ -285,6 +285,10 @@ fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
         || (enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some()))
 }
 
+fn default_managed_git_message(node: &Node) -> &str {
+    &node.name
+}
+
 pub fn record_unit_progress(
     state: &Arc<std::sync::Mutex<StepProgressState>>,
     unit_key: &str,
@@ -882,7 +886,12 @@ impl Engine {
                 pr_config.base.clone(),
             )
         } else {
-            (node.name.clone(), None, false, None)
+            (
+                default_managed_git_message(node).to_string(),
+                None,
+                false,
+                None,
+            )
         };
 
         Ok(Some(ResolvedPullRequestConfig {
@@ -3286,7 +3295,14 @@ impl Engine {
                             "No commit checkpoints in node '{}' but changes detected — creating fallback commit",
                             node.name
                         );
-                        match crate::git_ops::commit(&node.name, &[], true, target_path).await {
+                        match crate::git_ops::commit(
+                            default_managed_git_message(node),
+                            &[],
+                            true,
+                            target_path,
+                        )
+                        .await
+                        {
                             Ok(true) => {
                                 had_commit_checkpoint = true;
                             }
@@ -6196,6 +6212,12 @@ mod tests {
             std::env::remove_var(key);
             Self { key, original }
         }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -6346,6 +6368,29 @@ export default function transform(ast) {
 
         assert!(should_manage_git_for_node(&node, true));
         assert!(!should_manage_git_for_node(&node, false));
+    }
+
+    #[test]
+    #[serial]
+    fn cloud_managed_git_is_enabled_without_node_git_config() {
+        let _guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
+        let node = Node {
+            id: "apply-transforms".to_string(),
+            name: "Apply AST Transformations".to_string(),
+            description: None,
+            r#type: butterflow_models::node::NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        };
+
+        assert!(should_manage_git_for_node(&node, false));
+        assert_eq!(default_managed_git_message(&node), node.name);
     }
 
     #[test]
@@ -6640,6 +6685,51 @@ export default function transform(ast) {
         assert_eq!(pr.branch, "codemod-default-target");
         assert_eq!(pr.title, "Update default-target");
         assert_eq!(pr.body.as_deref(), Some("Body default-target"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cloud_pull_request_config_defaults_to_node_name_without_pull_request_config() {
+        let _guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_state_adapter(
+            Box::new(LocalStateAdapter::with_base_dir(
+                temp_dir.path().join("state"),
+            )),
+            WorkflowRunConfig::default(),
+        );
+        let workflow_run_id = Uuid::new_v4();
+        let node = Node {
+            id: "apply".to_string(),
+            name: "Apply AST Transformations".to_string(),
+            description: None,
+            r#type: butterflow_models::node::NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        };
+        let task = Task::new(workflow_run_id, node.id.clone(), false);
+
+        let pr = engine
+            .resolve_pull_request_config(&task, &node, &HashMap::new())
+            .unwrap()
+            .expect("cloud mode should synthesize PR metadata for managed git");
+
+        assert_eq!(pr.title, node.name);
+        assert_eq!(pr.body, None);
+        assert!(!pr.draft);
+        assert_eq!(
+            pr.branch,
+            crate::git_ops::resolve_branch_name(
+                None,
+                &crate::git_ops::build_task_expression_context(&task.id.to_string()).signature,
+            )
+        );
     }
 
     #[tokio::test]
