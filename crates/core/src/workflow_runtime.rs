@@ -11,8 +11,9 @@ use uuid::Uuid;
 use crate::ai_handoff::AgentOption;
 use crate::config::{
     AgentSelectionCallback, CapabilitiesSecurityCallback, DeferredInteractionError,
-    PullRequestApprovalCallback, PullRequestCreationRequest, SelectionPrompt,
-    SelectionPromptCallback, ShellCommandApprovalCallback, ShellCommandExecutionRequest,
+    DirtyGitApprovalCallback, DirtyGitApprovalRequest, PullRequestApprovalCallback,
+    PullRequestCreationRequest, SelectionPrompt, SelectionPromptCallback,
+    ShellCommandApprovalCallback, ShellCommandExecutionRequest,
 };
 use crate::engine::Engine;
 use crate::{Task, WorkflowRun, WorkflowStatus};
@@ -83,6 +84,11 @@ pub enum WorkflowEvent {
         modules: Vec<LlrtSupportedModules>,
         at: DateTime<Utc>,
     },
+    DirtyGitApprovalRequested {
+        request_id: Uuid,
+        request: DirtyGitApprovalRequest,
+        at: DateTime<Utc>,
+    },
     AgentSelectionRequested {
         request_id: Uuid,
         options: Vec<AgentSelectionOption>,
@@ -117,6 +123,10 @@ pub enum WorkflowCommand {
         approved: bool,
     },
     RespondCapabilitiesApproval {
+        request_id: Uuid,
+        approved: bool,
+    },
+    RespondDirtyGitApproval {
         request_id: Uuid,
         approved: bool,
     },
@@ -172,6 +182,7 @@ struct PendingApprovals {
     shell: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     pull_request: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     capabilities: Mutex<CapabilityApprovalState>,
+    dirty_git: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Result<bool>>>>,
     agent: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
     selection: Mutex<HashMap<Uuid, std::sync::mpsc::SyncSender<Option<String>>>>,
 }
@@ -186,6 +197,7 @@ impl PendingApprovals {
                 pending_by_request: HashMap::new(),
                 in_flight_by_key: HashMap::new(),
             }),
+            dirty_git: Mutex::new(HashMap::new()),
             agent: Mutex::new(HashMap::new()),
             selection: Mutex::new(HashMap::new()),
         }
@@ -328,6 +340,29 @@ impl WorkflowSessionInteractor {
         })
     }
 
+    fn dirty_git_callback(&self) -> DirtyGitApprovalCallback {
+        let sender = self.sender.clone();
+        let pending = Arc::clone(&self.pending);
+        Arc::new(move |request| {
+            let request_id = Uuid::new_v4();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            pending.dirty_git.lock().unwrap().insert(request_id, tx);
+            if let Err(error) = sender.send(WorkflowEvent::DirtyGitApprovalRequested {
+                request_id,
+                request: request.clone(),
+                at: Utc::now(),
+            }) {
+                pending.dirty_git.lock().unwrap().remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "failed to deliver dirty git approval event: {error}"
+                ));
+            }
+            rx.recv().map_err(|error| {
+                anyhow::anyhow!("dirty git approval response channel closed: {error}")
+            })?
+        })
+    }
+
     fn agent_callback(&self) -> AgentSelectionCallback {
         let sender = self.sender.clone();
         let pending = Arc::clone(&self.pending);
@@ -447,6 +482,15 @@ async fn handle_command(
             }
             Ok(())
         }
+        WorkflowCommand::RespondDirtyGitApproval {
+            request_id,
+            approved,
+        } => {
+            if let Some(tx) = pending.dirty_git.lock().unwrap().remove(&request_id) {
+                let _ = tx.send(Ok(approved));
+            }
+            Ok(())
+        }
         WorkflowCommand::RespondAgentSelection {
             request_id,
             selection,
@@ -515,6 +559,7 @@ impl WorkflowSession {
         config.selection_prompt_callback = Some(interactor.selection_callback());
         config.shell_command_approval_callback = Some(interactor.shell_callback());
         config.pull_request_approval_callback = Some(interactor.pull_request_callback());
+        config.dirty_git_approval_callback = Some(interactor.dirty_git_callback());
 
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<SessionCommandEnvelope>();
         let command_engine = engine.clone();
@@ -985,6 +1030,66 @@ mod tests {
             rx.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[tokio::test]
+    async fn dirty_git_approval_round_trips_through_runtime_commands() {
+        let (sender, _) = broadcast::channel(16);
+        let pending = Arc::new(PendingApprovals::with_approved(HashSet::new()));
+        let interactor = WorkflowSessionInteractor::new(sender.clone(), Arc::clone(&pending));
+        let callback = interactor.dirty_git_callback();
+        let mut rx = sender.subscribe();
+
+        let approval_thread = thread::spawn(move || {
+            callback(&crate::config::DirtyGitApprovalRequest {
+                path: std::path::PathBuf::from("/tmp/repo"),
+                kind: crate::config::DirtyGitApprovalKind::UncommittedChanges,
+            })
+        });
+
+        let event = tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => break event,
+                    Err(broadcast::error::TryRecvError::Empty) => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    }
+                    Err(error) => panic!("unexpected broadcast receive error: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("dirty git approval event should arrive");
+
+        let request_id = match event {
+            WorkflowEvent::DirtyGitApprovalRequested {
+                request_id,
+                request,
+                ..
+            } => {
+                assert_eq!(request.path, std::path::PathBuf::from("/tmp/repo"));
+                assert_eq!(
+                    request.kind,
+                    crate::config::DirtyGitApprovalKind::UncommittedChanges
+                );
+                request_id
+            }
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        handle_command(
+            &crate::engine::Engine::new(),
+            Uuid::new_v4(),
+            &pending,
+            WorkflowCommand::RespondDirtyGitApproval {
+                request_id,
+                approved: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(approval_thread.join().unwrap().unwrap());
     }
 
     #[tokio::test]

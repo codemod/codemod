@@ -160,6 +160,10 @@ fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
         && (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER))
 }
 
+fn should_exit_on_interrupt(code: KeyCode, modifiers: KeyModifiers, show_log_modal: bool) -> bool {
+    is_copy_shortcut(code, modifiers) && !show_log_modal
+}
+
 fn copy_text_to_clipboard(text: &str) -> Result<()> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(text.to_string())?;
@@ -524,6 +528,10 @@ async fn run_tui_loop(
                 }
                 needs_redraw = true;
 
+                if should_exit_on_interrupt(key.code, key.modifiers, state.show_log_modal) {
+                    break;
+                }
+
                 if matches!(state.screen, Screen::RunDetail) && state.approval.is_some() {
                     match key.code {
                         KeyCode::Char('y') => {
@@ -565,6 +573,7 @@ async fn run_tui_loop(
                                 Some(ApprovalPrompt::WorktreeConsent { .. })
                                     | Some(ApprovalPrompt::PullRequestConsent { .. })
                                     | Some(ApprovalPrompt::ManualPullRequestConsent { .. })
+                                    | Some(ApprovalPrompt::DirtyGit { .. })
                                     | Some(ApprovalPrompt::AgentSelection { .. })
                                     | Some(ApprovalPrompt::Selection { .. })
                             ) {
@@ -613,8 +622,6 @@ async fn run_tui_loop(
                                         "Clipboard copy failed: {error}"
                                     )),
                                 }
-                            } else if let Some(session) = runtime.session.as_ref() {
-                                spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
                             }
                         }
                         KeyCode::Char('q') => {
@@ -779,12 +786,14 @@ async fn bind_session(
 #[cfg(test)]
 mod tests {
     use super::{
-        reduce_workflow_receiver, should_redraw, task_list_viewport_height, TuiPerfCounters,
+        reduce_workflow_receiver, should_exit_on_interrupt, should_redraw,
+        task_list_viewport_height, TuiPerfCounters,
     };
     use crate::tui::app::{Screen, TuiState};
     use butterflow_core::workflow_runtime::WorkflowEvent;
     use butterflow_models::{workflow::Workflow, WorkflowRun, WorkflowStatus};
     use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::{Duration, Instant};
     use tokio::sync::broadcast;
     use uuid::Uuid;
@@ -1068,5 +1077,37 @@ mod tests {
         assert!(summary.contains("ui_events=1"));
         assert!(summary.contains("terminal_key_events=1"));
         assert!(summary.contains("deadline_wakeups=1"));
+    }
+
+    #[test]
+    fn ctrl_c_exits_tui_when_log_modal_is_closed() {
+        assert!(should_exit_on_interrupt(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            false
+        ));
+        assert!(should_exit_on_interrupt(
+            KeyCode::Char('C'),
+            KeyModifiers::SUPER,
+            false
+        ));
+    }
+
+    #[test]
+    fn ctrl_c_does_not_exit_tui_when_log_modal_is_open() {
+        assert!(!should_exit_on_interrupt(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            true
+        ));
+    }
+
+    #[test]
+    fn plain_c_does_not_exit_tui() {
+        assert!(!should_exit_on_interrupt(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE,
+            false
+        ));
     }
 }

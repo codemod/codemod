@@ -1137,6 +1137,34 @@ nodes:
         }
     }
 
+    fn workflow_with_manual_pull_request_only_node() -> butterflow_core::Workflow {
+        butterflow_core::Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![butterflow_core::Node {
+                id: "publish-node".to_string(),
+                name: "Publish Node".to_string(),
+                description: None,
+                r#type: butterflow_models::node::NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(butterflow_models::step::PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
     #[test]
     fn non_tui_package_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
         let workflow = workflow_with_manual_step();
@@ -1163,5 +1191,19 @@ nodes:
         assert!(cfg.enable_worktrees);
         assert!(cfg.quiet);
         assert!(!cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn manual_pull_request_only_package_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_pull_request_only_node();
+        let auto_launch_tui = should_auto_launch_package_run_tui(false, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
+        apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.enable_managed_git);
+        assert!(!cfg.enable_worktrees);
+        assert!(!cfg.quiet);
+        assert!(cfg.capture_stdout_in_quiet_mode);
     }
 }

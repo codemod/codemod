@@ -3,6 +3,7 @@
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -127,6 +128,79 @@ fn redact_git_credentials(value: &str) -> String {
 
     redacted.push_str(remaining);
     redacted
+}
+
+#[cfg(unix)]
+fn detach_from_controlling_terminal(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_from_controlling_terminal(_command: &mut Command) {}
+
+fn configure_non_interactive_git_command(command: &mut Command) {
+    detach_from_controlling_terminal(command);
+    command
+        .stdin(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "echo")
+        .env("SSH_ASKPASS", "echo");
+}
+
+fn configure_non_interactive_github_command(command: &mut Command) {
+    configure_non_interactive_git_command(command);
+    command
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1");
+}
+
+fn is_authentication_prompt_or_failure(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("username for 'https://github.com'")
+        || normalized.contains("password for 'https://")
+        || normalized.contains("could not read username")
+        || normalized.contains("could not read password")
+        || normalized.contains("terminal prompts disabled")
+        || normalized.contains("authentication failed")
+        || normalized.contains("could not authenticate")
+        || normalized.contains("requires authentication")
+        || normalized.contains("gh auth login")
+        || normalized.contains("not logged into any github hosts")
+}
+
+fn github_auth_guidance(action: &str) -> String {
+    format!(
+        "GitHub authentication is required to {action}. Log in first with `gh auth login`, or configure git credentials for `origin`, then retry."
+    )
+}
+
+fn normalize_git_push_error(stderr_summary: &str) -> String {
+    if is_authentication_prompt_or_failure(stderr_summary) {
+        github_auth_guidance("push the branch")
+    } else {
+        stderr_summary.to_string()
+    }
+}
+
+fn normalize_gh_pr_create_error(stderr: &str, stdout: &str) -> String {
+    let details = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+
+    if is_authentication_prompt_or_failure(details) {
+        github_auth_guidance("create the pull request")
+    } else {
+        details.to_string()
+    }
 }
 
 pub async fn repo_root(working_dir: &Path) -> Result<PathBuf> {
@@ -385,12 +459,12 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
     }
 
     // Try symbolic-ref first
-    if let Ok(output) = Command::new("git")
+    let mut symbolic_ref = Command::new("git");
+    symbolic_ref
         .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-        .current_dir(working_dir)
-        .output()
-        .await
-    {
+        .current_dir(working_dir);
+    configure_non_interactive_git_command(&mut symbolic_ref);
+    if let Ok(output) = symbolic_ref.output().await {
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout)
                 .trim()
@@ -404,17 +478,17 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
 
     // Fallback: try common default branch names on the remote.
     for candidate in &["main", "master"] {
-        if let Ok(output) = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args([
                 "ls-remote",
                 "--exit-code",
                 "origin",
                 &format!("refs/heads/{candidate}"),
             ])
-            .current_dir(working_dir)
-            .output()
-            .await
-        {
+            .current_dir(working_dir);
+        configure_non_interactive_git_command(&mut command);
+        if let Ok(output) = command.output().await {
             if output.status.success() {
                 return candidate.to_string();
             }
@@ -433,7 +507,8 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
     let mut last_push_stderr: Option<String> = None;
 
     for attempt in 1..=max_retries {
-        let push_output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args([
                 "-c",
                 "http.version=HTTP/1.1",
@@ -445,7 +520,10 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
                 branch,
                 "--force",
             ])
-            .current_dir(working_dir)
+            .current_dir(working_dir);
+        configure_non_interactive_git_command(&mut command);
+
+        let push_output = command
             .output()
             .await
             .map_err(|e| butterflow_models::Error::Runtime(format!("git push failed: {e}")))?;
@@ -469,20 +547,21 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
             .rfind(|line| !line.trim().is_empty())
             .unwrap_or("git push failed")
             .to_string();
+        let normalized_stderr_summary = normalize_git_push_error(&stderr_summary);
 
         if push_output.status.success() {
             pushed = true;
             break;
         }
 
-        last_push_stderr = Some(stderr_summary.clone());
+        last_push_stderr = Some(normalized_stderr_summary.clone());
 
         warn!(
             "Push attempt {}/{} failed (exit code {:?}): {}",
             attempt,
             max_retries,
             push_output.status.code(),
-            stderr_summary
+            normalized_stderr_summary
         );
 
         if attempt < max_retries {
@@ -494,7 +573,8 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
 
     // Verify branch exists on remote even if push reported failure
     if !pushed {
-        let verify = Command::new("git")
+        let mut verify_command = Command::new("git");
+        verify_command
             .args([
                 "-c",
                 "http.version=HTTP/1.1",
@@ -503,7 +583,9 @@ pub async fn push_branch(branch: &str, working_dir: &std::path::Path) -> Result<
                 "origin",
                 &format!("refs/heads/{}", branch),
             ])
-            .current_dir(working_dir)
+            .current_dir(working_dir);
+        configure_non_interactive_git_command(&mut verify_command);
+        let verify = verify_command
             .output()
             .await
             .map_err(|e| butterflow_models::Error::Runtime(format!("git ls-remote failed: {e}")))?;
@@ -651,6 +733,7 @@ async fn create_pull_request_via_gh(
             body.unwrap_or(""),
         ])
         .current_dir(working_dir);
+    configure_non_interactive_github_command(&mut command);
 
     if draft {
         command.arg("--draft");
@@ -663,11 +746,7 @@ async fn create_pull_request_via_gh(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let details = if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            stderr.trim().to_string()
-        };
+        let details = normalize_gh_pr_create_error(&stderr, &stdout);
         return Err(butterflow_models::Error::Runtime(format!(
             "gh pr create failed: {details}"
         )));
@@ -690,7 +769,10 @@ async fn create_pull_request_via_gh(
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_git_credentials, sanitize_path_component, worktree_path};
+    use super::{
+        normalize_gh_pr_create_error, normalize_git_push_error, redact_git_credentials,
+        sanitize_path_component, worktree_path,
+    };
     use std::path::Path;
 
     #[test]
@@ -727,5 +809,22 @@ mod tests {
             redact_git_credentials("git@github.com:org/repo.git"),
             "git@github.com:org/repo.git"
         );
+    }
+
+    #[test]
+    fn normalize_git_push_error_rewrites_github_auth_prompt() {
+        let message = normalize_git_push_error("Username for 'https://github.com': ");
+        assert!(message.contains("GitHub authentication is required to push the branch"));
+        assert!(message.contains("gh auth login"));
+    }
+
+    #[test]
+    fn normalize_gh_pr_create_error_rewrites_auth_failure() {
+        let message = normalize_gh_pr_create_error(
+            "To get started with GitHub CLI, please run:  gh auth login",
+            "",
+        );
+        assert!(message.contains("GitHub authentication is required to create the pull request"));
+        assert!(message.contains("gh auth login"));
     }
 }

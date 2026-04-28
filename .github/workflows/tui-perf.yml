@@ -823,6 +823,24 @@ jobs:
               "codemod" \
               "large_task_list_render_latency_benchmark" \
               "TUI_RENDER_LATENCY_MICROS"
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "tui-publish-log-render-latency" \
+              "codemod" \
+              "publish_log_heavy_task_list_render_latency_benchmark" \
+              "TUI_PUBLISH_LOG_RENDER_LATENCY_MICROS"
+            run_timed_benchmark \
+              "${worktree}" \
+              "${outdir}" \
+              "${ref}" \
+              "${target_dir}" \
+              "tui-log-modal-render-latency" \
+              "codemod" \
+              "log_modal_render_latency_benchmark" \
+              "TUI_LOG_MODAL_RENDER_LATENCY_MICROS"
           }
 
           compare_timed_benchmarks() {
@@ -843,6 +861,8 @@ jobs:
           benchmarks = [
               ("jssg-wait-latency", "jssg_wait_completion_latency", 50_000),
               ("tui-render-latency", "large_task_list_render_latency", 2_000),
+              ("tui-publish-log-render-latency", "publish_log_heavy_task_list_render_latency", 5_000),
+              ("tui-log-modal-render-latency", "log_modal_render_latency", 8_000),
           ]
           failed = False
           with open("perf-results/timed-benchmarks.md", "w", encoding="utf-8") as output:
