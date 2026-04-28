@@ -215,8 +215,21 @@ impl TuiState {
         })
     }
 
+    fn visible_task_iter(&self) -> impl Iterator<Item = &Task> {
+        self.tasks.iter().filter(|task| !task.is_master)
+    }
+
+    fn visible_task_count(&self) -> usize {
+        self.visible_task_iter().count()
+    }
+
+    fn visible_task_at(&self, index: usize) -> Option<&Task> {
+        self.visible_task_iter().nth(index)
+    }
+
+    #[cfg(test)]
     pub fn visible_tasks(&self) -> Vec<&Task> {
-        self.tasks.iter().filter(|task| !task.is_master).collect()
+        self.visible_task_iter().collect()
     }
 
     fn run_is_effectively_complete(&self, run: &WorkflowRun, tasks: &[Task]) -> bool {
@@ -370,7 +383,7 @@ impl TuiState {
     }
 
     fn clamp_selected_task(&mut self) {
-        let visible_len = self.visible_tasks().len();
+        let visible_len = self.visible_task_count();
         if self.selected_task >= visible_len {
             self.selected_task = visible_len.saturating_sub(1);
         }
@@ -383,7 +396,7 @@ impl TuiState {
 
     pub fn sync_task_list_scroll(&mut self, viewport_height: usize) -> bool {
         let previous_scroll = self.task_list_scroll;
-        let visible_len = self.visible_tasks().len();
+        let visible_len = self.visible_task_count();
         if visible_len == 0 || viewport_height == 0 {
             self.task_list_scroll = 0;
             return previous_scroll != self.task_list_scroll;
@@ -403,13 +416,16 @@ impl TuiState {
     }
 
     pub fn visible_task_window(&self, viewport_height: usize) -> Vec<&Task> {
-        let tasks = self.visible_tasks();
         if viewport_height == 0 {
             return Vec::new();
         }
-        let start = self.task_list_scroll.min(tasks.len());
-        let end = start.saturating_add(viewport_height).min(tasks.len());
-        tasks[start..end].to_vec()
+        let visible_len = self.visible_task_count();
+        let start = self.task_list_scroll.min(visible_len);
+        let window_len = visible_len.saturating_sub(start).min(viewport_height);
+        self.visible_task_iter()
+            .skip(start)
+            .take(window_len)
+            .collect()
     }
 
     pub fn set_runs(&mut self, runs: Vec<WorkflowRun>) {
@@ -458,11 +474,10 @@ impl TuiState {
         self.task_progress
             .retain(|task_id, _| self.tasks.iter().any(|task| task.id == *task_id));
         if let Some(selected_task_id) = selected_task_id {
-            if let Some(index) = self
-                .visible_tasks()
-                .iter()
-                .position(|task| task.id == selected_task_id)
-            {
+            let index = self
+                .visible_task_iter()
+                .position(|task| task.id == selected_task_id);
+            if let Some(index) = index {
                 self.selected_task = index;
                 return;
             }
@@ -492,7 +507,7 @@ impl TuiState {
     }
 
     pub fn selected_task(&self) -> Option<&Task> {
-        self.visible_tasks().get(self.selected_task).copied()
+        self.visible_task_at(self.selected_task)
     }
 
     pub fn task_display_name(&self, task: &Task) -> String {
@@ -912,7 +927,7 @@ impl TuiState {
                     }
                 }
                 _ => {
-                    let visible_len = self.visible_tasks().len();
+                    let visible_len = self.visible_task_count();
                     if visible_len > 0 {
                         self.selected_task = (self.selected_task + 1).min(visible_len - 1);
                     }
@@ -1320,8 +1335,7 @@ impl TuiState {
     }
 
     pub fn visible_awaiting_task_ids(&self) -> Vec<Uuid> {
-        self.visible_tasks()
-            .into_iter()
+        self.visible_task_iter()
             .filter(|task| self.is_bulk_triggerable_task(task))
             .map(|task| task.id)
             .collect()
