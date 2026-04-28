@@ -17,7 +17,9 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
-use crate::workflow_runner::{resolve_workflow_source, run_workflow, workflow_has_manual_steps};
+use crate::workflow_runner::{
+    resolve_workflow_source_with_name, run_workflow, workflow_has_manual_steps,
+};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -75,6 +77,10 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value = "text")]
     format: String,
+
+    /// Name of the workflow to run when codemod.yaml defines multiple workflows
+    #[arg(long = "workflow-name", value_name = "NAME")]
+    workflow_name: Option<String>,
 }
 
 fn should_auto_launch_workflow_tui(
@@ -99,7 +105,8 @@ fn apply_workflow_run_mode_to_config(
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve workflow file and bundle path
-    let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
+    let (workflow_file_path, _) =
+        resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
 
     // Parse parameters
     let params = utils::parse_params(&args.params).context("Failed to parse parameters")?;
@@ -284,6 +291,34 @@ mod tests {
         }
     }
 
+    fn workflow_with_manual_pull_request_only_node() -> Workflow {
+        Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "publish-node".to_string(),
+                name: "Publish Node".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
     #[test]
     fn non_tui_workflow_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
         let workflow = workflow_with_manual_step();
@@ -310,5 +345,19 @@ mod tests {
         assert!(cfg.enable_worktrees);
         assert!(cfg.quiet);
         assert!(!cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn manual_pull_request_only_workflow_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_pull_request_only_node();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.enable_managed_git);
+        assert!(!cfg.enable_worktrees);
+        assert!(!cfg.quiet);
+        assert!(cfg.capture_stdout_in_quiet_mode);
     }
 }

@@ -8,6 +8,7 @@ use std::fs::File;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -454,6 +455,39 @@ fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
+fn format_agent_stream_line(canonical: &str, stream: &str, line: String) -> String {
+    if canonical == "codex" || canonical == "claude-code" {
+        line
+    } else {
+        format!("[{stream}] {line}")
+    }
+}
+
+fn should_stream_agent_output_live(quiet: bool, logger: &StructuredLogger) -> bool {
+    !quiet && !logger.is_jsonl()
+}
+
+fn should_relog_captured_agent_output(logger: &StructuredLogger) -> bool {
+    logger.is_jsonl()
+}
+
+fn write_agent_stream_line_live(stream: &str, line: &str) {
+    use std::io::Write;
+
+    match stream {
+        "stderr" => {
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "{line}");
+            let _ = stderr.flush();
+        }
+        _ => {
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "{line}");
+            let _ = stdout.flush();
+        }
+    }
+}
+
 fn format_shell_command_log_notice(request: &ShellCommandExecutionRequest) -> String {
     format!(
         "About to execute shell command for step '{}' in node '{}'.",
@@ -566,6 +600,7 @@ pub struct CapabilitiesData {
 impl Engine {
     async fn launch_agent(
         &self,
+        task_id: Uuid,
         canonical: &str,
         executable: &Path,
         system_prompt: Option<&str>,
@@ -604,16 +639,14 @@ impl Engine {
             full_prompt_len
         );
 
-        if canonical == "claude-code" || canonical == "codex" {
+        // Only agents whose `build_agent_command` pass the prompt via stdin
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
-            cmd.stdin(Stdio::piped())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
+            cmd.stdin(Stdio::piped());
         } else {
-            cmd.stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
+            cmd.stdin(Stdio::inherit());
         }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let launch_args = cmd
             .get_args()
@@ -630,7 +663,54 @@ impl Engine {
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
-        if canonical == "claude-code" || canonical == "codex" {
+        let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
+        let stream_live = should_stream_agent_output_live(self.workflow_run_config.quiet, logger);
+        let capture_output_for_relog = should_relog_captured_agent_output(logger);
+        let stdout_reader = child.stdout.take().map(|stdout| {
+            let log_tx = log_tx.clone();
+            let canonical = canonical.to_string();
+            std::thread::spawn(move || -> Vec<String> {
+                let mut captured_output = Vec::new();
+                for line in BufReader::new(stdout)
+                    .lines()
+                    .map_while(|line: std::io::Result<String>| line.ok())
+                    .filter(|line| !line.trim().is_empty())
+                {
+                    let formatted = format_agent_stream_line(&canonical, "stdout", line);
+                    let _ = log_tx.send(formatted.clone());
+                    if stream_live {
+                        write_agent_stream_line_live("stdout", &formatted);
+                    }
+                    if capture_output_for_relog {
+                        captured_output.push(formatted);
+                    }
+                }
+                captured_output
+            })
+        });
+        let stderr_reader = child.stderr.take().map(|stderr| {
+            let log_tx = log_tx.clone();
+            let canonical = canonical.to_string();
+            std::thread::spawn(move || -> Vec<String> {
+                let mut captured_output = Vec::new();
+                for line in BufReader::new(stderr)
+                    .lines()
+                    .map_while(|line: std::io::Result<String>| line.ok())
+                    .filter(|line| !line.trim().is_empty())
+                {
+                    let formatted = format_agent_stream_line(&canonical, "stderr", line);
+                    let _ = log_tx.send(formatted.clone());
+                    if stream_live {
+                        write_agent_stream_line_live("stderr", &formatted);
+                    }
+                    if capture_output_for_relog {
+                        captured_output.push(formatted);
+                    }
+                }
+                captured_output
+            })
+        });
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             let mut stdin = child.stdin.take().ok_or_else(|| {
                 Error::StepExecution(format!("{} stdin pipe was not available", canonical))
             })?;
@@ -703,6 +783,28 @@ impl Engine {
                 }
             }
         };
+
+        drop(log_tx);
+        let _ = log_persist_task.await;
+        if capture_output_for_relog {
+            let mut captured_output = Vec::new();
+            if let Some(reader) = stdout_reader {
+                captured_output.extend(reader.join().unwrap_or_default());
+            }
+            if let Some(reader) = stderr_reader {
+                captured_output.extend(reader.join().unwrap_or_default());
+            }
+            for line in captured_output {
+                logger.log("info", &line);
+            }
+        } else {
+            if let Some(reader) = stdout_reader {
+                let _ = reader.join();
+            }
+            if let Some(reader) = stderr_reader {
+                let _ = reader.join();
+            }
+        }
 
         if status.success() {
             slog!(logger, info, "Agent '{}' completed successfully", canonical);
@@ -3679,7 +3781,9 @@ impl Engine {
             pre_run_callback(
                 &self.workflow_run_config.target_path,
                 self.workflow_run_config.dry_run,
-            );
+                &self.workflow_run_config,
+            )
+            .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
         }
 
         let config_path_clone = config_path.clone();
@@ -3821,7 +3925,12 @@ impl Engine {
         };
 
         if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_deref() {
-            pre_run_callback(target_path.as_path(), js_ast_grep.dry_run.unwrap_or(false));
+            pre_run_callback(
+                target_path.as_path(),
+                js_ast_grep.dry_run.unwrap_or(false),
+                &self.workflow_run_config,
+            )
+            .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
         }
 
         if !js_file_path.exists() {
@@ -3883,20 +3992,16 @@ impl Engine {
             matrix_input.as_ref(),
             task_expr_ctx,
         )?;
-        let explicit_files = if js_ast_grep.include.is_none() && resolved_exclude.is_none() {
-            matrix_input
-                .as_ref()
-                .and_then(|m| m.get("_meta_files"))
-                .and_then(butterflow_models::variable::value_to_string_vec)
-                .map(|files| {
-                    files
-                        .into_iter()
-                        .map(|file| target_path.join(file))
-                        .collect()
-                })
-        } else {
-            None
-        };
+        let explicit_files = matrix_input
+            .as_ref()
+            .and_then(|m| m.get("_meta_files"))
+            .and_then(butterflow_models::variable::value_to_string_vec)
+            .map(|files| {
+                files
+                    .into_iter()
+                    .map(|file| target_path.join(file))
+                    .collect()
+            });
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
@@ -4757,6 +4862,7 @@ impl Engine {
                 if let Some(executable) = find_agent_executable(canonical) {
                     return self
                         .launch_agent(
+                            task.id,
                             canonical,
                             &executable,
                             ai_config.system_prompt.as_deref(),
@@ -4795,6 +4901,7 @@ impl Engine {
                     if let Some(executable) = find_agent_executable(canonical) {
                         return self
                             .launch_agent(
+                                task.id,
                                 canonical,
                                 &executable,
                                 ai_config.system_prompt.as_deref(),
@@ -4856,6 +4963,7 @@ impl Engine {
                             if let Some(executable) = find_agent_executable(selected) {
                                 return self
                                     .launch_agent(
+                                        task.id,
                                         selected,
                                         &executable,
                                         ai_config.system_prompt.as_deref(),
@@ -6416,6 +6524,41 @@ export default function transform(ast) {
         assert!(line.contains(r#""branch":"codemod-branch""#));
         assert!(!line.contains("secret body"));
         assert!(!line.contains(r#""body""#));
+    }
+
+    #[test]
+    fn codex_agent_output_is_not_tagged_as_stderr() {
+        assert_eq!(
+            format_agent_stream_line("codex", "stderr", "hello".to_string()),
+            "hello"
+        );
+        assert_eq!(
+            format_agent_stream_line("claude-code", "stdout", "hello".to_string()),
+            "hello"
+        );
+        assert_eq!(
+            format_agent_stream_line("aider", "stderr", "hello".to_string()),
+            "[stderr] hello"
+        );
+    }
+
+    #[test]
+    fn live_agent_streaming_is_enabled_only_for_non_quiet_text_runs() {
+        let text_logger = StructuredLogger::default();
+        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
+
+        assert!(should_stream_agent_output_live(false, &text_logger));
+        assert!(!should_stream_agent_output_live(true, &text_logger));
+        assert!(!should_stream_agent_output_live(false, &jsonl_logger));
+    }
+
+    #[test]
+    fn captured_agent_output_is_only_relogged_in_jsonl_mode() {
+        let text_logger = StructuredLogger::default();
+        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
+
+        assert!(!should_relog_captured_agent_output(&text_logger));
+        assert!(should_relog_captured_agent_output(&jsonl_logger));
     }
 
     #[tokio::test]

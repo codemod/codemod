@@ -32,7 +32,7 @@ repository = "https://github.com/codemod/codemod"
 homepage = "https://github.com/codemod/codemod"
 license = "Apache-2.0"
 rust-version = "1.76"
-version = "1.8.4"
+version = "1.9.0"
 edition = "2021"
 
 [workspace.dependencies]
