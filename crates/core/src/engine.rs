@@ -3992,20 +3992,16 @@ impl Engine {
             matrix_input.as_ref(),
             task_expr_ctx,
         )?;
-        let explicit_files = if js_ast_grep.include.is_none() && resolved_exclude.is_none() {
-            matrix_input
-                .as_ref()
-                .and_then(|m| m.get("_meta_files"))
-                .and_then(butterflow_models::variable::value_to_string_vec)
-                .map(|files| {
-                    files
-                        .into_iter()
-                        .map(|file| target_path.join(file))
-                        .collect()
-                })
-        } else {
-            None
-        };
+        let explicit_files = matrix_input
+            .as_ref()
+            .and_then(|m| m.get("_meta_files"))
+            .and_then(butterflow_models::variable::value_to_string_vec)
+            .map(|files| {
+                files
+                    .into_iter()
+                    .map(|file| target_path.join(file))
+                    .collect()
+            });
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
