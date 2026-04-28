@@ -65,14 +65,12 @@ impl<'de> Deserialize<'de> for TestCase {
                 expected_output_file,
             } => match kind.as_str() {
                 "adhoc" => Ok(TestCase::Adhoc {
-                    input_code: input_code
-                        .ok_or_else(|| de::Error::missing_field("input_code"))?,
+                    input_code: input_code.ok_or_else(|| de::Error::missing_field("input_code"))?,
                     expected_output_code: expected_output_code
                         .ok_or_else(|| de::Error::missing_field("expected_output_code"))?,
                 }),
                 "file-system" => Ok(TestCase::FileSystem {
-                    input_file: input_file
-                        .ok_or_else(|| de::Error::missing_field("input_file"))?,
+                    input_file: input_file.ok_or_else(|| de::Error::missing_field("input_file"))?,
                     expected_output_file: expected_output_file
                         .ok_or_else(|| de::Error::missing_field("expected_output_file"))?,
                 }),
@@ -422,10 +420,8 @@ mod tests {
 
     #[test]
     fn test_case_deserializes_legacy_adhoc_string() {
-        let test_case: TestCase = serde_json::from_value(json!(
-            "const a = 1;>>>const a = 2;"
-        ))
-        .expect("expected legacy string test case to deserialize");
+        let test_case: TestCase = serde_json::from_value(json!("const a = 1;>>>const a = 2;"))
+            .expect("expected legacy string test case to deserialize");
 
         match test_case {
             TestCase::Adhoc {
