@@ -498,6 +498,71 @@ function testNamespaceNotReturnedAlongsideTypedResults() {
 }
 
 // ============================================================================
+// getImport — dynamic .then() callback tests
+// ============================================================================
+
+function testGetImport_DynamicThenArrowDefault() {
+  const program = parseProgram("javascript", "import('mod').then(mod => { mod(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find default from dynamic .then() arrow");
+  assert(res!.alias === "mod", "Alias should be the callback param name");
+  assert(res!.isNamespace === false, "isNamespace should be false");
+  assert(res!.moduleType === "esm", "moduleType should be esm for dynamic import");
+}
+
+function testGetImport_DynamicThenArrowParensDefault() {
+  const program = parseProgram("javascript", "import('mod').then((mod) => { mod(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find default from dynamic .then() arrow with parens");
+  assert(res!.alias === "mod", "Alias should be the callback param name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenFunctionExpressionDefault() {
+  const program = parseProgram("javascript", "import('mod').then(function(mod) { mod(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find default from dynamic .then() function expression");
+  assert(res!.alias === "mod", "Alias should be the callback param name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredNamed() {
+  const program = parseProgram("javascript", "import('mod').then(({fn}) => { fn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() callback");
+  assert(res!.alias === "fn", "Alias should be the destructured name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredNamedWithAlias() {
+  const program = parseProgram("javascript", "import('mod').then(({fn: myFn}) => { myFn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() callback with alias");
+  assert(res!.alias === "myFn", "Alias should be the renamed binding");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredFunctionExpression() {
+  const program = parseProgram("javascript", "import('mod').then(function({fn}) { fn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() function expression");
+  assert(res!.alias === "fn", "Alias should be the destructured name");
+}
+
+function testGetImport_DynamicThenDestructuredAliasedFunctionExpression() {
+  const program = parseProgram("javascript", "import('mod').then(function({fn: myFn}) { myFn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() function expression with alias");
+  assert(res!.alias === "myFn", "Alias should be the renamed binding");
+}
+
+function testGetImport_DynamicThenNamedNotFound() {
+  const program = parseProgram("javascript", "import('mod').then(({foo}) => { foo(); });\n");
+  const res = getImport(program, { type: "named", name: "bar", from: "mod" });
+  assert(res === null, "Should return null when requested named specifier is not destructured");
+}
+
+// ============================================================================
 // addImport tests
 // ============================================================================
 
@@ -1078,6 +1143,14 @@ function run() {
   testMultipleNamespaceImports_ReturnsFirstOnly();
   testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly();
   testNamespaceNotReturnedAlongsideTypedResults();
+  testGetImport_DynamicThenArrowDefault();
+  testGetImport_DynamicThenArrowParensDefault();
+  testGetImport_DynamicThenFunctionExpressionDefault();
+  testGetImport_DynamicThenDestructuredNamed();
+  testGetImport_DynamicThenDestructuredNamedWithAlias();
+  testGetImport_DynamicThenDestructuredFunctionExpression();
+  testGetImport_DynamicThenDestructuredAliasedFunctionExpression();
+  testGetImport_DynamicThenNamedNotFound();
 
   // addImport tests
   testAddDefaultImportESM();
