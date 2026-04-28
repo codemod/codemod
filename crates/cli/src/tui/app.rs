@@ -1,3 +1,4 @@
+use butterflow_core::config::DirtyGitApprovalKind;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
 use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
@@ -37,9 +38,14 @@ pub enum ApprovalPrompt {
         request_id: Uuid,
         modules: Vec<String>,
     },
+    DirtyGit {
+        request_id: Uuid,
+        path: String,
+        kind: DirtyGitApprovalKind,
+    },
     AgentSelection {
         request_id: Uuid,
-        options: Vec<(String, bool)>,
+        options: Vec<(String, String, bool)>,
         selected: usize,
     },
     Selection {
@@ -1029,6 +1035,17 @@ impl TuiState {
                         .collect(),
                 });
             }
+            WorkflowEvent::DirtyGitApprovalRequested {
+                request_id,
+                request,
+                ..
+            } => {
+                self.enqueue_approval(ApprovalPrompt::DirtyGit {
+                    request_id,
+                    path: request.path.display().to_string(),
+                    kind: request.kind,
+                });
+            }
             WorkflowEvent::AgentSelectionRequested {
                 request_id,
                 options,
@@ -1040,6 +1057,7 @@ impl TuiState {
                         .into_iter()
                         .map(|option| {
                             (
+                                option.canonical.to_string(),
                                 format!(
                                     "{}{}",
                                     option.label,
@@ -1103,27 +1121,28 @@ impl TuiState {
                     approved: true,
                 })
             }
+            ApprovalPrompt::DirtyGit { request_id, .. } => {
+                Some(WorkflowCommand::RespondDirtyGitApproval {
+                    request_id: *request_id,
+                    approved: true,
+                })
+            }
             ApprovalPrompt::AgentSelection {
                 request_id,
                 options,
                 selected,
-            } => options.get(*selected).map(|(label, available)| {
-                WorkflowCommand::RespondAgentSelection {
-                    request_id: *request_id,
-                    selection: if *available {
-                        Some(
-                            label
-                                .split(" (")
-                                .next()
-                                .unwrap_or(label)
-                                .to_ascii_lowercase()
-                                .replace(' ', "-"),
-                        )
-                    } else {
-                        None
+            } => options
+                .get(*selected)
+                .map(
+                    |(canonical, _label, available)| WorkflowCommand::RespondAgentSelection {
+                        request_id: *request_id,
+                        selection: if *available {
+                            Some(canonical.clone())
+                        } else {
+                            None
+                        },
                     },
-                }
-            }),
+                ),
             ApprovalPrompt::Selection {
                 request_id,
                 options,
@@ -1158,6 +1177,12 @@ impl TuiState {
             }
             ApprovalPrompt::Capabilities { request_id, .. } => {
                 Some(WorkflowCommand::RespondCapabilitiesApproval {
+                    request_id: *request_id,
+                    approved: false,
+                })
+            }
+            ApprovalPrompt::DirtyGit { request_id, .. } => {
+                Some(WorkflowCommand::RespondDirtyGitApproval {
                     request_id: *request_id,
                     approved: false,
                 })
@@ -3021,6 +3046,48 @@ mod tests {
     }
 
     #[test]
+    fn reducer_maps_dirty_git_approval_to_tui_prompt_and_commands() {
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+
+        state.reduce(AppEvent::Workflow(
+            WorkflowEvent::DirtyGitApprovalRequested {
+                request_id,
+                request: butterflow_core::config::DirtyGitApprovalRequest {
+                    path: "/tmp/repo".into(),
+                    kind: butterflow_core::config::DirtyGitApprovalKind::UncommittedChanges,
+                },
+                at: Utc::now(),
+            },
+        ));
+
+        assert!(matches!(
+            state.approval,
+            Some(super::ApprovalPrompt::DirtyGit {
+                request_id: actual_request_id,
+                ref path,
+                kind: butterflow_core::config::DirtyGitApprovalKind::UncommittedChanges,
+            }) if actual_request_id == request_id && path == "/tmp/repo"
+        ));
+
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::RespondDirtyGitApproval {
+                request_id: actual_request_id,
+                approved: true,
+            }) if actual_request_id == request_id
+        ));
+
+        assert!(matches!(
+            state.approval_reject_command(),
+            Some(WorkflowCommand::RespondDirtyGitApproval {
+                request_id: actual_request_id,
+                approved: false,
+            }) if actual_request_id == request_id
+        ));
+    }
+
+    #[test]
     fn drain_approval_reject_commands_rejects_pending_engine_prompts() {
         let first_request_id = Uuid::new_v4();
         let second_request_id = Uuid::new_v4();
@@ -3291,6 +3358,29 @@ mod tests {
                 request_id: actual_request_id,
                 selection: None,
             }) if actual_request_id == request_id
+        ));
+    }
+
+    #[test]
+    fn agent_selection_returns_canonical_agent_name() {
+        let request_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.reduce(AppEvent::Workflow(WorkflowEvent::AgentSelectionRequested {
+            request_id,
+            options: vec![butterflow_core::workflow_runtime::AgentSelectionOption {
+                canonical: "codex".to_string(),
+                label: "Codex CLI".to_string(),
+                is_available: true,
+            }],
+            at: Utc::now(),
+        }));
+
+        assert!(matches!(
+            state.approval_accept_command(),
+            Some(WorkflowCommand::RespondAgentSelection {
+                request_id: actual_request_id,
+                selection: Some(selection),
+            }) if actual_request_id == request_id && selection == "codex"
         ));
     }
 

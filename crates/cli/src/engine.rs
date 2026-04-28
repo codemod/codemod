@@ -196,10 +196,11 @@ pub fn create_engine(
         workflow_file_path.to_path_buf()
     };
 
-    let pre_run_callback: PreRunCallback = Box::new(move |path: &Path, dirty: bool| {
+    let pre_run_callback: PreRunCallback = Box::new(move |path: &Path, dirty: bool, config| {
         if !allow_dirty {
-            dirty_check(path, dirty);
+            dirty_check(path, dirty, config.dirty_git_approval_callback.as_ref())?;
         }
+        Ok(())
     });
 
     // Skip progress bars in JSONL mode (would corrupt structured output)
