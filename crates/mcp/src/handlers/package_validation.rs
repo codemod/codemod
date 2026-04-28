@@ -6,7 +6,9 @@ use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use walkdir::WalkDir;
 
@@ -987,39 +989,96 @@ async fn run_package_script(
     let command_display = package_command.to_string();
     let mut command = Command::new(package_command.program());
     package_command.apply(&mut command);
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_command_for_timeout_cleanup(&mut command);
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(timeout_seconds),
-        command.current_dir(package_root).output(),
-    )
-    .await;
+    let spawn_result = command.current_dir(package_root).spawn();
 
-    match result {
-        Ok(Ok(output)) => ProcessCheckResult {
+    let mut child = match spawn_result {
+        Ok(child) => child,
+        Err(error) => {
+            return ProcessCheckResult {
+                command: command_display,
+                success: false,
+                exit_code: None,
+                timed_out: false,
+                stdout_tail: String::new(),
+                stderr_tail: error.to_string(),
+            };
+        }
+    };
+
+    let stdout_task = child.stdout.take().map(|mut stdout| {
+        tokio::spawn(async move {
+            let mut buffer = Vec::new();
+            let _ = stdout.read_to_end(&mut buffer).await;
+            buffer
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut buffer = Vec::new();
+            let _ = stderr.read_to_end(&mut buffer).await;
+            buffer
+        })
+    });
+
+    let wait_result = tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await;
+
+    let stdout = collect_output(stdout_task).await;
+    let stderr = collect_output(stderr_task).await;
+
+    match wait_result {
+        Ok(Ok(status)) => ProcessCheckResult {
             command: command_display.clone(),
-            success: output.status.success(),
-            exit_code: output.status.code(),
+            success: status.success(),
+            exit_code: status.code(),
             timed_out: false,
-            stdout_tail: truncate_tail(&String::from_utf8_lossy(&output.stdout), 2000),
-            stderr_tail: truncate_tail(&String::from_utf8_lossy(&output.stderr), 2000),
+            stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
+            stderr_tail: truncate_tail(&String::from_utf8_lossy(&stderr), 2000),
         },
         Ok(Err(error)) => ProcessCheckResult {
             command: command_display.clone(),
             success: false,
             exit_code: None,
             timed_out: false,
-            stdout_tail: String::new(),
+            stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
             stderr_tail: error.to_string(),
         },
-        Err(_) => ProcessCheckResult {
-            command: command_display,
-            success: false,
-            exit_code: None,
-            timed_out: true,
-            stdout_tail: String::new(),
-            stderr_tail: format!("Timed out after {timeout_seconds}s"),
-        },
+        Err(_) => {
+            kill_child_process_tree(&mut child).await;
+            let _ = child.wait().await;
+
+            ProcessCheckResult {
+                command: command_display,
+                success: false,
+                exit_code: None,
+                timed_out: true,
+                stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
+                stderr_tail: if stderr.is_empty() {
+                    format!("Timed out after {timeout_seconds}s")
+                } else {
+                    truncate_tail(&String::from_utf8_lossy(&stderr), 2000)
+                },
+            }
+        }
     }
+}
+
+async fn collect_output(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    match task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+fn configure_command_for_timeout_cleanup(_command: &mut Command) {}
+
+async fn kill_child_process_tree(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
 }
 
 fn truncate_tail(value: &str, max_chars: usize) -> String {
@@ -1545,6 +1604,40 @@ mod tests {
 
         let default_test = response.default_test.expect("expected default test result");
         assert_eq!(default_test.command, "yarn test");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn timed_out_package_script_returns_timed_out_result() {
+        let npm_available = Command::new("npm")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !npm_available {
+            return;
+        }
+
+        let dir = unique_temp_dir();
+        fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "timeout-test",
+  "scripts": {
+    "test": "node -e \"setTimeout(() => require('fs').writeFileSync('late.txt', 'done'), 1500)\""
+  }
+}"#,
+        )
+        .unwrap();
+
+        let result = run_package_script(&dir, PackageManager::Npm, "test", 1).await;
+        assert!(result.timed_out);
+        assert!(!result.success);
+        assert!(result.stderr_tail.contains("Timed out after 1s"));
 
         fs::remove_dir_all(dir).unwrap();
     }
