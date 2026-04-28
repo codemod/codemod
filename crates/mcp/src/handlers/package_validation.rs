@@ -137,6 +137,7 @@ struct ValidationRequirements {
 struct WorkflowPathResolution {
     path: PathBuf,
     codemod_yaml_invalid: bool,
+    workflow_path_invalid: bool,
 }
 
 impl ValidationPackageKind {
@@ -357,6 +358,15 @@ impl PackageValidationHandler {
             ));
         }
 
+        if workflow_resolution.workflow_path_invalid {
+            issues.push(issue(
+                "error",
+                "workflow_path_invalid",
+                "codemod.yaml workflow path must stay within the package root; falling back to workflow.yaml.",
+                Some(package_root.join("codemod.yaml")),
+            ));
+        }
+
         if files.package_json && package_json_result.invalid {
             issues.push(issue(
                 "error",
@@ -550,6 +560,7 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
         return WorkflowPathResolution {
             path: package_root.join("workflow.yaml"),
             codemod_yaml_invalid: false,
+            workflow_path_invalid: false,
         };
     };
 
@@ -557,6 +568,7 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
         return WorkflowPathResolution {
             path: package_root.join("workflow.yaml"),
             codemod_yaml_invalid: true,
+            workflow_path_invalid: false,
         };
     };
     let workflow = manifest
@@ -564,9 +576,21 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("workflow.yaml");
+
+    let workflow_path = Path::new(workflow);
+    let unsafe_workflow_path = workflow_path.is_absolute()
+        || workflow_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir));
+
     WorkflowPathResolution {
-        path: package_root.join(workflow),
+        path: if unsafe_workflow_path {
+            package_root.join("workflow.yaml")
+        } else {
+            package_root.join(workflow_path)
+        },
         codemod_yaml_invalid: false,
+        workflow_path_invalid: unsafe_workflow_path,
     }
 }
 
@@ -1480,6 +1504,41 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "codemod_yaml_invalid"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsafe_workflow_path_in_codemod_yaml_is_reported_and_sandboxed() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("rules")).unwrap();
+        fs::create_dir_all(dir.join("tests/input")).unwrap();
+        fs::create_dir_all(dir.join("tests/expected")).unwrap();
+        fs::write(
+            dir.join("codemod.yaml"),
+            "workflow: ../outside/workflow.yaml\n",
+        )
+        .unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("README.md"), "# YAML package\n").unwrap();
+        fs::write(dir.join("rules/config.yml"), "id: sample\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "workflow_path_invalid"));
+        assert!(response.workflow_valid);
 
         fs::remove_dir_all(dir).unwrap();
     }

@@ -8,6 +8,7 @@ use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::OnceCell;
@@ -50,6 +51,11 @@ static JSSG_UTILS_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
 static CODEMOD_CLI_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
 static SHARDING_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
 static CODEMOD_CREATION_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+static JSSG_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
+static JSSG_UTILS_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
+static CODEMOD_CLI_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
+static SHARDING_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
+static CODEMOD_CREATION_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Default, schemars::JsonSchema)]
 struct GetInstructionsRequest;
@@ -200,12 +206,32 @@ async fn fetch_public_doc_sections(urls: &[&str]) -> Vec<String> {
     sections.into_iter().flatten().collect()
 }
 
-async fn cached_public_docs_bundle<F, Fut>(cell: &'static OnceCell<String>, build: F) -> String
+async fn cached_public_docs_bundle<F, Fut>(
+    cell: &'static OnceCell<String>,
+    fetch_started: &'static AtomicBool,
+    fallback: &'static str,
+    build: F,
+) -> String
 where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = String>,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = String> + Send + 'static,
 {
-    cell.get_or_init(build).await.clone()
+    if let Some(cached) = cell.get() {
+        return cached.clone();
+    }
+
+    if fetch_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let future = build();
+        tokio::spawn(async move {
+            let content = future.await;
+            let _ = cell.set(content);
+        });
+    }
+
+    fallback.to_string()
 }
 
 fn build_public_docs_bundle_from_sections(
@@ -382,28 +408,35 @@ impl CodemodMcpServer {
 
     async fn resource_content(&self, uri: &str) -> Result<String, McpError> {
         match uri {
-            "jssg://instructions" => Ok(cached_public_docs_bundle(&JSSG_DOCS_BUNDLE, || async {
-                build_public_docs_bundle_with_supplement(
-                    "Canonical JSSG Documentation",
-                    &[
-                        JSSG_QUICKSTART_DOC_URL,
-                        JSSG_REFERENCE_DOC_URL,
-                        JSSG_ADVANCED_DOC_URL,
-                        JSSG_TESTING_DOC_URL,
-                        JSSG_METRICS_DOC_URL,
-                        JSSG_SEMANTIC_ANALYSIS_DOC_URL,
-                    ],
-                    "Agent-Specific Caveats",
-                    JSSG_INSTRUCTIONS,
-                    JSSG_INSTRUCTIONS,
-                )
-                .await
-            })
+            "jssg://instructions" => Ok(cached_public_docs_bundle(
+                &JSSG_DOCS_BUNDLE,
+                &JSSG_DOCS_FETCH_STARTED,
+                JSSG_INSTRUCTIONS,
+                || async {
+                    build_public_docs_bundle_with_supplement(
+                        "Canonical JSSG Documentation",
+                        &[
+                            JSSG_QUICKSTART_DOC_URL,
+                            JSSG_REFERENCE_DOC_URL,
+                            JSSG_ADVANCED_DOC_URL,
+                            JSSG_TESTING_DOC_URL,
+                            JSSG_METRICS_DOC_URL,
+                            JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+                        ],
+                        "Agent-Specific Caveats",
+                        JSSG_INSTRUCTIONS,
+                        JSSG_INSTRUCTIONS,
+                    )
+                    .await
+                },
+            )
             .await),
             "jssg-gotchas://instructions" => Ok(JSSG_GOTCHAS.to_string()),
             "ast-grep-gotchas://instructions" => Ok(AST_GREP_GOTCHAS.to_string()),
             "jssg-utils://instructions" => Ok(cached_public_docs_bundle(
                 &JSSG_UTILS_DOCS_BUNDLE,
+                &JSSG_UTILS_DOCS_FETCH_STARTED,
+                JSSG_UTILS_INSTRUCTIONS,
                 || async {
                     build_public_docs_bundle(
                         "Canonical JSSG Import Utilities Documentation",
@@ -419,6 +452,8 @@ impl CodemodMcpServer {
             }
             "codemod-cli://instructions" => Ok(cached_public_docs_bundle(
                 &CODEMOD_CLI_DOCS_BUNDLE,
+                &CODEMOD_CLI_DOCS_FETCH_STARTED,
+                CODEMOD_CLI_INSTRUCTIONS,
                 || async {
                     build_public_docs_bundle(
                         "Canonical Codemod CLI and Workflow Documentation",
@@ -433,22 +468,27 @@ impl CodemodMcpServer {
                 },
             )
             .await),
-            "sharding://instructions" => {
-                Ok(cached_public_docs_bundle(&SHARDING_DOCS_BUNDLE, || async {
+            "sharding://instructions" => Ok(cached_public_docs_bundle(
+                &SHARDING_DOCS_BUNDLE,
+                &SHARDING_DOCS_FETCH_STARTED,
+                SHARDING_INSTRUCTIONS,
+                || async {
                     build_public_docs_bundle(
                         "Canonical Sharding Documentation",
                         &[SHARDING_DOC_URL],
                         SHARDING_INSTRUCTIONS,
                     )
                     .await
-                })
-                .await)
-            }
+                },
+            )
+            .await),
             "codemod-troubleshooting://instructions" => {
                 Ok(CODEMOD_TROUBLESHOOTING_SUPPLEMENT.to_string())
             }
             "codemod-creation-workflow://instructions" => Ok(cached_public_docs_bundle(
                 &CODEMOD_CREATION_DOCS_BUNDLE,
+                &CODEMOD_CREATION_DOCS_FETCH_STARTED,
+                CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
                 || async {
                     build_public_docs_bundle_with_supplement(
                         "Canonical Codemod Creation Documentation",
