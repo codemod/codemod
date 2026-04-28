@@ -4,19 +4,19 @@ use std::hash::{Hash, Hasher};
 
 use butterflow_models::variable::resolve_state_path;
 use log::{debug, warn};
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use serde::Serialize;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use serde_wasm_bindgen::{from_value, to_value};
 use uuid::Uuid;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;
 
 use butterflow_models::node::NodeType;
 use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Error, Result, Strategy, StrategyType, Task, TaskStatus, WorkflowRun};
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen(typescript_custom_section)]
 const MATRIX_TASK_CHANGES: &'static str = r#"
 type Uuid = string;
@@ -58,21 +58,21 @@ pub struct RunnableTaskChanges {
     pub runnable_tasks: Vec<Uuid>,
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 pub struct Scheduler {}
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub struct Scheduler {}
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 impl Scheduler {
     pub fn new() -> Self {
         Self {}
@@ -105,7 +105,7 @@ impl Scheduler {
     }
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen]
 impl Scheduler {
     // Expose constructor to WASM
