@@ -909,8 +909,8 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
 fn default_include_patterns(language: &str) -> String {
     let patterns: &[&str] = match language {
-        "javascript" => &["**/*.{js,jsx}"],
-        "typescript" => &["**/*.{ts,tsx}"],
+        "javascript" => &["**/*.{js,jsx,mjs,cjs}"],
+        "typescript" => &["**/*.{ts,tsx,mts,cts}"],
         "python" => &["**/*.py"],
         "rust" => &["**/*.rs"],
         "go" => &["**/*.go"],
@@ -2111,11 +2111,11 @@ mod tests {
     fn default_include_patterns_match_language_family() {
         assert_eq!(
             default_include_patterns("typescript"),
-            "            - \"**/*.{ts,tsx}\""
+            "            - \"**/*.{ts,tsx,mts,cts}\""
         );
         assert_eq!(
             default_include_patterns("javascript"),
-            "            - \"**/*.{js,jsx}\""
+            "            - \"**/*.{js,jsx,mjs,cjs}\""
         );
         assert_eq!(
             default_include_patterns("yaml"),
