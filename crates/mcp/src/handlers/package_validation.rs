@@ -1026,7 +1026,8 @@ async fn run_package_script(
         })
     });
 
-    let wait_result = tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await;
+    let wait_result =
+        tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await;
 
     let stdout = collect_output(stdout_task).await;
     let stderr = collect_output(stderr_task).await;
