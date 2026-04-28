@@ -1,13 +1,16 @@
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, service::RequestContext, tool,
+    handler::server::router::tool::ToolRouter, model::*, schemars, service::RequestContext, tool,
     tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
 use serde_json::json;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::OnceCell;
 
 mod handlers;
 use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler, PackageValidationHandler};
@@ -42,6 +45,55 @@ const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/jssg/utils.md";
 const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str = "https://docs.codemod.com/jssg/semantic-analysis.md";
 
 static PUBLIC_DOCS_CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+static JSSG_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+static JSSG_UTILS_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+static CODEMOD_CLI_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+static SHARDING_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+static CODEMOD_CREATION_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
+
+#[derive(Debug, Default, schemars::JsonSchema)]
+struct GetInstructionsRequest;
+
+impl<'de> serde::Deserialize<'de> for GetInstructionsRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EmptyRequestVisitor;
+
+        impl<'de> Visitor<'de> for EmptyRequestVisitor {
+            type Value = GetInstructionsRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("null or an empty object")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GetInstructionsRequest)
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GetInstructionsRequest)
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(GetInstructionsRequest)
+            }
+        }
+
+        deserializer.deserialize_any(EmptyRequestVisitor)
+    }
+}
 
 fn public_docs_client() -> Option<&'static reqwest::Client> {
     PUBLIC_DOCS_CLIENT
@@ -146,6 +198,14 @@ async fn fetch_public_doc_sections(urls: &[&str]) -> Vec<String> {
     }
 
     sections.into_iter().flatten().collect()
+}
+
+async fn cached_public_docs_bundle<F, Fut>(cell: &'static OnceCell<String>, build: F) -> String
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = String>,
+{
+    cell.get_or_init(build).await.clone()
 }
 
 fn build_public_docs_bundle_from_sections(
@@ -322,67 +382,91 @@ impl CodemodMcpServer {
 
     async fn resource_content(&self, uri: &str) -> Result<String, McpError> {
         match uri {
-            "jssg://instructions" => Ok(build_public_docs_bundle_with_supplement(
-                "Canonical JSSG Documentation",
-                &[
-                    JSSG_QUICKSTART_DOC_URL,
-                    JSSG_REFERENCE_DOC_URL,
-                    JSSG_ADVANCED_DOC_URL,
-                    JSSG_TESTING_DOC_URL,
-                    JSSG_METRICS_DOC_URL,
-                    JSSG_SEMANTIC_ANALYSIS_DOC_URL,
-                ],
-                "Agent-Specific Caveats",
-                JSSG_INSTRUCTIONS,
-                JSSG_INSTRUCTIONS,
-            )
+            "jssg://instructions" => Ok(cached_public_docs_bundle(&JSSG_DOCS_BUNDLE, || async {
+                build_public_docs_bundle_with_supplement(
+                    "Canonical JSSG Documentation",
+                    &[
+                        JSSG_QUICKSTART_DOC_URL,
+                        JSSG_REFERENCE_DOC_URL,
+                        JSSG_ADVANCED_DOC_URL,
+                        JSSG_TESTING_DOC_URL,
+                        JSSG_METRICS_DOC_URL,
+                        JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+                    ],
+                    "Agent-Specific Caveats",
+                    JSSG_INSTRUCTIONS,
+                    JSSG_INSTRUCTIONS,
+                )
+                .await
+            })
             .await),
             "jssg-gotchas://instructions" => Ok(JSSG_GOTCHAS.to_string()),
             "ast-grep-gotchas://instructions" => Ok(AST_GREP_GOTCHAS.to_string()),
-            "jssg-utils://instructions" => Ok(build_public_docs_bundle(
-                "Canonical JSSG Import Utilities Documentation",
-                &[JSSG_UTILS_DOC_URL],
-                JSSG_UTILS_INSTRUCTIONS,
+            "jssg-utils://instructions" => Ok(cached_public_docs_bundle(
+                &JSSG_UTILS_DOCS_BUNDLE,
+                || async {
+                    build_public_docs_bundle(
+                        "Canonical JSSG Import Utilities Documentation",
+                        &[JSSG_UTILS_DOC_URL],
+                        JSSG_UTILS_INSTRUCTIONS,
+                    )
+                    .await
+                },
             )
             .await),
             "jssg-runtime-capabilities://instructions" => {
                 Ok(JSSG_RUNTIME_CAPABILITIES_INSTRUCTIONS.to_string())
             }
-            "codemod-cli://instructions" => Ok(build_public_docs_bundle(
-                "Canonical Codemod CLI and Workflow Documentation",
-                &[
-                    CLI_DOC_URL,
-                    PACKAGE_STRUCTURE_DOC_URL,
-                    WORKFLOW_REFERENCE_DOC_URL,
-                ],
-                CODEMOD_CLI_INSTRUCTIONS,
+            "codemod-cli://instructions" => Ok(cached_public_docs_bundle(
+                &CODEMOD_CLI_DOCS_BUNDLE,
+                || async {
+                    build_public_docs_bundle(
+                        "Canonical Codemod CLI and Workflow Documentation",
+                        &[
+                            CLI_DOC_URL,
+                            PACKAGE_STRUCTURE_DOC_URL,
+                            WORKFLOW_REFERENCE_DOC_URL,
+                        ],
+                        CODEMOD_CLI_INSTRUCTIONS,
+                    )
+                    .await
+                },
             )
             .await),
-            "sharding://instructions" => Ok(build_public_docs_bundle(
-                "Canonical Sharding Documentation",
-                &[SHARDING_DOC_URL],
-                SHARDING_INSTRUCTIONS,
-            )
-            .await),
+            "sharding://instructions" => {
+                Ok(cached_public_docs_bundle(&SHARDING_DOCS_BUNDLE, || async {
+                    build_public_docs_bundle(
+                        "Canonical Sharding Documentation",
+                        &[SHARDING_DOC_URL],
+                        SHARDING_INSTRUCTIONS,
+                    )
+                    .await
+                })
+                .await)
+            }
             "codemod-troubleshooting://instructions" => {
                 Ok(CODEMOD_TROUBLESHOOTING_SUPPLEMENT.to_string())
             }
-            "codemod-creation-workflow://instructions" => {
-                Ok(build_public_docs_bundle_with_supplement(
-                    "Canonical Codemod Creation Documentation",
-                    &[
-                        OSS_QUICKSTART_DOC_URL,
-                        CLI_DOC_URL,
-                        PACKAGE_STRUCTURE_DOC_URL,
-                        WORKFLOW_REFERENCE_DOC_URL,
-                        JSSG_TESTING_DOC_URL,
-                    ],
-                    "Supplemental Agent Workflow Policy",
-                    CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
-                    CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
-                )
-                .await)
-            }
+            "codemod-creation-workflow://instructions" => Ok(cached_public_docs_bundle(
+                &CODEMOD_CREATION_DOCS_BUNDLE,
+                || async {
+                    build_public_docs_bundle_with_supplement(
+                        "Canonical Codemod Creation Documentation",
+                        &[
+                            OSS_QUICKSTART_DOC_URL,
+                            CLI_DOC_URL,
+                            PACKAGE_STRUCTURE_DOC_URL,
+                            WORKFLOW_REFERENCE_DOC_URL,
+                            JSSG_TESTING_DOC_URL,
+                        ],
+                        "Supplemental Agent Workflow Policy",
+                        CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+                        CODEMOD_CREATION_WORKFLOW_SUPPLEMENT,
+                    )
+                    .await
+                },
+            )
+            .await),
             "codemod-maintainer-monorepo://instructions" => {
                 Ok(CODEMOD_MAINTAINER_MONOREPO_GUIDE.to_string())
             }
@@ -464,7 +548,7 @@ impl CodemodMcpServer {
     )]
     async fn get_jssg_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response("jssg://instructions", "tool:get_jssg_instructions")
             .await
@@ -475,7 +559,7 @@ impl CodemodMcpServer {
     )]
     async fn get_jssg_gotchas(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response("jssg-gotchas://instructions", "tool:get_jssg_gotchas")
             .await
@@ -486,7 +570,7 @@ impl CodemodMcpServer {
     )]
     async fn get_ast_grep_gotchas(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "ast-grep-gotchas://instructions",
@@ -500,7 +584,7 @@ impl CodemodMcpServer {
     )]
     async fn get_jssg_utils_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "jssg-utils://instructions",
@@ -514,7 +598,7 @@ impl CodemodMcpServer {
     )]
     async fn get_jssg_runtime_capabilities_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "jssg-runtime-capabilities://instructions",
@@ -528,7 +612,7 @@ impl CodemodMcpServer {
     )]
     async fn get_jssg_runtime_capabilities(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "jssg-runtime-capabilities://instructions",
@@ -542,7 +626,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_cli_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-cli://instructions",
@@ -556,7 +640,7 @@ impl CodemodMcpServer {
     )]
     async fn get_sharding_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response("sharding://instructions", "tool:get_sharding_instructions")
             .await
@@ -567,7 +651,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_troubleshooting_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-troubleshooting://instructions",
@@ -581,7 +665,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_troubleshooting(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-troubleshooting://instructions",
@@ -595,7 +679,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_creation_workflow_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-creation-workflow://instructions",
@@ -609,7 +693,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_creation_workflow(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-creation-workflow://instructions",
@@ -623,7 +707,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_maintainer_monorepo_instructions(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-maintainer-monorepo://instructions",
@@ -637,7 +721,7 @@ impl CodemodMcpServer {
     )]
     async fn get_codemod_maintainer_monorepo(
         &self,
-        _params: rmcp::handler::server::wrapper::Parameters<()>,
+        _params: rmcp::handler::server::wrapper::Parameters<GetInstructionsRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.instruction_tool_response(
             "codemod-maintainer-monorepo://instructions",
@@ -791,7 +875,9 @@ mod tests {
     async fn test_instruction_alias_tool_returns_resource_content() {
         let server = CodemodMcpServer::default();
         let result = server
-            .get_jssg_instructions(rmcp::handler::server::wrapper::Parameters(()))
+            .get_jssg_instructions(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest,
+            ))
             .await
             .expect("expected compatibility tool result");
 
@@ -808,19 +894,27 @@ mod tests {
         let server = CodemodMcpServer::default();
 
         let runtime = server
-            .get_jssg_runtime_capabilities(rmcp::handler::server::wrapper::Parameters(()))
+            .get_jssg_runtime_capabilities(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest,
+            ))
             .await
             .expect("expected runtime compatibility tool result");
         let troubleshooting = server
-            .get_codemod_troubleshooting(rmcp::handler::server::wrapper::Parameters(()))
+            .get_codemod_troubleshooting(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest,
+            ))
             .await
             .expect("expected troubleshooting compatibility tool result");
         let creation = server
-            .get_codemod_creation_workflow(rmcp::handler::server::wrapper::Parameters(()))
+            .get_codemod_creation_workflow(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest,
+            ))
             .await
             .expect("expected creation compatibility tool result");
         let monorepo = server
-            .get_codemod_maintainer_monorepo(rmcp::handler::server::wrapper::Parameters(()))
+            .get_codemod_maintainer_monorepo(rmcp::handler::server::wrapper::Parameters(
+                GetInstructionsRequest,
+            ))
             .await
             .expect("expected monorepo compatibility tool result");
 
@@ -849,6 +943,14 @@ mod tests {
             .expect("expected monorepo text content")
             .text
             .contains("Maintainer Monorepo"));
+    }
+
+    #[test]
+    fn test_legacy_instruction_request_accepts_null_and_empty_object() {
+        serde_json::from_value::<GetInstructionsRequest>(serde_json::Value::Null)
+            .expect("expected null to deserialize");
+        serde_json::from_value::<GetInstructionsRequest>(json!({}))
+            .expect("expected empty object to deserialize");
     }
 
     #[tokio::test]
