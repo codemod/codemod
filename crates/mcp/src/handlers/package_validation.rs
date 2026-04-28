@@ -1029,29 +1029,37 @@ async fn run_package_script(
     let wait_result =
         tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await;
 
-    let stdout = collect_output(stdout_task).await;
-    let stderr = collect_output(stderr_task).await;
-
     match wait_result {
-        Ok(Ok(status)) => ProcessCheckResult {
-            command: command_display.clone(),
-            success: status.success(),
-            exit_code: status.code(),
-            timed_out: false,
-            stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
-            stderr_tail: truncate_tail(&String::from_utf8_lossy(&stderr), 2000),
-        },
-        Ok(Err(error)) => ProcessCheckResult {
-            command: command_display.clone(),
-            success: false,
-            exit_code: None,
-            timed_out: false,
-            stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
-            stderr_tail: error.to_string(),
-        },
+        Ok(Ok(status)) => {
+            let stdout = collect_output(stdout_task).await;
+            let stderr = collect_output(stderr_task).await;
+
+            ProcessCheckResult {
+                command: command_display.clone(),
+                success: status.success(),
+                exit_code: status.code(),
+                timed_out: false,
+                stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
+                stderr_tail: truncate_tail(&String::from_utf8_lossy(&stderr), 2000),
+            }
+        }
+        Ok(Err(error)) => {
+            let stdout = collect_output(stdout_task).await;
+
+            ProcessCheckResult {
+                command: command_display.clone(),
+                success: false,
+                exit_code: None,
+                timed_out: false,
+                stdout_tail: truncate_tail(&String::from_utf8_lossy(&stdout), 2000),
+                stderr_tail: error.to_string(),
+            }
+        }
         Err(_) => {
             kill_child_process_tree(&mut child).await;
             let _ = child.wait().await;
+            let stdout = collect_output(stdout_task).await;
+            let stderr = collect_output(stderr_task).await;
 
             ProcessCheckResult {
                 command: command_display,
@@ -1623,22 +1631,32 @@ mod tests {
             return;
         }
 
+        let script_command = if cfg!(windows) {
+            "powershell -Command \"Start-Sleep -Seconds 5\""
+        } else {
+            "sleep 5"
+        };
+
         let dir = unique_temp_dir();
         fs::write(
             dir.join("package.json"),
-            r#"{
+            format!(
+                r#"{{
   "name": "timeout-test",
-  "scripts": {
-    "test": "node -e \"setTimeout(() => require('fs').writeFileSync('late.txt', 'done'), 1500)\""
-  }
-}"#,
+  "scripts": {{
+    "test": "{script_command}"
+  }}
+}}"#
+            ),
         )
         .unwrap();
 
-        let result = run_package_script(&dir, PackageManager::Npm, "test", 1).await;
+        let start = std::time::Instant::now();
+        let result = run_package_script(&dir, PackageManager::Npm, "test", 0).await;
         assert!(result.timed_out);
         assert!(!result.success);
-        assert!(result.stderr_tail.contains("Timed out after 1s"));
+        assert!(result.stderr_tail.contains("Timed out after 0s"));
+        assert!(start.elapsed() < Duration::from_secs(3));
 
         fs::remove_dir_all(dir).unwrap();
     }
