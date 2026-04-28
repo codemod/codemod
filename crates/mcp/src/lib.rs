@@ -524,6 +524,20 @@ impl CodemodMcpServer {
     }
 
     #[tool(
+        description = "Deprecated compatibility alias for get_jssg_runtime_capabilities_instructions."
+    )]
+    async fn get_jssg_runtime_capabilities(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "jssg-runtime-capabilities://instructions",
+            "tool:get_jssg_runtime_capabilities",
+        )
+        .await
+    }
+
+    #[tool(
         description = "Deprecated compatibility alias for codemod CLI instructions. Prefer the codemod-cli-instructions resource."
     )]
     async fn get_codemod_cli_instructions(
@@ -563,6 +577,20 @@ impl CodemodMcpServer {
     }
 
     #[tool(
+        description = "Deprecated compatibility alias for get_codemod_troubleshooting_instructions."
+    )]
+    async fn get_codemod_troubleshooting(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-troubleshooting://instructions",
+            "tool:get_codemod_troubleshooting",
+        )
+        .await
+    }
+
+    #[tool(
         description = "Deprecated compatibility alias for codemod creation workflow instructions. Prefer the codemod-creation-workflow-instructions resource."
     )]
     async fn get_codemod_creation_workflow_instructions(
@@ -577,6 +605,20 @@ impl CodemodMcpServer {
     }
 
     #[tool(
+        description = "Deprecated compatibility alias for get_codemod_creation_workflow_instructions."
+    )]
+    async fn get_codemod_creation_workflow(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-creation-workflow://instructions",
+            "tool:get_codemod_creation_workflow",
+        )
+        .await
+    }
+
+    #[tool(
         description = "Deprecated compatibility alias for codemod maintainer monorepo instructions. Prefer the codemod-maintainer-monorepo-instructions resource."
     )]
     async fn get_codemod_maintainer_monorepo_instructions(
@@ -586,6 +628,20 @@ impl CodemodMcpServer {
         self.instruction_tool_response(
             "codemod-maintainer-monorepo://instructions",
             "tool:get_codemod_maintainer_monorepo_instructions",
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Deprecated compatibility alias for get_codemod_maintainer_monorepo_instructions."
+    )]
+    async fn get_codemod_maintainer_monorepo(
+        &self,
+        _params: rmcp::handler::server::wrapper::Parameters<()>,
+    ) -> Result<CallToolResult, McpError> {
+        self.instruction_tool_response(
+            "codemod-maintainer-monorepo://instructions",
+            "tool:get_codemod_maintainer_monorepo",
         )
         .await
     }
@@ -745,6 +801,54 @@ mod tests {
             .as_text()
             .expect("expected text content from compatibility tool");
         assert!(text.text.contains("JSSG"));
+    }
+
+    #[tokio::test]
+    async fn test_legacy_instruction_alias_tools_return_resource_content() {
+        let server = CodemodMcpServer::default();
+
+        let runtime = server
+            .get_jssg_runtime_capabilities(rmcp::handler::server::wrapper::Parameters(()))
+            .await
+            .expect("expected runtime compatibility tool result");
+        let troubleshooting = server
+            .get_codemod_troubleshooting(rmcp::handler::server::wrapper::Parameters(()))
+            .await
+            .expect("expected troubleshooting compatibility tool result");
+        let creation = server
+            .get_codemod_creation_workflow(rmcp::handler::server::wrapper::Parameters(()))
+            .await
+            .expect("expected creation compatibility tool result");
+        let monorepo = server
+            .get_codemod_maintainer_monorepo(rmcp::handler::server::wrapper::Parameters(()))
+            .await
+            .expect("expected monorepo compatibility tool result");
+
+        assert_eq!(runtime.is_error, Some(false));
+        assert_eq!(troubleshooting.is_error, Some(false));
+        assert_eq!(creation.is_error, Some(false));
+        assert_eq!(monorepo.is_error, Some(false));
+
+        assert!(runtime.content[0]
+            .as_text()
+            .expect("expected runtime text content")
+            .text
+            .contains("JSSG Runtime and Capabilities"));
+        assert!(troubleshooting.content[0]
+            .as_text()
+            .expect("expected troubleshooting text content")
+            .text
+            .contains("Troubleshooting"));
+        assert!(creation.content[0]
+            .as_text()
+            .expect("expected creation text content")
+            .text
+            .contains("Codemod Creation"));
+        assert!(monorepo.content[0]
+            .as_text()
+            .expect("expected monorepo text content")
+            .text
+            .contains("Maintainer Monorepo"));
     }
 
     #[tokio::test]
