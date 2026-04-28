@@ -2,7 +2,8 @@ use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape_with_manifest_hint, expected_workflow_path, PackageBehaviorShape,
+    default_workflow_path, detect_package_behavior_shape_with_manifest_hint, select_workflow_path,
+    PackageBehaviorShape,
 };
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
@@ -110,6 +111,10 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
+
+    /// Name of the workflow to run when the package defines multiple workflows
+    #[arg(long, value_name = "NAME")]
+    workflow: Option<String>,
 }
 
 impl Command {
@@ -274,8 +279,19 @@ pub async fn handler(
         return Err(error);
     }
 
-    let workflow_path =
-        workflow_path_for_run(&resolved_package.package_dir, codemod_config.as_ref());
+    let (workflow_path, selected_workflow_name) = match select_workflow_for_run(
+        &resolved_package.package_dir,
+        codemod_config.as_ref(),
+        args.workflow.as_deref(),
+        args.no_interactive,
+    ) {
+        Ok(selected) => selected,
+        Err(error) => {
+            let error_msg = error.to_string();
+            send_failure_event(&telemetry, &args.package, &error_msg).await;
+            return Err(error);
+        }
+    };
     if !workflow_path.exists() {
         let error = missing_workflow_error(&args.package, &workflow_path);
         let error_msg = error.to_string();
@@ -417,18 +433,22 @@ pub async fn handler(
 
     let execution_id = generate_execution_id();
 
+    let mut executed_props = HashMap::from([
+        ("codemodName".to_string(), args.package.clone()),
+        ("executionId".to_string(), execution_id.clone()),
+        ("fileCount".to_string(), files_modified.to_string()),
+        ("cliVersion".to_string(), CLI_VERSION.to_string()),
+        ("os".to_string(), std::env::consts::OS.to_string()),
+        ("arch".to_string(), std::env::consts::ARCH.to_string()),
+    ]);
+    if let Some(name) = &selected_workflow_name {
+        executed_props.insert("workflowName".to_string(), name.clone());
+    }
     telemetry
         .send_event(
             BaseEvent {
                 kind: "codemodExecuted".to_string(),
-                properties: HashMap::from([
-                    ("codemodName".to_string(), args.package.clone()),
-                    ("executionId".to_string(), execution_id.clone()),
-                    ("fileCount".to_string(), files_modified.to_string()),
-                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
-                    ("os".to_string(), std::env::consts::OS.to_string()),
-                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                ]),
+                properties: executed_props,
             },
             None,
         )
@@ -502,12 +522,86 @@ fn detect_package_behavior_shape_for_run(
     detect_package_behavior_shape_with_manifest_hint(package_dir, manifest)
 }
 
-fn workflow_path_for_run(package_dir: &Path, manifest: Option<&CodemodManifest>) -> PathBuf {
+fn workflow_path_for_run(
+    package_dir: &Path,
+    manifest: Option<&CodemodManifest>,
+    workflow_name: Option<&str>,
+) -> Result<PathBuf> {
     if let Some(manifest) = manifest {
-        return expected_workflow_path(package_dir, manifest);
+        if workflow_name.is_some() {
+            return Ok(select_workflow_path(package_dir, manifest, workflow_name)?.path);
+        }
+        return default_workflow_path(package_dir, manifest);
     }
 
-    package_dir.join(WORKFLOW_FILE_NAME)
+    if workflow_name.is_some() {
+        return Err(anyhow!(
+            "Cannot select a named workflow without a codemod.yaml manifest."
+        ));
+    }
+    Ok(package_dir.join(WORKFLOW_FILE_NAME))
+}
+
+fn select_workflow_for_run(
+    package_dir: &Path,
+    manifest: Option<&CodemodManifest>,
+    workflow_name: Option<&str>,
+    no_interactive: bool,
+) -> Result<(PathBuf, Option<String>)> {
+    let Some(manifest) = manifest else {
+        let path = workflow_path_for_run(package_dir, None, workflow_name)?;
+        return Ok((path, None));
+    };
+
+    if let Some(name) = workflow_name {
+        let resolved = select_workflow_path(package_dir, manifest, Some(name))?;
+        return Ok((resolved.path, Some(resolved.entry.name)));
+    }
+
+    let entries = manifest.resolved_workflows()?;
+    if entries.len() == 1 {
+        let entry = entries.into_iter().next().unwrap();
+        return Ok((package_dir.join(&entry.path), Some(entry.name)));
+    }
+
+    let stdin_is_tty = io::stdin().is_terminal();
+    let stdout_is_tty = io::stdout().is_terminal();
+    if no_interactive || !stdin_is_tty || !stdout_is_tty {
+        let entry = manifest.default_workflow()?;
+        return Ok((package_dir.join(&entry.path), Some(entry.name)));
+    }
+
+    let chosen = prompt_workflow_selection(&entries)?;
+    let path = package_dir.join(&chosen.path);
+    Ok((path, Some(chosen.name)))
+}
+
+fn prompt_workflow_selection(
+    entries: &[crate::utils::manifest::WorkflowEntry],
+) -> Result<crate::utils::manifest::WorkflowEntry> {
+    let labels: Vec<String> = entries
+        .iter()
+        .map(|entry| {
+            let suffix = match (&entry.description, entry.default) {
+                (Some(desc), true) => format!(" — {desc} (default)"),
+                (Some(desc), false) => format!(" — {desc}"),
+                (None, true) => " (default)".to_string(),
+                (None, false) => String::new(),
+            };
+            format!("{}{}", entry.name, suffix)
+        })
+        .collect();
+    let default_idx = entries.iter().position(|e| e.default).unwrap_or(0);
+
+    let selected = inquire::Select::new("Select a workflow to run:", labels.clone())
+        .with_starting_cursor(default_idx)
+        .prompt()
+        .map_err(|e| anyhow!("Workflow selection cancelled: {e}"))?;
+    let index = labels
+        .iter()
+        .position(|l| l == &selected)
+        .ok_or_else(|| anyhow!("Internal error: workflow selection mismatch"))?;
+    Ok(entries[index].clone())
 }
 
 fn should_skip_install_skill_steps(
@@ -876,7 +970,8 @@ mod tests {
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: workflow.to_string(),
+            workflow: Some(workflow.to_string()),
+            workflows: None,
             targets: None,
             dependencies: None,
             keywords: None,
@@ -993,8 +1088,63 @@ nodes:
         let package_dir = Path::new("/tmp/sample");
         let manifest = manifest_with_workflow("custom/workflow.yaml");
 
-        let workflow_path = workflow_path_for_run(package_dir, Some(&manifest));
+        let workflow_path = workflow_path_for_run(package_dir, Some(&manifest), None).unwrap();
         assert_eq!(workflow_path, package_dir.join("custom/workflow.yaml"));
+    }
+
+    fn manifest_with_named_workflows(entries: Vec<(&str, &str, bool)>) -> CodemodManifest {
+        let mut manifest = manifest_with_workflow("workflow.yaml");
+        manifest.workflow = None;
+        manifest.workflows = Some(
+            entries
+                .into_iter()
+                .map(
+                    |(name, path, default)| crate::utils::manifest::WorkflowEntry {
+                        name: name.to_string(),
+                        path: path.to_string(),
+                        description: None,
+                        default,
+                    },
+                )
+                .collect(),
+        );
+        manifest
+    }
+
+    #[test]
+    fn test_workflow_path_for_run_uses_default_when_no_workflow_name() {
+        let package_dir = Path::new("/tmp/multi");
+        let manifest = manifest_with_named_workflows(vec![
+            ("plain", "workflow.yaml", true),
+            ("sharded", "workflows/sharded.yaml", false),
+        ]);
+
+        let path = workflow_path_for_run(package_dir, Some(&manifest), None).unwrap();
+        assert_eq!(path, package_dir.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn test_workflow_path_for_run_resolves_named_workflow() {
+        let package_dir = Path::new("/tmp/multi");
+        let manifest = manifest_with_named_workflows(vec![
+            ("plain", "workflow.yaml", true),
+            ("sharded", "workflows/sharded.yaml", false),
+        ]);
+
+        let path = workflow_path_for_run(package_dir, Some(&manifest), Some("sharded")).unwrap();
+        assert_eq!(path, package_dir.join("workflows/sharded.yaml"));
+    }
+
+    #[test]
+    fn test_workflow_path_for_run_unknown_workflow_errors() {
+        let package_dir = Path::new("/tmp/multi");
+        let manifest = manifest_with_named_workflows(vec![
+            ("plain", "workflow.yaml", true),
+            ("sharded", "workflows/sharded.yaml", false),
+        ]);
+
+        let err = workflow_path_for_run(package_dir, Some(&manifest), Some("missing")).unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]

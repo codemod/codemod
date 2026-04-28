@@ -1,4 +1,4 @@
-use crate::utils::manifest::CodemodManifest;
+use crate::utils::manifest::{CodemodManifest, WorkflowEntry};
 use crate::utils::path_safety::{has_parent_path_components, resolve_relative_path_within_root};
 use crate::utils::skill_layout::{
     expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
@@ -13,6 +13,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) const DEFAULT_WORKFLOW_FILE_NAME: &str = "workflow.yaml";
+
+/// Resolved workflow entry paired with the absolute path it points at.
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedWorkflow {
+    pub entry: WorkflowEntry,
+    pub path: PathBuf,
+}
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const REQUIRED_FRONTMATTER_KEYS: [&str; 3] = ["name:", "description:", "allowed-tools:"];
@@ -75,15 +82,20 @@ pub(crate) fn validate_package_behavior_structure(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<()> {
-    let workflow_path = expected_workflow_path(package_path, manifest);
-    if !workflow_path.is_file() {
-        return Err(anyhow!(
-            "Workflow file is missing at {}.",
-            workflow_path.display()
-        ));
+    let workflows = expected_workflow_paths(package_path, manifest)?;
+
+    let mut merged = WorkflowBehaviorSummary::default();
+    for resolved in &workflows {
+        if !resolved.path.is_file() {
+            return Err(anyhow!(
+                "Workflow file `{}` is missing at {}.",
+                resolved.entry.name,
+                resolved.path.display()
+            ));
+        }
+        merged.merge(workflow_behavior_summary_from_path(&resolved.path)?);
     }
 
-    let workflow_summary = workflow_behavior_summary_from_path(&workflow_path)?;
     let authored_skill_candidate =
         authored_skill_file_candidate(package_path, Some(manifest), &manifest.name)?;
     let has_skill_layout = if authored_skill_candidate.explicit {
@@ -92,16 +104,16 @@ pub(crate) fn validate_package_behavior_structure(
         find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
     };
 
-    if workflow_summary.has_install_skill_steps && !has_skill_layout {
+    if merged.has_install_skill_steps && !has_skill_layout {
         return Err(anyhow!(
             "Workflow contains `install-skill` step(s), but authored skill files are missing at {}.",
             authored_skill_candidate.path.display()
         ));
     }
 
-    if has_skill_layout && !workflow_summary.has_install_skill_steps {
+    if has_skill_layout && !merged.has_install_skill_steps {
         return Err(anyhow!(
-            "Authored skill files exist under `{}`, but workflow does not contain any `install-skill` steps.",
+            "Authored skill files exist under `{}`, but no workflow contains any `install-skill` steps.",
             AGENTS_SKILL_ROOT_RELATIVE_PATH
         ));
     }
@@ -269,24 +281,52 @@ pub(crate) fn authored_skill_file_candidate(
     })
 }
 
-pub(crate) fn expected_workflow_path(package_path: &Path, manifest: &CodemodManifest) -> PathBuf {
-    package_path.join(configured_workflow_path(manifest))
+/// Returns every workflow declared by the manifest with its absolute path.
+pub(crate) fn expected_workflow_paths(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<Vec<ResolvedWorkflow>> {
+    let entries = manifest.resolved_workflows()?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| {
+            let path = package_path.join(&entry.path);
+            ResolvedWorkflow { entry, path }
+        })
+        .collect())
 }
 
-pub(crate) fn configured_workflow_path(manifest: &CodemodManifest) -> &str {
-    let workflow = manifest.workflow.trim();
-    if workflow.is_empty() {
-        DEFAULT_WORKFLOW_FILE_NAME
-    } else {
-        workflow
-    }
+/// Returns the path of the manifest's default workflow.
+pub(crate) fn default_workflow_path(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<PathBuf> {
+    let entry = manifest.default_workflow()?;
+    Ok(package_path.join(&entry.path))
+}
+
+/// Resolves the workflow chosen by name (or the default when `name` is None).
+pub(crate) fn select_workflow_path(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+    name: Option<&str>,
+) -> Result<ResolvedWorkflow> {
+    let entry = manifest.find_workflow(name)?;
+    let path = package_path.join(&entry.path);
+    Ok(ResolvedWorkflow { entry, path })
 }
 
 fn workflow_behavior_summary(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<WorkflowBehaviorSummary> {
-    workflow_behavior_summary_from_path_optional(&expected_workflow_path(package_path, manifest))
+    let mut merged = WorkflowBehaviorSummary::default();
+    for resolved in expected_workflow_paths(package_path, manifest)? {
+        merged.merge(workflow_behavior_summary_from_path_optional(
+            &resolved.path,
+        )?);
+    }
+    Ok(merged)
 }
 
 fn configured_skill_file_from_workflow(
@@ -294,35 +334,56 @@ fn configured_skill_file_from_workflow(
     manifest: Option<&CodemodManifest>,
     package_name: &str,
 ) -> Result<Option<PathBuf>> {
-    let workflow_path = workflow_path_with_manifest_hint(package_path, manifest);
-    if !workflow_path.is_file() {
-        return Ok(None);
-    }
+    let workflow_paths = workflow_paths_with_manifest_hint(package_path, manifest)?;
 
-    let workflow = parse_workflow_file(&workflow_path).map_err(|error| {
-        anyhow!(
-            "Failed to parse workflow file {}: {error}",
-            workflow_path.display()
-        )
-    })?;
-    let install_skill_steps = collect_install_skill_steps(&workflow);
-    let exact_matches = install_skill_steps
-        .iter()
-        .filter(|install_skill| {
-            exact_package_identifier_match(&install_skill.package, package_name)
-        })
-        .collect::<Vec<_>>();
+    let mut resolved_paths: HashSet<PathBuf> = HashSet::new();
+    let mut last_workflow_path: Option<PathBuf> = None;
 
-    if !exact_matches.is_empty() {
-        return configured_path_from_matching_steps(
+    for workflow_path in workflow_paths {
+        if !workflow_path.is_file() {
+            continue;
+        }
+
+        let workflow = parse_workflow_file(&workflow_path).map_err(|error| {
+            anyhow!(
+                "Failed to parse workflow file {}: {error}",
+                workflow_path.display()
+            )
+        })?;
+        let install_skill_steps = collect_install_skill_steps(&workflow);
+        let exact_matches = install_skill_steps
+            .iter()
+            .filter(|install_skill| {
+                exact_package_identifier_match(&install_skill.package, package_name)
+            })
+            .collect::<Vec<_>>();
+
+        if exact_matches.is_empty() {
+            continue;
+        }
+
+        if let Some(path) = configured_path_from_matching_steps(
             package_path,
             &workflow_path,
             package_name,
             &exact_matches,
-        );
+        )? {
+            resolved_paths.insert(path);
+        }
+        last_workflow_path = Some(workflow_path);
     }
 
-    Ok(None)
+    match resolved_paths.len() {
+        0 => Ok(None),
+        1 => Ok(resolved_paths.into_iter().next()),
+        _ => Err(anyhow!(
+            "Workflow files for package `{}` declare conflicting install-skill `path` values{}. Ensure matching install-skill steps across all workflows resolve to a single skill path.",
+            package_name,
+            last_workflow_path
+                .map(|p| format!(" (last seen in {})", p.display()))
+                .unwrap_or_default()
+        )),
+    }
 }
 
 fn collect_install_skill_steps(
@@ -446,14 +507,17 @@ fn exact_package_identifier_match(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
 
-fn workflow_path_with_manifest_hint(
+fn workflow_paths_with_manifest_hint(
     package_path: &Path,
     manifest: Option<&CodemodManifest>,
-) -> PathBuf {
+) -> Result<Vec<PathBuf>> {
     if let Some(manifest) = manifest {
-        expected_workflow_path(package_path, manifest)
+        Ok(expected_workflow_paths(package_path, manifest)?
+            .into_iter()
+            .map(|r| r.path)
+            .collect())
     } else {
-        package_path.join(DEFAULT_WORKFLOW_FILE_NAME)
+        Ok(vec![package_path.join(DEFAULT_WORKFLOW_FILE_NAME)])
     }
 }
 
@@ -645,7 +709,8 @@ mod tests {
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: DEFAULT_WORKFLOW_FILE_NAME.to_string(),
+            workflow: Some(DEFAULT_WORKFLOW_FILE_NAME.to_string()),
+            workflows: None,
             targets: None,
             dependencies: None,
             keywords: None,
@@ -932,7 +997,7 @@ nodes:
         let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error
             .to_string()
-            .contains("workflow does not contain any `install-skill` steps"));
+            .contains("no workflow contains any `install-skill` steps"));
     }
 
     #[test]

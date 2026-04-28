@@ -278,6 +278,16 @@ fn format_summary_suffix(summary: &TaskSummary) -> String {
 /// Resolves the workflow source string into the actual workflow file path
 /// and the bundle's root directory path.
 pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
+    resolve_workflow_source_with_name(source, None)
+}
+
+/// Same as [`resolve_workflow_source`] but, when `source` is a directory and
+/// contains a `codemod.yaml`, honors that manifest's workflow declaration(s)
+/// and lets the caller pick a workflow by name.
+pub fn resolve_workflow_source_with_name(
+    source: &str,
+    workflow_name: Option<&str>,
+) -> Result<(PathBuf, PathBuf)> {
     let path = PathBuf::from(source);
 
     if !path.exists() {
@@ -293,6 +303,37 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             "Failed to get absolute path for bundle directory: {}",
             path.display()
         ))?;
+
+        let manifest_path = bundle_path.join("codemod.yaml");
+        if manifest_path.is_file() {
+            let manifest_content = std::fs::read_to_string(&manifest_path).context(format!(
+                "Failed to read manifest {}",
+                manifest_path.display()
+            ))?;
+            let manifest: crate::utils::manifest::CodemodManifest =
+                serde_yaml::from_str(&manifest_content).context(format!(
+                    "Failed to parse manifest {}",
+                    manifest_path.display()
+                ))?;
+            let entry = manifest.find_workflow(workflow_name)?;
+            let workflow_file_path = bundle_path.join(&entry.path);
+            if !workflow_file_path.is_file() {
+                return Err(anyhow::anyhow!(
+                    "Workflow `{}` declared in codemod.yaml is missing at {}",
+                    entry.name,
+                    workflow_file_path.display()
+                ));
+            }
+            return Ok((workflow_file_path, bundle_path));
+        }
+
+        if workflow_name.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot select a named workflow without a codemod.yaml in {}",
+                bundle_path.display()
+            ));
+        }
+
         // Look for default workflow files within the directory
         let default_files = [
             "workflow.yaml",
@@ -318,6 +359,12 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             )),
         }
     } else if path.is_file() {
+        if workflow_name.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot select a named workflow when the source points at a workflow file: {}",
+                source
+            ));
+        }
         let workflow_file_path = path.canonicalize().context(format!(
             "Failed to get absolute path for workflow file: {}",
             path.display()

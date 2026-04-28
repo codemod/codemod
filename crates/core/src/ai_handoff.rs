@@ -156,7 +156,11 @@ pub fn build_agent_command(
             cmd.env("GOOSE_MODE", "auto");
             cmd.arg("run").arg("--text").arg(&full_prompt);
         }
-        "opencode" | "openclaw" => {
+        "opencode" => {
+            let _ = full_prompt;
+            cmd.arg("run").arg("--dangerously-skip-permissions");
+        }
+        "openclaw" => {
             cmd.arg("--dangerously-skip-permissions")
                 .arg("--message")
                 .arg(&full_prompt);
