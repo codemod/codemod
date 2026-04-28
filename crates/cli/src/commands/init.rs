@@ -1809,7 +1809,7 @@ fn package_manager_test_command(package_manager: &str) -> String {
     match package_manager {
         "yarn" => "yarn test".to_string(),
         "pnpm" => "pnpm test".to_string(),
-        "bun" => "bun test".to_string(),
+        "bun" => "bun run test".to_string(),
         _ => "npm test".to_string(),
     }
 }
@@ -2127,7 +2127,7 @@ mod tests {
     fn package_manager_test_command_matches_package_manager() {
         assert_eq!(package_manager_test_command("pnpm"), "pnpm test");
         assert_eq!(package_manager_test_command("yarn"), "yarn test");
-        assert_eq!(package_manager_test_command("bun"), "bun test");
+        assert_eq!(package_manager_test_command("bun"), "bun run test");
         assert_eq!(package_manager_test_command("npm"), "npm test");
         assert_eq!(package_manager_test_command("unknown"), "npm test");
     }

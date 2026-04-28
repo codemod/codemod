@@ -129,13 +129,23 @@ async fn fetch_public_doc_markdown(url: &str) -> Option<String> {
 }
 
 async fn fetch_public_doc_sections(urls: &[&str]) -> Vec<String> {
-    let mut sections = Vec::new();
-    for url in urls {
-        if let Some(content) = fetch_public_doc_markdown(url).await {
-            sections.push(format!("<!-- Source: {url} -->\n\n{content}"));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (index, url) in urls.iter().copied().enumerate() {
+        let url = url.to_string();
+        tasks.spawn(async move {
+            let content = fetch_public_doc_markdown(&url).await;
+            (index, url, content)
+        });
+    }
+
+    let mut sections = vec![None; urls.len()];
+    while let Some(result) = tasks.join_next().await {
+        if let Ok((index, url, Some(content))) = result {
+            sections[index] = Some(format!("<!-- Source: {url} -->\n\n{content}"));
         }
     }
-    sections
+
+    sections.into_iter().flatten().collect()
 }
 
 fn build_public_docs_bundle_from_sections(

@@ -816,12 +816,48 @@ fn detect_package_manager_drift_in_scripts(
 
 fn package_manager_commands_in_script(command: &str) -> Vec<String> {
     const PACKAGE_MANAGER_COMMANDS: [&str; 6] = ["npm", "npx", "yarn", "pnpm", "bun", "bunx"];
+    let mut commands = Vec::new();
+    let mut token = String::new();
+    let mut at_command_start = true;
 
-    command
-        .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
-        .map(str::to_ascii_lowercase)
-        .filter(|token| PACKAGE_MANAGER_COMMANDS.contains(&token.as_str()))
-        .collect()
+    let mut flush_token = |token: &mut String, at_command_start: &mut bool| {
+        if token.is_empty() {
+            return;
+        }
+
+        if *at_command_start && token.contains('=') && !token.starts_with('=') {
+            token.clear();
+            return;
+        }
+
+        if *at_command_start {
+            let lower = token.to_ascii_lowercase();
+            if PACKAGE_MANAGER_COMMANDS.contains(&lower.as_str()) {
+                commands.push(lower);
+            }
+        }
+
+        *at_command_start = false;
+        token.clear();
+    };
+
+    for character in command.chars() {
+        if character.is_ascii_whitespace() {
+            flush_token(&mut token, &mut at_command_start);
+            continue;
+        }
+
+        if matches!(character, ';' | '|' | '&' | '(' | ')') {
+            flush_token(&mut token, &mut at_command_start);
+            at_command_start = true;
+            continue;
+        }
+
+        token.push(character);
+    }
+
+    flush_token(&mut token, &mut at_command_start);
+    commands
 }
 
 fn detect_transform_risks(transform_content: Option<&str>) -> TransformRiskSummary {
@@ -957,14 +993,18 @@ impl Default for PackageValidationHandler {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn unique_temp_dir() -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("expected monotonic time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("codemod-mcp-validate-{}", unique));
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("codemod-mcp-validate-{unique}-{counter}"));
         fs::create_dir_all(&dir).expect("expected temp dir");
         dir
     }
@@ -1179,6 +1219,73 @@ mod tests {
 
         let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Pnpm);
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn package_manager_command_detection_uses_command_positions() {
+        assert_eq!(
+            package_manager_commands_in_script(
+                "echo $npm_package_name && yarn test; FOO=bar pnpm lint"
+            ),
+            vec!["yarn".to_string(), "pnpm".to_string()]
+        );
+    }
+
+    #[test]
+    fn package_manager_drift_ignores_non_command_tokens() {
+        let package_json = PackageJsonLite {
+            scripts: BTreeMap::from([(
+                "test".to_string(),
+                "echo $npm_package_name && yarn test".to_string(),
+            )]),
+            package_manager: Some("yarn".to_string()),
+        };
+
+        let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Yarn);
+        assert!(issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn declared_package_manager_is_used_for_script_execution_without_lockfile() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{
+  "packageManager": "yarn@4.0.0",
+  "scripts": {
+    "test": "echo ok"
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: true,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        let default_test = response.default_test.expect("expected default test result");
+        assert_eq!(default_test.command, "yarn test");
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
