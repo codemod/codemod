@@ -131,6 +131,12 @@ struct ValidationRequirements {
     tests_dir: bool,
 }
 
+#[derive(Debug)]
+struct WorkflowPathResolution {
+    path: PathBuf,
+    codemod_yaml_invalid: bool,
+}
+
 impl ValidationPackageKind {
     fn requirements(self) -> ValidationRequirements {
         match self {
@@ -279,7 +285,8 @@ impl PackageValidationHandler {
         request: ValidateCodemodPackageRequest,
     ) -> Result<ValidateCodemodPackageResponse> {
         let package_root = canonicalize_package_root(request.package_path.as_deref())?;
-        let workflow_path = workflow_path_for_package(&package_root)?;
+        let workflow_resolution = workflow_path_for_package(&package_root);
+        let workflow_path = workflow_resolution.path.clone();
         let files = collect_file_presence(&package_root, &workflow_path);
         let package_kind = infer_validation_package_kind(&package_root, &files);
         let workflow_valid = validate_workflow_at_path(&workflow_path).is_ok();
@@ -301,8 +308,7 @@ impl PackageValidationHandler {
         });
         let test_cases = summarize_test_cases(&tests_path);
         let package_json = load_package_json(&package_root);
-        let preferred_package_manager =
-            preferred_package_manager_name(&package_root, &package_json).to_string();
+        let preferred_package_manager = preferred_package_manager(&package_root, &package_json);
 
         let scripts = PackageScriptSummary {
             test: package_json.scripts.get("test").cloned(),
@@ -313,7 +319,7 @@ impl PackageValidationHandler {
             Some(
                 run_package_script(
                     &package_root,
-                    infer_package_manager(&package_root),
+                    preferred_package_manager,
                     "test",
                     request.command_timeout_seconds,
                 )
@@ -327,7 +333,7 @@ impl PackageValidationHandler {
             Some(
                 run_package_script(
                     &package_root,
-                    infer_package_manager(&package_root),
+                    preferred_package_manager,
                     "check-types",
                     request.command_timeout_seconds,
                 )
@@ -338,6 +344,16 @@ impl PackageValidationHandler {
         };
 
         let mut issues = Vec::new();
+
+        if workflow_resolution.codemod_yaml_invalid {
+            issues.push(issue(
+                "error",
+                "codemod_yaml_invalid",
+                "codemod.yaml failed to parse; falling back to workflow.yaml.",
+                Some(package_root.join("codemod.yaml")),
+            ));
+        }
+
         push_missing_file_issues(
             &files,
             package_kind,
@@ -407,7 +423,7 @@ impl PackageValidationHandler {
         }
 
         let package_manager_drift_scripts =
-            detect_package_manager_drift_in_scripts(&package_json, &preferred_package_manager);
+            detect_package_manager_drift_in_scripts(&package_json, preferred_package_manager);
         if !package_manager_drift_scripts.is_empty() {
             issues.push(issue(
                 "error",
@@ -415,7 +431,7 @@ impl PackageValidationHandler {
                 &format!(
                     "package.json scripts {} use commands from a different package manager than the scaffold-selected package manager (`{}`). Keep package-local install/run/test invocations consistent.",
                     format_script_list(&package_manager_drift_scripts),
-                    preferred_package_manager
+                    preferred_package_manager.binary()
                 ),
                 Some(package_root.join("package.json")),
             ));
@@ -503,20 +519,30 @@ fn infer_validation_package_kind(
     }
 }
 
-fn workflow_path_for_package(package_root: &Path) -> Result<PathBuf> {
+fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
     let manifest_path = package_root.join("codemod.yaml");
     let Some(content) = read_file_if_exists(&manifest_path) else {
-        return Ok(package_root.join("workflow.yaml"));
+        return WorkflowPathResolution {
+            path: package_root.join("workflow.yaml"),
+            codemod_yaml_invalid: false,
+        };
     };
 
-    let manifest = serde_yaml::from_str::<YamlValue>(&content)
-        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    let Ok(manifest) = serde_yaml::from_str::<YamlValue>(&content) else {
+        return WorkflowPathResolution {
+            path: package_root.join("workflow.yaml"),
+            codemod_yaml_invalid: true,
+        };
+    };
     let workflow = manifest
         .get("workflow")
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("workflow.yaml");
-    Ok(package_root.join(workflow))
+    WorkflowPathResolution {
+        path: package_root.join(workflow),
+        codemod_yaml_invalid: false,
+    }
 }
 
 fn validate_workflow_at_path(workflow_path: &Path) -> Result<()> {
@@ -757,24 +783,21 @@ fn parse_package_manager_name(value: &str) -> &str {
     value.split('@').next().unwrap_or(value).trim()
 }
 
-fn preferred_package_manager_name<'a>(
-    package_root: &'a Path,
-    package_json: &'a PackageJsonLite,
-) -> &'a str {
+fn preferred_package_manager(
+    package_root: &Path,
+    package_json: &PackageJsonLite,
+) -> PackageManager {
     if let Some(package_manager) = package_json.package_manager.as_deref() {
-        return package_manager;
+        return PackageManager::from_name(package_manager).unwrap_or(PackageManager::Npm);
     }
 
-    infer_package_manager(package_root).binary()
+    infer_package_manager(package_root)
 }
 
 fn detect_package_manager_drift_in_scripts(
     package_json: &PackageJsonLite,
-    preferred_package_manager: &str,
+    preferred_package_manager: PackageManager,
 ) -> Vec<String> {
-    let preferred_manager =
-        PackageManager::from_name(preferred_package_manager).unwrap_or(PackageManager::Npm);
-
     package_json
         .scripts
         .iter()
@@ -782,7 +805,7 @@ fn detect_package_manager_drift_in_scripts(
             package_manager_commands_in_script(command)
                 .iter()
                 .any(|command_name| {
-                    !preferred_manager
+                    !preferred_package_manager
                         .allowed_command_names()
                         .contains(&command_name.as_str())
                 })
@@ -1126,7 +1149,7 @@ mod tests {
             package_manager: Some("yarn".to_string()),
         };
 
-        let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
+        let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Yarn);
         assert_eq!(issues, vec!["test".to_string()]);
     }
 
@@ -1140,7 +1163,7 @@ mod tests {
             package_manager: Some("yarn".to_string()),
         };
 
-        let issues = detect_package_manager_drift_in_scripts(&package_json, "yarn");
+        let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Yarn);
         assert!(issues.is_empty());
     }
 
@@ -1154,8 +1177,44 @@ mod tests {
             package_manager: Some("pnpm".to_string()),
         };
 
-        let issues = detect_package_manager_drift_in_scripts(&package_json, "pnpm");
+        let issues = detect_package_manager_drift_in_scripts(&package_json, PackageManager::Pnpm);
         assert!(issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_codemod_yaml_is_reported_without_failing_tool() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: [\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("package.json"), "{\"scripts\":{}}\n").unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "codemod_yaml_invalid"));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
