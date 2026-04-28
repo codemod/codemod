@@ -501,6 +501,10 @@ fn infer_validation_package_kind(
     let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
     let has_authored_skill = package_root.join("agents/skill").is_dir();
 
+    if has_shell_scripts {
+        return ValidationPackageKind::Shell;
+    }
+
     match (
         files.scripts_codemod_ts || files.package_json,
         has_rules,
@@ -1123,6 +1127,50 @@ mod tests {
             .issues
             .iter()
             .all(|issue| issue.code != "missing_package_json"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_transform_script"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_tests_dir"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_packages_with_package_json_do_not_require_jssg_artifacts() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "shell-package",
+  "scripts": {
+    "helper": "node helper.js"
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# Shell package\n").unwrap();
+        fs::write(dir.join("scripts/setup.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("scripts/transform.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("scripts/cleanup.sh"), "#!/usr/bin/env bash\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
         assert!(response
             .issues
             .iter()
