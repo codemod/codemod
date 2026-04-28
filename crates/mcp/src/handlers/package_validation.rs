@@ -26,18 +26,14 @@ pub struct ValidateCodemodPackageRequest {
     #[serde(default)]
     pub package_path: Option<String>,
     /// Run the package's default `test` script if present.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub run_default_test: bool,
     /// Run the package's `check-types` script if present.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub run_check_types: bool,
     /// Timeout for spawned package commands, in seconds.
     #[serde(default = "default_timeout_seconds")]
     pub command_timeout_seconds: u64,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_timeout_seconds() -> u64 {
@@ -575,6 +571,12 @@ fn summarize_test_cases(tests_path: &Path) -> TestCaseSummary {
     let mut negative_case_dirs = 0;
     let mut edge_case_dirs = 0;
     let mut starter_fixtures_detected = false;
+
+    if contains_named_fixture_pair(tests_path)
+        || (tests_path.join("input").is_dir() && tests_path.join("expected").is_dir())
+    {
+        total_case_dirs += 1;
+    }
 
     for entry in WalkDir::new(tests_path)
         .min_depth(1)
@@ -1342,5 +1344,17 @@ mod tests {
             .to_string(),
             "npm run test"
         );
+    }
+
+    #[test]
+    fn top_level_input_expected_directories_count_as_valid_test_case() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("tests/input")).unwrap();
+        fs::create_dir_all(dir.join("tests/expected")).unwrap();
+
+        let summary = summarize_test_cases(&dir.join("tests"));
+        assert_eq!(summary.total_case_dirs, 1);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

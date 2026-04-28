@@ -961,7 +961,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
-        .replace("{package_manager}", package_manager)
+        .replace("{package_manager}", selected_package_manager_spec(config))
         .replace("{codemod_command}", codemod_command);
 
     fs::write(project_path.join("package.json"), package_json)?;
@@ -1128,7 +1128,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
 }}"#,
         config.name,
         config.description,
-        selected_package_manager(config)
+        selected_package_manager_spec(config)
     );
 
     let tsconfig_content = r#"{
@@ -1791,6 +1791,15 @@ fn selected_package_manager(config: &ProjectConfig) -> &str {
     config.package_manager.as_deref().unwrap_or("npm")
 }
 
+fn selected_package_manager_spec(config: &ProjectConfig) -> &'static str {
+    match selected_package_manager(config) {
+        "yarn" => "yarn@4.x",
+        "pnpm" => "pnpm@10.x",
+        "bun" => "bun@1.x",
+        _ => "npm@10.x",
+    }
+}
+
 fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
     match package_manager {
         "npm" => "npx codemod@latest",
@@ -2004,7 +2013,7 @@ mod tests {
         let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
-        assert!(package_json.contains("\"packageManager\": \"yarn\""));
+        assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
         assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
         assert!(readme.contains("yarn test"));
         assert!(!readme.contains("npm test"));
@@ -2096,11 +2105,11 @@ mod tests {
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("base_path: \".\""));
         assert!(workflow.contains("include:"));
-        assert!(workflow.contains("\"**/*.{ts,tsx}\""));
+        assert!(workflow.contains("\"**/*.{ts,tsx,mts,cts}\""));
         assert!(workflow.contains("\"**/node_modules/**\""));
 
         let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
-        assert!(package_json.contains("\"packageManager\": \"pnpm\""));
+        assert!(package_json.contains("\"packageManager\": \"pnpm@10.x\""));
 
         let gitignore = fs::read_to_string(project_path.join(".gitignore")).unwrap();
         assert!(gitignore.contains("*.tgz\n"));
