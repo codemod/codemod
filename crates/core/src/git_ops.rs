@@ -147,11 +147,7 @@ fn detach_from_controlling_terminal(_command: &mut Command) {}
 
 fn configure_non_interactive_git_command(command: &mut Command) {
     detach_from_controlling_terminal(command);
-    command
-        .stdin(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "echo")
-        .env("SSH_ASKPASS", "echo");
+    command.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
 }
 
 fn configure_non_interactive_github_command(command: &mut Command) {
