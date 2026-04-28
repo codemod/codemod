@@ -50,14 +50,31 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
 
 ## Available tools
 
-The Codemod MCP server provides these tools for AI assistants:
+The Codemod MCP server provides these operational tools for AI assistants:
 
 - **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
 - **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
-- **`run_jssg_tests`** - Run tests for jssg (TypeScript transformation scripts) codemods with test cases
-- **`get_jssg_instructions`** - Get jssg instructions for creating TypeScript transformation scripts
-- **`get_ast_grep_instructions`** - Get ast-grep instructions for creating ast-grep rules
-- **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
+- **`run_jssg_tests`** - Run tests for JSSG codemods with test cases
+- **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold or incomplete
+
+## Available resources
+
+The Codemod MCP server provides these guidance resources for AI assistants:
+
+- **`jssg-instructions`** - Docs-backed JSSG guidance for creating and testing transformation scripts
+- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms
+- **`ast-grep-gotchas`** - Highest-priority ast-grep gotchas before implementing transforms
+- **`jssg-utils-instructions`** - Docs-backed import utility guidance for `getImport`, `addImport`, and `removeImport`
+- **`jssg-runtime-capabilities-instructions`** - Runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work
+- **`codemod-cli-instructions`** - Docs-backed CLI, package, and workflow guidance
+- **`codemod-creation-workflow-instructions`** - Docs-backed codemod authoring workflow guidance with a small local supplement
+- **`codemod-troubleshooting-instructions`** - Troubleshooting guidance for common Codemod CLI failures
+- **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
+- **`sharding-instructions`** - Docs-backed sharding guidance
+
+For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
+
+When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
 
 ## Why use Codemod MCP?
 

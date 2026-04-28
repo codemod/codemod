@@ -2,22 +2,25 @@ pub(crate) mod sg_node;
 mod types;
 mod utils;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_lang;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_utils;
 
 #[cfg(feature = "native")]
 pub mod native;
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 use ast_grep_language::{LanguageExt, SupportLang};
 
 #[cfg(feature = "native")]
 use ast_grep_core::tree_sitter::LanguageExt;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use ast_grep_core::language::Language;
 
 #[cfg(feature = "native")]
@@ -91,7 +94,7 @@ pub(crate) fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRoo
 }
 
 fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
-    #[cfg(feature = "wasm")]
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
             return Err(Exception::throw_message(&ctx, "Tree-sitter parser not initialized. Ensure setupParser() has completed before calling parseAsync."));
@@ -113,7 +116,7 @@ fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRoo
 
 // Corresponds to the `kind` function in wasm/lib.rs
 // Takes lang: string, kind_name: string -> u16
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
@@ -125,7 +128,10 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     Ok(kind)
 }
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 

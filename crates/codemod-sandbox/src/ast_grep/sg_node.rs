@@ -1,10 +1,13 @@
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use crate::ast_grep::wasm_lang::WasmDoc;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 use ast_grep_core::tree_sitter::StrDoc as TSStrDoc;
 use ast_grep_core::{AstGrep, Node, NodeMatch};
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 use ast_grep_language::SupportLang;
 
 #[cfg(feature = "native")]
@@ -21,7 +24,10 @@ use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
 use crate::ast_grep::utils::convert_matcher;
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 use ast_grep_language::SupportLang as Lang;
 
 #[cfg(feature = "native")]
@@ -29,11 +35,14 @@ use crate::sandbox::engine::codemod_lang::CodemodLang;
 #[cfg(feature = "native")]
 use CodemodLang as Lang;
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 type TSDoc = TSStrDoc<SupportLang>;
 #[cfg(feature = "native")]
 type TSDoc = TSStrDoc<CodemodLang>;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 type TSDoc = WasmDoc;
 
 pub(crate) struct SgRootInner {
@@ -227,7 +236,7 @@ impl<'js> SgRootRjs<'js> {
         filename: Option<String>,
         target_directory: Option<&std::path::Path>,
     ) -> std::result::Result<Self, String> {
-        #[cfg(feature = "wasm")]
+        #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
         {
             if !crate::ast_grep::wasm_lang::WasmLang::is_parser_initialized() {
                 return Err(
@@ -256,7 +265,10 @@ impl<'js> SgRootRjs<'js> {
             })
         }
 
-        #[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+        #[cfg(all(
+            not(all(feature = "wasm", target_arch = "wasm32")),
+            not(feature = "native")
+        ))]
         {
             let lang = SupportLang::from_str(&lang_str)
                 .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
@@ -1188,12 +1200,12 @@ fn detect_language_from_path(path: &std::path::Path) -> String {
 }
 
 /// Get the language from an AstGrep instance.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 fn get_language(grep: &AstGrep<TSDoc>) -> Lang {
     *grep.lang()
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn get_language(grep: &AstGrep<TSDoc>) -> crate::ast_grep::wasm_lang::WasmLang {
     grep.lang().clone()
 }

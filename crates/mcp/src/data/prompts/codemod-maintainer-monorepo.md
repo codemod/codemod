@@ -52,3 +52,8 @@ Use this guide when setting up or maintaining a codemod monorepo for an open-sou
 - Keep tests close to each codemod package and ensure every hop has its own fixture coverage and green test run before the workspace is considered complete.
 - Test coverage should reflect the real migration scope for each hop, including realistic/doc-derived cases, representative repo examples when available, edge cases, preserve/no-op coverage, and negative cases.
 - Verify README command examples against the current CLI help before treating the workspace docs as complete.
+- Enforce package-level consistency checks during review:
+  - The transform, fixtures, README, workflow file, and `codemod.yaml` must all describe the same migration.
+  - Workflow `include`/`exclude` globs and `targets.languages` must match the actual file types in scope.
+  - Reuse the repository's package-manager and lockfile conventions instead of adding ad hoc dependency ranges or unrelated lockfile churn.
+  - Remove avoidable hygiene noise such as trailing whitespace or stale scaffold text before opening a PR.

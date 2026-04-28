@@ -1,5 +1,5 @@
 use crate::ast_grep::types::AstGrepError;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
 #[cfg(feature = "native")]
 use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
@@ -9,7 +9,10 @@ use ast_grep_core::{
     meta_var::MetaVarEnv,
     Doc, Node, Pattern,
 };
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 use ast_grep_language::SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
