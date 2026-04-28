@@ -57,6 +57,37 @@ function testSingleDefaultESMImport() {
   assert(res[0]!.node.text() === "foo", "Node should reflect identifier");
 }
 
+function testSingleDefaultDynamicImport() {
+  const program = parseProgram("javascript", "import('foo').then(test => {\n const example = test('bar');\n });");
+
+  const res = getAllImports(program, { type: "default", from: "foo" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.isNamespace === false, "isNamespace should be false");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+  assert(res[0]!.node.text() === "test", "Node should reflect identifier");
+}
+
+function testSingleNamedDynamicImport() {
+  const program = parseProgram("javascript", "import('test').then(({fn}) => {\n const pair = fn('test');\n });");
+
+  const res = getAllImports(program, { type: "named", name: 'fn' , from: "test" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.isNamespace === false, "isNamespace should be false");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+  assert(res[0]!.node.text() === "fn", "Node should reflect identifier");
+}
+
+function testSingleNamedDynamicImportWithAlias() {
+  const program = parseProgram("javascript", "import('test').then(({fn: test}) => {\n const pair = fn('test');\n });");
+
+  const res = getAllImports(program, { type: "named", name: 'fn' , from: "test" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.node.text() === "test", "Node should reflect identifier");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm for dynamic()");
+  assert(res[0]!.alias === "test", "Alias should be the import name");
+}
+
+
 function testSingleDefaultCJSImport() {
   const program = parseProgram("javascript", "const bar = require('mod');\nconsole.log(bar);\n");
 
@@ -1028,6 +1059,9 @@ function run() {
   testMultipleNamespaceImports_getAllImports_AllReturned();
   testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned();
   testNamespaceNotReturnedAlongsideTypedResults_getAllImports();
+  testSingleDefaultDynamicImport();
+  testSingleNamedDynamicImport();
+  testSingleNamedDynamicImportWithAlias()
 
   // getImport tests
   testReturnsNullWhenNoMatches();
