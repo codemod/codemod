@@ -59,7 +59,7 @@ static SHARDING_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
 static CODEMOD_CREATION_DOCS_FETCH_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Default, schemars::JsonSchema)]
-struct GetInstructionsRequest;
+struct GetInstructionsRequest {}
 
 impl<'de> serde::Deserialize<'de> for GetInstructionsRequest {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -79,14 +79,14 @@ impl<'de> serde::Deserialize<'de> for GetInstructionsRequest {
             where
                 E: de::Error,
             {
-                Ok(GetInstructionsRequest)
+                Ok(GetInstructionsRequest {})
             }
 
             fn visit_none<E>(self) -> Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                Ok(GetInstructionsRequest)
+                Ok(GetInstructionsRequest {})
             }
 
             fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
@@ -94,7 +94,7 @@ impl<'de> serde::Deserialize<'de> for GetInstructionsRequest {
                 M: MapAccess<'de>,
             {
                 while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
-                Ok(GetInstructionsRequest)
+                Ok(GetInstructionsRequest {})
             }
         }
 
@@ -967,7 +967,7 @@ mod tests {
         let server = CodemodMcpServer::default();
         let result = server
             .get_jssg_instructions(rmcp::handler::server::wrapper::Parameters(
-                GetInstructionsRequest,
+                GetInstructionsRequest {},
             ))
             .await
             .expect("expected compatibility tool result");
@@ -986,25 +986,25 @@ mod tests {
 
         let runtime = server
             .get_jssg_runtime_capabilities(rmcp::handler::server::wrapper::Parameters(
-                GetInstructionsRequest,
+                GetInstructionsRequest {},
             ))
             .await
             .expect("expected runtime compatibility tool result");
         let troubleshooting = server
             .get_codemod_troubleshooting(rmcp::handler::server::wrapper::Parameters(
-                GetInstructionsRequest,
+                GetInstructionsRequest {},
             ))
             .await
             .expect("expected troubleshooting compatibility tool result");
         let creation = server
             .get_codemod_creation_workflow(rmcp::handler::server::wrapper::Parameters(
-                GetInstructionsRequest,
+                GetInstructionsRequest {},
             ))
             .await
             .expect("expected creation compatibility tool result");
         let monorepo = server
             .get_codemod_maintainer_monorepo(rmcp::handler::server::wrapper::Parameters(
-                GetInstructionsRequest,
+                GetInstructionsRequest {},
             ))
             .await
             .expect("expected monorepo compatibility tool result");
