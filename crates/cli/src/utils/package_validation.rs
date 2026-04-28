@@ -1,4 +1,4 @@
-use crate::utils::manifest::{CodemodManifest, WorkflowEntry};
+use crate::utils::manifest::{is_safe_relative_path, CodemodManifest, WorkflowEntry};
 use crate::utils::path_safety::{has_parent_path_components, resolve_relative_path_within_root};
 use crate::utils::skill_layout::{
     expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
@@ -281,19 +281,30 @@ pub(crate) fn authored_skill_file_candidate(
     })
 }
 
+fn safe_join_within_package(package_path: &Path, entry: &WorkflowEntry) -> Result<PathBuf> {
+    if !is_safe_relative_path(&entry.path) {
+        return Err(anyhow!(
+            "Workflow `{}` declares unsafe path `{}` (must be relative to the package root with no `..` segments).",
+            entry.name,
+            entry.path
+        ));
+    }
+    Ok(package_path.join(&entry.path))
+}
+
 /// Returns every workflow declared by the manifest with its absolute path.
 pub(crate) fn expected_workflow_paths(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<Vec<ResolvedWorkflow>> {
     let entries = manifest.resolved_workflows()?;
-    Ok(entries
+    entries
         .into_iter()
         .map(|entry| {
-            let path = package_path.join(&entry.path);
-            ResolvedWorkflow { entry, path }
+            let path = safe_join_within_package(package_path, &entry)?;
+            Ok(ResolvedWorkflow { entry, path })
         })
-        .collect())
+        .collect()
 }
 
 /// Returns the path of the manifest's default workflow.
@@ -302,7 +313,7 @@ pub(crate) fn default_workflow_path(
     manifest: &CodemodManifest,
 ) -> Result<PathBuf> {
     let entry = manifest.default_workflow()?;
-    Ok(package_path.join(&entry.path))
+    safe_join_within_package(package_path, &entry)
 }
 
 /// Resolves the workflow chosen by name (or the default when `name` is None).
@@ -312,7 +323,7 @@ pub(crate) fn select_workflow_path(
     name: Option<&str>,
 ) -> Result<ResolvedWorkflow> {
     let entry = manifest.find_workflow(name)?;
-    let path = package_path.join(&entry.path);
+    let path = safe_join_within_package(package_path, &entry)?;
     Ok(ResolvedWorkflow { entry, path })
 }
 

@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::path::Path;
+
+use crate::utils::path_safety::has_parent_path_components;
 
 pub(crate) const DEFAULT_WORKFLOW_NAME: &str = "default";
 pub(crate) const DEFAULT_WORKFLOW_FILE: &str = "workflow.yaml";
@@ -104,7 +107,7 @@ impl CodemodManifest {
             }
             (Some(path), _) => {
                 let trimmed = path.trim();
-                let resolved_path = if trimmed.is_empty() {
+                let resolved_path = if trimmed.is_empty() || !is_safe_relative_path(trimmed) {
                     DEFAULT_WORKFLOW_FILE.to_string()
                 } else {
                     trimmed.to_string()
@@ -131,6 +134,15 @@ impl CodemodManifest {
             return Err(anyhow!(
                 "codemod.yaml cannot set both `workflow` and `workflows`. Use one or the other."
             ));
+        }
+        if let Some(workflow) = &self.workflow {
+            let trimmed = workflow.trim();
+            if !trimmed.is_empty() && !is_safe_relative_path(trimmed) {
+                return Err(anyhow!(
+                    "Workflow path `{}` is invalid. Paths must be package-relative and may not contain `..` segments or absolute roots.",
+                    trimmed
+                ));
+            }
         }
         if let Some(entries) = &self.workflows {
             normalize_workflow_entries_strict(entries)?;
@@ -201,6 +213,13 @@ fn normalize_workflow_entries_strict(entries: &[WorkflowEntry]) -> Result<Vec<Wo
         if trimmed_path.is_empty() {
             return Err(anyhow!("Workflow `{}` has empty `path`.", trimmed_name));
         }
+        if !is_safe_relative_path(trimmed_path) {
+            return Err(anyhow!(
+                "Workflow `{}` has invalid `path` `{}`. Paths must be package-relative and may not contain `..` segments or absolute roots.",
+                trimmed_name,
+                trimmed_path
+            ));
+        }
         if !seen_paths.insert(trimmed_path.to_string()) {
             return Err(anyhow!(
                 "Duplicate workflow path `{}` in codemod.yaml `workflows`.",
@@ -252,6 +271,9 @@ fn normalize_workflow_entries_lenient(entries: &[WorkflowEntry]) -> Result<Vec<W
         let trimmed_name = entry.name.trim();
         let trimmed_path = entry.path.trim();
         if trimmed_name.is_empty() || trimmed_path.is_empty() {
+            continue;
+        }
+        if !is_safe_relative_path(trimmed_path) {
             continue;
         }
         if !seen_names.insert(trimmed_name.to_string()) {
@@ -307,6 +329,19 @@ fn is_valid_workflow_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A workflow path is safe iff it is non-empty, relative, and contains no
+/// parent-dir (`..`) segments. This blocks publish-time AND run-time
+/// resolution of paths that would escape the package root via
+/// `package_path.join(entry.path)` (which silently replaces the base when
+/// `entry.path` is absolute on the same platform).
+pub(crate) fn is_safe_relative_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    !has_parent_path_components(Path::new(trimmed))
 }
 
 #[cfg(test)]
@@ -466,6 +501,89 @@ mod tests {
             default: false,
         }]);
         assert!(manifest.validate_workflow_entries().is_err());
+    }
+
+    #[test]
+    fn rejects_absolute_workflow_path_at_publish() {
+        let mut manifest = empty_manifest();
+        manifest.workflows = Some(vec![WorkflowEntry {
+            name: "main".to_string(),
+            #[cfg(unix)]
+            path: "/etc/passwd".to_string(),
+            #[cfg(windows)]
+            path: "C:\\windows\\system32\\drivers\\etc\\hosts".to_string(),
+            description: None,
+            default: true,
+        }]);
+        let err = manifest.validate_workflow_entries().unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("invalid `path`"),
+            "expected absolute-path rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_parent_traversal_workflow_path_at_publish() {
+        let mut manifest = empty_manifest();
+        manifest.workflows = Some(vec![WorkflowEntry {
+            name: "main".to_string(),
+            path: "../../etc/passwd".to_string(),
+            description: None,
+            default: true,
+        }]);
+        let err = manifest.validate_workflow_entries().unwrap_err();
+        assert!(
+            err.to_string().contains("invalid"),
+            "expected parent-dir rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_workflow_field_with_unsafe_path_at_publish() {
+        let mut manifest = empty_manifest();
+        manifest.workflow = Some("../escape.yaml".to_string());
+        let err = manifest.validate_workflow_entries().unwrap_err();
+        assert!(
+            err.to_string().contains("invalid"),
+            "expected unsafe-path rejection on legacy `workflow:`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lenient_resolution_drops_unsafe_workflow_paths() {
+        let mut manifest = empty_manifest();
+        manifest.workflows = Some(vec![
+            WorkflowEntry {
+                name: "evil".to_string(),
+                path: "../../../etc/passwd".to_string(),
+                description: None,
+                default: true,
+            },
+            WorkflowEntry {
+                name: "ok".to_string(),
+                path: "workflow.yaml".to_string(),
+                description: None,
+                default: false,
+            },
+        ]);
+        let resolved = manifest.resolved_workflows().unwrap();
+        // The unsafe entry must be dropped; the safe entry remains and
+        // becomes the implicit default since the original default was
+        // dropped.
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "ok");
+        assert!(resolved[0].default);
+    }
+
+    #[test]
+    fn lenient_resolution_falls_back_when_legacy_workflow_path_is_unsafe() {
+        let mut manifest = empty_manifest();
+        manifest.workflow = Some("../../etc/passwd".to_string());
+        let resolved = manifest.resolved_workflows().unwrap();
+        // Falls back to the synthesized default file name; downstream
+        // existence check will then surface a clear "missing" error
+        // rather than reading an arbitrary file.
+        assert_eq!(resolved[0].path, DEFAULT_WORKFLOW_FILE);
     }
 
     #[test]
