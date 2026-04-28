@@ -1870,7 +1870,12 @@ mod tests {
         create_manifest(&project_path, &config).unwrap();
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
 
-        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        // The init template now scaffolds the multi-workflow `workflows:`
+        // shape with a single `main` entry pointing at `workflow.yaml`.
+        assert!(manifest.contains("workflows:"));
+        assert!(manifest.contains("name: main"));
+        assert!(manifest.contains("path: workflow.yaml"));
+        assert!(manifest.contains("default: true"));
         assert!(manifest.contains("capabilities: []"));
     }
 
@@ -1904,7 +1909,8 @@ mod tests {
         assert!(project_path.join("workflow.yaml").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
-        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        assert!(manifest.contains("workflows:"));
+        assert!(manifest.contains("path: workflow.yaml"));
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("install-skill:"));
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));

@@ -17,7 +17,9 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::engine::create_engine;
-use crate::workflow_runner::{resolve_workflow_source, run_workflow, workflow_has_manual_steps};
+use crate::workflow_runner::{
+    resolve_workflow_source_with_name, run_workflow, workflow_has_manual_steps,
+};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -75,6 +77,10 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value = "text")]
     format: String,
+
+    /// Name of the workflow to run when codemod.yaml defines multiple workflows
+    #[arg(long = "workflow-name", value_name = "NAME")]
+    workflow_name: Option<String>,
 }
 
 fn should_auto_launch_workflow_tui(
@@ -99,7 +105,8 @@ fn apply_workflow_run_mode_to_config(
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     // Resolve workflow file and bundle path
-    let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
+    let (workflow_file_path, _) =
+        resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
 
     // Parse parameters
     let params = utils::parse_params(&args.params).context("Failed to parse parameters")?;

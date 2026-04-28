@@ -5,7 +5,6 @@ version: "0.1.0"
 description: "{description}"
 author: "{author}"
 license: "{license}"
-workflow: "workflow.yaml"
 {repository}
 
 targets:
@@ -18,3 +17,8 @@ registry:
   visibility: "{visibility}"
 
 capabilities: []
+
+workflows:
+  - name: main
+    default: true
+    path: workflow.yaml

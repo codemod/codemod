@@ -5000,6 +5000,396 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     assert!(result.unwrap_err().to_string().contains("JavaScript file"));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_execute_js_ast_grep_step_limits_to_matrix_meta_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Codemod that converts `var` declarations to `const` so we can detect
+    // by-content which files were touched.
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({
+    rule: { pattern: 'var $X = $Y' },
+  });
+  const edits = nodes.map((node) => {
+    const x = node.getMatch('X').text();
+    const y = node.getMatch('Y').text();
+    return node.replace(`const ${x} = ${y}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    // Three eligible files. Only `included.js` is listed in
+    // matrix._meta_files, so the other two must be left untouched.
+    create_test_file(temp_path, "included.js", "var x = 1;\n");
+    create_test_file(temp_path, "skipped_a.js", "var a = 2;\n");
+    create_test_file(temp_path, "skipped_b.js", "var b = 3;\n");
+
+    let config = WorkflowRunConfig {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+
+    let mut matrix = HashMap::new();
+    matrix.insert("_meta_files".to_string(), json!(["included.js"]));
+
+    let result = engine
+        .execute_js_ast_grep_step(
+            "matrix-meta-files".to_string(),
+            "matrix-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: None,
+                // No include/exclude — relies on matrix._meta_files for
+                // file scoping. This is the regression-prone path: it
+                // must NOT walk the whole target_path.
+                include: None,
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            Some(matrix),
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "matrix _meta_files step should execute successfully: {result:?}"
+    );
+
+    let included = std::fs::read_to_string(temp_path.join("included.js")).unwrap();
+    let skipped_a = std::fs::read_to_string(temp_path.join("skipped_a.js")).unwrap();
+    let skipped_b = std::fs::read_to_string(temp_path.join("skipped_b.js")).unwrap();
+
+    assert!(
+        included.contains("const x"),
+        "the file listed in matrix._meta_files must be transformed: {included}"
+    );
+    assert!(
+        skipped_a.contains("var a"),
+        "files NOT in matrix._meta_files must be left untouched: {skipped_a}"
+    );
+    assert!(
+        skipped_b.contains("var b"),
+        "files NOT in matrix._meta_files must be left untouched: {skipped_b}"
+    );
+}
+
+/// End-to-end: declare a matrix node with literal `values` containing
+/// `_meta_files`, run the workflow, and verify only the listed files in
+/// each shard get transformed. Catches regressions where the per-task
+/// `matrix_values._meta_files` filter never reaches the js-ast-grep
+/// executor (e.g., because it's lost during state diffing or the scheduler
+/// drops it from matrix_data).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_matrix_meta_files_filtering_end_to_end() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({
+    rule: { pattern: 'var $X = $Y' },
+  });
+  const edits = nodes.map((node) => {
+    const x = node.getMatch('X').text();
+    const y = node.getMatch('Y').text();
+    return node.replace(`const ${x} = ${y}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    create_test_file(temp_path, "shard0/a.js", "var a = 1;\n");
+    create_test_file(temp_path, "shard0/b.js", "var b = 2;\n");
+    create_test_file(temp_path, "shard1/c.js", "var c = 3;\n");
+    create_test_file(temp_path, "outside/d.js", "var d = 4;\n");
+
+    // Two shards. shard0 owns shard0/a.js and shard0/b.js; shard1 owns
+    // shard1/c.js. outside/d.js is not declared in any shard and must
+    // remain untouched if the matrix _meta_files filter is honored.
+    let workflow = Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "transform".to_string(),
+            name: "Transform".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: Some(Strategy {
+                r#type: butterflow_models::strategy::StrategyType::Matrix,
+                values: Some(vec![
+                    HashMap::from([
+                        ("name".to_string(), json!("shard-0")),
+                        (
+                            "_meta_files".to_string(),
+                            json!(["shard0/a.js", "shard0/b.js"]),
+                        ),
+                    ]),
+                    HashMap::from([
+                        ("name".to_string(), json!("shard-1")),
+                        ("_meta_files".to_string(), json!(["shard1/c.js"])),
+                    ]),
+                ]),
+                from_state: None,
+            }),
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("jssg".to_string()),
+                name: "Convert var to const".to_string(),
+                action: StepAction::JSAstGrep(UseJSAstGrep {
+                    js_file: "codemod.js".to_string(),
+                    base_path: None,
+                    include: None,
+                    exclude: None,
+                    max_threads: Some(1),
+                    dry_run: Some(false),
+                    language: Some("javascript".to_string()),
+                    capabilities: None,
+                    semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                        SemanticAnalysisMode::File,
+                    )),
+                }),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
+    };
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: temp_path.to_path_buf(),
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow_run_id = engine
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(temp_path.to_path_buf()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Wait for completion — automatic matrix nodes self-trigger.
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        matches!(
+            status,
+            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Canceled
+        )
+    })
+    .await;
+
+    let final_status = engine.get_workflow_status(workflow_run_id).await.unwrap();
+    assert_eq!(
+        final_status,
+        WorkflowStatus::Completed,
+        "workflow run should reach Completed for the matrix _meta_files end-to-end test"
+    );
+
+    let read = |rel: &str| std::fs::read_to_string(temp_path.join(rel)).unwrap();
+    assert!(
+        read("shard0/a.js").contains("const a"),
+        "shard0/a.js should be transformed (listed in shard-0 _meta_files)"
+    );
+    assert!(
+        read("shard0/b.js").contains("const b"),
+        "shard0/b.js should be transformed (listed in shard-0 _meta_files)"
+    );
+    assert!(
+        read("shard1/c.js").contains("const c"),
+        "shard1/c.js should be transformed (listed in shard-1 _meta_files)"
+    );
+    let outside = read("outside/d.js");
+    assert!(
+        outside.contains("var d"),
+        "outside/d.js must remain untouched (not in any shard _meta_files): {outside}"
+    );
+}
+
+/// Regression guard: even when the workflow's js-ast-grep step declares an
+/// `include` glob, matrix `_meta_files` must still strictly scope each
+/// shard's run. Previously a workflow with include + matrix shards would
+/// silently bypass the `_meta_files` filter and let the walker process
+/// every file matching `include`, defeating sharding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_matrix_meta_files_overrides_include_glob() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({
+    rule: { pattern: 'var $X = $Y' },
+  });
+  const edits = nodes.map((node) => {
+    const x = node.getMatch('X').text();
+    const y = node.getMatch('Y').text();
+    return node.replace(`const ${x} = ${y}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/in_shard.js", "var x = 1;\n");
+    create_test_file(temp_path, "src/out_of_shard.js", "var y = 2;\n");
+
+    let workflow = Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "transform".to_string(),
+            name: "Transform".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: Some(Strategy {
+                r#type: butterflow_models::strategy::StrategyType::Matrix,
+                values: Some(vec![HashMap::from([
+                    ("name".to_string(), json!("shard-0")),
+                    // Only one of the two src/*.js files is in this
+                    // shard. The include glob below would otherwise
+                    // match both.
+                    ("_meta_files".to_string(), json!(["src/in_shard.js"])),
+                ])]),
+                from_state: None,
+            }),
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("jssg".to_string()),
+                name: "Convert var to const".to_string(),
+                action: StepAction::JSAstGrep(UseJSAstGrep {
+                    js_file: "codemod.js".to_string(),
+                    base_path: None,
+                    // Workflow declares an include glob — the regression
+                    // bypassed _meta_files here and processed every
+                    // matching file.
+                    include: Some(vec!["src/**/*.js".to_string()]),
+                    exclude: None,
+                    max_threads: Some(1),
+                    dry_run: Some(false),
+                    language: Some("javascript".to_string()),
+                    capabilities: None,
+                    semantic_analysis: Some(SemanticAnalysisConfig::Mode(
+                        SemanticAnalysisMode::File,
+                    )),
+                }),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
+    };
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let config = WorkflowRunConfig {
+        target_path: temp_path.to_path_buf(),
+        bundle_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow_run_id = engine
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(temp_path.to_path_buf()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let _ = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        matches!(
+            status,
+            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Canceled
+        )
+    })
+    .await;
+
+    assert_eq!(
+        engine.get_workflow_status(workflow_run_id).await.unwrap(),
+        WorkflowStatus::Completed,
+    );
+
+    let in_shard = std::fs::read_to_string(temp_path.join("src/in_shard.js")).unwrap();
+    let out_of_shard = std::fs::read_to_string(temp_path.join("src/out_of_shard.js")).unwrap();
+
+    assert!(
+        in_shard.contains("const x"),
+        "shard-listed file should be transformed: {in_shard}"
+    );
+    assert!(
+        out_of_shard.contains("var y"),
+        "matrix `_meta_files` must take precedence over the workflow's include glob: {out_of_shard}"
+    );
+}
+
 #[tokio::test]
 async fn test_execute_js_ast_grep_step_with_gitignore() {
     let temp_dir = TempDir::new().unwrap();

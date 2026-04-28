@@ -1,6 +1,6 @@
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
+    detect_package_behavior_shape, expected_workflow_paths, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape,
 };
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
@@ -216,6 +216,7 @@ fn validate_package_structure(
     package_path: &Path,
     manifest: &CodemodManifest,
 ) -> Result<Vec<String>> {
+    manifest.validate_workflow_entries()?;
     validate_package_behavior_structure(package_path, manifest)?;
     validate_common_package_metadata(package_path, manifest)?;
 
@@ -227,14 +228,22 @@ fn validate_package_structure(
         ));
     }
 
-    let workflow_path = expected_workflow_path(package_path, manifest);
-    if !workflow_path.exists() {
-        return Err(anyhow!(
-            "Workflow file not found: {}",
-            workflow_path.display()
-        ));
+    let workflows = expected_workflow_paths(package_path, manifest)?;
+    let mut js_files: Vec<String> = Vec::new();
+    let mut seen_js = std::collections::HashSet::new();
+    for resolved in &workflows {
+        if !resolved.path.exists() {
+            return Err(anyhow!(
+                "Workflow file not found: {}",
+                resolved.path.display()
+            ));
+        }
+        for js_file in validate_workflow_behavior(package_path, &resolved.path)? {
+            if seen_js.insert(js_file.clone()) {
+                js_files.push(js_file);
+            }
+        }
     }
-    let js_files = validate_workflow_behavior(package_path, &workflow_path)?;
 
     if behavior_shape.includes_skill() || behavior_shape == PackageBehaviorShape::SkillOnly {
         validate_skill_behavior(package_path, manifest)?;
@@ -243,15 +252,19 @@ fn validate_package_structure(
     if !behavior_shape.includes_workflow() {
         info!("Skill-only package validation successful");
         info!(
-            "Package validation successful ({})",
-            behavior_shape.as_str()
+            "Package validation successful ({}, {} workflow{})",
+            behavior_shape.as_str(),
+            workflows.len(),
+            if workflows.len() == 1 { "" } else { "s" }
         );
         return Ok(js_files);
     }
 
     info!(
-        "Package validation successful ({})",
-        behavior_shape.as_str()
+        "Package validation successful ({}, {} workflow{})",
+        behavior_shape.as_str(),
+        workflows.len(),
+        if workflows.len() == 1 { "" } else { "s" }
     );
     Ok(js_files)
 }
@@ -649,7 +662,8 @@ codemod-skill-version: 0.1.0
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: workflow.to_string(),
+            workflow: Some(workflow.to_string()),
+            workflows: None,
             targets: None,
             dependencies: None,
             keywords: None,
@@ -721,7 +735,11 @@ nodes:
         let manifest = manifest_with("workflow.yaml", "example");
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error.to_string().contains("Workflow file is missing"));
+        let msg = error.to_string();
+        assert!(
+            msg.contains("Workflow file") && msg.contains("missing"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -767,10 +785,39 @@ nodes: []
     }
 
     #[test]
-    fn expected_workflow_path_uses_manifest_value_when_set() {
+    fn expected_workflow_paths_uses_manifest_value_when_set() {
         let manifest = manifest_with("custom-workflow.yaml", "example");
-        let path = expected_workflow_path(Path::new("/tmp/test"), &manifest);
-        assert_eq!(path, Path::new("/tmp/test").join("custom-workflow.yaml"));
+        let paths = expected_workflow_paths(Path::new("/tmp/test"), &manifest).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0].path,
+            Path::new("/tmp/test").join("custom-workflow.yaml")
+        );
+        assert_eq!(paths[0].entry.name, "default");
+    }
+
+    #[test]
+    fn expected_workflow_paths_returns_all_workflows_for_multi_manifest() {
+        let mut manifest = manifest_with("workflow.yaml", "example");
+        manifest.workflow = None;
+        manifest.workflows = Some(vec![
+            crate::utils::manifest::WorkflowEntry {
+                name: "plain".to_string(),
+                path: "workflow.yaml".to_string(),
+                description: None,
+                default: true,
+            },
+            crate::utils::manifest::WorkflowEntry {
+                name: "sharded".to_string(),
+                path: "workflows/sharded.yaml".to_string(),
+                description: Some("Sharded".to_string()),
+                default: false,
+            },
+        ]);
+        let paths = expected_workflow_paths(Path::new("/tmp/multi"), &manifest).unwrap();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0].entry.name, "plain");
+        assert_eq!(paths[1].entry.name, "sharded");
     }
 
     #[test]

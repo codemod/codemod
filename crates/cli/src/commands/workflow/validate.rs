@@ -1,7 +1,7 @@
 use crate::utils::ancestor_search::find_in_ancestors;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_path, validate_package_behavior_structure,
+    detect_package_behavior_shape, expected_workflow_paths, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape, DEFAULT_WORKFLOW_FILE_NAME,
 };
 use anyhow::{anyhow, Context, Result};
@@ -66,14 +66,21 @@ fn validate_package(package_root: &Path) -> Result<()> {
     );
 
     if behavior_shape.includes_workflow() {
-        let workflow_path = expected_workflow_path(package_root, &manifest);
-        if !workflow_path.is_file() {
-            return Err(anyhow!(
-                "❌ Workflow behavior declared but workflow file not found at {}.",
-                workflow_path.display()
-            ));
+        for resolved in expected_workflow_paths(package_root, &manifest)? {
+            if !resolved.path.is_file() {
+                return Err(anyhow!(
+                    "❌ Workflow behavior declared but workflow `{}` not found at {}.",
+                    resolved.entry.name,
+                    resolved.path.display()
+                ));
+            }
+            println!(
+                "─── Workflow `{}` ({}) ───",
+                resolved.entry.name,
+                resolved.path.display()
+            );
+            validate_workflow_file(&resolved.path)?;
         }
-        validate_workflow_file(&workflow_path)?;
     }
 
     if behavior_shape.includes_skill() {

@@ -639,7 +639,8 @@ impl Engine {
             full_prompt_len
         );
 
-        if canonical == "claude-code" || canonical == "codex" {
+        // Only agents whose `build_agent_command` pass the prompt via stdin
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
             cmd.stdin(Stdio::piped());
         } else {
@@ -709,7 +710,7 @@ impl Engine {
                 captured_output
             })
         });
-        if canonical == "claude-code" || canonical == "codex" {
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             let mut stdin = child.stdin.take().ok_or_else(|| {
                 Error::StepExecution(format!("{} stdin pipe was not available", canonical))
             })?;
@@ -3991,20 +3992,16 @@ impl Engine {
             matrix_input.as_ref(),
             task_expr_ctx,
         )?;
-        let explicit_files = if js_ast_grep.include.is_none() && resolved_exclude.is_none() {
-            matrix_input
-                .as_ref()
-                .and_then(|m| m.get("_meta_files"))
-                .and_then(butterflow_models::variable::value_to_string_vec)
-                .map(|files| {
-                    files
-                        .into_iter()
-                        .map(|file| target_path.join(file))
-                        .collect()
-                })
-        } else {
-            None
-        };
+        let explicit_files = matrix_input
+            .as_ref()
+            .and_then(|m| m.get("_meta_files"))
+            .and_then(butterflow_models::variable::value_to_string_vec)
+            .map(|files| {
+                files
+                    .into_iter()
+                    .map(|file| target_path.join(file))
+                    .collect()
+            });
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),

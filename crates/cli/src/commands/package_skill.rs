@@ -1038,7 +1038,12 @@ mod tests {
             homepage: None,
             bugs: None,
             registry: None,
-            workflow: workflow.to_string(),
+            workflow: if workflow.is_empty() {
+                None
+            } else {
+                Some(workflow.to_string())
+            },
+            workflows: None,
             targets: None,
             dependencies: None,
             keywords: None,
