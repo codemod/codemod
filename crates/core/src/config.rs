@@ -19,7 +19,8 @@ use crate::{
 
 pub type CapabilitiesSecurityCallback =
     Arc<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>;
-pub type PreRunCallback = Box<dyn Fn(&Path, bool) + Send + Sync>;
+pub type PreRunCallback =
+    Box<dyn Fn(&Path, bool, &WorkflowRunConfig) -> Result<(), anyhow::Error> + Send + Sync>;
 
 /// Callback for selecting an agent from available options.
 /// Returns the canonical name of the selected agent, or None to skip.
@@ -101,6 +102,21 @@ pub struct PullRequestCreationRequest {
 pub type PullRequestApprovalCallback =
     Arc<dyn Fn(&PullRequestCreationRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirtyGitApprovalKind {
+    UncommittedChanges,
+    NotTracked,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirtyGitApprovalRequest {
+    pub path: PathBuf,
+    pub kind: DirtyGitApprovalKind,
+}
+
+pub type DirtyGitApprovalCallback =
+    Arc<dyn Fn(&DirtyGitApprovalRequest) -> Result<bool, anyhow::Error> + Send + Sync>;
+
 #[derive(Clone, Debug)]
 pub struct ManagedGitWorktree {
     pub branch: String,
@@ -170,6 +186,8 @@ pub struct WorkflowRunConfig {
     pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
     /// Optional interactive approval callback for managed-git pull request creation
     pub pull_request_approval_callback: Option<PullRequestApprovalCallback>,
+    /// Optional interactive approval callback for proceeding on dirty/untracked git targets
+    pub dirty_git_approval_callback: Option<DirtyGitApprovalCallback>,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
     /// Optional per-task git worktree used for managed git execution.
@@ -218,6 +236,7 @@ impl Default for WorkflowRunConfig {
             capture_stdout_in_quiet_mode: true,
             shell_command_approval_callback: None,
             pull_request_approval_callback: None,
+            dirty_git_approval_callback: None,
             install_skill_executor: None,
             managed_git_worktree: None,
             enable_managed_git: true,

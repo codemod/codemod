@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState, WorktreeConsentScope};
+use butterflow_core::config::DirtyGitApprovalKind;
 
 fn log_modal_copy_hint() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -656,13 +657,28 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
             format!("Approve capabilities?\n\n{}", modules.join(", ")),
             "y approve  n/esc reject".to_string(),
         ),
+        ApprovalPrompt::DirtyGit { path, kind, .. } => {
+            let body = match kind {
+                DirtyGitApprovalKind::UncommittedChanges => format!(
+                    "The target has uncommitted changes.\n\nPath: {path}\n\nProceed anyway?"
+                ),
+                DirtyGitApprovalKind::NotTracked => format!(
+                    "The target path is not tracked by Git.\n\nPath: {path}\n\nProceed anyway?"
+                ),
+            };
+            (
+                "Git Confirmation".to_string(),
+                body,
+                "y/Enter approve  n/esc cancel".to_string(),
+            )
+        }
         ApprovalPrompt::AgentSelection {
             options, selected, ..
         } => {
             let options_text = options
                 .iter()
                 .enumerate()
-                .map(|(index, (label, _))| {
+                .map(|(index, (_canonical, label, _available))| {
                     if index == *selected {
                         format!("▶ {label}")
                     } else {
@@ -718,6 +734,7 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
 mod tests {
     use super::{log_modal_copy_hint, render};
     use crate::tui::app::{Screen, TaskProgressView, TuiState};
+    use butterflow_core::config::DirtyGitApprovalKind;
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
@@ -1264,6 +1281,29 @@ mod tests {
             .iter()
             .any(|line| line.contains("Publish Branch and Create Pull Request")));
         assert!(lines.iter().any(|line| line.contains("codemod-branch")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_dirty_git_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::DirtyGit {
+                request_id: Uuid::new_v4(),
+                path: "/tmp/repo".to_string(),
+                kind: DirtyGitApprovalKind::UncommittedChanges,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Git Confirmation")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("uncommitted changes")));
+        assert!(lines.iter().any(|line| line.contains("/tmp/repo")));
         assert!(lines
             .iter()
             .any(|line| line.contains("approve") && line.contains("cancel")));

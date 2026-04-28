@@ -15,13 +15,23 @@ use crate::tui::{create_tui_progress_callback, run_workflow_tui_with_session};
 use butterflow_core::workflow_runtime::WorkflowSession;
 
 pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
-    workflow.nodes.iter().any(|node| {
-        node.r#type == NodeType::Manual
-            || node
-                .trigger
-                .as_ref()
-                .is_some_and(|trigger| trigger.r#type == TriggerType::Manual)
-    })
+    workflow.nodes.iter().any(node_requires_manual_tui)
+}
+
+fn node_requires_manual_tui(node: &butterflow_models::Node) -> bool {
+    node_has_manual_gate(node) && !is_pull_request_only_manual_publish_node(node)
+}
+
+fn node_has_manual_gate(node: &butterflow_models::Node) -> bool {
+    node.r#type == NodeType::Manual
+        || node
+            .trigger
+            .as_ref()
+            .is_some_and(|trigger| trigger.r#type == TriggerType::Manual)
+}
+
+fn is_pull_request_only_manual_publish_node(node: &butterflow_models::Node) -> bool {
+    node.steps.is_empty() && node.pull_request.is_some()
 }
 
 /// Run a workflow with the given configuration
@@ -326,8 +336,13 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{format_summary_suffix, summarize_tasks};
-    use butterflow_models::{Task, TaskStatus};
+    use super::{
+        format_summary_suffix, node_requires_manual_tui, summarize_tasks, workflow_has_manual_steps,
+    };
+    use butterflow_models::node::NodeType;
+    use butterflow_models::step::{PullRequestConfig, Step, StepAction};
+    use butterflow_models::{Node, Task, TaskStatus, Workflow};
+    use std::collections::HashMap;
     use uuid::Uuid;
 
     fn task(node_id: &str, status: TaskStatus) -> Task {
@@ -383,5 +398,103 @@ mod tests {
         assert!(suffix.contains("4 running"));
         assert!(suffix.contains("1 pending"));
         assert!(suffix.contains("active nodes: a, b, c (+1 more)"));
+    }
+
+    #[test]
+    fn manual_pull_request_only_node_does_not_require_tui() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "publish".to_string(),
+                name: "Publish".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        };
+
+        assert!(!node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(!workflow_has_manual_steps(&workflow));
+    }
+
+    #[test]
+    fn manual_node_with_steps_still_requires_tui() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "review".to_string(),
+                name: "Review".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![Step {
+                    id: None,
+                    name: "noop".to_string(),
+                    action: StepAction::RunScript("echo hi".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        };
+
+        assert!(node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(workflow_has_manual_steps(&workflow));
+    }
+
+    #[test]
+    fn manual_gate_without_steps_still_requires_tui_when_not_pr_only() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "checkpoint".to_string(),
+                name: "Checkpoint".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            }],
+        };
+
+        assert!(node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(workflow_has_manual_steps(&workflow));
     }
 }
