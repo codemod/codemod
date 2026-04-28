@@ -639,11 +639,8 @@ impl Engine {
             full_prompt_len
         );
 
-        if canonical == "claude-code"
-            || canonical == "codex"
-            || canonical == "opencode"
-            || canonical == "openclaw"
-        {
+        // Only agents whose `build_agent_command` pass the prompt via stdin
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
             cmd.stdin(Stdio::piped());
         } else {
@@ -713,11 +710,7 @@ impl Engine {
                 captured_output
             })
         });
-        if canonical == "claude-code"
-            || canonical == "codex"
-            || canonical == "opencode"
-            || canonical == "openclaw"
-        {
+        if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
             let mut stdin = child.stdin.take().ok_or_else(|| {
                 Error::StepExecution(format!("{} stdin pipe was not available", canonical))
             })?;
