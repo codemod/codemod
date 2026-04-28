@@ -160,8 +160,13 @@ fn is_copy_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
         && (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER))
 }
 
-fn should_exit_on_interrupt(code: KeyCode, modifiers: KeyModifiers, show_log_modal: bool) -> bool {
-    is_copy_shortcut(code, modifiers) && !show_log_modal
+fn should_exit_on_interrupt(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    show_log_modal: bool,
+    approval_active: bool,
+) -> bool {
+    is_copy_shortcut(code, modifiers) && !show_log_modal && !approval_active
 }
 
 fn copy_text_to_clipboard(text: &str) -> Result<()> {
@@ -528,7 +533,12 @@ async fn run_tui_loop(
                 }
                 needs_redraw = true;
 
-                if should_exit_on_interrupt(key.code, key.modifiers, state.show_log_modal) {
+                if should_exit_on_interrupt(
+                    key.code,
+                    key.modifiers,
+                    state.show_log_modal,
+                    state.approval.is_some(),
+                ) {
                     break;
                 }
 
@@ -1084,11 +1094,13 @@ mod tests {
         assert!(should_exit_on_interrupt(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
+            false,
             false
         ));
         assert!(should_exit_on_interrupt(
             KeyCode::Char('C'),
             KeyModifiers::SUPER,
+            false,
             false
         ));
     }
@@ -1098,6 +1110,17 @@ mod tests {
         assert!(!should_exit_on_interrupt(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn ctrl_c_does_not_exit_tui_when_approval_is_open() {
+        assert!(!should_exit_on_interrupt(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            false,
             true
         ));
     }
@@ -1107,6 +1130,7 @@ mod tests {
         assert!(!should_exit_on_interrupt(
             KeyCode::Char('c'),
             KeyModifiers::NONE,
+            false,
             false
         ));
     }

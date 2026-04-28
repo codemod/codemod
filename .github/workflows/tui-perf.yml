@@ -171,7 +171,8 @@ jobs:
             cp "${CANDIDATE_WORKTREE}/${BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${BENCH_TEST_PATH}"
           fi
           RENDER_BENCH_TEST_PATH="crates/cli/src/tui/render_latency_bench.rs"
-          if [ ! -f "${BASELINE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ] && [ -f "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ]; then
+          if [ -f "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" ]; then
+            mkdir -p "${BASELINE_WORKTREE}/$(dirname "${RENDER_BENCH_TEST_PATH}")"
             cp "${CANDIDATE_WORKTREE}/${RENDER_BENCH_TEST_PATH}" "${BASELINE_WORKTREE}/${RENDER_BENCH_TEST_PATH}"
             if ! grep -q "mod render_latency_bench;" "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs"; then
               python3 - "${BASELINE_WORKTREE}/crates/cli/src/tui/mod.rs" <<'PY'
