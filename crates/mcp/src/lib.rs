@@ -17,6 +17,7 @@ mod handlers;
 use handlers::{AstDumpHandler, JssgTestHandler, NodeTypesHandler, PackageValidationHandler};
 
 const PUBLIC_DOCS_TIMEOUT_SECS: u64 = 10;
+const PUBLIC_DOCS_INITIAL_WAIT_MILLIS: u64 = 200;
 const JSSG_INSTRUCTIONS: &str = include_str!("data/prompts/jssg-instructions.md");
 const JSSG_UTILS_INSTRUCTIONS: &str = include_str!("data/prompts/jssg-utils-instructions.md");
 const JSSG_RUNTIME_CAPABILITIES_INSTRUCTIONS: &str =
@@ -224,11 +225,22 @@ where
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
         let future = build();
         tokio::spawn(async move {
             let content = future.await;
+            let _ = sender.send(content.clone());
             let _ = cell.set(content);
         });
+
+        if let Ok(Ok(content)) = tokio::time::timeout(
+            Duration::from_millis(PUBLIC_DOCS_INITIAL_WAIT_MILLIS),
+            receiver,
+        )
+        .await
+        {
+            return content;
+        }
     }
 
     fallback.to_string()
@@ -892,6 +904,45 @@ mod tests {
         );
         assert!(content.contains("supplement text"));
         assert!(content.contains("section"));
+    }
+
+    #[tokio::test]
+    async fn cached_public_docs_bundle_returns_fetched_content_when_fast() {
+        let cell = Box::leak(Box::new(OnceCell::new()));
+        let started = Box::leak(Box::new(AtomicBool::new(false)));
+
+        let content = cached_public_docs_bundle(cell, started, "fallback", || async {
+            "fetched".to_string()
+        })
+        .await;
+
+        assert_eq!(content, "fetched");
+        assert_eq!(cell.get().map(String::as_str), Some("fetched"));
+    }
+
+    #[tokio::test]
+    async fn cached_public_docs_bundle_falls_back_when_fetch_is_slow() {
+        let cell = Box::leak(Box::new(OnceCell::new()));
+        let started = Box::leak(Box::new(AtomicBool::new(false)));
+
+        let content = cached_public_docs_bundle(cell, started, "fallback", || async {
+            tokio::time::sleep(Duration::from_millis(PUBLIC_DOCS_INITIAL_WAIT_MILLIS * 2)).await;
+            "fetched".to_string()
+        })
+        .await;
+
+        assert_eq!(content, "fallback");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while cell.get().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for cached content"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(cell.get().map(String::as_str), Some("fetched"));
     }
 
     #[tokio::test]
