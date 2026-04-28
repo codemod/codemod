@@ -1,4 +1,4 @@
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod wasm_capabilities {
 
     use std::future::Future;
@@ -75,5 +75,5 @@ mod wasm_capabilities {
     }
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm_capabilities::*;

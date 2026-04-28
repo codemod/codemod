@@ -1,61 +1,58 @@
-# Codemod CLI Troubleshooting
+# Codemod Troubleshooting Supplement
 
-Use these checks when commands fail or produce unexpected output.
+This file is a compact local supplement.
 
-## Agent-Safe Defaults
+Use the public Codemod docs and current CLI help for canonical command behavior.
 
-For agents/automation, prefer non-interactive execution:
-- add `--no-interactive` to `codemod workflow run` and `codemod run`.
-
-## Dirty Git Tree Blocking Execution
+## Codemod MCP missing in Codex
 
 Symptom:
-- command aborts because working tree is dirty.
+- the installed `codemod` skill references Codemod MCP tools, but those tools are not in the callable tool list
 
 Fix:
-- review and commit/stash changes, or explicitly allow dirty state:
-  - `codemod workflow run -w my-codemod --target <repo-path> --allow-dirty`
-  - `codemod run <package-name> --target <repo-path> --allow-dirty`
+- reload or restart the Codex session/workspace after `codemod ai` install
+- verify the workspace MCP config is present
+- do not continue codemod authoring until Codemod MCP tools are visible
 
-## Parameter Parsing Errors
+## Dirty tree blocking workflow runs
 
 Symptom:
-- parse failure for params.
+- workflow dry-run/apply stops because the target repo is dirty
 
 Fix:
-- pass each parameter as one `key=value` token:
-  - `codemod workflow run -w my-codemod --param strict=true --param format=esm`
+- clean/stash the target repo, or use `--allow-dirty` when dirty-state execution is intentional
 
-## Capability/Permission Failures
+## Shell step schema mistake
 
 Symptom:
-- transform fails with `err.code === "EACCES"` when reading/writing outside the target directory, or `fetch is not defined`, or `Cannot find module 'child_process'`.
+- `workflow validate` fails because a shell step was written with `command:` instead of the workflow schema key
 
 Fix:
-- The default sandboxed `fs` already allows reads/writes inside the target directory. If the codemod only touches files inside the repo, no flag is needed — investigate the path instead.
-- If the codemod genuinely needs to access paths outside `target_dir`, network, or subprocesses, enable the matching flag:
-  - `--allow-fs` — swaps the sandboxed fs for the unrestricted real-disk fs (removes the `target_dir` prefix check).
-  - `--allow-fetch` — exposes the `fetch` global.
-  - `--allow-child-process` — exposes the `child_process` module.
-- for automation, combine with:
-  - `--no-interactive`
+- use `run:` for shell command steps in `workflow.yaml`
+- do not invent `command:` as a workflow step field
+
+## Capability/permission failures
+
+Symptom:
+- a transform fails with `err.code === "EACCES"` when reading/writing outside the target directory, `fetch is not defined`, or `Cannot find module 'child_process'`
+
+Fix:
+- the default sandboxed `fs` allows reads/writes inside the target directory; if the codemod only touches files inside the repo, investigate the path before adding capability flags
+- if the codemod genuinely needs paths outside `target_dir`, network, or subprocesses, enable the matching flag: `--allow-fs`, `--allow-fetch`, or `--allow-child-process`
+- for automation, combine runtime flags with `--no-interactive`
 
 ## Registry/Auth Failures
 
 Symptom:
-- package resolution/search/publish fails with auth errors.
+- package resolution, search, or publish fails with auth errors
 
 Fix:
-- check current auth:
-  - `codemod whoami`
-- login:
-  - `codemod login`
-- logout/reset:
-  - `codemod logout --all`
+- check current auth with `codemod whoami`
+- login with `codemod login`
+- logout or reset with `codemod logout --all`
 
 ## Search Returns No Useful Results
 
 Fix:
-- broaden query text and increase result size:
-  - `codemod search migration --size 50`
-  - `codemod search "jest vitest migration" --size 50`
+- broaden query text and increase result size, for example `codemod search migration --size 50`
+- quote multi-word queries, for example `codemod search "jest vitest migration" --size 50`

@@ -1,6 +1,6 @@
 use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
 use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -22,7 +22,7 @@ use testing_utils::{
     TransformationResult, TransformationTestCase,
 };
 
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum TestCase {
     #[serde(rename = "adhoc")]
@@ -35,6 +35,61 @@ pub enum TestCase {
         input_file: String,
         expected_output_file: String,
     },
+}
+
+impl<'de> Deserialize<'de> for TestCase {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawTestCase {
+            Tagged {
+                #[serde(rename = "type")]
+                kind: String,
+                input_code: Option<String>,
+                expected_output_code: Option<String>,
+                input_file: Option<String>,
+                expected_output_file: Option<String>,
+            },
+            LegacyAdhoc(String),
+        }
+
+        match RawTestCase::deserialize(deserializer)? {
+            RawTestCase::Tagged {
+                kind,
+                input_code,
+                expected_output_code,
+                input_file,
+                expected_output_file,
+            } => match kind.as_str() {
+                "adhoc" => Ok(TestCase::Adhoc {
+                    input_code: input_code.ok_or_else(|| de::Error::missing_field("input_code"))?,
+                    expected_output_code: expected_output_code
+                        .ok_or_else(|| de::Error::missing_field("expected_output_code"))?,
+                }),
+                "file-system" => Ok(TestCase::FileSystem {
+                    input_file: input_file.ok_or_else(|| de::Error::missing_field("input_file"))?,
+                    expected_output_file: expected_output_file
+                        .ok_or_else(|| de::Error::missing_field("expected_output_file"))?,
+                }),
+                _ => Err(de::Error::unknown_variant(&kind, &["adhoc", "file-system"])),
+            },
+            RawTestCase::LegacyAdhoc(value) => {
+                let Some((input_code, expected_output_code)) = value.split_once(">>>") else {
+                    return Err(de::Error::custom(
+                        "legacy adhoc test case strings must contain '>>>' delimiter",
+                    ));
+                };
+
+                Ok(TestCase::Adhoc {
+                    input_code: input_code.to_string(),
+                    expected_output_code: expected_output_code.to_string(),
+                })
+            }
+        }
+    }
 }
 
 impl TestCase {
@@ -355,5 +410,49 @@ impl JssgTestHandler {
 impl Default for JssgTestHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_case_deserializes_legacy_adhoc_string() {
+        let test_case: TestCase = serde_json::from_value(json!("const a = 1;>>>const a = 2;"))
+            .expect("expected legacy string test case to deserialize");
+
+        match test_case {
+            TestCase::Adhoc {
+                input_code,
+                expected_output_code,
+            } => {
+                assert_eq!(input_code, "const a = 1;");
+                assert_eq!(expected_output_code, "const a = 2;");
+            }
+            other => panic!("expected adhoc test case, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_case_deserializes_tagged_adhoc_object() {
+        let test_case: TestCase = serde_json::from_value(json!({
+            "type": "adhoc",
+            "input_code": "const a = 1;",
+            "expected_output_code": "const a = 2;"
+        }))
+        .expect("expected tagged adhoc test case to deserialize");
+
+        match test_case {
+            TestCase::Adhoc {
+                input_code,
+                expected_output_code,
+            } => {
+                assert_eq!(input_code, "const a = 1;");
+                assert_eq!(expected_output_code, "const a = 2;");
+            }
+            other => panic!("expected adhoc test case, got {other:?}"),
+        }
     }
 }

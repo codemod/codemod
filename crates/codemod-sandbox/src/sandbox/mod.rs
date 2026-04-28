@@ -9,5 +9,5 @@ pub mod resolvers;
 #[cfg(feature = "native")]
 pub mod runtime_module;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_exports;

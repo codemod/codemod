@@ -7,7 +7,14 @@ nodes:
     name: Apply AST Transformations
     type: automatic
     steps:
-      - name: "Scan {language} files and apply fixes"
+      - name: "Scan matching {language} files and apply fixes"
         js-ast-grep:
           js_file: scripts/codemod.ts
+          base_path: "."
           language: "{language}"
+          include:
+{include_patterns}
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"

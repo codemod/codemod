@@ -26,21 +26,47 @@ When the intent is migration/update/upgrade oriented, use Codemod first before d
 
 ## MCP invocation guarantees
 
+- If the expected Codemod MCP tools are not actually available in the callable tool list for this session, stop codemod authoring immediately. Tell the user to reload/restart Codex and fix the Codemod MCP setup first. Do not continue codemod creation without MCP.
+
 When the user:
-- **Creates a codemod or does a large refactor** — Call `get_jssg_instructions`, `get_codemod_cli_instructions`, and `get_codemod_creation_workflow` from Codemod MCP before proceeding.
-- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Call `get_jssg_runtime_capabilities` from Codemod MCP.
-- **Maintains a codemod monorepo** — Call `get_codemod_maintainer_monorepo` from Codemod MCP.
-- **Runs or discovers codemods** — Call `get_codemod_cli_instructions` for command syntax.
-- **Hits errors or unexpected behavior** — Call `get_codemod_troubleshooting` from Codemod MCP.
-- **Needs import manipulation helpers** — Call `get_jssg_utils_instructions` from Codemod MCP.
+- **Creates a codemod or does a large refactor** — Read `codemod-creation-workflow-instructions` first. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas`. Read `codemod-cli-instructions` only when you need exact command syntax. Read `jssg-instructions` once a package exists and you are implementing the transform.
+- **Needs to know whether a codemod package is still a starter scaffold or incomplete** — Call `validate_codemod_package` from Codemod MCP before stopping.
+- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Read `jssg-runtime-capabilities-instructions` from Codemod MCP.
+- **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` from Codemod MCP.
+- **Runs or discovers codemods** — Read `codemod-cli-instructions` for command syntax.
+- **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` from Codemod MCP.
+- **Needs import manipulation helpers** — Read `jssg-utils-instructions` from Codemod MCP.
 - **Needs to split a large migration into multiple PRs** — Read the `sharding-instructions` resource from Codemod MCP.
+
+## Authoring defaults
+
+- Treat the public Codemod docs served through MCP as the source of truth for CLI, workflow, and JSSG semantics.
+- Keep source transforms AST-first. Do not use regex or raw source-text rewriting as the primary implementation strategy.
+- Use `dump_ast` before broadening heuristics.
+- If symbol origin matters, use semantic analysis and binding-aware checks.
+- Keep one granular transform or one exact `from -> to` migration as a single package unless the request is clearly open-ended or multi-hop.
+- Inspect 1-3 representative repo files after or alongside registry discovery before you finalize the transform shape.
+- If registry search yields no exact package, run `codemod init` immediately instead of continuing broad research without a package. In headless/non-interactive flows, use the simplified `codemod init <path> --no-interactive` interface and pass only user- or task-provided flags; do not invent `--author`, `--license`, `--description`, or `--git-repository-url`.
+- After the package exists, replace the starter transform, README, and starter fixtures before doing optional work.
+- Define positive, negative, and edge fixtures before deep implementation work.
+- Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn version numbers by default, but do not leave stale package metadata behind after a rename or material package-surface change.
+- Keep the requested migration aligned across every artifact: transform logic, fixtures, `workflow.yaml`, `codemod.yaml`, README, and package metadata must all describe the same codemod.
+- Replace scaffold boilerplate before finishing. Do not leave generic README text, placeholder fixture intent, or mismatched usage descriptions in place.
+- Use explicit workflow `base_path`, `include`, and `exclude` globs that match the actual target file types and keep `codemod.yaml` `targets.languages` aligned with that scope.
+- Preserve the scaffold-selected package manager in `package.json` scripts and package-local README/development commands. Infer it from the scaffold choice, lockfile, or existing package metadata; do not rewrite `yarn`/`pnpm`/`bun` packages to `npx`/`npm` unless the user explicitly asked.
+- Preserve repository-local package and lockfile conventions. In existing monorepos, do not introduce ad hoc dependency ranges or unrelated lockfile churn.
+- Treat fixture quality as a release gate. Cover realistic positive cases, edge cases, preserve/no-op cases, and negative cases where similar code must stay unchanged.
+- Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
+- For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.
+- Leave missing package author metadata to the CLI defaults/publish-time auth fallback unless the user supplied an explicit author.
+- Do not create commits or push branches for codemod authoring/evaluation unless the user explicitly asked for git operations.
 
 ## Runtime flow (default)
 
 1. Discover candidates with `codemod search`.
 2. Read the selected package's README/docs and perform any documented prerequisites or setup steps.
 3. Run workflow-capable packages with `codemod run --dry-run` before apply.
-4. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior (required for skill-only packages).
+4. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior.
 5. Enforce verification with tests and dry-run summaries before apply.
 
 ## Mandatory first action for migration/update/upgrade requests
@@ -52,18 +78,18 @@ When the user:
 
 ## First-turn behavior
 
-- Before globbing the repo, reading config files, or asking scope questions, derive a small set of high-signal search terms from the user request and run `codemod search`.
-- Only inspect the repository after search results are summarized or when validating whether a discovered codemod matches the codebase.
-- If the search returns a plausible match, the next step is to inspect that package's README/limits and run a dry-run, not to draft a manual migration plan.
+- Before broad repo inspection or planning, derive a small set of high-signal search terms from the user request and run `codemod search`.
+- For codemod authoring, inspect only a small representative slice of the repo after or alongside registry discovery, then scaffold and iterate.
+- If the search returns a plausible existing package, the next step is to inspect that package's README/limits and run a dry-run, not to draft a manual migration plan.
 
 ## Anti-patterns to avoid
 
 - Do not start by planning a manual migration when the request is an upgrade, update, or migration and the registry has not been searched yet.
 - Do not create a new codemod package before checking whether an existing registry package already covers the migration.
-- Do not start with package.json inspection, framework-config inspection, or codebase grep when the user intent can first be narrowed by registry discovery.
-- Do not ask broad strategy questions like "in-place vs side-by-side?" before checking whether an existing codemod already defines the practical migration surface.
+- Do not keep reading broad guidance after a registry miss without scaffolding a package.
 - Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
-- Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop with `jssgTransform` or another JSSG API.
+- Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop.
+- Do not continue codemod authoring when Codemod MCP is missing from the callable tool list.
 
 ## User preferences (override defaults here if needed)
 
