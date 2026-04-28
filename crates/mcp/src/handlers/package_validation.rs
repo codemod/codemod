@@ -527,12 +527,16 @@ fn infer_validation_package_kind(
     let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
     let has_authored_skill = package_root.join("agents/skill").is_dir();
 
-    if has_rules && files.scripts_codemod_ts {
+    if has_rules && (files.scripts_codemod_ts || has_shell_scripts) {
         return ValidationPackageKind::Hybrid;
     }
 
     if files.scripts_codemod_ts {
         return ValidationPackageKind::Jssg;
+    }
+
+    if has_authored_skill {
+        return ValidationPackageKind::SkillOnly;
     }
 
     if has_rules {
@@ -545,10 +549,6 @@ fn infer_validation_package_kind(
 
     if files.package_json {
         return ValidationPackageKind::Jssg;
-    }
-
-    if has_authored_skill {
-        return ValidationPackageKind::SkillOnly;
     }
 
     ValidationPackageKind::Unknown
@@ -1274,6 +1274,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incomplete_hybrid_packages_still_require_codemod_ts() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("rules")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(dir.join("package.json"), "{\"scripts\":{}}\n").unwrap();
+        fs::write(dir.join("README.md"), "# Hybrid package\n").unwrap();
+        fs::write(dir.join("scripts/transform.sh"), "#!/usr/bin/env bash\n").unwrap();
+        fs::write(dir.join("rules/config.yml"), "id: sample\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "missing_transform_script"));
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "missing_tests_dir"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn yaml_packages_do_not_require_jssg_package_files() {
         let dir = unique_temp_dir();
         fs::create_dir_all(dir.join("rules")).unwrap();
@@ -1327,6 +1362,48 @@ mod tests {
         .unwrap();
         fs::write(dir.join("README.md"), "# YAML package\n").unwrap();
         fs::write(dir.join("rules/config.yml"), "id: sample\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_transform_script"));
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_tests_dir"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn skill_only_packages_with_package_json_do_not_require_jssg_artifacts() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("agents/skill")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.yaml\n").unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "skill-package",
+  "scripts": {
+    "lint": "node helper.js"
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# Skill package\n").unwrap();
+        fs::write(dir.join("agents/skill/SKILL.md"), "# Skill\n").unwrap();
 
         let handler = PackageValidationHandler::new();
         let response = handler
