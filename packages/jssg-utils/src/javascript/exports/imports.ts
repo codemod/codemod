@@ -152,6 +152,32 @@ function findRawImportMatches<T extends Language>(
     ],
   } satisfies Rule<Language>;
 
+  const dynamicThenRule = {
+    inside: {
+      stopBy: "end",
+      kind: "call_expression",
+      has: {
+        field: "function",
+        kind: "member_expression",
+        all: [
+          {
+            has: {
+              field: "property",
+              kind: "property_identifier",
+              regex: "^then$",
+            },
+          },
+          {
+            has: {
+              field: "object",
+              matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
+            },
+          },
+        ],
+      },
+    },
+  } satisfies Rule<Language>;
+
   return tsProgram.findAll({
     utils: {
       [CJS_OR_DYNAMIC_VALUE_UTIL_RULE]: cjsOrDynamicValue,
@@ -211,6 +237,74 @@ function findRawImportMatches<T extends Language>(
                 matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
               },
             },
+          ],
+        },
+        // - dynamic with callback: import("mod").then(mod => ...) or import("mod").then(function(mod) { ... })
+        {
+          all: [
+            {
+              kind: "identifier",
+              pattern: "$VAR_NAME",
+              any: [
+                {
+                  inside: {
+                    kind: "arrow_function",
+                    field: "parameter",
+                  },
+                },
+                {
+                  inside: {
+                    kind: "formal_parameters",
+                    stopBy: "end",
+                    inside: {
+                      any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
+                    },
+                  },
+                },
+              ],
+            },
+            dynamicThenRule,
+          ],
+        },
+        // - dynamic with destructured callback: import("mod").then(({test}) => ...)
+        {
+          all: [
+            { kind: "shorthand_property_identifier_pattern" },
+            { pattern: "$ORIGINAL" },
+            {
+              inside: {
+                kind: "object_pattern",
+                inside: {
+                  kind: "formal_parameters",
+                  stopBy: "end",
+                  inside: {
+                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
+                  },
+                },
+              },
+            },
+            dynamicThenRule,
+          ],
+        },
+        // - dynamic with destructured + alias callback: import("mod").then(({test: alias}) => ...)
+        {
+          all: [
+            { kind: "pair_pattern" },
+            { has: { field: "key", kind: "property_identifier", pattern: "$ORIGINAL" } },
+            { has: { field: "value", kind: "identifier", pattern: "$ALIAS" } },
+            {
+              inside: {
+                kind: "object_pattern",
+                inside: {
+                  kind: "formal_parameters",
+                  stopBy: "end",
+                  inside: {
+                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
+                  },
+                },
+              },
+            },
+            dynamicThenRule,
           ],
         },
         // - CJS: const { foo } = require("mod")
