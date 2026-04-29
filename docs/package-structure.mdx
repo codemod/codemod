@@ -94,6 +94,7 @@ description: "Transform legacy patterns to modern syntax"
 author: "Your Name <you@example.com>"
 license: "MIT"
 workflow: "workflow.yaml"
+repository: "https://github.com/username/codemod-repo"
 category: "migration"
 
 targets:
@@ -164,6 +165,10 @@ License identifier (SPDX), e.g., <code>MIT</code>.
 
 <ParamField path="workflow" type="string" required default="workflow.yaml">
 Relative path to your workflow file (required for workflow-only, skill-only, and workflow + skill packages).
+</ParamField>
+
+<ParamField path="repository" type="string">
+Source repository URL for this package.
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">
