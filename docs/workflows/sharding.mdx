@@ -203,6 +203,14 @@ export default function shard(input: ShardInput): ShardResult[] {
 Fields prefixed with `_meta_` are excluded from the matrix hash. This means re-indexing shards won't invalidate existing task identity.
 </Info>
 
+<Info>
+**`_meta_files` is the per-shard scope contract.** When a shard's matrix task runs the downstream `js-ast-grep` step, the engine restricts the run to exactly the files listed in that shard's `_meta_files`, regardless of whether the workflow's `js-ast-grep` step declares `include`/`exclude` globs. The `include` glob in the original step shapes which files the **shard** step considers (during pre-filtering); after sharding, the per-shard `_meta_files` list is authoritative.
+</Info>
+
+### Shipping plain + sharded variants in one package
+
+A single package can ship multiple workflow files via `codemod.yaml`'s `workflows:` array — for example a plain `workflow.yaml` and a sharded `workflows/sharded.yaml`. End users pick a variant in the CLI or via the Codemod Campaign creation picker. See [Multiple workflows per package](/package-structure#multiple-workflows-per-package) for the manifest reference.
+
 ### Available APIs
 
 Custom shard functions run in the jssg engine with full access to:
