@@ -108,6 +108,50 @@ registry:
 
 For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
 
+### Multiple workflows per package
+
+A single package can ship multiple named workflow variants — for example a plain run and a sharded variant for large monorepos. Use the `workflows` array instead of `workflow`:
+
+```yaml codemod.yaml
+schema_version: "1.0"
+
+name: "my-awesome-codemod"
+version: "0.2.0"
+description: "Transform legacy patterns to modern syntax"
+author: "Your Name <you@example.com>"
+license: "MIT"
+
+# Pick exactly one of `workflow` (single-workflow) or `workflows` (multi-workflow).
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+    description: "Run the full migration in one pass"
+  - name: sharded
+    path: workflows/sharded.yaml
+    description: "Split the migration across many PRs by codeowner"
+
+targets:
+  languages: ["typescript"]
+
+registry:
+  access: "public"
+  visibility: "public"
+```
+
+When the package is consumed:
+
+- **CLI:** `codemod run @scope/pkg --workflow <name>` selects a variant. Without `--workflow`, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin is interactive and no flag is given, the CLI shows a picker.
+- **Local directory runs:** `codemod workflow run -w ./pkg --workflow-name <name>` mirrors the same selection.
+- **Codemod campaigns:** the campaign creation flow allows the user to pick the preferred workflow variant.
+
+Validation rules at publish time:
+
+- Exactly one of `workflow` or `workflows` may be set.
+- Each `name` matches alphanumeric and is unique within the package.
+- Each `path` is package-relative — absolute paths and `..` segments are rejected — and unique within the package.
+- At most one entry may set `default: true`. If none is flagged, the first entry is treated as the default.
+
 Authored package skills used by `install-skill` must include a `SKILL.md` with:
 - YAML frontmatter containing at least `name`, `description`, and `allowed-tools`
 - `codemod-compatibility: skill-package-v1`
@@ -162,8 +206,31 @@ Author name and email, e.g., `Jane Doe <jane@example.com>`.
 License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
-<ParamField path="workflow" type="string" required default="workflow.yaml">
-Relative path to your workflow file (required for workflow-only, skill-only, and workflow + skill packages).
+<ParamField path="workflow" type="string" default="workflow.yaml">
+Relative path to your workflow file. Use this for single-workflow packages. Mutually exclusive with `workflows`. Required for workflow-only, skill-only, and workflow + skill packages unless `workflows` is set.
+
+Path must be package-relative; absolute paths and `..` segments are rejected at publish time.
+</ParamField>
+
+<ParamField path="workflows" type="WorkflowEntry[]">
+List of named workflow variants this package ships. Mutually exclusive with `workflow`. Each entry has:
+
+- `name` (required) — package-local identifier matching `^[A-Za-z0-9_-]+$`. Used by `codemod run --workflow <name>` and the cloud campaign picker.
+- `path` (required) — package-relative path to the workflow YAML. Absolute paths and `..` segments are rejected.
+- `description` (optional) — short blurb shown in the picker UI.
+- `default` (optional) — at most one entry may set `default: true`. If none is flagged, the first entry is the default.
+
+Example:
+
+```yaml
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+    description: "Sharded for large monorepos"
+```
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">

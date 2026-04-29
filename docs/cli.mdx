@@ -156,6 +156,7 @@ In interactive TTY sessions, `npx codemod <package-id>` prompts for harness/scop
   - **Workflow-only package**: `npx codemod <package-id>` runs the workflow behavior.
   - **Skill-only package**: `npx codemod <package-id>` does not run a no-op workflow. It returns install guidance and, in interactive terminals, can prompt to install the skill.
   - **Workflow + skill package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
+  - **Multi-workflow package**: when the package's `codemod.yaml` declares multiple workflows under `workflows:`, the default workflow runs unless you pass `--workflow <name>`. In an interactive terminal with no flag, the CLI shows a picker.
 </Info>
 
 **AI-native error codes**
@@ -245,6 +246,19 @@ npx codemod <package-name>
   npx codemod workflow run -w workflow.yaml --no-interactive --install-skill
   npx codemod <package-name> --no-interactive --install-skill
   ```
+</ResponseField>
+
+<ResponseField name="--workflow-name <NAME>" type="string">
+  When the package directory's `codemod.yaml` declares multiple workflows under `workflows:`, pick which variant to run.
+
+  Without this flag, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin/stdout are interactive and no flag is given, the CLI shows a picker.
+
+  ```bash
+  # Run a named workflow defined in the package's codemod.yaml
+  npx codemod workflow run -w ./my-codemod --workflow-name sharded
+  ```
+
+  Errors out if the name doesn't match any declared workflow, or if the source path is a workflow file (rather than a package directory) — in that case the file IS the workflow.
 </ResponseField>
 
 **`workflow resume`**
