@@ -1,0 +1,150 @@
+---
+title: "React Router v6 to v7 Migration"
+---
+
+React Router v7 introduces several breaking changes that affect virtually every React application using it:
+
+1. **Module Consolidation**: `react-router-dom` is deprecated and merged into `react-router`.
+2. **Future Flags**: 6 mandatory future flags must be injected into every Router component (`v7_startTransition`, `v7_relativeSplatPath`, `v7_fetcherPersist`, `v7_normalizeFormMethod`, `v7_partialHydration`, `v7_skipActionErrorRevalidation`).
+3. **API Deprecation**: `json()` and `defer()` helpers are removed — return plain objects instead.
+4. **Package Migration**: `react-router-dom` dependency must be replaced with `react-router@7` in `package.json`.
+
+For more details, check out the [React Router v7 upgrade guide](https://reactrouter.com/upgrading/v6).
+
+This codemod provides a fully automated, zero-false-positive migration experience powered by AST-based transforms using [ast-grep](https://github.com/ast-grep/ast-grep).
+
+## Getting started
+
+<CardGroup cols={2}>
+<Card
+    title="React Router v7 Upgrade Guide"
+    icon="route"
+    href="https://reactrouter.com/upgrading/v6"
+>
+    Official React Router v6 to v7 migration documentation.
+</Card>
+<Card
+    title="React Router v6→v7 Codemod"
+    icon="cauldron"
+    href="https://app.codemod.com/registry/react-router-v6-to-v7"
+>
+    Run the codemod to automate the migration.
+</Card>
+</CardGroup>
+
+## Migration Steps
+<Steps>
+    <Step title="Run the codemod">
+    Run the React Router v6 to v7 migration codemod:
+
+    ```bash
+    npx codemod react-router-v6-to-v7
+    ```
+
+    This recipe automates **four key transforms**:
+
+    | Transform | What it does |
+    |-----------|-------------|
+    | **update-imports** | Rewrites `react-router-dom` → `react-router` across all source files |
+    | **add-future-flags** | Injects/smart-merges all 6 mandatory v7 future flags into Router components |
+    | **remove-json-defer** | Unwraps deprecated `json()` and `defer()` calls to plain objects |
+    | **update-package** | Replaces `react-router-dom` with `react-router@7` in `package.json` |
+
+    </Step>
+    <Step title="Verify the migration">
+    After the codemod runs, verify the changes:
+
+    ```bash
+    # Check TypeScript compilation
+    npx tsc --noEmit
+
+    # Run your test suite
+    npm test
+    ```
+
+    The codemod generates a detailed HTML migration report showing:
+    - Files scanned and modified
+    - Per-file changes (lines added/removed)
+    - False positive verification results
+    - TypeScript compilation status
+    </Step>
+    <Step title="Install updated dependencies">
+    Install the new dependencies:
+
+    ```bash
+    npm install
+    ```
+
+    or, if you're using Yarn:
+    ```bash
+    yarn install
+    ```
+    </Step>
+</Steps>
+
+## Before & After
+
+### Import Rewriting
+
+```jsx
+// Before (v6)
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+
+// After (v7)
+import { BrowserRouter, Routes, Route } from 'react-router';
+```
+
+### Future Flag Injection
+
+```jsx
+// Before (v6)
+<BrowserRouter>
+  <App />
+</BrowserRouter>
+
+// After (v7)
+<BrowserRouter future={{
+  v7_relativeSplatPath: true,
+  v7_startTransition: true,
+  v7_fetcherPersist: true,
+  v7_normalizeFormMethod: true,
+  v7_partialHydration: true,
+  v7_skipActionErrorRevalidation: true
+}}>
+  <App />
+</BrowserRouter>
+```
+
+### Deprecated API Removal
+
+```jsx
+// Before (v6)
+export function loader() {
+  return json({ user: getUser() });
+}
+
+// After (v7)
+export function loader() {
+  return { user: getUser() };
+}
+```
+
+## Key Features
+
+- **Zero False Positives**: AST-based transforms via [ast-grep](https://github.com/ast-grep/ast-grep) (Rust) — never matches inside strings, comments, or URLs.
+- **Idempotent Execution**: Smart-merge logic ensures running the codemod multiple times produces the same result.
+- **Backup & Rollback**: Full file-level snapshots with SHA-256 integrity verification. Run `--rollback` to undo instantly.
+- **Real-World Validated**: Tested on multiple open-source repositories with 0 false positives across all validations.
+
+## Real-World Validation
+
+| Repository | Stack | Files Modified | False Positives |
+|------------|-------|:--------------:|:---------------:|
+| react-admin | TypeScript + v6 | 3 | 0 |
+| react-petstore | JavaScript + v6 | 15 | 0 |
+
+## Resources
+
+- [Source Code](https://github.com/Ankit-raj-11/react-router-v6-to-v7)
+- [Demo Video](https://youtu.be/sYSHvwAp1Ts)
+- [Engineering Case Study](https://dev.to/ankit_raj_16a4c518f4c1689/automating-react-router-v6-to-v7-migration-with-ast-codemods-2888)

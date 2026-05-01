@@ -103,6 +103,7 @@
             "group": "Migrations",
             "pages": [
               "guides/migrations/react-18-19",
+              "guides/migrations/react-router-v6-v7",
               "guides/migrations/nuxt-3-4",
               "guides/migrations/zod-3-4",
               "guides/migrations/msw-v1-v2",
