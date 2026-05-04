@@ -5,6 +5,42 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="April 2026">
+- **Automations are now more powerful**: Automations can start from scheduled or incoming webhook triggers, scan codebases with ast-grep or JSSG queries, create campaigns, and pass action outputs into downstream steps. The editor now starts from a blank canvas, has clearer node insertion/configuration flows, shows action output fields, supports action-to-action chaining, and can use Handlebars templates for looping over array values.
+
+- **Insights expanded to dependencies and semantic controls**: Insights can now analyze third-party dependency usage across repositories from lockfiles, with filters for ecosystem, package name, semver range, and direct/transitive depth. JSSG queries now include semantic analysis mode options, and Insights, Campaigns, and Automations list pages have improved search and pagination.
+
+- **Multi-workflow packages**: Codemod packages can now define multiple workflows, with CLI, registry, campaign creation, and documentation support. Workflow authors also get expression-based shard sizing, automatic shard-file pickup for ast-grep/JSSG steps, task-context variable resolution, and a new string-list resolver.
+
+- **Workflow CLI/TUI improvements**:
+  - Reworked workflow TUI keeps statuses, logs, sharding progress, runtime controls, and failure details in one place
+  - Dirty-repo confirmations and manual pull request prompts now stay inside the TUI
+  - Sandbox, git, and auth failures are routed into task logs instead of breaking the task table
+  - Codex/OpenCode AI handoffs resolve more reliably
+
+- **JSSG & codemod authoring**:
+  - New sandboxed file system defaults let codemods work inside the target repo while requiring explicit capability elevation for out-of-repo access
+  - `getAllImports()` was added to `@jssg/utils`
+  - `removeImport()` now handles default imports, `var require()` declarations, and side-effect imports more safely
+  - `addImport()` places new imports more predictably
+  - `SgRoot.relativeFilename` is available, and `jssg test` handles metrics more reliably
+  - The `Transform` type is deprecated in favor of the clearer `Codemod` type
+
+- **AI-assisted codemod creation**: Wish is now available as an in-app assistant overlay, and Codemod AI/MCP package generation better preserves the selected package manager, validates package-manager drift, and uses the published `codemod ai` setup for OpenCode handoffs.
+
+- **Registry, website & code readability**:
+  - Registry package pages have cleaner copy-command controls, Pro access flow improvements, and refreshed layout/search/filter styling
+  - Homepage now tells the Plan -> Automate -> Orchestrate product story with a new interactive section and Zapier case study strip
+  - Shared navigation, header, and footer components make the website and app feel more consistent
+  - Code blocks, syntax highlighting, and report/blog Open Graph previews render more cleanly
+
+- **Reliability & polish**:
+  - Pro codemods now show a free-preview notice instead of pushing users through a login prompt
+  - Cloud semantic analysis and JSSG runs do less unnecessary polling and file processing
+  - Managed update manifest failures now return an actionable 503 response instead of a generic server error
+  - Select menus, dialogs over resizable panels, SAML setup docs, and the Studio banner received usability fixes
+</Update>
+
 <Update label="March 2026">
 - **AI-native CLI & agent skills**: `npx codemod ai` now installs Codemod MCP and the `/codemod` command across Claude, Goose, OpenCode, Cursor, and Codex, with signed managed updates for installed components. Registry packages can now include installable skills, and bare `npx codemod` opens an interactive launcher for creating a package or running one from the registry.
 
