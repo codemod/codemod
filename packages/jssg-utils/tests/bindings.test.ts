@@ -6,10 +6,7 @@ import type TSX from "@codemod.com/jssg-types/langs/tsx";
 import type { SgNode } from "@codemod.com/jssg-types/main";
 import {
   findShadowingBinding,
-  getAllTopLevelImportBindings,
-  getTopLevelImportBinding,
   isRuntimeImportBinding,
-  isTypeOnlyImportBinding,
 } from "../src/javascript/exports/bindings.ts";
 
 type Language = JS | TS | TSX;
@@ -41,78 +38,6 @@ function findIdentifierWithAncestorKind(
         node.ancestors().some((ancestor) => String(ancestor.kind()) === ancestorKind),
       ) ?? null
   );
-}
-
-function testGetTopLevelImportBindingReturnsAliasedNamedImport() {
-  const program = parseProgram(
-    "tsx",
-    "import { Grid as MuiGrid } from '@mui/material';\nconsole.log(MuiGrid);\n",
-  );
-
-  const binding = getTopLevelImportBinding(program, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  });
-
-  const resolvedBinding = requireNode(binding, "Expected binding");
-  assert(resolvedBinding.alias === "MuiGrid", "Should expose the local alias");
-  assert(resolvedBinding.isTypeOnly === false, "Runtime named import should not be type-only");
-}
-
-function testGetAllTopLevelImportBindingsMarksTypeOnlyImports() {
-  const program = parseProgram(
-    "tsx",
-    "import type { Grid } from '@mui/material';\nimport { Grid as RuntimeGrid } from '@mui/material';\n",
-  );
-
-  const bindings = getAllTopLevelImportBindings(program, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  });
-
-  assert(bindings.length === 2, "Should include both type-only and runtime imports");
-  assert(
-    bindings.some((binding) => binding.isTypeOnly),
-    "Should mark type-only import",
-  );
-  assert(
-    bindings.some((binding) => binding.alias === "RuntimeGrid" && !binding.isTypeOnly),
-    "Should keep runtime import separate",
-  );
-}
-
-function testIsTypeOnlyImportBindingHandlesInlineTypeSpecifiers() {
-  const program = parseProgram(
-    "tsx",
-    "import { type Grid as TypeGrid, Button } from '@mui/material';\nconsole.log(TypeGrid, Button);\n",
-  );
-
-  const typeGrid = program.find({
-    rule: {
-      kind: "identifier",
-      pattern: "TypeGrid",
-      inside: {
-        kind: "import_specifier",
-      },
-    },
-  });
-
-  const button = program.find({
-    rule: {
-      kind: "identifier",
-      pattern: "Button",
-      inside: {
-        kind: "import_specifier",
-      },
-    },
-  });
-
-  const resolvedTypeGrid = requireNode(typeGrid, "Should find type-only alias");
-  const resolvedButton = requireNode(button, "Should find runtime named import");
-  assert(isTypeOnlyImportBinding(resolvedTypeGrid), "Inline type specifier should be detected");
-  assert(!isTypeOnlyImportBinding(resolvedButton), "Runtime specifier should not be type-only");
 }
 
 function testFindShadowingBindingReturnsLocalVariable() {
@@ -149,11 +74,15 @@ function testIsRuntimeImportBindingRejectsTypeOnlyUsage() {
     ["import type { Grid } from '@mui/material';", "type Gridish = Grid;"].join("\n"),
   );
 
-  const usage = getTopLevelImportBinding(program, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  })?.node;
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "import_specifier",
+      },
+    },
+  });
 
   const resolvedUsage = requireNode(usage, "Should find type usage");
   assert(
@@ -459,9 +388,6 @@ function testIsRuntimeImportBindingAcceptsJsxNamedAliasUsage() {
   );
 }
 
-testGetTopLevelImportBindingReturnsAliasedNamedImport();
-testGetAllTopLevelImportBindingsMarksTypeOnlyImports();
-testIsTypeOnlyImportBindingHandlesInlineTypeSpecifiers();
 testFindShadowingBindingReturnsLocalVariable();
 testIsRuntimeImportBindingRejectsTypeOnlyUsage();
 testIsRuntimeImportBindingRejectsShadowedUsage();

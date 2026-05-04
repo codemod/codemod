@@ -18,18 +18,19 @@ Import from:
 
 ```ts
 import {
-  getTopLevelImportBinding,
-  getAllTopLevelImportBindings,
-  isRuntimeImportBinding,
-  isTypeOnlyImportBinding,
   findShadowingBinding,
+  isRuntimeImportBinding,
 } from "@jssg/utils/javascript/bindings";
+import {
+  isUsedAsConstructor,
+  isUsedInReflectiveAccess,
+  unwrapParenthesizedExpression,
+} from "@jssg/utils/javascript/context";
 ```
 
 These helpers are intended for conservative transform gating:
 
 - detect whether a matched identifier really comes from a top-level import
-- distinguish runtime imports from `import type` bindings
 - skip rewrites when a local variable shadows an imported name
 - handle both plain identifier usages and JSX tag identifiers such as `<Grid />`
 
@@ -48,75 +49,6 @@ if (
   })
 ) {
   // Safe to treat this usage as the runtime Grid import.
-}
-```
-
-### `getTopLevelImportBinding(program, options)`
-
-Returns the first matching top-level import binding or `null`.
-
-The result extends the import-helper result shape with:
-
-- **`isTypeOnly`**: `true` when the binding comes from `import type` or an inline `type` specifier
-
-Use this when the codemod only needs one binding candidate for a module/symbol pair.
-
-Example:
-
-```ts
-const binding = getTopLevelImportBinding(program, {
-  type: "named",
-  name: "Grid",
-  from: "@mui/material",
-});
-
-if (binding && !binding.isTypeOnly) {
-  // Safe to reason about the runtime Grid import.
-}
-```
-
-### `getAllTopLevelImportBindings(program, options)`
-
-Returns every matching top-level import binding for the query.
-
-Use this when a file may contain:
-
-- both type-only and runtime imports for the same symbol
-- multiple import forms that all need inspection
-- aliased variants that should be checked individually
-
-Example:
-
-```ts
-const bindings = getAllTopLevelImportBindings(program, {
-  type: "named",
-  name: "Grid",
-  from: "@mui/material",
-});
-
-const runtimeBindings = bindings.filter((binding) => !binding.isTypeOnly);
-```
-
-### `isTypeOnlyImportBinding(node)`
-
-Returns `true` when the given import binding node belongs to:
-
-- `import type { ... } from "mod"`
-- an inline `type` specifier such as `import { type Foo } from "mod"`
-
-Use this to keep type-only imports out of runtime transforms.
-
-Example:
-
-```ts
-const binding = getTopLevelImportBinding(program, {
-  type: "named",
-  name: "Grid",
-  from: "@mui/material",
-});
-
-if (binding && isTypeOnlyImportBinding(binding.node)) {
-  return null;
 }
 ```
 
@@ -166,15 +98,6 @@ if (
 }
 ```
 
-### `isNodeBoundToIdentifier(node, identifierName)`
-
-Returns `true` when:
-
-- the node is an identifier with the requested text
-- and there is no local shadowing binding for that identifier at the usage site
-
-This is a small conservative guard for direct identifier checks.
-
 ### `isRuntimeImportBinding(node, options)`
 
 Returns `true` when the given usage node resolves to a non-type-only top-level import matching the query.
@@ -195,6 +118,71 @@ if (
   })
 ) {
   // Rewrite this usage as the imported runtime Grid symbol.
+}
+```
+
+## JavaScript context helpers
+
+Import from:
+
+```ts
+import {
+  isUsedAsConstructor,
+  isUsedInReflectiveAccess,
+  unwrapParenthesizedExpression,
+} from "@jssg/utils/javascript/context";
+```
+
+These helpers are intended for conservative usage-context checks:
+
+- strip only extra parentheses when a codemod needs expression normalization
+- recognize constructor and reflective usage after wrapper expressions
+- keep wrapper/context logic out of codemod-local string heuristics
+
+Typical use case:
+
+```ts
+if (isUsedAsConstructor(bindCall)) {
+  return null;
+}
+
+if (isUsedInReflectiveAccess(bindCall, ["name", "length", "prototype", "toString"])) {
+  return null;
+}
+```
+
+### `unwrapParenthesizedExpression(node)`
+
+Returns the innermost expression after stripping only `parenthesized_expression` wrappers.
+
+Use this when a codemod only needs simple paren normalization.
+
+### `isUsedAsConstructor(node)`
+
+Returns `true` when the node is effectively used as the `constructor` of a `new_expression`, even through transparent wrappers.
+
+Example:
+
+```ts
+// true for `boundFn`
+new ((0, boundFn))();
+```
+
+### `isUsedInReflectiveAccess(node, keys)`
+
+Returns `true` when the node is used in reflective/member-introspection positions for one of the requested keys.
+
+Handled forms include:
+
+- member access: `node.name`
+- computed access: `node["name"]`
+- `in` checks: `"name" in node`
+
+Example:
+
+```ts
+if (isUsedInReflectiveAccess(boundFnUsage, ["name", "length", "prototype", "toString"])) {
+  return null;
 }
 ```
 

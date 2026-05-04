@@ -14,7 +14,7 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/bindings.test.ts",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/bindings.test.ts && pnpx codemod jssg exec ./tests/context.test.ts",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },

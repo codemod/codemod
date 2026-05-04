@@ -248,7 +248,7 @@ function findDeclarationsInScope(scope: any, identifierName: string): any[] {
   });
 }
 
-export function isTypeOnlyImportBinding<T extends Language>(node: SgNode<T>) {
+function isTypeOnlyImportBinding<T extends Language>(node: SgNode<T>) {
   const importSpecifier = findAncestorOfKind(node, "import_specifier");
   if (importSpecifier && /^\s*type\b/.test(importSpecifier.text())) {
     return true;
@@ -262,7 +262,7 @@ export function isTypeOnlyImportBinding<T extends Language>(node: SgNode<T>) {
   return false;
 }
 
-export function getAllTopLevelImportBindings<T extends Language>(
+function getAllTopLevelImportBindings<T extends Language>(
   program: SgNode<T, "program">,
   query: ImportBindingQuery,
 ): ImportBinding<T>[] {
@@ -277,13 +277,6 @@ export function getAllTopLevelImportBindings<T extends Language>(
       isTypeOnly: isTypeOnlyImportBinding(binding.node),
     }),
   );
-}
-
-export function getTopLevelImportBinding<T extends Language>(
-  program: SgNode<T, "program">,
-  query: ImportBindingQuery,
-): ImportBinding<T> | null {
-  return getAllTopLevelImportBindings(program, query)[0] ?? null;
 }
 
 export function findShadowingBinding<T extends Language>(
@@ -312,10 +305,7 @@ export function findShadowingBinding<T extends Language>(
   return null;
 }
 
-export function isNodeBoundToIdentifier<T extends Language>(
-  node: SgNode<T>,
-  identifierName: string,
-) {
+function isNodeBoundToIdentifier<T extends Language>(node: SgNode<T>, identifierName: string) {
   return (
     String(node.kind()) === "identifier" &&
     node.text() === identifierName &&
