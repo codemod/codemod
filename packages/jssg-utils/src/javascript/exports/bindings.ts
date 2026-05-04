@@ -189,6 +189,11 @@ function getDeclarationScope(node: any) {
     }
   }
 
+  if (isFunctionLikeNameIdentifier(node)) {
+    const declaration = node.parent();
+    return declaration ? getOuterScope(declaration) : null;
+  }
+
   if (findAncestorOfKind(node, "catch_clause")) {
     return findNearestScope(node);
   }

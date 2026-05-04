@@ -262,6 +262,78 @@ function testFindShadowingBindingHandlesCatchParameters() {
   );
 }
 
+function testFindShadowingBindingHandlesFunctionDeclarationNames() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render() {",
+      "  function Grid() {}",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find function declaration usage");
+  const shadow = findShadowingBinding(resolvedUsage, "Grid");
+  const resolvedShadow = requireNode(shadow, "Should treat function declaration name as shadowing");
+  assert(resolvedShadow.text() === "Grid", "Function declaration shadow should resolve to Grid");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Function declaration should shadow the imported binding",
+  );
+}
+
+function testFindShadowingBindingHandlesClassDeclarationNames() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render() {",
+      "  class Grid {}",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find class declaration usage");
+  const shadow = findShadowingBinding(resolvedUsage, "Grid");
+  const resolvedShadow = requireNode(shadow, "Should treat class declaration name as shadowing");
+  assert(resolvedShadow.text() === "Grid", "Class declaration shadow should resolve to Grid");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Class declaration should shadow the imported binding",
+  );
+}
+
 function testImportedBindingIsNotTreatedAsShadow() {
   const program = parseProgram(
     "javascript",
@@ -395,6 +467,8 @@ testIsRuntimeImportBindingAcceptsUnshadowedRuntimeUsage();
 testFindShadowingBindingHandlesHoistedVarFromNestedBlock();
 testFindShadowingBindingHandlesDestructuredParameters();
 testFindShadowingBindingHandlesCatchParameters();
+testFindShadowingBindingHandlesFunctionDeclarationNames();
+testFindShadowingBindingHandlesClassDeclarationNames();
 testImportedBindingIsNotTreatedAsShadow();
 testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage();
 testIsRuntimeImportBindingRejectsJsxShadowedUsage();
