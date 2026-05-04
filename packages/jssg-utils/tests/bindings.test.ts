@@ -198,6 +198,45 @@ function testFindShadowingBindingHandlesHoistedVarFromNestedBlock() {
   );
 }
 
+function testLoopHeaderLexicalBindingDoesNotShadowOutsideLoop() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render(xs) {",
+      "  for (let Grid of xs) {",
+      "    console.log(Grid);",
+      "  }",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find post-loop usage");
+  assert(
+    findShadowingBinding(resolvedUsage, "Grid") === null,
+    "Loop-header lexical binding should not shadow outside the loop scope",
+  );
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Post-loop usage should still resolve as the imported runtime binding",
+  );
+}
+
 function testFindShadowingBindingHandlesDestructuredParameters() {
   const program = parseProgram(
     "javascript",
@@ -501,6 +540,7 @@ testIsRuntimeImportBindingRejectsTypeOnlyUsage();
 testIsRuntimeImportBindingRejectsShadowedUsage();
 testIsRuntimeImportBindingAcceptsUnshadowedRuntimeUsage();
 testFindShadowingBindingHandlesHoistedVarFromNestedBlock();
+testLoopHeaderLexicalBindingDoesNotShadowOutsideLoop();
 testFindShadowingBindingHandlesDestructuredParameters();
 testDefaultParameterInitializerUsageIsNotTreatedAsBinding();
 testFindShadowingBindingHandlesCatchParameters();

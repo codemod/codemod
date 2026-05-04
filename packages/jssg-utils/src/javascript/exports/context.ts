@@ -68,10 +68,7 @@ function shouldBubbleTransparentWrapper(
   if (parent.kind() === "binary_expression") {
     const operator = getFieldText(parent, "operator");
     if (operator === "&&" || operator === "||" || operator === "??") {
-      return (
-        getFieldNode(parent, "left")?.id() === current.id() ||
-        getFieldNode(parent, "right")?.id() === current.id()
-      );
+      return getFieldNode(parent, "right")?.id() === current.id();
     }
   }
 

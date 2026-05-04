@@ -79,6 +79,24 @@ function testIsUsedInReflectiveAccessHandlesComputedAndInOperator() {
     isUsedInReflectiveAccess(inUsage, ["name", "length", "prototype"]),
     "Reflective in-operator usage should be detected",
   );
+
+  const leftShortCircuitProgram = parseProgram(
+    "javascript",
+    'const boundFn = fn.bind(obj); (boundFn || fallback)["name"];\n',
+  );
+  const leftShortCircuitUsage = requireNode(
+    leftShortCircuitProgram.find({
+      rule: {
+        kind: "identifier",
+        pattern: "boundFn",
+      },
+    }),
+    "Should find left short-circuit operand usage",
+  );
+  assert(
+    !isUsedInReflectiveAccess(leftShortCircuitUsage, ["name", "length", "prototype"]),
+    "Left short-circuit operands should not bubble into reflective access detection",
+  );
 }
 
 function testUnwrapParenthesizedExpressionOnlyStripsParens() {

@@ -28,6 +28,9 @@ type ImportBinding<T extends Language> = {
 const SCOPE_KINDS = new Set<string>([
   "program",
   "statement_block",
+  "for_statement",
+  "for_in_statement",
+  "for_of_statement",
   "function_declaration",
   "function_expression",
   "arrow_function",
