@@ -1,5 +1,5 @@
 ---
-title: "Import Utilities"
+title: "JSSG Utilities"
 ---
 
 `@jssg/utils` provides reusable utility functions for JSSG codemods. These helpers handle common import manipulation tasks that are tedious and error-prone when done manually with AST queries.
@@ -20,11 +20,197 @@ Add `@jssg/utils` to your codemod project:
 
 ```typescript
 import { getImport, addImport, removeImport } from "@jssg/utils/javascript/imports";
+import {
+  getTopLevelImportBinding,
+  getAllTopLevelImportBindings,
+  isTypeOnlyImportBinding,
+  findShadowingBinding,
+  isNodeBoundToIdentifier,
+  isRuntimeImportBinding,
+} from "@jssg/utils/javascript/bindings";
 ```
 
 <Info>
 These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically.
 </Info>
+
+---
+
+## Binding helpers
+
+Use these helpers when a codemod needs to answer questions like:
+
+- does this usage really refer to the imported runtime symbol?
+- is this binding type-only?
+- is a local declaration shadowing the imported name?
+- is a JSX tag like `<Grid />` actually the imported component or a local shadow?
+
+These helpers are intended for conservative transform gating.
+
+## `getTopLevelImportBinding`
+
+Return the first matching top-level import binding or `null`.
+
+### Parameters
+
+<ParamField body="program" type="SgNode<T, 'program'>" required>
+  The root program node to search within.
+</ParamField>
+
+<ParamField body="options" type='{"type":"default","from":string} | {"type":"named","name":string,"from":string}' required>
+  What top-level import binding to look for.
+</ParamField>
+
+### Returns
+
+`ImportBinding<T> | null` — an object containing:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `alias` | `string` | The local name used at call sites |
+| `isNamespace` | `boolean` | `true` for namespace imports |
+| `moduleType` | `"esm" \| "cjs"` | Whether the binding came from ESM or CJS |
+| `node` | `SgNode<T, "identifier">` | The identifier AST node for the binding |
+| `isTypeOnly` | `boolean` | `true` for `import type` or inline `type` specifiers |
+
+### Example
+
+```typescript
+const binding = getTopLevelImportBinding(rootNode, {
+  type: "named",
+  name: "Grid",
+  from: "@mui/material",
+});
+
+if (binding && !binding.isTypeOnly) {
+  console.log(`Runtime Grid imported as: ${binding.alias}`);
+}
+```
+
+---
+
+## `getAllTopLevelImportBindings`
+
+Return every matching top-level import binding for a module/symbol pair.
+
+Use this when a file may contain multiple aliased or mixed type/runtime imports that all need inspection.
+
+### Example
+
+```typescript
+const bindings = getAllTopLevelImportBindings(rootNode, {
+  type: "named",
+  name: "Grid",
+  from: "@mui/material",
+});
+
+const runtimeBindings = bindings.filter((binding) => !binding.isTypeOnly);
+```
+
+---
+
+## `isTypeOnlyImportBinding`
+
+Return `true` when the given binding node belongs to:
+
+- `import type { ... } from "mod"`
+- an inline type specifier such as `import { type Foo } from "mod"`
+
+### Example
+
+```typescript
+const binding = getTopLevelImportBinding(rootNode, {
+  type: "named",
+  name: "Grid",
+  from: "@mui/material",
+});
+
+if (binding && isTypeOnlyImportBinding(binding.node)) {
+  return null;
+}
+```
+
+---
+
+## `findShadowingBinding`
+
+Return the local binding node that shadows an identifier at the given usage site, or `null` when no local shadow exists.
+
+Handled cases include:
+
+- local variables
+- function and class names
+- destructured parameters
+- `catch` parameters
+- hoisted `var` declarations
+
+### Example
+
+```typescript
+const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
+
+if (usage && findShadowingBinding(usage, "Grid")) {
+  return null;
+}
+```
+
+This also works for JSX tag identifiers:
+
+```typescript
+const jsxGrid = rootNode.find({
+  rule: {
+    kind: "identifier",
+    pattern: "Grid",
+    inside: { kind: "jsx_self_closing_element" },
+  },
+});
+
+if (
+  jsxGrid &&
+  isRuntimeImportBinding(jsxGrid, {
+    type: "default",
+    from: "@mui/material/Grid",
+  })
+) {
+  // Safe to treat <Grid /> as the imported runtime component.
+}
+```
+
+---
+
+## `isNodeBoundToIdentifier`
+
+Return `true` when:
+
+- the node is an identifier with the requested text
+- and there is no local shadowing binding for that identifier at the usage site
+
+This is a small conservative helper for direct identifier checks.
+
+---
+
+## `isRuntimeImportBinding`
+
+Return `true` when the given usage node resolves to a non-type-only top-level import matching the query.
+
+Use this as the main guard before rewriting runtime symbol usages.
+
+### Example
+
+```typescript
+const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
+
+if (
+  usage &&
+  isRuntimeImportBinding(usage, {
+    type: "named",
+    name: "Grid",
+    from: "@mui/material",
+  })
+) {
+  // Safe to treat this usage as the runtime Grid import.
+}
+```
 
 ---
 

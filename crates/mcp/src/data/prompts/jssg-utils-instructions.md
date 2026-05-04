@@ -1,21 +1,27 @@
-# JSSG Import Utilities Fallback
+# JSSG Utilities Fallback
 
 This file is only a compact fallback.
 
-Public Codemod docs are the source of truth for import utility details such as:
+Public Codemod docs are the source of truth for utility details such as:
 - `getImport`
 - `getAllImports`
 - `addImport`
 - `removeImport`
 - `stringToExactRegexString`
+- `getTopLevelImportBinding`
+- `getAllTopLevelImportBindings`
+- `isTypeOnlyImportBinding`
+- `findShadowingBinding`
+- `isNodeBoundToIdentifier`
+- `isRuntimeImportBinding`
 
 When public docs are available, prefer them over this file.
 
 ## Default rule
 
-If a codemod touches imports at all, check `@jssg/utils` first and use it by default whenever the needed operation is covered.
+If a codemod touches imports or needs symbol-origin/runtime-binding checks, check `@jssg/utils` first and use it by default whenever the needed operation is covered.
 
-Treat helper-first import handling as the normal path, not an optional refinement. Do not hand-roll import parsing, alias discovery, import merging, import removal, or import-string reconstruction unless the helpers cannot express the required behavior.
+Treat helper-first import and binding handling as the normal path, not an optional refinement. Do not hand-roll import parsing, alias discovery, import merging, import removal, runtime-vs-type import filtering, local shadow detection, or import-string reconstruction unless the helpers cannot express the required behavior.
 
 If you bypass the helpers for an import-related change, state why.
 
@@ -42,11 +48,38 @@ If you bypass the helpers for an import-related change, state why.
   - Escape a string into an exact-match regex source.
   - Useful when a helper or query path needs a literal-safe regex for module names or aliases.
 
+- `getTopLevelImportBinding`
+  - Find the first matching top-level import binding.
+  - Useful when a codemod only needs one runtime/type-aware import binding candidate.
+
+- `getAllTopLevelImportBindings`
+  - Find every matching top-level import binding.
+  - Useful when a file may contain multiple aliased or mixed type/runtime imports that all need inspection.
+
+- `isTypeOnlyImportBinding`
+  - Detect whether a binding comes from `import type` or an inline `type` specifier.
+  - Useful for preventing runtime transforms from touching type-only imports.
+
+- `findShadowingBinding`
+  - Detect whether a local declaration shadows a candidate imported symbol at a usage site.
+  - Useful for conservative transform gating before treating an identifier as imported.
+
+- `isNodeBoundToIdentifier`
+  - Check whether a node is a non-shadowed identifier with the requested name.
+  - Useful as a small guard before runtime-binding checks.
+
+- `isRuntimeImportBinding`
+  - Detect whether a usage node resolves to a non-type-only top-level import matching a query.
+  - Useful as the main gate before rewriting imported runtime symbol usages.
+
 ## Use helpers by default for
 
 - locating whether a symbol really comes from a target module
 - locating every matching import when duplicate or repeated import forms may exist
 - resolving aliased import names used at runtime call sites
+- filtering runtime imports from type-only imports
+- detecting whether a local binding shadows an imported symbol
+- gating runtime symbol rewrites conservatively before editing call sites
 - preserving default/named/namespace import shape
 - merging named imports into an existing statement
 - handling side-effect imports
@@ -56,12 +89,14 @@ If you bypass the helpers for an import-related change, state why.
 
 ## Escalation rule
 
-Before writing custom import logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, or `stringToExactRegexString` already cover the task. If they do, use them. Only drop to custom AST logic for import changes when helper behavior is genuinely insufficient.
+Before writing custom import or binding logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `getTopLevelImportBinding`, `getAllTopLevelImportBindings`, `isTypeOnlyImportBinding`, `findShadowingBinding`, `isNodeBoundToIdentifier`, or `isRuntimeImportBinding` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
 
 ## Common patterns
 
 - Verify import origin before transforming usages.
   - Prefer `getImport` so aliased imports are resolved before rewriting call sites.
+- Verify runtime binding identity before rewriting symbol usages.
+  - Prefer `isRuntimeImportBinding` and `findShadowingBinding` over local alias sets or raw text checks.
 - Replace one import with another by composing `removeImport` and `addImport`.
   - Prefer this over handwritten import-statement surgery.
 - Match existing module style when adding imports.
@@ -69,4 +104,4 @@ Before writing custom import logic, explicitly decide whether `getImport`, `getA
 
 ## Important limitation
 
-Import utilities reduce review churn for common import manipulation, but they do not replace semantic checks for runtime-vs-type bindings. When symbol origin matters, combine helper usage with semantic/binding-aware checks.
+These utilities reduce review churn for common import, binding, and symbol-origin handling, but they do not replace semantic checks entirely. When symbol origin matters across files or through non-local indirection, combine helper usage with semantic/binding-aware checks.

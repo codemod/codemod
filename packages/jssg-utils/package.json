@@ -6,6 +6,7 @@
   "repository": "https://github.com/codemod/codemod",
   "author": "Mohebifar <mo@codemod.com>",
   "license": "Apache-2.0",
+  "type": "module",
   "exports": {
     "./javascript/*": {
       "types": "./src/javascript/exports/*.ts",
@@ -13,7 +14,7 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/bindings.test.ts",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
