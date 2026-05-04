@@ -233,6 +233,42 @@ function testFindShadowingBindingHandlesDestructuredParameters() {
   );
 }
 
+function testDefaultParameterInitializerUsageIsNotTreatedAsBinding() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render(local = Grid) {",
+      "  return local;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "assignment_pattern",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find default-parameter initializer usage");
+  assert(
+    findShadowingBinding(resolvedUsage, "Grid") === null,
+    "Default-parameter initializer usage should not be treated as a binding",
+  );
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Default-parameter initializer usage should still resolve as the imported runtime binding",
+  );
+}
+
 function testFindShadowingBindingHandlesCatchParameters() {
   const program = parseProgram(
     "javascript",
@@ -466,6 +502,7 @@ testIsRuntimeImportBindingRejectsShadowedUsage();
 testIsRuntimeImportBindingAcceptsUnshadowedRuntimeUsage();
 testFindShadowingBindingHandlesHoistedVarFromNestedBlock();
 testFindShadowingBindingHandlesDestructuredParameters();
+testDefaultParameterInitializerUsageIsNotTreatedAsBinding();
 testFindShadowingBindingHandlesCatchParameters();
 testFindShadowingBindingHandlesFunctionDeclarationNames();
 testFindShadowingBindingHandlesClassDeclarationNames();

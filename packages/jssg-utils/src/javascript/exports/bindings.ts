@@ -54,7 +54,6 @@ const PARAMETER_BINDING_PARENT_KINDS = new Set<string>([
   "pair_pattern",
   "array_pattern",
   "object_pattern",
-  "assignment_pattern",
 ]);
 
 function findAncestorOfKind(node: any, kind: string): any | null {
