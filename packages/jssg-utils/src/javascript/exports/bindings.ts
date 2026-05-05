@@ -175,6 +175,10 @@ function isParameterBindingIdentifier(node: any, scope: any) {
   }
 
   const parentKind = String(node.parent()?.kind());
+  if (parentKind === "formal_parameters") {
+    return true;
+  }
+
   if (PARAMETER_BINDING_PARENT_KINDS.has(parentKind)) {
     return true;
   }
@@ -214,6 +218,20 @@ function isCatchBindingIdentifier(node: any, scope: any) {
     (catchClause.field("parameter") as any | null) ?? catchClause.child(1) ?? catchClause.child(0);
 
   return isWithinSubtree(node, parameterField);
+}
+
+function isDeclarationBindingIdentifier(node: any) {
+  const scope = findNearestScope(node);
+  if (!scope) {
+    return false;
+  }
+
+  return (
+    isVariableBindingIdentifier(node) ||
+    isFunctionLikeNameIdentifier(node) ||
+    isParameterBindingIdentifier(node, scope) ||
+    isCatchBindingIdentifier(node, scope)
+  );
 }
 
 function getDeclarationScope(node: any) {
@@ -351,6 +369,7 @@ function isNodeBoundToIdentifier<T extends Language>(node: SgNode<T>, identifier
     String(node.kind()) === "identifier" &&
     node.text() === identifierName &&
     !isImportBindingIdentifier(node) &&
+    !isDeclarationBindingIdentifier(node) &&
     !findShadowingBinding(node, identifierName)
   );
 }

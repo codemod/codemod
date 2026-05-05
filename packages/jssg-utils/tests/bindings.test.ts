@@ -612,6 +612,125 @@ function testIsRuntimeImportBindingAcceptsCjsNamedAliasUsage() {
   );
 }
 
+function testIsRuntimeImportBindingRejectsLocalVariableDeclarationIdentifier() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render() {",
+      "  const Grid = localFactory();",
+      "  return null;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "variable_declarator",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find local variable declaration identifier");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Local variable declaration identifiers should not be treated as runtime usage",
+  );
+}
+
+function testIsRuntimeImportBindingRejectsParameterDeclarationIdentifier() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render(Grid) {",
+      "  return null;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "formal_parameters",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find parameter declaration identifier");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Parameter declaration identifiers should not be treated as runtime usage",
+  );
+}
+
+function testIsRuntimeImportBindingRejectsFunctionDeclarationIdentifier() {
+  const program = parseProgram(
+    "javascript",
+    ["import { Grid } from '@mui/material';", "function Grid() {}", "console.log(1);"].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "function_declaration",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find function declaration identifier");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Function declaration identifiers should not be treated as runtime usage",
+  );
+}
+
+function testIsRuntimeImportBindingRejectsClassDeclarationIdentifier() {
+  const program = parseProgram(
+    "javascript",
+    ["import { Grid } from '@mui/material';", "class Grid {}", "console.log(1);"].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "class_declaration",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find class declaration identifier");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Class declaration identifiers should not be treated as runtime usage",
+  );
+}
+
 function testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage() {
   const program = parseProgram(
     "tsx",
@@ -724,6 +843,10 @@ testImportedBindingIsNotTreatedAsShadow();
 testImportDeclarationIdentifierIsNotTreatedAsRuntimeUsage();
 testIsRuntimeImportBindingAcceptsCjsDefaultImportUsage();
 testIsRuntimeImportBindingAcceptsCjsNamedAliasUsage();
+testIsRuntimeImportBindingRejectsLocalVariableDeclarationIdentifier();
+testIsRuntimeImportBindingRejectsParameterDeclarationIdentifier();
+testIsRuntimeImportBindingRejectsFunctionDeclarationIdentifier();
+testIsRuntimeImportBindingRejectsClassDeclarationIdentifier();
 testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage();
 testIsRuntimeImportBindingRejectsJsxShadowedUsage();
 testIsRuntimeImportBindingAcceptsJsxNamedAliasUsage();
