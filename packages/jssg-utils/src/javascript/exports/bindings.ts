@@ -28,9 +28,11 @@ type ImportBinding<T extends Language> = {
 const SCOPE_KINDS = new Set<string>([
   "program",
   "statement_block",
+  "catch_clause",
   "for_statement",
   "for_in_statement",
   "for_of_statement",
+  "switch_statement",
   "function_declaration",
   "function_expression",
   "arrow_function",
@@ -318,6 +320,7 @@ function isNodeBoundToIdentifier<T extends Language>(node: SgNode<T>, identifier
   return (
     String(node.kind()) === "identifier" &&
     node.text() === identifierName &&
+    !isImportBindingIdentifier(node) &&
     !findShadowingBinding(node, identifierName)
   );
 }

@@ -337,6 +337,47 @@ function testFindShadowingBindingHandlesCatchParameters() {
   );
 }
 
+function testCatchParameterDoesNotShadowOutsideCatchClause() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render() {",
+      "  try {",
+      "    run();",
+      "  } catch (Grid) {",
+      "    console.log(Grid);",
+      "  }",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find post-catch usage");
+  assert(
+    findShadowingBinding(resolvedUsage, "Grid") === null,
+    "Catch parameter should not shadow outside the catch clause",
+  );
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Post-catch usage should still resolve as the imported runtime binding",
+  );
+}
+
 function testFindShadowingBindingHandlesFunctionDeclarationNames() {
   const program = parseProgram(
     "javascript",
@@ -409,6 +450,50 @@ function testFindShadowingBindingHandlesClassDeclarationNames() {
   );
 }
 
+function testSwitchLexicalBindingDoesNotShadowOutsideSwitch() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "import { Grid } from '@mui/material';",
+      "function render(value) {",
+      "  switch (value) {",
+      "    case 1:",
+      "      let Grid = makeLocalGrid();",
+      "      console.log(Grid);",
+      "      break;",
+      "    default:",
+      "      break;",
+      "  }",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find post-switch usage");
+  assert(
+    findShadowingBinding(resolvedUsage, "Grid") === null,
+    "Switch lexical binding should not shadow outside the switch statement",
+  );
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Post-switch usage should still resolve as the imported runtime binding",
+  );
+}
+
 function testImportedBindingIsNotTreatedAsShadow() {
   const program = parseProgram(
     "javascript",
@@ -437,6 +522,30 @@ function testImportedBindingIsNotTreatedAsShadow() {
       from: "@material-ui/core/styles",
     }),
     "Imported helper usage should still resolve as a runtime import binding",
+  );
+}
+
+function testImportDeclarationIdentifierIsNotTreatedAsRuntimeUsage() {
+  const program = parseProgram("javascript", "import { Grid } from '@mui/material';\n");
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "import_specifier",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find import declaration identifier");
+  assert(
+    !isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "Import declaration identifiers should not be treated as runtime usage",
   );
 }
 
@@ -544,9 +653,12 @@ testLoopHeaderLexicalBindingDoesNotShadowOutsideLoop();
 testFindShadowingBindingHandlesDestructuredParameters();
 testDefaultParameterInitializerUsageIsNotTreatedAsBinding();
 testFindShadowingBindingHandlesCatchParameters();
+testCatchParameterDoesNotShadowOutsideCatchClause();
 testFindShadowingBindingHandlesFunctionDeclarationNames();
 testFindShadowingBindingHandlesClassDeclarationNames();
+testSwitchLexicalBindingDoesNotShadowOutsideSwitch();
 testImportedBindingIsNotTreatedAsShadow();
+testImportDeclarationIdentifierIsNotTreatedAsRuntimeUsage();
 testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage();
 testIsRuntimeImportBindingRejectsJsxShadowedUsage();
 testIsRuntimeImportBindingAcceptsJsxNamedAliasUsage();
