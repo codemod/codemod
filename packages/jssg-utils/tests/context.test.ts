@@ -124,10 +124,7 @@ function testUnwrapParenthesizedExpressionOnlyStripsParens() {
 }
 
 function testGetNamedChildrenSkipsTokensAndComments() {
-  const program = parseProgram(
-    "javascript",
-    "if (cond) { /* keep hidden */ value = one; }\n",
-  );
+  const program = parseProgram("javascript", "if (cond) { /* keep hidden */ value = one; }\n");
 
   const block = requireNode(
     program.find({
