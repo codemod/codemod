@@ -74,7 +74,7 @@ jobs:
           pnpm_version: "10.19.0"
           install_command: pnpm install --frozen-lockfile
           working_directory: .
-          codex_effort: medium
+          codex_effort: high
           sandbox: workspace-write
           review_focus: |
             Focus on:
