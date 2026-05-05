@@ -63,7 +63,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: codemod/codex-review-action@94cbe605c105edd2ff6629553ba403c2e8a888ac
+      - uses: codemod/codex-review-action@6ee783467b23db88ea1d88b220919ae14d900b38
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
