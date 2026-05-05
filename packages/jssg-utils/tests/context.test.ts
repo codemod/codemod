@@ -5,6 +5,7 @@ import type TSX from "@codemod.com/jssg-types/langs/tsx";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type { SgNode } from "@codemod.com/jssg-types/main";
 import {
+  getNamedChildren,
   isUsedAsConstructor,
   isUsedInReflectiveAccess,
   unwrapParenthesizedExpression,
@@ -122,6 +123,27 @@ function testUnwrapParenthesizedExpressionOnlyStripsParens() {
   );
 }
 
+function testGetNamedChildrenSkipsTokensAndComments() {
+  const program = parseProgram(
+    "javascript",
+    "if (cond) { /* keep hidden */ value = one; }\n",
+  );
+
+  const block = requireNode(
+    program.find({
+      rule: {
+        kind: "statement_block",
+      },
+    }),
+    "Should find statement block",
+  );
+
+  const children = getNamedChildren(block);
+  assert(children.length === 1, "Should return only named, non-comment children");
+  assert(children[0]?.kind() === "expression_statement", "Should keep the statement child");
+}
+
+testGetNamedChildrenSkipsTokensAndComments();
 testIsUsedAsConstructorThroughTransparentWrappers();
 testIsUsedInReflectiveAccessHandlesComputedAndInOperator();
 testUnwrapParenthesizedExpressionOnlyStripsParens();

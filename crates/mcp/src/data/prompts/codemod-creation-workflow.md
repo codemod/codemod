@@ -33,7 +33,7 @@ Use this file only for the extra agent guidance that public docs should not carr
 - Read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 - Use `dump_ast` when the pattern shape is unclear.
 - If symbol origin matters, use semantic analysis and binding-aware checks.
-- If a codemod touches imports, needs symbol-origin/runtime-binding checks, or needs wrapper/context-sensitive usage checks, read `jssg-utils-instructions` before implementing that logic. Explicitly check whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `findShadowingBinding`, `isRuntimeImportBinding`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` cover the task, and use them by default when they do.
+- If a codemod touches imports, needs symbol-origin/runtime-binding checks, or needs wrapper/context-sensitive usage checks, read `jssg-utils-instructions` before implementing that logic. Explicitly check whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `findShadowingBinding`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` cover the task, and use them by default when they do.
 - Prefer the documented import-helper patterns when they fit:
   - verify import origin before transforming usages
   - replace one import with another via `removeImport` + `addImport`

@@ -10,6 +10,7 @@ Public Codemod docs are the source of truth for utility details such as:
 - `stringToExactRegexString`
 - `findShadowingBinding`
 - `isRuntimeImportBinding`
+- `getNamedChildren`
 - `unwrapParenthesizedExpression`
 - `isUsedAsConstructor`
 - `isUsedInReflectiveAccess`
@@ -55,6 +56,10 @@ If you bypass the helpers for an import-related change, state why.
   - Detect whether a usage node resolves to a non-type-only top-level import matching a query.
   - Useful as the main gate before rewriting imported runtime symbol usages.
 
+- `getNamedChildren`
+  - Return a node's named children while skipping non-named tokens and comment nodes.
+  - Useful when a codemod needs semantic child nodes without hand-filtering punctuation or trivia.
+
 - `unwrapParenthesizedExpression`
   - Strip only `parenthesized_expression` wrappers.
   - Useful when the codemod only needs simple paren normalization.
@@ -86,7 +91,7 @@ If you bypass the helpers for an import-related change, state why.
 
 ## Escalation rule
 
-Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `findShadowingBinding`, `isRuntimeImportBinding`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
+Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `findShadowingBinding`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
 
 ## Common patterns
 
@@ -96,6 +101,8 @@ Before writing custom import, binding, or usage-context logic, explicitly decide
   - Prefer `isRuntimeImportBinding` and `findShadowingBinding` over local alias sets or raw text checks.
 - Verify effective usage context before rewriting wrapped expressions.
   - Prefer `unwrapParenthesizedExpression`, `isUsedAsConstructor`, and `isUsedInReflectiveAccess` over codemod-local parent/ancestor bubbling logic.
+- Read semantic child nodes from AST containers.
+  - Prefer `getNamedChildren` over repeating `children().filter((child) => child.isNamed())` and similar local trivia filtering.
 - Replace one import with another by composing `removeImport` and `addImport`.
   - Prefer this over handwritten import-statement surgery.
 - Match existing module style when adding imports.

@@ -151,6 +151,15 @@ function isParameterBindingIdentifier(node: any, scope: any) {
     return true;
   }
 
+  const assignmentPattern = findAncestorOfKind(node, "assignment_pattern");
+  if (assignmentPattern) {
+    const leftField =
+      (assignmentPattern.field("left") as any | null) ??
+      (assignmentPattern.field("pattern") as any | null) ??
+      assignmentPattern.child(0);
+    return isWithinSubtree(node, leftField);
+  }
+
   const parameter = findNearestAncestorOfKinds(
     node,
     new Set(["required_parameter", "optional_parameter", "rest_pattern"]),
@@ -225,20 +234,13 @@ function findLocalDefinition(node: any, identifierName: string) {
 }
 
 function findDeclarationsInScope(scope: any, identifierName: string): any[] {
-  const matchingIdentifiers = scope.findAll({
-    rule: {
-      any: [
-        {
-          kind: "identifier",
-          regex: `^${identifierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-        },
-        {
-          kind: "shorthand_property_identifier_pattern",
-          regex: `^${identifierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-        },
-      ],
-    },
-  }) as any[];
+  const matchingIdentifiers = scope
+    .findAll({
+      rule: {
+        any: [{ kind: "identifier" }, { kind: "shorthand_property_identifier_pattern" }],
+      },
+    })
+    .filter((candidate: any) => candidate.text() === identifierName) as any[];
 
   return matchingIdentifiers.filter((candidate) => {
     const declarationScope = getDeclarationScope(candidate);

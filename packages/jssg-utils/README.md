@@ -22,6 +22,7 @@ import {
   isRuntimeImportBinding,
 } from "@jssg/utils/javascript/bindings";
 import {
+  getNamedChildren,
   isUsedAsConstructor,
   isUsedInReflectiveAccess,
   unwrapParenthesizedExpression,
@@ -135,6 +136,7 @@ import {
 
 These helpers are intended for conservative usage-context checks:
 
+- fetch named AST children while skipping tokens and comment nodes
 - strip only extra parentheses when a codemod needs expression normalization
 - recognize constructor and reflective usage after wrapper expressions
 - keep wrapper/context logic out of codemod-local string heuristics
@@ -150,6 +152,13 @@ if (isUsedInReflectiveAccess(bindCall, ["name", "length", "prototype", "toString
   return null;
 }
 ```
+
+### `getNamedChildren(node)`
+
+Returns the node's named children while skipping non-named tokens and comment nodes.
+
+Use this when a codemod wants AST children that correspond to semantic nodes rather
+than punctuation or comment trivia.
 
 ### `unwrapParenthesizedExpression(node)`
 

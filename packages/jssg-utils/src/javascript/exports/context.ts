@@ -11,7 +11,7 @@ type EffectiveParentContext = {
   parent: AnyNode | null;
 };
 
-function getNamedChildren(node: AnyNode | null): AnyNode[] {
+export function getNamedChildren(node: AnyNode | null): AnyNode[] {
   return node
     ? node
         .children()

@@ -25,6 +25,7 @@ import {
   isRuntimeImportBinding,
 } from "@jssg/utils/javascript/bindings";
 import {
+  getNamedChildren,
   isUsedAsConstructor,
   isUsedInReflectiveAccess,
   unwrapParenthesizedExpression,
@@ -122,11 +123,18 @@ if (
 
 Use these helpers when a codemod needs to answer questions like:
 
+- what are the semantic child nodes here, without punctuation or comment trivia?
 - is this node effectively inside a `new (...)` constructor position?
 - is this usage hidden behind extra parentheses?
 - is this value being used in reflective/introspection access such as `["name"]` or `"prototype" in value`?
 
 These helpers are intended for conservative usage-context gating.
+
+## `getNamedChildren`
+
+Return the node's named children while skipping non-named tokens and comment nodes.
+
+Use this when a codemod needs semantic child nodes instead of punctuation, delimiters, or trivia.
 
 ## `unwrapParenthesizedExpression`
 
