@@ -549,6 +549,69 @@ function testImportDeclarationIdentifierIsNotTreatedAsRuntimeUsage() {
   );
 }
 
+function testIsRuntimeImportBindingAcceptsCjsDefaultImportUsage() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "const Grid = require('@mui/material/Grid');",
+      "function render() {",
+      "  return Grid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "Grid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find CJS default import usage");
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "default",
+      from: "@mui/material/Grid",
+    }),
+    "CJS default import usage should resolve to the runtime import binding",
+  );
+}
+
+function testIsRuntimeImportBindingAcceptsCjsNamedAliasUsage() {
+  const program = parseProgram(
+    "javascript",
+    [
+      "const { Grid: LocalGrid } = require('@mui/material');",
+      "function render() {",
+      "  return LocalGrid;",
+      "}",
+    ].join("\n"),
+  );
+
+  const usage = program.find({
+    rule: {
+      kind: "identifier",
+      pattern: "LocalGrid",
+      inside: {
+        kind: "return_statement",
+      },
+    },
+  });
+
+  const resolvedUsage = requireNode(usage, "Should find CJS named alias usage");
+  assert(
+    isRuntimeImportBinding(resolvedUsage, {
+      type: "named",
+      name: "Grid",
+      from: "@mui/material",
+    }),
+    "CJS named alias usage should resolve to the runtime import binding",
+  );
+}
+
 function testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage() {
   const program = parseProgram(
     "tsx",
@@ -659,6 +722,8 @@ testFindShadowingBindingHandlesClassDeclarationNames();
 testSwitchLexicalBindingDoesNotShadowOutsideSwitch();
 testImportedBindingIsNotTreatedAsShadow();
 testImportDeclarationIdentifierIsNotTreatedAsRuntimeUsage();
+testIsRuntimeImportBindingAcceptsCjsDefaultImportUsage();
+testIsRuntimeImportBindingAcceptsCjsNamedAliasUsage();
 testIsRuntimeImportBindingAcceptsJsxDefaultImportUsage();
 testIsRuntimeImportBindingRejectsJsxShadowedUsage();
 testIsRuntimeImportBindingAcceptsJsxNamedAliasUsage();

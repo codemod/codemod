@@ -128,6 +128,32 @@ function isFunctionLikeNameIdentifier(node: any) {
 }
 
 function isImportBindingIdentifier(node: any) {
+  const declarator = findAncestorOfKind(node, "variable_declarator");
+  if (declarator) {
+    const valueField = declarator.field("value") as any | null;
+    const valueKind = String(valueField?.kind());
+    const callExpression =
+      valueKind === "call_expression"
+        ? valueField
+        : valueKind === "await_expression"
+          ? ((valueField?.field("argument") as any | null) ?? valueField?.child(1) ?? null)
+          : null;
+
+    if (callExpression && String(callExpression.kind()) === "call_expression") {
+      const callee =
+        (callExpression.field("function") as any | null) ?? callExpression.child(0) ?? null;
+      const calleeText = callee?.text();
+      const nameField = declarator.field("name") as any | null;
+
+      if (
+        (calleeText === "require" || calleeText === "import") &&
+        isWithinSubtree(node, nameField)
+      ) {
+        return true;
+      }
+    }
+  }
+
   return (
     String(node.kind()) === "import_specifier" ||
     String(node.kind()) === "namespace_import" ||
@@ -245,6 +271,10 @@ function findDeclarationsInScope(scope: any, identifierName: string): any[] {
     .filter((candidate: any) => candidate.text() === identifierName) as any[];
 
   return matchingIdentifiers.filter((candidate) => {
+    if (isImportBindingIdentifier(candidate)) {
+      return false;
+    }
+
     const declarationScope = getDeclarationScope(candidate);
     if (!sameNode(declarationScope, scope)) {
       return false;
