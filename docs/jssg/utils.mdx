@@ -21,7 +21,6 @@ Add `@jssg/utils` to your codemod project:
 ```typescript
 import { getImport, addImport, removeImport } from "@jssg/utils/javascript/imports";
 import {
-  findShadowingBinding,
   isRuntimeImportBinding,
 } from "@jssg/utils/javascript/bindings";
 import {
@@ -47,28 +46,6 @@ Use these helpers when a codemod needs to answer questions like:
 - is a JSX tag like `<Grid />` actually the imported component or a local shadow?
 
 These helpers are intended for conservative transform gating.
-
-## `findShadowingBinding`
-
-Return the local binding node that shadows an identifier at the given usage site, or `null` when no local shadow exists.
-
-Handled cases include:
-
-- local variables
-- function and class names
-- destructured parameters
-- `catch` parameters
-- hoisted `var` declarations
-
-### Example
-
-```typescript
-const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
-
-if (usage && findShadowingBinding(usage)) {
-  return null;
-}
-```
 
 This also works for JSX tag identifiers:
 

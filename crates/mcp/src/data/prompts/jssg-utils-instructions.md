@@ -7,7 +7,6 @@ Public Codemod docs are the source of truth for utility details such as:
 - `getAllImports`
 - `addImport`
 - `removeImport`
-- `findShadowingBinding`
 - `isRuntimeImportBinding`
 - `getNamedChildren`
 - `unwrapParenthesizedExpression`
@@ -42,10 +41,6 @@ If you bypass the helpers for an import-related change, state why.
 - `getAllImports`
   - Find every matching import for a symbol/module instead of only the first one.
   - Useful when a file may contain multiple relevant imports that all need inspection or cleanup.
-
-- `findShadowingBinding`
-  - Detect whether a local declaration shadows a candidate imported symbol at a usage site.
-  - Useful for conservative transform gating before treating an identifier as imported.
 
 - `isRuntimeImportBinding`
   - Detect whether a usage node resolves to a non-type-only top-level runtime import.
@@ -86,14 +81,14 @@ If you bypass the helpers for an import-related change, state why.
 
 ## Escalation rule
 
-Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `findShadowingBinding`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
+Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
 
 ## Common patterns
 
 - Verify import origin before transforming usages.
   - Prefer `getImport` so aliased imports are resolved before rewriting call sites.
 - Verify runtime binding identity before rewriting symbol usages.
-  - Prefer `isRuntimeImportBinding` and `findShadowingBinding` over local alias sets or raw text checks.
+  - Prefer `isRuntimeImportBinding` over local alias sets or raw text checks.
 - Verify effective usage context before rewriting wrapped expressions.
   - Prefer `unwrapParenthesizedExpression`, `isUsedAsConstructor`, and `isUsedInReflectiveAccess` over codemod-local parent/ancestor bubbling logic.
 - Read semantic child nodes from AST containers.

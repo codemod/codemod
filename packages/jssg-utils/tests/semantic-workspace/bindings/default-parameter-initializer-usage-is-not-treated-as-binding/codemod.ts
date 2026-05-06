@@ -1,8 +1,5 @@
 import { ok as assert } from "assert";
-import {
-  findShadowingBinding,
-  isRuntimeImportBinding,
-} from "../../../../src/javascript/exports/bindings.ts";
+import { isRuntimeImportBinding } from "../../../../src/javascript/exports/bindings.ts";
 import { requireNode, type SemanticCodemodRoot } from "../_shared.ts";
 
 export default function transform(root: SemanticCodemodRoot) {
@@ -15,10 +12,6 @@ export default function transform(root: SemanticCodemodRoot) {
   });
 
   const resolvedUsage = requireNode(usage, "Should find default-parameter initializer usage");
-  assert(
-    findShadowingBinding(resolvedUsage) === null,
-    "Default-parameter initializer usage should not be treated as a binding",
-  );
   assert(
     isRuntimeImportBinding(resolvedUsage),
     "Default-parameter initializer usage should still resolve as the imported runtime binding",

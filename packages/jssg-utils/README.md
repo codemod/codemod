@@ -24,7 +24,6 @@ Import from:
 
 ```ts
 import {
-  findShadowingBinding,
   isRuntimeImportBinding,
 } from "@jssg/utils/javascript/bindings";
 import {
@@ -52,30 +51,6 @@ if (
   isRuntimeImportBinding(gridUsage)
 ) {
   // Safe to treat this usage as the runtime Grid import.
-}
-```
-
-### `findShadowingBinding(node)`
-
-Returns the local binding node that shadows the given usage, or `null` if no local shadow exists.
-
-The helper handles:
-
-- local variables
-- function and class names
-- destructured parameters
-- `catch` parameters
-- hoisted `var` declarations
-
-Use this to avoid treating a local binding as an imported symbol.
-
-Example:
-
-```ts
-const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
-
-if (usage && findShadowingBinding(usage)) {
-  // This usage is shadowed locally, so skip the import-based rewrite.
 }
 ```
 

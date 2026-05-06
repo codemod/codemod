@@ -1,8 +1,5 @@
 import { ok as assert } from "assert";
-import {
-  findShadowingBinding,
-  isRuntimeImportBinding,
-} from "../../../../src/javascript/exports/bindings.ts";
+import { isRuntimeImportBinding } from "../../../../src/javascript/exports/bindings.ts";
 import { requireNode, type SemanticCodemodRoot } from "../_shared.ts";
 
 export default function transform(root: SemanticCodemodRoot) {
@@ -15,9 +12,7 @@ export default function transform(root: SemanticCodemodRoot) {
   });
 
   const resolvedUsage = requireNode(usage, "Should find hoisted var usage");
-  const shadow = findShadowingBinding(resolvedUsage);
-  const resolvedShadow = requireNode(shadow, "Should find hoisted var declaration");
-  assert(resolvedShadow.text() === "Grid", "Hoisted var shadow should resolve to Grid");
+  assert(!isRuntimeImportBinding(resolvedUsage), "Hoisted var shadow should resolve to Grid");
   assert(!isRuntimeImportBinding(resolvedUsage), "Hoisted var should shadow the imported binding");
   return null;
 }
