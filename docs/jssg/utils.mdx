@@ -65,7 +65,7 @@ Handled cases include:
 ```typescript
 const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
 
-if (usage && findShadowingBinding(usage, "Grid")) {
+if (usage && findShadowingBinding(usage)) {
   return null;
 }
 ```
@@ -83,10 +83,7 @@ const jsxGrid = rootNode.find({
 
 if (
   jsxGrid &&
-  isRuntimeImportBinding(jsxGrid, {
-    type: "default",
-    from: "@mui/material/Grid",
-  })
+  isRuntimeImportBinding(jsxGrid)
 ) {
   // Safe to treat <Grid /> as the imported runtime component.
 }
@@ -96,7 +93,7 @@ if (
 
 ## `isRuntimeImportBinding`
 
-Return `true` when the given usage node resolves to a non-type-only top-level import matching the query.
+Return `true` when the given usage node resolves to a non-type-only top-level runtime import.
 
 Use this as the main guard before rewriting runtime symbol usages.
 
@@ -105,14 +102,7 @@ Use this as the main guard before rewriting runtime symbol usages.
 ```typescript
 const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
 
-if (
-  usage &&
-  isRuntimeImportBinding(usage, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  })
-) {
+if (usage && isRuntimeImportBinding(usage)) {
   // Safe to treat this usage as the runtime Grid import.
 }
 ```
@@ -421,19 +411,6 @@ const codemod: Codemod<TSX> = async (root) => {
 };
 
 export default codemod;
-```
-
----
-
-## `stringToExactRegexString`
-
-Escape a string for use as an exact-match regex pattern. Wraps in `^...$` and escapes special characters.
-
-```typescript
-import { stringToExactRegexString } from "@jssg/utils/javascript/imports";
-
-// Returns "^my\\.module$"
-const regex = stringToExactRegexString("my.module");
 ```
 
 ---

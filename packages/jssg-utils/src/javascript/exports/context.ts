@@ -11,6 +11,8 @@ type EffectiveParentContext = {
   parent: AnyNode | null;
 };
 
+type FieldName = Parameters<AnyNode["field"]>[0];
+
 export function getNamedChildren(node: AnyNode | null): AnyNode[] {
   return node
     ? node
@@ -19,11 +21,11 @@ export function getNamedChildren(node: AnyNode | null): AnyNode[] {
     : [];
 }
 
-function getFieldNode(node: AnyNode | null, name: string): AnyNode | null {
-  return (node?.field(name as never) as AnyNode | null | undefined) ?? null;
+function getFieldNode(node: AnyNode | null, name: FieldName): AnyNode | null {
+  return (node?.field(name) as AnyNode | null | undefined) ?? null;
 }
 
-function getFieldText(node: AnyNode | null, name: string): string | null {
+function getFieldText(node: AnyNode | null, name: FieldName): string | null {
   return getFieldNode(node, name)?.text() ?? null;
 }
 
@@ -32,13 +34,23 @@ function getStaticStringKey(node: AnyNode | null): string | null {
     return null;
   }
 
-  const text = node.text();
+  if (node.is("string")) {
+    return node
+      .children()
+      .slice(1, -1)
+      .map((child) => child.text())
+      .join("");
+  }
+
   if (
-    (text.startsWith("'") && text.endsWith("'")) ||
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("`") && text.endsWith("`") && !text.includes("${"))
+    node.is("template_string") &&
+    !node.children().some((child) => child.isNamed() && child.kind() === "template_substitution")
   ) {
-    return text.slice(1, -1);
+    return node
+      .children()
+      .slice(1, -1)
+      .map((child) => child.text())
+      .join("");
   }
 
   return null;

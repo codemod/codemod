@@ -1,5 +1,5 @@
 import astGrep from "codemod:ast-grep";
-import transform from "./{script_name}";
+import transform from {script_name};
 
 export function executeCodemod(sgRoot, options) {{
     if (typeof transform !== "function") {{

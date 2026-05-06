@@ -58,6 +58,18 @@ impl OxcResolver {
 
 impl ModuleResolver for OxcResolver {
     fn resolve(&self, base: &str, name: &str) -> Result<String, ResolverError> {
+        let specifier_path = Path::new(name);
+        if specifier_path.is_absolute() {
+            if specifier_path.exists() {
+                return Ok(specifier_path.to_string_lossy().to_string());
+            }
+
+            return Err(ResolverError::ResolutionFailed {
+                base: base.to_string(),
+                name: name.to_string(),
+            });
+        }
+
         // Determine the resolution context directory
         let context_dir = if base.is_empty() {
             self.base_dir.clone()
@@ -82,6 +94,28 @@ impl ModuleResolver for OxcResolver {
                 })?
                 .join(context_dir)
         };
+
+        if name.starts_with("./") || name.starts_with("../") {
+            let candidate = absolute_context.join(name);
+
+            if let Ok(canonical) = candidate.canonicalize() {
+                if canonical.is_file() {
+                    return Ok(canonical.to_string_lossy().to_string());
+                }
+            }
+
+            if candidate.extension().is_none() {
+                for extension in [".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts"] {
+                    let with_extension =
+                        candidate.with_extension(extension.trim_start_matches('.'));
+                    if let Ok(canonical) = with_extension.canonicalize() {
+                        if canonical.is_file() {
+                            return Ok(canonical.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         // Use oxc_resolver to resolve the module
         match self.resolver.resolve(&absolute_context, name) {
@@ -127,5 +161,26 @@ mod tests {
                 println!("Resolution failed (expected in test): {e}");
             }
         }
+    }
+
+    #[test]
+    fn test_resolver_with_relative_parent_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().join("cases").join("example");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let shared_file = temp_dir.path().join("shared.ts");
+        fs::write(&shared_file, "export const shared = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir.clone(), None).unwrap();
+        let base_file = base_dir.join("codemod.ts");
+        fs::write(&base_file, "import { shared } from '../../shared.ts';").unwrap();
+
+        let result = resolver.resolve(&base_file.to_string_lossy(), "../../shared.ts");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            shared_file.canonicalize().unwrap().to_string_lossy()
+        );
     }
 }

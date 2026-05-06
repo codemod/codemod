@@ -2,6 +2,12 @@
 
 Utilities used by the JSSG codemod engine.
 
+Public JavaScript helpers are currently grouped under:
+
+- `@jssg/utils/javascript/imports`
+- `@jssg/utils/javascript/bindings`
+- `@jssg/utils/javascript/context`
+
 ## JavaScript import helpers
 
 Import from:
@@ -43,19 +49,15 @@ const gridUsage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } 
 
 if (
   gridUsage &&
-  isRuntimeImportBinding(gridUsage, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  })
+  isRuntimeImportBinding(gridUsage)
 ) {
   // Safe to treat this usage as the runtime Grid import.
 }
 ```
 
-### `findShadowingBinding(node, identifierName)`
+### `findShadowingBinding(node)`
 
-Returns the local binding node that shadows `identifierName` for the given usage, or `null` if no local shadow exists.
+Returns the local binding node that shadows the given usage, or `null` if no local shadow exists.
 
 The helper handles:
 
@@ -72,7 +74,7 @@ Example:
 ```ts
 const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
 
-if (usage && findShadowingBinding(usage, "Grid")) {
+if (usage && findShadowingBinding(usage)) {
   // This usage is shadowed locally, so skip the import-based rewrite.
 }
 ```
@@ -90,18 +92,15 @@ const jsxGrid = rootNode.find({
 
 if (
   jsxGrid &&
-  isRuntimeImportBinding(jsxGrid, {
-    type: "default",
-    from: "@mui/material/Grid",
-  })
+  isRuntimeImportBinding(jsxGrid)
 ) {
   // Safe to treat <Grid /> as the runtime imported component.
 }
 ```
 
-### `isRuntimeImportBinding(node, options)`
+### `isRuntimeImportBinding(node)`
 
-Returns `true` when the given usage node resolves to a non-type-only top-level import matching the query.
+Returns `true` when the given usage node resolves to a non-type-only top-level runtime import.
 
 Use this as the main conservative gate before rewriting runtime symbol usages.
 
@@ -110,14 +109,7 @@ Example:
 ```ts
 const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
 
-if (
-  usage &&
-  isRuntimeImportBinding(usage, {
-    type: "named",
-    name: "Grid",
-    from: "@mui/material",
-  })
-) {
+if (usage && isRuntimeImportBinding(usage)) {
   // Rewrite this usage as the imported runtime Grid symbol.
 }
 ```

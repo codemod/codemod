@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "jsx": "preserve"
+  },
+  "include": ["./bindings/_shared.ts", "./bindings/**/codemod.ts"],
+  "exclude": ["./bindings/**/tests/**"]
+}

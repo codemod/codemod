@@ -7,7 +7,6 @@ Public Codemod docs are the source of truth for utility details such as:
 - `getAllImports`
 - `addImport`
 - `removeImport`
-- `stringToExactRegexString`
 - `findShadowingBinding`
 - `isRuntimeImportBinding`
 - `getNamedChildren`
@@ -44,16 +43,12 @@ If you bypass the helpers for an import-related change, state why.
   - Find every matching import for a symbol/module instead of only the first one.
   - Useful when a file may contain multiple relevant imports that all need inspection or cleanup.
 
-- `stringToExactRegexString`
-  - Escape a string into an exact-match regex source.
-  - Useful when a helper or query path needs a literal-safe regex for module names or aliases.
-
 - `findShadowingBinding`
   - Detect whether a local declaration shadows a candidate imported symbol at a usage site.
   - Useful for conservative transform gating before treating an identifier as imported.
 
 - `isRuntimeImportBinding`
-  - Detect whether a usage node resolves to a non-type-only top-level import matching a query.
+  - Detect whether a usage node resolves to a non-type-only top-level runtime import.
   - Useful as the main gate before rewriting imported runtime symbol usages.
 
 - `getNamedChildren`
@@ -91,7 +86,7 @@ If you bypass the helpers for an import-related change, state why.
 
 ## Escalation rule
 
-Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `stringToExactRegexString`, `findShadowingBinding`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
+Before writing custom import, binding, or usage-context logic, explicitly decide whether `getImport`, `getAllImports`, `addImport`, `removeImport`, `findShadowingBinding`, `isRuntimeImportBinding`, `getNamedChildren`, `unwrapParenthesizedExpression`, `isUsedAsConstructor`, or `isUsedInReflectiveAccess` already cover the task. If they do, use them. Only drop to custom AST logic when helper behavior is genuinely insufficient.
 
 ## Common patterns
 

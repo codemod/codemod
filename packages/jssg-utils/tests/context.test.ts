@@ -68,6 +68,19 @@ function testIsUsedInReflectiveAccessHandlesComputedAndInOperator() {
     "Computed reflective access should be detected",
   );
 
+  const templateProgram = parseProgram(
+    "javascript",
+    "const boundFn = fn.bind(obj); (0, boundFn)[`prototype`];\n",
+  );
+  const templateUsage = requireNode(
+    findIdentifierWithAncestorKind(templateProgram, "boundFn", "sequence_expression"),
+    "Should find static template reflective usage",
+  );
+  assert(
+    isUsedInReflectiveAccess(templateUsage, ["name", "length", "prototype"]),
+    "Static template reflective access should be detected",
+  );
+
   const inProgram = parseProgram(
     "javascript",
     'const boundFn = fn.bind(obj); "prototype" in (0, boundFn);\n',
@@ -97,6 +110,19 @@ function testIsUsedInReflectiveAccessHandlesComputedAndInOperator() {
   assert(
     !isUsedInReflectiveAccess(leftShortCircuitUsage, ["name", "length", "prototype"]),
     "Left short-circuit operands should not bubble into reflective access detection",
+  );
+
+  const dynamicTemplateProgram = parseProgram(
+    "javascript",
+    "const boundFn = fn.bind(obj); (0, boundFn)[`${key}`];\n",
+  );
+  const dynamicTemplateUsage = requireNode(
+    findIdentifierWithAncestorKind(dynamicTemplateProgram, "boundFn", "sequence_expression"),
+    "Should find dynamic template reflective usage",
+  );
+  assert(
+    !isUsedInReflectiveAccess(dynamicTemplateUsage, ["name", "length", "prototype"]),
+    "Dynamic template keys should not be treated as static reflective access",
   );
 }
 

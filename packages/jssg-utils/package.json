@@ -14,7 +14,12 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/bindings.test.ts && pnpx codemod jssg exec ./tests/context.test.ts",
+    "build:test-cli": "cargo build -q --release --manifest-path ../../Cargo.toml -p codemod",
+    "test": "pnpm build:test-cli && pnpm test:unit && pnpm test:semantic:raw",
+    "test:unit": "../../target/release/codemod jssg exec ./tests/imports.test.ts && ../../target/release/codemod jssg exec ./tests/context.test.ts",
+    "test:semantic": "pnpm build:test-cli && pnpm test:semantic:raw",
+    "test:semantic:bindings": "pnpm build:test-cli && pnpm test:semantic:raw bindings",
+    "test:semantic:raw": "node ./tests/run-semantic-tests.mjs",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
