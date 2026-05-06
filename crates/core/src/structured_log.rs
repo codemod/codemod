@@ -381,12 +381,11 @@ impl StdoutCaptureGuard {
                         if line.is_empty() {
                             continue;
                         }
-                        let tagged = format!("[stdio] {}", line);
                         if let Some(callback) = line_callback.as_ref() {
-                            callback(tagged.clone());
+                            callback(line.clone());
                         }
                         if let Some(logger) = cb_logger.as_ref() {
-                            logger.log("info", &tagged);
+                            logger.log("info", &line);
                         }
                     }
                     Err(_) => break,

@@ -183,21 +183,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         return Ok(());
     }
 
-    // Wait for workflow to complete or pause again
-    let mut poll_count = 0u64;
     loop {
-        // Get workflow status
         let status = engine
             .get_workflow_status(args.id)
             .await
             .context("Failed to get workflow status")?;
-        poll_count += 1;
-        if poll_count == 1 || poll_count % 5 == 0 {
-            info!(
-                "workflow resume poll {}: workflow {} status {:?}",
-                poll_count, args.id, status
-            );
-        }
 
         match status {
             WorkflowStatus::Completed => {
@@ -267,7 +257,6 @@ async fn wait_for_triggered_tasks(
         return Ok(());
     }
 
-    let mut poll_count = 0u64;
     loop {
         let tasks = engine
             .get_tasks(workflow_run_id)
@@ -277,21 +266,6 @@ async fn wait_for_triggered_tasks(
             .iter()
             .filter(|task| tracked_task_ids.contains(&task.id))
             .collect::<Vec<_>>();
-
-        poll_count += 1;
-        if poll_count == 1 || poll_count % 5 == 0 {
-            info!(
-                "triggered-task poll {}: workflow {} tracked={} matched={} statuses={:?}",
-                poll_count,
-                workflow_run_id,
-                tracked_task_ids.len(),
-                tracked_tasks.len(),
-                tracked_tasks
-                    .iter()
-                    .map(|task| (task.id, task.status))
-                    .collect::<Vec<_>>()
-            );
-        }
 
         if tracked_tasks.len() == tracked_task_ids.len()
             && tracked_tasks
