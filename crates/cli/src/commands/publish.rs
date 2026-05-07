@@ -278,10 +278,7 @@ fn validate_common_package_metadata(package_path: &Path, manifest: &CodemodManif
         }
     }
 
-    // Validate package name format
-    if !is_valid_package_name(&manifest.name) {
-        return Err(anyhow!("Invalid package name: {}. Must contain only lowercase letters, numbers, hyphens, and underscores.", manifest.name));
-    }
+    validate_package_name(&manifest.name)?;
 
     // Validate version format (semver)
     if !is_valid_semver(&manifest.version) {
@@ -542,14 +539,41 @@ fn calculate_package_size(package_path: &Path) -> Result<u64> {
     Ok(total_size)
 }
 
-fn is_valid_package_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 50 {
-        return false;
+const MAX_PACKAGE_NAME_LENGTH: usize = 50;
+const PACKAGE_NAME_PATTERN: &str = r"^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$";
+
+fn validate_package_name(name: &str) -> Result<()> {
+    let mut reasons = Vec::new();
+
+    if name.is_empty() {
+        reasons.push("name cannot be empty".to_string());
     }
 
-    // Pattern: /^(@[a-zA-Z0-9-_.]+\/)?[a-zA-Z0-9-_]+$/
-    let re = Regex::new(r"^(@[a-zA-Z0-9\-_.]+/)?[a-zA-Z0-9\-_]+$").unwrap();
-    re.is_match(name)
+    if name.len() > MAX_PACKAGE_NAME_LENGTH {
+        reasons.push(format!(
+            "name is {} characters long; maximum allowed is {}",
+            name.len(),
+            MAX_PACKAGE_NAME_LENGTH
+        ));
+    }
+
+    let re = Regex::new(PACKAGE_NAME_PATTERN).unwrap();
+    if !re.is_match(name) {
+        reasons.push(format!(
+            "name must match {} (optional @scope/ prefix, then letters, numbers, hyphens, or underscores)",
+            PACKAGE_NAME_PATTERN
+        ));
+    }
+
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Invalid package name: {}. {}.",
+            name,
+            reasons.join("; ")
+        ))
+    }
 }
 
 fn is_valid_semver(version: &str) -> bool {
@@ -877,6 +901,38 @@ nodes:
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("Invalid package name"));
+        assert!(error.to_string().contains("name must match"));
+    }
+
+    #[test]
+    fn too_long_package_name_fails_with_length_details() {
+        let temp_dir = tempdir().unwrap();
+        let package_name = "a".repeat(MAX_PACKAGE_NAME_LENGTH + 1);
+        create_authored_skill_bundle(temp_dir.path(), &package_name);
+        let manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, &package_name);
+        fs::write(
+            temp_dir.path().join(DEFAULT_WORKFLOW_FILE_NAME),
+            r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    type: automatic
+    steps:
+      - id: install-skill
+        name: Install skill
+        install-skill:
+          package: "@codemod/example"
+"#,
+        )
+        .unwrap();
+
+        let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
+        assert!(error.to_string().contains("Invalid package name"));
+        assert!(error.to_string().contains("characters long"));
+        assert!(error
+            .to_string()
+            .contains(&format!("maximum allowed is {}", MAX_PACKAGE_NAME_LENGTH)));
     }
 
     #[test]
