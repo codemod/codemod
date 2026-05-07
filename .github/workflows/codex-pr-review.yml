@@ -6,7 +6,6 @@ on:
       - main
     types:
       - opened
-      - synchronize
       - reopened
       - ready_for_review
   workflow_dispatch:
@@ -63,7 +62,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: codemod/codex-review-action@94cbe605c105edd2ff6629553ba403c2e8a888ac
+      - uses: codemod/codex-review-action@6ee78346401c879c73ab6eb408e1945c65739a19
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
@@ -74,7 +73,7 @@ jobs:
           pnpm_version: "10.19.0"
           install_command: pnpm install --frozen-lockfile
           working_directory: .
-          codex_effort: medium
+          codex_effort: high
           sandbox: workspace-write
           review_focus: |
             Focus on:
