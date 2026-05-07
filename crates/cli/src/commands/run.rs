@@ -304,7 +304,7 @@ pub async fn handler(
     let workflow_definition = butterflow_core::utils::parse_workflow_file(&workflow_path)
         .map_err(|e| anyhow::anyhow!("Failed to parse workflow before run: {}", e))?;
     let auto_launch_tui =
-        should_auto_launch_package_run_tui(args.no_interactive, &workflow_definition);
+        should_auto_launch_package_run_tui(args.no_interactive, dry_run, &workflow_definition);
 
     let capabilities = resolve_capabilities(
         ResolveCapabilitiesArgs {
@@ -639,9 +639,10 @@ fn should_prompt_for_skill_install_with_tty(
 
 fn should_auto_launch_package_run_tui(
     no_interactive: bool,
+    dry_run: bool,
     workflow_definition: &butterflow_core::Workflow,
 ) -> bool {
-    !no_interactive && workflow_has_manual_steps(workflow_definition)
+    !no_interactive && !dry_run && workflow_has_manual_steps(workflow_definition)
 }
 
 fn apply_package_run_mode_to_config(
@@ -1318,7 +1319,7 @@ nodes:
     #[test]
     fn non_tui_package_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
         let workflow = workflow_with_manual_step();
-        let auto_launch_tui = should_auto_launch_package_run_tui(true, &workflow);
+        let auto_launch_tui = should_auto_launch_package_run_tui(true, false, &workflow);
         assert!(!auto_launch_tui);
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
@@ -1332,7 +1333,7 @@ nodes:
     #[test]
     fn interactive_manual_package_run_enables_tui_managed_git_mode() {
         let workflow = workflow_with_manual_step();
-        let auto_launch_tui = should_auto_launch_package_run_tui(false, &workflow);
+        let auto_launch_tui = should_auto_launch_package_run_tui(false, false, &workflow);
         assert!(auto_launch_tui);
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
@@ -1346,7 +1347,7 @@ nodes:
     #[test]
     fn manual_pull_request_only_package_run_does_not_enable_tui_mode() {
         let workflow = workflow_with_manual_pull_request_only_node();
-        let auto_launch_tui = should_auto_launch_package_run_tui(false, &workflow);
+        let auto_launch_tui = should_auto_launch_package_run_tui(false, false, &workflow);
         assert!(!auto_launch_tui);
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
@@ -1355,5 +1356,12 @@ nodes:
         assert!(!cfg.enable_worktrees);
         assert!(!cfg.quiet);
         assert!(cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn dry_run_package_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_package_run_tui(false, true, &workflow);
+        assert!(!auto_launch_tui);
     }
 }

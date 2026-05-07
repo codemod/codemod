@@ -4836,7 +4836,7 @@ impl Engine {
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
         slog!(
             logger,
-            info,
+            debug,
             "AI handoff detection confidence={} agent={} reasons={}",
             handoff_detection.confidence.as_str(),
             detected_agent,

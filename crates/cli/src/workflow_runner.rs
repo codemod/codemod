@@ -41,7 +41,8 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         "Failed to parse workflow file: {}",
         engine.get_workflow_file_path().display()
     ))?;
-    let auto_launch_tui = !config.no_interactive && workflow_has_manual_steps(&workflow);
+    let auto_launch_tui =
+        !config.no_interactive && !config.dry_run && workflow_has_manual_steps(&workflow);
 
     let started = std::time::Instant::now();
 
