@@ -182,13 +182,21 @@ Codemod workflow schema version.
 <ParamField path="name" type="string" required>
 Codemod package name (unique within scope).
 
-**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+**Naming rules:** Use either `package-name` or `@scope/package-name`.
 
-**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+Allowed characters are lowercase letters, numbers, hyphens, and underscores. A single `/` is allowed only to separate a scope from the package name.
+
+**Not allowed:** uppercase letters, dots, commas, spaces, multiple `/` separators, or other special characters
 
 Valid examples:
 - <code>remove-console-logs</code>
 - <code>@scope/remove-console-logs</code> (using `@organization-or-project-scope/name` provides better discoverability in the [Codemod Registry](https://go.codemod.com/registry))
+
+Invalid examples:
+- <code>RemoveConsoleLogs</code>
+- <code>my.package</code>
+- <code>@scope/pkg/extra</code>
+- <code>my codemod</code>
 </ParamField>
 
 <ParamField path="version" type="string" required default="0.1.0">
