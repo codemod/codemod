@@ -171,7 +171,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         None,
         Some(capabilities.clone()),
         args.no_interactive,
-        args.no_color,
         diff_collector.clone(),
         args.no_interactive && !args.install_skill,
         output_format,

@@ -38,6 +38,23 @@ enum SkillInstallOfferContext {
     WorkflowAndSkillPostRun,
 }
 
+fn format_file_count(count: usize) -> String {
+    if count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{count} files")
+    }
+}
+
+fn print_dry_run_summary(files_modified: usize, files_unmodified: usize, files_with_errors: usize) {
+    println!("\n🔎 Dry run complete");
+    println!("📝 Would modify: {}", format_file_count(files_modified));
+    println!("✅ Unchanged: {}", format_file_count(files_unmodified));
+    if files_with_errors > 0 {
+        println!("❌ Errors: {}", format_file_count(files_with_errors));
+    }
+}
+
 /// Represents a file change from legacy codemod JSON output
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -333,7 +350,6 @@ pub async fn handler(
         args.registry.clone(),
         Some(capabilities.clone()),
         args.no_interactive,
-        args.no_color,
         diff_collector.clone(),
         should_skip_install_skill_steps(
             args.no_interactive,
@@ -387,13 +403,7 @@ pub async fn handler(
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
 
     if dry_run {
-        println!("\n=== DRY RUN SUMMARY ===");
-        println!("Files that would be modified: {files_modified}");
-        println!("Files that would be unmodified: {files_unmodified}");
-        if files_with_errors > 0 {
-            println!("Files with errors: {files_with_errors}");
-        }
-        println!("No changes were made to the filesystem.");
+        print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
     } else {
         println!("\n📝 Modified files: {files_modified}");
         println!("✅ Unmodified files: {files_unmodified}");
@@ -919,14 +929,9 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
                     }
                 }
 
-                // Print summary
-                println!("\n=== DRY RUN SUMMARY ===");
-                println!("Files that would be modified: {}", files_modified);
-                println!(
-                    "Total: +{} additions, -{} deletions",
-                    total_additions, total_deletions
-                );
-                println!("No changes were made to the filesystem.");
+                println!("\n🔎 Dry run complete");
+                println!("📝 Would modify: {}", format_file_count(files_modified));
+                println!("Δ Changes: +{} -{}", total_additions, total_deletions);
             }
             Err(e) => {
                 // JSON parsing failed, print raw output
