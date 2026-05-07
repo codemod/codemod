@@ -6,6 +6,14 @@ use std::sync::{Arc, Mutex};
 
 pub type CapturedLineCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedLogLine {
+    ts: String,
+    level: String,
+    target: Option<String>,
+    msg: String,
+}
+
 fn strip_ansi_escape_sequences(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -44,6 +52,27 @@ fn strip_ansi_escape_sequences(input: &str) -> String {
     }
 
     output
+}
+
+fn parse_env_logger_line(input: &str) -> Option<ParsedLogLine> {
+    let body = input.strip_prefix('[')?;
+    let (meta, msg) = body.split_once("] ")?;
+    let mut parts = meta.splitn(3, ' ');
+    let ts = parts.next()?.to_string();
+    let level = parts.next()?.to_ascii_lowercase();
+    if !matches!(
+        level.as_str(),
+        "trace" | "debug" | "info" | "warn" | "error"
+    ) {
+        return None;
+    }
+
+    Some(ParsedLogLine {
+        ts,
+        level,
+        target: parts.next().map(str::to_string),
+        msg: msg.to_string(),
+    })
 }
 
 /// Output format for the engine
@@ -96,6 +125,8 @@ struct JsonlRecord {
     event: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     msg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,6 +229,16 @@ impl StructuredLogger {
     /// In Text mode, this is a no-op (caller should use `log!` macros).
     /// In both modes the message is collected for task log persistence.
     pub fn log(&self, level: &str, msg: &str) {
+        self.log_with_metadata(level, msg, None, None);
+    }
+
+    pub fn log_with_metadata(
+        &self,
+        level: &str,
+        msg: &str,
+        ts: Option<&str>,
+        target: Option<&str>,
+    ) {
         // Always collect for task log persistence
         if let Ok(mut logs) = self.collected_logs.lock() {
             logs.push(msg.to_string());
@@ -208,10 +249,13 @@ impl StructuredLogger {
         }
         let record = JsonlRecord {
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
-            ts: Utc::now().to_rfc3339(),
+            ts: ts
+                .map(str::to_string)
+                .unwrap_or_else(|| Utc::now().to_rfc3339()),
             level: level.to_string(),
             event: "log".to_string(),
             msg: Some(msg.to_string()),
+            target: target.map(str::to_string),
             step_name: self.context.as_ref().map(|c| c.step_name.clone()),
             step_id: self.context.as_ref().and_then(|c| c.step_id.clone()),
             step_index: self.context.as_ref().map(|c| c.step_index),
@@ -241,6 +285,7 @@ impl StructuredLogger {
             level: "info".to_string(),
             event: "step_start".to_string(),
             msg: None,
+            target: None,
             step_name: Some(ctx.step_name.clone()),
             step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
@@ -270,6 +315,7 @@ impl StructuredLogger {
             level: "info".to_string(),
             event: "step_end".to_string(),
             msg: None,
+            target: None,
             step_name: Some(ctx.step_name.clone()),
             step_id: ctx.step_id.clone(),
             step_index: Some(ctx.step_index),
@@ -385,7 +431,16 @@ impl StdoutCaptureGuard {
                             callback(line.clone());
                         }
                         if let Some(logger) = cb_logger.as_ref() {
-                            logger.log("info", &line);
+                            if let Some(parsed) = parse_env_logger_line(&line) {
+                                logger.log_with_metadata(
+                                    &parsed.level,
+                                    &parsed.msg,
+                                    Some(&parsed.ts),
+                                    parsed.target.as_deref(),
+                                );
+                            } else {
+                                logger.log("info", &line);
+                            }
                         }
                     }
                     Err(_) => break,
@@ -499,5 +554,26 @@ mod tests {
         logger.log("info", "hello");
         logger.step_start();
         logger.step_end("success", 100);
+    }
+
+    #[test]
+    fn test_parse_env_logger_line() {
+        let parsed = parse_env_logger_line(
+            "[2026-05-07T00:07:08Z DEBUG butterflow_core::ai_handoff] starting parent coding agent detection",
+        )
+        .expect("line should parse");
+
+        assert_eq!(parsed.ts, "2026-05-07T00:07:08Z");
+        assert_eq!(parsed.level, "debug");
+        assert_eq!(
+            parsed.target.as_deref(),
+            Some("butterflow_core::ai_handoff")
+        );
+        assert_eq!(parsed.msg, "starting parent coding agent detection");
+    }
+
+    #[test]
+    fn test_parse_env_logger_line_rejects_non_logger_text() {
+        assert!(parse_env_logger_line("plain stdout line").is_none());
     }
 }
