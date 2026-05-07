@@ -52,7 +52,7 @@ function getStaticStringKey(node: SgNode<Language>): string | null {
 
   if (
     node.is("template_string") &&
-    !node.children().some((child) => child.isNamed() && child.kind() === "template_substitution")
+    !node.children().some((child) => child.isNamed() && child.is("template_substitution"))
   ) {
     return node
       .children()
@@ -69,30 +69,30 @@ function shouldBubbleTransparentWrapper(
   current: SgNode<Language>,
   includeAssignmentRhs: boolean,
 ): boolean {
-  if (parent.kind() === "parenthesized_expression") {
+  if (parent.is("parenthesized_expression")) {
     return true;
   }
 
-  if (parent.kind() === "sequence_expression") {
+  if (parent.is("sequence_expression")) {
     const namedChildren = getNamedChildren(parent);
     return namedChildren[namedChildren.length - 1]?.id() === current.id();
   }
 
-  if (parent.kind() === "ternary_expression") {
+  if (parent.is("ternary_expression")) {
     return (
       getFieldNode(parent, "consequence")?.id() === current.id() ||
       getFieldNode(parent, "alternative")?.id() === current.id()
     );
   }
 
-  if (parent.kind() === "binary_expression") {
+  if (parent.is("binary_expression")) {
     const operator = getFieldText(parent, "operator");
     if (operator === "&&" || operator === "||" || operator === "??") {
       return getFieldNode(parent, "right")?.id() === current.id();
     }
   }
 
-  if (includeAssignmentRhs && parent.kind() === "assignment_expression") {
+  if (includeAssignmentRhs && parent.is("assignment_expression")) {
     return getFieldNode(parent, "right")?.id() === current.id();
   }
 
@@ -130,7 +130,7 @@ function unwrapTransparentWrappers(node: SgNode<Language>): SgNode<Language> {
 export function unwrapParenthesizedExpression(node: SgNode<Language>): SgNode<Language> {
   let current = node;
 
-  while (current.kind() === "parenthesized_expression") {
+  while (current.is("parenthesized_expression")) {
     const inner = getNamedChildren(current)[0];
     if (!inner) {
       break;
@@ -160,7 +160,7 @@ function findEffectiveParentContext(node: SgNode<Language>): EffectiveParentCont
 export function isUsedAsConstructor(node: SgNode<Language>): boolean {
   const { node: effectiveNode, parent } = findEffectiveParentContext(node);
   return (
-    parent?.kind() === "new_expression" &&
+    !!parent?.is("new_expression") &&
     getFieldNode(parent, "constructor")?.id() === effectiveNode.id()
   );
 }
@@ -191,7 +191,7 @@ export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] 
   }
 
   if (
-    parent.kind() === "member_expression" &&
+    parent.is("member_expression") &&
     getFieldNode(parent, "object")?.id() === effectiveNode.id()
   ) {
     const property = getFieldText(parent, "property") ?? "";
@@ -199,7 +199,7 @@ export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] 
   }
 
   if (
-    parent.kind() === "subscript_expression" &&
+    parent.is("subscript_expression") &&
     getFieldNode(parent, "object")?.id() === effectiveNode.id()
   ) {
     const fieldNode = getFieldNode(parent, "index");
@@ -209,7 +209,7 @@ export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] 
   }
 
   if (
-    parent.kind() === "binary_expression" &&
+    parent.is("binary_expression") &&
     getFieldNode(parent, "right")?.id() === effectiveNode.id() &&
     getFieldText(parent, "operator") === "in"
   ) {

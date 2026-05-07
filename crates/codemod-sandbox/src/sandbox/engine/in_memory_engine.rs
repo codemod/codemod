@@ -159,7 +159,10 @@ where
     })?;
 
     let mut resolver = InMemoryResolver::new();
-    resolver.set_source("__codemod_script.js".to_string(), options.codemod_source.to_string());
+    resolver.set_source(
+        "__codemod_script.js".to_string(),
+        options.codemod_source.to_string(),
+    );
     let resolver_arc = Arc::new(resolver);
 
     let js_code = format!(
