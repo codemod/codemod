@@ -4,32 +4,40 @@ import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type { SgNode } from "@codemod.com/jssg-types/main";
 
 type Language = JS | TS | TSX;
-type AnyNode = SgNode<Language>;
 
 type EffectiveParentContext = {
-  node: AnyNode;
-  parent: AnyNode | null;
+  node: SgNode<Language>;
+  parent: SgNode<Language> | null;
 };
 
-type FieldName = Parameters<AnyNode["field"]>[0];
+type FieldName = Parameters<SgNode<Language>["field"]>[0];
 
-export function getNamedChildren(node: AnyNode | null): AnyNode[] {
+/**
+ * Returns the named, non-comment children of `node`.
+ *
+ * This is useful when walking statement containers such as blocks or program
+ * bodies without having to filter out punctuation and comment trivia manually.
+ *
+ * @param node The AST node whose direct children should be inspected.
+ * @returns The direct named children of `node`, excluding comment nodes.
+ */
+export function getNamedChildren(node: SgNode<Language> | null): SgNode<Language>[] {
   return node
     ? node
         .children()
-        .filter((child): child is AnyNode => child.isNamed() && child.kind() !== "comment")
+        .filter((child): child is SgNode<Language> => child.isNamed() && child.kind() !== "comment")
     : [];
 }
 
-function getFieldNode(node: AnyNode | null, name: FieldName): AnyNode | null {
-  return (node?.field(name) as AnyNode | null | undefined) ?? null;
+function getFieldNode(node: SgNode<Language> | null, name: FieldName): SgNode<Language> | null {
+  return (node?.field(name) as SgNode<Language> | null | undefined) ?? null;
 }
 
-function getFieldText(node: AnyNode | null, name: FieldName): string | null {
+function getFieldText(node: SgNode<Language> | null, name: FieldName): string | null {
   return getFieldNode(node, name)?.text() ?? null;
 }
 
-function getStaticStringKey(node: AnyNode | null): string | null {
+function getStaticStringKey(node: SgNode<Language> | null): string | null {
   if (!node) {
     return null;
   }
@@ -57,8 +65,8 @@ function getStaticStringKey(node: AnyNode | null): string | null {
 }
 
 function shouldBubbleTransparentWrapper(
-  parent: AnyNode,
-  current: AnyNode,
+  parent: SgNode<Language>,
+  current: SgNode<Language>,
   includeAssignmentRhs: boolean,
 ): boolean {
   if (parent.kind() === "parenthesized_expression") {
@@ -91,23 +99,35 @@ function shouldBubbleTransparentWrapper(
   return false;
 }
 
-function unwrapTransparentWrappersInternal(node: AnyNode, includeAssignmentRhs: boolean): AnyNode {
+function unwrapTransparentWrappersInternal(
+  node: SgNode<Language>,
+  includeAssignmentRhs: boolean,
+): SgNode<Language> {
   let current = node;
-  let parent = current.parent() as AnyNode | null;
+  let parent = current.parent() as SgNode<Language> | null;
 
   while (parent && shouldBubbleTransparentWrapper(parent, current, includeAssignmentRhs)) {
     current = parent;
-    parent = current.parent() as AnyNode | null;
+    parent = current.parent() as SgNode<Language> | null;
   }
 
   return current;
 }
 
-function unwrapTransparentWrappers(node: AnyNode): AnyNode {
+function unwrapTransparentWrappers(node: SgNode<Language>): SgNode<Language> {
   return unwrapTransparentWrappersInternal(node, true);
 }
 
-export function unwrapParenthesizedExpression(node: AnyNode): AnyNode {
+/**
+ * Removes only nested parenthesized-expression wrappers from `node`.
+ *
+ * Unlike the broader transparent-wrapper logic used internally, this helper does
+ * not bubble through sequence, ternary, or assignment contexts.
+ *
+ * @param node The node to unwrap.
+ * @returns The innermost non-parenthesized node reachable by stripping `(...)`.
+ */
+export function unwrapParenthesizedExpression(node: SgNode<Language>): SgNode<Language> {
   let current = node;
 
   while (current.kind() === "parenthesized_expression") {
@@ -121,15 +141,23 @@ export function unwrapParenthesizedExpression(node: AnyNode): AnyNode {
   return current;
 }
 
-function findEffectiveParentContext(node: AnyNode): EffectiveParentContext {
+function findEffectiveParentContext(node: SgNode<Language>): EffectiveParentContext {
   const effectiveNode = unwrapTransparentWrappers(node);
   return {
     node: effectiveNode,
-    parent: (effectiveNode.parent() as AnyNode | null) ?? null,
+    parent: (effectiveNode.parent() as SgNode<Language> | null) ?? null,
   };
 }
 
-export function isUsedAsConstructor(node: AnyNode): boolean {
+/**
+ * Returns `true` when `node` is used as the constructor target of a `new`
+ * expression, even through transparent wrappers such as parentheses or trailing
+ * sequence-expression positions.
+ *
+ * @param node The expression node to inspect.
+ * @returns `true` when the effective usage is `new node(...)`; otherwise `false`.
+ */
+export function isUsedAsConstructor(node: SgNode<Language>): boolean {
   const { node: effectiveNode, parent } = findEffectiveParentContext(node);
   return (
     parent?.kind() === "new_expression" &&
@@ -137,7 +165,24 @@ export function isUsedAsConstructor(node: AnyNode): boolean {
   );
 }
 
-export function isUsedInReflectiveAccess(node: AnyNode, keys: string[] = []): boolean {
+/**
+ * Returns `true` when `node` is used in reflective property access for one of
+ * the provided `keys`.
+ *
+ * Supported reflective forms include:
+ * - `node.name`
+ * - `node["name"]`
+ * - ``node[`name`]``
+ * - `"name" in node`
+ *
+ * Dynamic computed keys are intentionally rejected.
+ *
+ * @param node The expression node to inspect.
+ * @param keys The reflective property names to treat as significant.
+ * @returns `true` when `node` participates in one of the supported reflective
+ * access patterns for a requested key; otherwise `false`.
+ */
+export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] = []): boolean {
   const keySet = new Set(keys);
   const { node: effectiveNode, parent } = findEffectiveParentContext(node);
 
