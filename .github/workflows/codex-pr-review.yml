@@ -63,6 +63,7 @@ jobs:
       issues: write
     steps:
       - uses: codemod/codex-review-action@6ee78346401c879c73ab6eb408e1945c65739a19
+        continue-on-error: ${{ github.actor == 'codemod[bot]' }}
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
