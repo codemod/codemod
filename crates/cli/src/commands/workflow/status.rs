@@ -51,7 +51,6 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
         None,
         false,
-        false,
         None,
         false,
         Default::default(),

@@ -3521,12 +3521,6 @@ impl Engine {
             StepAction::RunScript(run) => {
                 // Skip run script steps in dry-run mode
                 if self.workflow_run_config.dry_run {
-                    if !self.workflow_run_config.quiet {
-                        eprintln!(
-                            "\n[WARN] Skipping run: script step (cannot preview):\n  {}...",
-                            run.chars().take(80).collect::<String>()
-                        );
-                    }
                     return Ok(());
                 }
                 self.execute_run_script_step(
@@ -4836,7 +4830,7 @@ impl Engine {
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
         slog!(
             logger,
-            info,
+            debug,
             "AI handoff detection confidence={} agent={} reasons={}",
             handoff_detection.confidence.as_str(),
             detected_agent,

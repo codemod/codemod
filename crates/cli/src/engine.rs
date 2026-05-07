@@ -23,42 +23,6 @@ use crate::capabilities_security_callback::capabilities_security_callback;
 use crate::utils::env_paths::data_dir_from_env;
 use crate::{dirty_git_check, progress_bar};
 
-/// Create a callback for reporting dry-run changes with diffs.
-/// When `diff_collector` is provided, also generates plain-text diffs and collects them.
-pub fn create_dry_run_callback(
-    no_color: bool,
-    diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
-) -> DryRunCallback {
-    let config = DiffConfig::with_color_control(no_color);
-
-    Arc::new(move |change: DryRunChange| {
-        let diff = generate_unified_diff(
-            &change.file_path,
-            &change.original_content,
-            &change.new_content,
-            &config,
-        );
-        diff.print();
-
-        // If collecting diffs for report, generate a plain-text (no color) version
-        if let Some(ref collector) = diff_collector {
-            let plain_config = DiffConfig {
-                color: false,
-                ..DiffConfig::default()
-            };
-            let plain_diff = generate_unified_diff(
-                &change.file_path,
-                &change.original_content,
-                &change.new_content,
-                &plain_config,
-            );
-            if let Ok(mut diffs) = collector.lock() {
-                diffs.push(plain_diff);
-            }
-        }
-    })
-}
-
 /// Create a callback that silently collects diffs without printing to terminal.
 /// Used when --report is passed without --dry-run.
 pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> DryRunCallback {
@@ -181,7 +145,6 @@ pub fn create_engine(
     registry: Option<String>,
     capabilities: Option<HashSet<LlrtSupportedModules>>,
     no_interactive: bool,
-    no_color: bool,
     diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>>,
     skip_install_skill_steps: bool,
     output_format: OutputFormat,
@@ -214,12 +177,7 @@ pub fn create_engine(
 
     let capabilities_security_callback =
         capabilities_security_callback(no_interactive, pre_approved_capabilities);
-    let dry_run_callback = if dry_run {
-        // In dry-run mode: print diffs to terminal + optionally collect for report
-        Some(create_dry_run_callback(no_color, diff_collector))
-    } else {
-        diff_collector.map(create_silent_diff_collector)
-    };
+    let dry_run_callback = diff_collector.map(create_silent_diff_collector);
 
     let agent_selection_callback: Option<AgentSelectionCallback> = if no_interactive {
         None

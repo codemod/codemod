@@ -329,12 +329,6 @@ pub fn detect_parent_coding_agent() -> DetectionResult {
     let process_signals = collect_process_signals(MAX_PARENT_DEPTH);
     let result = classify_detection(process_signals, env_signals);
 
-    log::info!(
-        "AI handoff detection complete: confidence={}, agent={}, reasons={}",
-        result.confidence.as_str(),
-        result.agent_name.as_deref().unwrap_or("none"),
-        result.reasons.len(),
-    );
     for reason in &result.reasons {
         log::debug!("detection signal: {}", reason);
     }

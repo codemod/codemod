@@ -85,9 +85,10 @@ pub struct Command {
 
 fn should_auto_launch_workflow_tui(
     no_interactive: bool,
+    dry_run: bool,
     workflow_definition: &butterflow_core::Workflow,
 ) -> bool {
-    !no_interactive && workflow_has_manual_steps(workflow_definition)
+    !no_interactive && !dry_run && workflow_has_manual_steps(workflow_definition)
 }
 
 fn apply_workflow_run_mode_to_config(
@@ -149,7 +150,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let workflow_definition = utils::parse_workflow_file(&workflow_file_path)
         .context("Failed to parse workflow before run")?;
     let auto_launch_tui =
-        should_auto_launch_workflow_tui(args.no_interactive, &workflow_definition);
+        should_auto_launch_workflow_tui(args.no_interactive, args.dry_run, &workflow_definition);
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -170,7 +171,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         None,
         Some(capabilities.clone()),
         args.no_interactive,
-        args.no_color,
         diff_collector.clone(),
         args.no_interactive && !args.install_skill,
         output_format,
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn non_tui_workflow_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
         let workflow = workflow_with_manual_step();
-        let auto_launch_tui = should_auto_launch_workflow_tui(true, &workflow);
+        let auto_launch_tui = should_auto_launch_workflow_tui(true, false, &workflow);
         assert!(!auto_launch_tui);
 
         let mut cfg = WorkflowRunConfig::default();
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn interactive_manual_workflow_run_enables_tui_managed_git_mode() {
         let workflow = workflow_with_manual_step();
-        let auto_launch_tui = should_auto_launch_workflow_tui(false, &workflow);
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, false, &workflow);
         assert!(auto_launch_tui);
 
         let mut cfg = WorkflowRunConfig::default();
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn manual_pull_request_only_workflow_run_does_not_enable_tui_mode() {
         let workflow = workflow_with_manual_pull_request_only_node();
-        let auto_launch_tui = should_auto_launch_workflow_tui(false, &workflow);
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, false, &workflow);
         assert!(!auto_launch_tui);
 
         let mut cfg = WorkflowRunConfig::default();
@@ -359,5 +359,12 @@ mod tests {
         assert!(!cfg.enable_worktrees);
         assert!(!cfg.quiet);
         assert!(cfg.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn dry_run_workflow_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, true, &workflow);
+        assert!(!auto_launch_tui);
     }
 }
