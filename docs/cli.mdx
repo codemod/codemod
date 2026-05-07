@@ -291,10 +291,10 @@ npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
 
 **`workflow validate`**
 
-Validate a workflow file.
+Validate a workflow file or codemod package.
 
 ```bash
-npx codemod workflow validate -w <workflow.yaml>
+npx codemod workflow validate -w <workflow.yaml|package-directory>
 ```
 
 `workflow validate` is capability-aware for codemod packages:
@@ -306,6 +306,10 @@ npx codemod workflow validate -w <workflow.yaml>
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
   Path to workflow file or codemod package directory.
 </ResponseField>
+
+`workflow validate` also accepts nested paths inside a package and resolves the nearest ancestor containing `codemod.yaml`. If you pass a directory that is not a package, the CLI validates `workflow.yaml` inside that directory.
+
+Passing a standalone `SKILL.md` path is not supported because skill validation requires the surrounding package context.
 
 | Check                       | Ensures                                |
 | --------------------------- | -------------------------------------- |
