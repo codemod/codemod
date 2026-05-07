@@ -842,6 +842,15 @@ npx codemod search [OPTIONS] [QUERY]
   Output format (default: table). Possible values: table, json, yaml
 </ResponseField>
 
+When `--format json` or `--format yaml` is used, the command returns more than the raw package list. The machine-readable response includes:
+
+- `total`: total number of matches returned by the registry
+- `packages`: the matched packages, each with an added `metadata_coverage` summary describing which metadata fields are populated
+- `metadata_coverage`: an aggregate summary across the returned result set
+- `threshold_route_preview`: the CLI's suitability routing preview for the result set
+
+This is useful when scripting against search results and deciding whether a query has enough high-quality matches to route directly into package execution or needs further refinement.
+
 <Accordion title="Examples">
   Search for codemods related to React:
 
@@ -859,6 +868,12 @@ npx codemod search [OPTIONS] [QUERY]
 
   ```bash
   npx codemod search --format json next
+  ```
+
+  Inspect metadata coverage and routing preview for automation:
+
+  ```bash
+  npx codemod search react --format json
   ```
 </Accordion>
 
