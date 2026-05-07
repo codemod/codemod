@@ -3,20 +3,18 @@ import { isRuntimeImportBinding } from "../../../../src/javascript/exports/bindi
 import { requireNode, type SemanticCodemodRoot } from "../_shared.ts";
 
 export default function transform(root: SemanticCodemodRoot) {
-  const typeAlias = root.root().find({
+  const usage = root.root().find({
     rule: {
-      kind: "type_alias_declaration",
+      kind: "identifier",
+      pattern: "Grid",
+      inside: { kind: "variable_declarator" },
     },
   });
-  const usage =
-    typeAlias
-      ?.children()
-      .find((node) => String(node.kind()) === "type_identifier" && node.text() === "Grid") ?? null;
 
-  const resolvedUsage = requireNode(usage, "Should find type usage");
+  const resolvedUsage = requireNode(usage, "Should find CommonJS declaration identifier");
   assert(
     !isRuntimeImportBinding(resolvedUsage),
-    "Type-only import usage should not be treated as runtime",
+    "CommonJS declaration identifiers should not be treated as runtime usage",
   );
   return null;
 }

@@ -60,14 +60,23 @@ impl ModuleResolver for OxcResolver {
     fn resolve(&self, base: &str, name: &str) -> Result<String, ResolverError> {
         let specifier_path = Path::new(name);
         if specifier_path.is_absolute() {
-            if specifier_path.exists() {
-                return Ok(specifier_path.to_string_lossy().to_string());
+            if let Ok(canonical) = specifier_path.canonicalize() {
+                if canonical.is_file() {
+                    return Ok(canonical.to_string_lossy().to_string());
+                }
             }
 
-            return Err(ResolverError::ResolutionFailed {
-                base: base.to_string(),
-                name: name.to_string(),
-            });
+            if specifier_path.extension().is_none() {
+                for extension in [".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts"] {
+                    let with_extension =
+                        specifier_path.with_extension(extension.trim_start_matches('.'));
+                    if let Ok(canonical) = with_extension.canonicalize() {
+                        if canonical.is_file() {
+                            return Ok(canonical.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
         }
 
         // Determine the resolution context directory
@@ -202,6 +211,39 @@ mod tests {
                 .to_string_lossy(),
             absolute_file.canonicalize().unwrap().to_string_lossy()
         );
+    }
+
+    #[test]
+    fn test_resolver_with_absolute_extensionless_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let absolute_file = base_dir.join("absolute.ts");
+        fs::write(&absolute_file, "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let extensionless = absolute_file.with_extension("");
+        let result = resolver.resolve("", &extensionless.to_string_lossy());
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            absolute_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_with_absolute_directory_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let package_dir = base_dir.join("abs-package");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("index.js"), "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let result = resolver.resolve("", &package_dir.to_string_lossy());
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().ends_with("index.js"));
     }
 
     #[test]

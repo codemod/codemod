@@ -3,20 +3,18 @@ import { isRuntimeImportBinding } from "../../../../src/javascript/exports/bindi
 import { requireNode, type SemanticCodemodRoot } from "../_shared.ts";
 
 export default function transform(root: SemanticCodemodRoot) {
-  const typeAlias = root.root().find({
+  const usage = root.root().find({
     rule: {
-      kind: "type_alias_declaration",
+      kind: "identifier",
+      pattern: "Grid",
+      inside: { kind: "return_statement" },
     },
   });
-  const usage =
-    typeAlias
-      ?.children()
-      .find((node) => String(node.kind()) === "type_identifier" && node.text() === "Grid") ?? null;
 
-  const resolvedUsage = requireNode(usage, "Should find type usage");
+  const resolvedUsage = requireNode(usage, "Should find nested require binding usage");
   assert(
     !isRuntimeImportBinding(resolvedUsage),
-    "Type-only import usage should not be treated as runtime",
+    "Nested require-derived values should not be treated as direct runtime import bindings",
   );
   return null;
 }
