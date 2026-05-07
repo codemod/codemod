@@ -21,7 +21,7 @@ type FieldName = Parameters<SgNode<Language>["field"]>[0];
  * @param node The AST node whose direct children should be inspected.
  * @returns The direct named children of `node`, excluding comment nodes.
  */
-export function getNamedChildren(node: SgNode<Language> | null): SgNode<Language>[] {
+export function getNamedChildren(node: SgNode<Language>): SgNode<Language>[] {
   return node
     ? node
         .children()
@@ -29,15 +29,15 @@ export function getNamedChildren(node: SgNode<Language> | null): SgNode<Language
     : [];
 }
 
-function getFieldNode(node: SgNode<Language> | null, name: FieldName): SgNode<Language> | null {
-  return (node?.field(name) as SgNode<Language> | null | undefined) ?? null;
+function getFieldNode(node: SgNode<Language>, name: FieldName) {
+  return node?.field(name);
 }
 
-function getFieldText(node: SgNode<Language> | null, name: FieldName): string | null {
+function getFieldText(node: SgNode<Language>, name: FieldName): string | null {
   return getFieldNode(node, name)?.text() ?? null;
 }
 
-function getStaticStringKey(node: SgNode<Language> | null): string | null {
+function getStaticStringKey(node: SgNode<Language>): string | null {
   if (!node) {
     return null;
   }
@@ -104,11 +104,11 @@ function unwrapTransparentWrappersInternal(
   includeAssignmentRhs: boolean,
 ): SgNode<Language> {
   let current = node;
-  let parent = current.parent() as SgNode<Language> | null;
+  let parent = current.parent();
 
   while (parent && shouldBubbleTransparentWrapper(parent, current, includeAssignmentRhs)) {
     current = parent;
-    parent = current.parent() as SgNode<Language> | null;
+    parent = current.parent();
   }
 
   return current;
@@ -145,7 +145,7 @@ function findEffectiveParentContext(node: SgNode<Language>): EffectiveParentCont
   const effectiveNode = unwrapTransparentWrappers(node);
   return {
     node: effectiveNode,
-    parent: (effectiveNode.parent() as SgNode<Language> | null) ?? null,
+    parent: effectiveNode.parent(),
   };
 }
 
@@ -202,7 +202,9 @@ export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] 
     parent.kind() === "subscript_expression" &&
     getFieldNode(parent, "object")?.id() === effectiveNode.id()
   ) {
-    const key = getStaticStringKey(getFieldNode(parent, "index"));
+    const fieldNode = getFieldNode(parent, "index");
+    if (!fieldNode) return false;
+    const key = getStaticStringKey(fieldNode);
     return key ? keySet.has(key) : false;
   }
 
@@ -211,7 +213,9 @@ export function isUsedInReflectiveAccess(node: SgNode<Language>, keys: string[] 
     getFieldNode(parent, "right")?.id() === effectiveNode.id() &&
     getFieldText(parent, "operator") === "in"
   ) {
-    const key = getStaticStringKey(getFieldNode(parent, "left"));
+    const fieldNode = getFieldNode(parent, "left");
+    if (!fieldNode) return false;
+    const key = getStaticStringKey(fieldNode);
     return key ? keySet.has(key) : false;
   }
 

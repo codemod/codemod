@@ -196,7 +196,10 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(
-            result.unwrap(),
+            PathBuf::from(result.unwrap())
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy(),
             absolute_file.canonicalize().unwrap().to_string_lossy()
         );
     }
@@ -244,7 +247,10 @@ mod tests {
         let result = resolver.resolve("", "demo-pkg");
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), entry_file.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(
+            result.unwrap(),
+            entry_file.canonicalize().unwrap().to_string_lossy()
+        );
     }
 
     #[test]
@@ -266,7 +272,10 @@ mod tests {
         let result = resolver.resolve("", "exports-pkg");
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), entry_file.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(
+            result.unwrap(),
+            entry_file.canonicalize().unwrap().to_string_lossy()
+        );
     }
 
     #[test]
