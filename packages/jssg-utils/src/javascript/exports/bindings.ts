@@ -20,6 +20,23 @@ function isNodeWithin(node: SgNode<Language>, container: SgNode<Language> | null
   );
 }
 
+function isBindingPatternSite(node: SgNode<Language>, container: SgNode<Language>) {
+  for (const ancestor of [node, ...node.ancestors()]) {
+    if (ancestor.id() === container.id()) {
+      return true;
+    }
+
+    if (ancestor.is("object_assignment_pattern") || ancestor.is("assignment_pattern")) {
+      const bindingNode = ancestor.child(0) ?? null;
+      if (!isNodeWithin(node, bindingNode)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 function isDeclarationSite(node: SgNode<Language>) {
   if (
     findAncestorOfKind(node, ["import_specifier", "import_clause", "import_statement"]) !== null
@@ -28,26 +45,22 @@ function isDeclarationSite(node: SgNode<Language>) {
   }
 
   const declarator = findAncestorOfKind(node, ["variable_declarator"]);
+  const declaratorName = declarator?.field("name") ?? null;
   if (
-    declarator &&
-    isNodeWithin(node, (declarator.field("name") as SgNode<Language> | null) ?? null)
+    declaratorName &&
+    isNodeWithin(node, declaratorName) &&
+    isBindingPatternSite(node, declaratorName)
   ) {
     return true;
   }
 
   const functionDeclaration = findAncestorOfKind(node, ["function_declaration"]);
-  if (
-    functionDeclaration &&
-    isNodeWithin(node, (functionDeclaration.field("name") as SgNode<Language> | null) ?? null)
-  ) {
+  if (functionDeclaration && isNodeWithin(node, functionDeclaration.field("name") ?? null)) {
     return true;
   }
 
   const classDeclaration = findAncestorOfKind(node, ["class_declaration"]);
-  if (
-    classDeclaration &&
-    isNodeWithin(node, (classDeclaration.field("name") as SgNode<Language> | null) ?? null)
-  ) {
+  if (classDeclaration && isNodeWithin(node, classDeclaration.field("name") ?? null)) {
     return true;
   }
 
@@ -70,7 +83,7 @@ function isDirectRequireCall(node: SgNode<Language> | null) {
 
 function isDirectRequireBindingDefinition(node: SgNode<Language>) {
   const declarator = findAncestorOfKind(node, ["variable_declarator"]);
-  const valueField = (declarator?.field("value") as SgNode<Language> | null) ?? null;
+  const valueField = declarator?.field("value") ?? null;
   return isDirectRequireCall(valueField);
 }
 
