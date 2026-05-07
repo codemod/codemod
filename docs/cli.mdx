@@ -917,3 +917,21 @@ npx codemod cache prune [--max-age <MAX_AGE>] [--dry-run]
 <ResponseField name="--dry-run" type="boolean">
   Dry run - show what would be removed.
 </ResponseField>
+
+### `codemod mcp`
+
+Start the Codemod Model Context Protocol (MCP) server over stdio.
+
+This is the command that harness integrations invoke after `codemod ai` installs a Codemod MCP entry.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for debugging.
+</ResponseField>
+
+<Info>
+  `codemod mcp` is intended to be launched by an MCP client or harness configuration, not used as an interactive terminal command.
+</Info>
