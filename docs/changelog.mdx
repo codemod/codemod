@@ -84,7 +84,7 @@ mode: "center"
 
 - **New website**: Completely redesigned website with updated feature sections, case studies, client testimonials, and improved responsive design.
 
-- **Structured logging**: The CLI now supports a `--format jsonl` flag on `codemod run` and `codemod workflow run` for machine-readable JSONL output, enabling easier integration with CI pipelines and external tooling.
+- **Structured logging**: The CLI now supports a `--format jsonl` flag on `codemod run` and `codemod workflow run` for machine-readable JSONL output, enabling easier integration with CI pipelines and external tooling. Captured env-logger lines now also preserve their original timestamp and logger `target` in JSONL records.
 
 - **JSSG & Insights improvements**:
   - `jssgTransform()` API for applying multi-file transforms atomically and `SgRoot.rename()` for renaming files within codemods
