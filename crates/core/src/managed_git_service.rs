@@ -1,15 +1,15 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use butterflow_models::{
-    Error, Node, Result, Task, TaskExpressionContext, WorkflowRun,
-};
+use butterflow_models::{Error, Node, Result, Task, TaskExpressionContext, WorkflowRun};
 use uuid::Uuid;
 
 use crate::{
     config::{ManagedGitWorktree, PullRequestCreationRequest},
-    engine::{pull_request_metadata_log_line, resolve_workflow_run_params, should_manage_git_for_node, Engine, ResolvedPullRequestConfig},
-    git_ops,
-    slog,
+    engine::{
+        pull_request_metadata_log_line, resolve_workflow_run_params, should_manage_git_for_node,
+        Engine, ResolvedPullRequestConfig,
+    },
+    git_ops, slog,
     structured_log::StepContext,
 };
 
@@ -37,7 +37,10 @@ impl<'a> ManagedGitService<'a> {
     ) -> Result<Option<ResolvedPullRequestConfig>> {
         if !should_manage_git_for_node(
             node,
-            self.engine.workflow_run_config().managed_git.enable_managed_git,
+            self.engine
+                .workflow_run_config()
+                .managed_git
+                .enable_managed_git,
         ) {
             return Ok(None);
         }
@@ -99,8 +102,17 @@ impl<'a> ManagedGitService<'a> {
         }))
     }
 
-    pub(crate) async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
-        let task = self.engine.state_adapter().lock().await.get_task(task_id).await?;
+    pub(crate) async fn create_pull_request_for_task(
+        &self,
+        task_id: Uuid,
+    ) -> Result<Option<String>> {
+        let task = self
+            .engine
+            .state_adapter()
+            .lock()
+            .await
+            .get_task(task_id)
+            .await?;
         let workflow_run = self
             .engine
             .state_adapter()
@@ -226,7 +238,10 @@ impl<'a> ManagedGitService<'a> {
         let branch = git_ops::resolve_branch_name(configured_branch.as_deref(), &ctx.signature);
         let base_target_path = engine.workflow_run_config().execution.target_path.clone();
         let _ = engine
-            .append_task_log(task_id, format!("Resolving git repo root for branch {branch}"))
+            .append_task_log(
+                task_id,
+                format!("Resolving git repo root for branch {branch}"),
+            )
             .await;
 
         let repo_root = match tokio::time::timeout(
@@ -252,7 +267,11 @@ impl<'a> ManagedGitService<'a> {
         let _ = engine
             .append_task_log(
                 task_id,
-                format!("Creating git worktree for branch {} in {}", branch, repo_root.display()),
+                format!(
+                    "Creating git worktree for branch {} in {}",
+                    branch,
+                    repo_root.display()
+                ),
             )
             .await;
 
@@ -268,18 +287,27 @@ impl<'a> ManagedGitService<'a> {
                 )))
             }
             Ok(Err(error)) => {
-                return Err(Error::Runtime(format!("Failed to prepare git worktree: {}", error)))
+                return Err(Error::Runtime(format!(
+                    "Failed to prepare git worktree: {}",
+                    error
+                )))
             }
             Ok(Ok(worktree_path)) => worktree_path,
         };
 
         engine.workflow_run_config_mut().execution.target_path = worktree_path.clone();
-        engine.workflow_run_config_mut().managed_git.managed_git_worktree = Some(ManagedGitWorktree {
+        engine
+            .workflow_run_config_mut()
+            .managed_git
+            .managed_git_worktree = Some(ManagedGitWorktree {
             branch,
             path: worktree_path.clone(),
         });
         let _ = engine
-            .append_task_log(task_id, format!("Git worktree ready at {}", worktree_path.display()))
+            .append_task_log(
+                task_id,
+                format!("Git worktree ready at {}", worktree_path.display()),
+            )
             .await;
         if let Ok(mut cleanup) = cleanup_slot.lock() {
             *cleanup = Some((repo_root, worktree_path));
@@ -288,14 +316,23 @@ impl<'a> ManagedGitService<'a> {
         Ok(())
     }
 
-    pub(crate) async fn cleanup_worktree(&self, task_id: Uuid, cleanup_slot: &WorktreeCleanup, panic_context: bool) {
+    pub(crate) async fn cleanup_worktree(
+        &self,
+        task_id: Uuid,
+        cleanup_slot: &WorktreeCleanup,
+        panic_context: bool,
+    ) {
         let worktree_cleanup = cleanup_slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         if let Some((repo_root, worktree_path)) = worktree_cleanup {
             if let Err(error) = git_ops::remove_worktree(&repo_root, &worktree_path).await {
-                let context = if panic_context { "panicked task" } else { "task" };
+                let context = if panic_context {
+                    "panicked task"
+                } else {
+                    "task"
+                };
                 self.engine.emit_error(format!(
                     "Failed to clean up git worktree for {} {}: {}",
                     context, task_id, error
@@ -313,12 +350,20 @@ impl<'a> ManagedGitService<'a> {
     ) -> Result<Option<String>> {
         if !should_manage_git_for_node(
             node,
-            self.engine.workflow_run_config().managed_git.enable_managed_git,
+            self.engine
+                .workflow_run_config()
+                .managed_git
+                .enable_managed_git,
         ) {
             return Ok(None);
         }
 
-        if let Some(worktree) = &self.engine.workflow_run_config().managed_git.managed_git_worktree {
+        if let Some(worktree) = &self
+            .engine
+            .workflow_run_config()
+            .managed_git
+            .managed_git_worktree
+        {
             return Ok(Some(worktree.branch.clone()));
         }
 
@@ -392,7 +437,9 @@ impl<'a> ManagedGitService<'a> {
                 match git_ops::commit(&node.name, &[], true, target_path).await {
                     Ok(true) => *had_commit_checkpoint = true,
                     Ok(false) => {}
-                    Err(e) => self.engine.emit_error(format!("Fallback commit failed: {}", e)),
+                    Err(e) => self
+                        .engine
+                        .emit_error(format!("Fallback commit failed: {}", e)),
                 }
             }
         }

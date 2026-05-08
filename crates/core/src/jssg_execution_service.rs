@@ -15,15 +15,13 @@ use butterflow_models::{
 use chrono::Utc;
 use codemod_sandbox::sandbox::{
     engine::{
-        codemod_lang::CodemodLang,
-        execution_engine::execute_codemod_with_quickjs, extract_selector_with_quickjs,
-        CodemodOutput, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
+        codemod_lang::CodemodLang, execution_engine::execute_codemod_with_quickjs,
+        extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
+        SelectorEngineOptions,
     },
     errors::ExecutionError as SandboxExecutionError,
     resolvers::OxcResolver,
-    runtime_module::{
-        RuntimeEventCallback, RuntimeEventKind,
-    },
+    runtime_module::{RuntimeEventCallback, RuntimeEventKind},
 };
 use codemod_sandbox::{
     utils::project_discovery::find_tsconfig, MetricsContext, SharedStateContext,
@@ -36,11 +34,11 @@ use uuid::Uuid;
 use crate::{
     config::DryRunChange,
     engine::{
-        auto_meta_files_include, await_js_ast_grep_execution_task,
-        block_on_runtime_handle, build_js_ast_grep_idle_timeout_message,
-        finish_unit_progress, format_runtime_event_log, format_runtime_failure_message,
-        js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
-        resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase, StepProgressState,
+        auto_meta_files_include, await_js_ast_grep_execution_task, block_on_runtime_handle,
+        build_js_ast_grep_idle_timeout_message, finish_unit_progress, format_runtime_event_log,
+        format_runtime_failure_message, js_ast_grep_idle_timeout, record_output_progress,
+        record_unit_progress, resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase,
+        StepProgressState,
     },
     execution::{CodemodExecutionConfig, PreRunCallback},
     slog,
@@ -91,7 +89,11 @@ impl<'a> JssgExecutionService<'a> {
                 .target_path
                 .join(base_path)
         } else {
-            self.engine.workflow_run_config().execution.target_path.clone()
+            self.engine
+                .workflow_run_config()
+                .execution
+                .target_path
+                .clone()
         };
 
         if let Some(pre_run_callback) = self
@@ -174,7 +176,12 @@ impl<'a> JssgExecutionService<'a> {
             .as_ref()
             .and_then(|m| m.get("_meta_files"))
             .and_then(butterflow_models::variable::value_to_string_vec)
-            .map(|files| files.into_iter().map(|file| target_path.join(file)).collect());
+            .map(|files| {
+                files
+                    .into_iter()
+                    .map(|file| target_path.join(file))
+                    .collect()
+            });
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
@@ -191,13 +198,11 @@ impl<'a> JssgExecutionService<'a> {
             exclude_globs: resolved_exclude,
             dry_run: request.js_ast_grep.dry_run.unwrap_or(false)
                 || self.engine.workflow_run_config().execution.dry_run,
-            languages: Some(vec![
-                request
-                    .js_ast_grep
-                    .language
-                    .clone()
-                    .unwrap_or("typescript".to_string()),
-            ]),
+            languages: Some(vec![request
+                .js_ast_grep
+                .language
+                .clone()
+                .unwrap_or("typescript".to_string())]),
             threads: request.js_ast_grep.max_threads,
             capabilities: request
                 .capabilities_data
@@ -259,7 +264,7 @@ impl<'a> JssgExecutionService<'a> {
             target_path,
             resolver,
             language,
-            selector_config.map(Arc::new),
+            selector_config.map(Arc::from),
             semantic_provider,
             config,
         )
@@ -275,11 +280,9 @@ impl<'a> JssgExecutionService<'a> {
             Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)) => {
                 Some(Arc::new(LazySemanticProvider::file_scope()))
             }
-            Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => {
-                Some(Arc::new(LazySemanticProvider::workspace_scope(
-                    target_path.to_path_buf(),
-                )))
-            }
+            Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => Some(Arc::new(
+                LazySemanticProvider::workspace_scope(target_path.to_path_buf()),
+            )),
             Some(SemanticAnalysisConfig::Detailed(detailed)) => match detailed.mode {
                 SemanticAnalysisMode::File => Some(Arc::new(LazySemanticProvider::file_scope())),
                 SemanticAnalysisMode::Workspace => {
@@ -361,7 +364,7 @@ impl<'a> JssgExecutionService<'a> {
         target_path: PathBuf,
         resolver: Arc<OxcResolver>,
         language: CodemodLang,
-        selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
+        selector_config: Option<Arc<RuleConfig<CodemodLang>>>,
         semantic_provider: Option<Arc<dyn SemanticProvider>>,
         config: CodemodExecutionConfig,
     ) -> Result<()> {
@@ -679,8 +682,8 @@ impl<'a> JssgExecutionService<'a> {
 
                 match execution_result {
                     Ok(Ok(CodemodOutput { primary, secondary })) => {
-                        let apply_change = |change_path: &Path, result: &ExecutionResult| {
-                            match result {
+                        let apply_change =
+                            |change_path: &Path, result: &ExecutionResult| match result {
                                 ExecutionResult::Modified(ref modified) => {
                                     let write_path =
                                         modified.rename_to.as_deref().unwrap_or(change_path);
@@ -789,8 +792,7 @@ impl<'a> JssgExecutionService<'a> {
                                     }
                                 }
                                 ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
-                            }
-                        };
+                            };
 
                         match &primary {
                             ExecutionResult::Modified(_) => {
@@ -1009,7 +1011,13 @@ impl<'a> JssgExecutionService<'a> {
         }
 
         if let Some(wf_run_id) = workflow_run_id {
-            if !self.engine.workflow_run_config().execution.skip_state_writes && !config.dry_run {
+            if !self
+                .engine
+                .workflow_run_config()
+                .execution
+                .skip_state_writes
+                && !config.dry_run
+            {
                 let persistable = shared_state_context.get_persistable();
                 let removals = shared_state_context.get_removals();
 

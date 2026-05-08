@@ -148,7 +148,7 @@ pub struct JssgExecutionOptions<'a, R> {
     pub language: CodemodLang,
     pub file_path: &'a Path,
     pub content: &'a str,
-    pub selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
+    pub selector_config: Option<Arc<RuleConfig<CodemodLang>>>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_values: Option<HashMap<String, serde_json::Value>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,

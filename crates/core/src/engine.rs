@@ -815,16 +815,6 @@ impl Engine {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn resolve_pull_request_config(
-        &self,
-        task: &Task,
-        node: &Node,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Option<ResolvedPullRequestConfig>> {
-        ManagedGitService::new(self).resolve_pull_request_config(task, node, params)
-    }
-
     pub async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
         ManagedGitService::new(self)
             .create_pull_request_for_task(task_id)
@@ -1092,7 +1082,9 @@ impl Engine {
                 let mut engine = engine;
                 let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
 
-                let _ = engine.append_task_log(task_id, "Task execution starting").await;
+                let _ = engine
+                    .append_task_log(task_id, "Task execution starting")
+                    .await;
                 let task_after_log = {
                     let adapter = engine.state_adapter.lock().await;
                     adapter.get_task(task_id).await.ok()
@@ -1122,15 +1114,15 @@ impl Engine {
                             .iter()
                             .find(|node| node.id == task.node_id)
                         {
-                                if let Err(error) = ManagedGitService::prepare_task_worktree(
-                                        &mut engine,
-                                        task_id,
-                                        &task,
-                                        &workflow_run,
-                                        node,
-                                        &shared_worktree_cleanup_for_task,
-                                    )
-                                .await
+                            if let Err(error) = ManagedGitService::prepare_task_worktree(
+                                &mut engine,
+                                task_id,
+                                &task,
+                                &workflow_run,
+                                node,
+                                &shared_worktree_cleanup_for_task,
+                            )
+                            .await
                             {
                                 let message = error.to_string();
                                 let _ = engine.append_task_log(task_id, &message).await;
@@ -3197,7 +3189,7 @@ impl Engine {
         selector_matched_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
         task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
-        return JssgExecutionService::new(self)
+        JssgExecutionService::new(self)
             .execute(JssgExecutionRequest {
                 id,
                 step_id,
@@ -3213,7 +3205,7 @@ impl Engine {
                 selector_matched_files_collector,
                 task_expr_ctx,
             })
-            .await;
+            .await
     }
 
     /// Execute an AI agent step
@@ -5069,7 +5061,7 @@ export default function transform(ast) {
         };
         let resolved_params = resolve_workflow_run_params(&workflow_run);
 
-        let pr = engine
+        let pr = ManagedGitService::new(&engine)
             .resolve_pull_request_config(&task, &node, &resolved_params)
             .unwrap()
             .expect("managed git node should resolve PR metadata");
