@@ -10,7 +10,6 @@ use butterflow_models::step::StepAction;
 use butterflow_models::{evaluate_condition, Node, Result, Task, TaskExpressionContext, Workflow};
 use butterflow_runners::Runner;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use log::info;
 
 use crate::{
     config::{DeferredInteractionError, InstallSkillExecutionRequest},
@@ -18,6 +17,7 @@ use crate::{
         auto_meta_files_include, execute_install_skill_in_isolated_runtime, log_step_output,
         resolve_optional_glob_list, CapabilitiesData, CodemodDependency, Engine,
     },
+    slog,
     structured_log::StructuredLogger,
     Error,
 };
@@ -104,9 +104,12 @@ impl<'a> StepExecutor<'a> {
                             )?;
 
                             if !should_execute {
-                                info!(
+                                slog!(
+                                    request.logger,
+                                    info,
                                     "Skipping template step '{}' - condition not met: {}",
-                                    template_step.name, condition
+                                    template_step.name,
+                                    condition
                                 );
                                 continue;
                             }
@@ -208,7 +211,7 @@ impl<'a> StepExecutor<'a> {
                 }
                 StepAction::AI(ai_config) => {
                     if self.engine.workflow_run_config().execution.dry_run {
-                        info!("Skipping AI step in dry-run mode");
+                        slog!(request.logger, info, "Skipping AI step in dry-run mode");
                         return Ok(());
                     }
 
@@ -226,7 +229,11 @@ impl<'a> StepExecutor<'a> {
                 }
                 StepAction::Shard(shard_config) => {
                     if self.engine.workflow_run_config().execution.skip_shard_steps {
-                        info!("Skipping shard step in dry-run preview mode");
+                        slog!(
+                            request.logger,
+                            info,
+                            "Skipping shard step in dry-run preview mode"
+                        );
                         return Ok(());
                     }
 
@@ -249,22 +256,28 @@ impl<'a> StepExecutor<'a> {
                         .skip_install_skill_steps
                     {
                         if self.engine.workflow_run_config().interaction.no_interactive {
-                            eprintln!(
-                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
-                            install_skill.package
-                        );
+                            slog!(
+                                request.logger,
+                                info,
+                                "install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step: package={}",
+                                install_skill.package
+                            );
                         } else {
-                            eprintln!(
-                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
-                            install_skill.package
-                        );
+                            slog!(
+                                request.logger,
+                                info,
+                                "Skipping install-skill step in this run mode: package={}",
+                                install_skill.package
+                            );
                         }
                         return Ok(());
                     }
 
                     if self.engine.workflow_run_config().execution.dry_run {
-                        eprintln!(
-                            "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
+                        slog!(
+                            request.logger,
+                            warn,
+                            "Skipping install-skill step in dry-run mode: package={}",
                             install_skill.package
                         );
                         return Ok(());

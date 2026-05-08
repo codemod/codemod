@@ -132,14 +132,12 @@ impl<'a> JssgExecutionService<'a> {
             .capabilities_data
             .capabilities_security_callback
             .clone();
-        let quiet = self.engine.workflow_run_config().output.quiet;
+        let logger = request.logger.clone();
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config| {
                 if let Some(callback) = &capabilities_security_callback_clone {
                     callback(config).map_err(|e| {
-                        if !quiet {
-                            log::error!("Failed to check capabilities: {e}");
-                        }
+                        slog!(logger, error, "Failed to check capabilities: {e}");
                         Box::<dyn std::error::Error + Send + Sync>::from(format!(
                             "Failed to check capabilities: {e}"
                         ))

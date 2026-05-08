@@ -41,7 +41,7 @@ use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
 };
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
-use log::{debug, error, info, warn};
+use log::debug;
 use std::path::Path;
 use tokio::fs::read_to_string;
 use tokio::sync::Mutex;
@@ -458,10 +458,6 @@ fn should_stream_agent_output_live(quiet: bool, logger: &StructuredLogger) -> bo
     !quiet && !logger.is_jsonl()
 }
 
-fn should_relog_captured_agent_output(logger: &StructuredLogger) -> bool {
-    logger.is_jsonl()
-}
-
 fn write_agent_stream_line_live(stream: &str, line: &str) {
     use std::io::Write;
 
@@ -560,6 +556,9 @@ pub struct Engine {
     /// Notification for when running tasks complete
     task_completion_notify: Arc<Notify>,
 
+    /// Notification for changes that can make the scheduler's next decision different.
+    scheduler_wake_notify: Arc<Notify>,
+
     /// Structured logger for JSONL output
     pub structured_logger: StructuredLogger,
 
@@ -593,7 +592,6 @@ pub struct CapabilitiesData {
 impl Engine {
     async fn launch_agent(
         &self,
-        task_id: Uuid,
         canonical: &str,
         executable: &Path,
         system_prompt: Option<&str>,
@@ -656,52 +654,40 @@ impl Engine {
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
-        let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
         let stream_live =
             should_stream_agent_output_live(self.workflow_run_config.output.quiet, logger);
-        let capture_output_for_relog = should_relog_captured_agent_output(logger);
         let stdout_reader = child.stdout.take().map(|stdout| {
-            let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
-            std::thread::spawn(move || -> Vec<String> {
-                let mut captured_output = Vec::new();
+            let logger = logger.clone();
+            std::thread::spawn(move || {
                 for line in BufReader::new(stdout)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
                     let formatted = format_agent_stream_line(&canonical, "stdout", line);
-                    let _ = log_tx.send(formatted.clone());
+                    logger.log("info", &formatted);
                     if stream_live {
                         write_agent_stream_line_live("stdout", &formatted);
                     }
-                    if capture_output_for_relog {
-                        captured_output.push(formatted);
-                    }
                 }
-                captured_output
             })
         });
         let stderr_reader = child.stderr.take().map(|stderr| {
-            let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
-            std::thread::spawn(move || -> Vec<String> {
-                let mut captured_output = Vec::new();
+            let logger = logger.clone();
+            std::thread::spawn(move || {
                 for line in BufReader::new(stderr)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
                     let formatted = format_agent_stream_line(&canonical, "stderr", line);
-                    let _ = log_tx.send(formatted.clone());
+                    logger.log("info", &formatted);
                     if stream_live {
                         write_agent_stream_line_live("stderr", &formatted);
                     }
-                    if capture_output_for_relog {
-                        captured_output.push(formatted);
-                    }
                 }
-                captured_output
             })
         });
         if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
@@ -778,26 +764,11 @@ impl Engine {
             }
         };
 
-        drop(log_tx);
-        let _ = log_persist_task.await;
-        if capture_output_for_relog {
-            let mut captured_output = Vec::new();
-            if let Some(reader) = stdout_reader {
-                captured_output.extend(reader.join().unwrap_or_default());
-            }
-            if let Some(reader) = stderr_reader {
-                captured_output.extend(reader.join().unwrap_or_default());
-            }
-            for line in captured_output {
-                logger.log("info", &line);
-            }
-        } else {
-            if let Some(reader) = stdout_reader {
-                let _ = reader.join();
-            }
-            if let Some(reader) = stderr_reader {
-                let _ = reader.join();
-            }
+        if let Some(reader) = stdout_reader {
+            let _ = reader.join();
+        }
+        if let Some(reader) = stderr_reader {
+            let _ = reader.join();
         }
 
         if status.success() {
@@ -832,24 +803,24 @@ impl Engine {
         resolved_prompt: &str,
     ) {
         if logger.is_jsonl() {
-            logger.log("info", "[AI INSTRUCTIONS]");
+            logger.user_line("[AI INSTRUCTIONS]");
             if let Some(system_prompt) = system_prompt {
-                logger.log("info", system_prompt);
+                logger.user_line(system_prompt);
             }
-            logger.log("info", resolved_prompt);
-            logger.log("info", "[/AI INSTRUCTIONS]");
+            logger.user_line(resolved_prompt);
+            logger.user_line("[/AI INSTRUCTIONS]");
         } else if !self.workflow_run_config.output.quiet {
-            println!();
-            println!("[AI INSTRUCTIONS]");
-            println!();
+            logger.user_line("");
+            logger.user_line("[AI INSTRUCTIONS]");
+            logger.user_line("");
             if let Some(system_prompt) = system_prompt {
-                println!("{system_prompt}");
-                println!();
+                logger.user_line(system_prompt);
+                logger.user_line("");
             }
-            println!("{resolved_prompt}");
-            println!();
-            println!("[/AI INSTRUCTIONS]");
-            println!();
+            logger.user_line(resolved_prompt);
+            logger.user_line("");
+            logger.user_line("[/AI INSTRUCTIONS]");
+            logger.user_line("");
         }
     }
 
@@ -857,17 +828,22 @@ impl Engine {
     pub fn new() -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
+        let scheduler_wake_notify = Arc::new(Notify::new());
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
-            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
-            structured_logger: StructuredLogger::default().with_text_step_headings(true),
+            scheduler_wake_notify,
+            structured_logger: StructuredLogger::default()
+                .with_text_step_headings(true)
+                .with_text_log_fallthrough(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -877,18 +853,22 @@ impl Engine {
     pub fn with_workflow_run_config(workflow_run_config: WorkflowRunConfig) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
+        let scheduler_wake_notify = Arc::new(Notify::new());
         let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
-            .with_text_step_headings(!workflow_run_config.output.quiet);
+            .with_text_step_headings(!workflow_run_config.output.quiet)
+            .with_text_log_fallthrough(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
-            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            scheduler_wake_notify,
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -922,18 +902,22 @@ impl Engine {
         workflow_run_config: WorkflowRunConfig,
     ) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> = Arc::new(Mutex::new(state_adapter));
+        let scheduler_wake_notify = Arc::new(Notify::new());
         let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
-            .with_text_step_headings(!workflow_run_config.output.quiet);
+            .with_text_step_headings(!workflow_run_config.output.quiet)
+            .with_text_log_fallthrough(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
-            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            scheduler_wake_notify,
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -943,12 +927,12 @@ impl Engine {
     /// Enable or disable quiet mode (suppresses stdout/stderr when TUI is active)
     pub fn set_quiet(&mut self, quiet: bool) {
         self.workflow_run_config.output.quiet = quiet;
+        self.structured_logger.set_text_step_headings(!quiet);
+        self.structured_logger.set_text_log_fallthrough(!quiet);
     }
 
     pub(crate) fn emit_error(&self, message: String) {
-        if !self.workflow_run_config.output.quiet {
-            error!("{message}");
-        }
+        slog!(&self.structured_logger, error, "{message}");
     }
 
     fn emit_workflow_started(&self, workflow_run: &WorkflowRun) {
@@ -1044,18 +1028,6 @@ impl Engine {
                 let _ = engine
                     .append_task_log(task_id, "Task execution starting")
                     .await;
-                let task_after_log = {
-                    let adapter = engine.state_adapter.lock().await;
-                    adapter.get_task(task_id).await.ok()
-                };
-                if let Some(task_after_log) = task_after_log {
-                    debug!(
-                        "task {} startup log persisted; count={}, last={:?}",
-                        task_id,
-                        task_after_log.logs.len(),
-                        task_after_log.logs.last()
-                    );
-                }
 
                 let task = {
                     let adapter = engine.state_adapter.lock().await;
@@ -1106,7 +1078,12 @@ impl Engine {
 
                 match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
                     Ok(Ok(())) => {
-                        debug!("Task {} completed successfully", task_id);
+                        slog!(
+                            &engine.structured_logger,
+                            debug,
+                            "Task {} completed successfully",
+                            task_id
+                        );
                         cleanup_guard.mark_sent();
                     }
                     Ok(Err(Error::Deferred(message))) => {
@@ -1248,24 +1225,6 @@ impl Engine {
         Ok(task.status == TaskStatus::Failed && task.error.as_deref() == Some("Canceled by user"))
     }
 
-    fn spawn_task_log_persistor(
-        &self,
-        task_id: Uuid,
-    ) -> (
-        tokio::sync::mpsc::UnboundedSender<String>,
-        tokio::task::JoinHandle<()>,
-    ) {
-        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let task_state_service = self.task_state_service();
-        let log_persist_task = tokio::spawn(async move {
-            while let Some(line) = log_rx.recv().await {
-                task_state_service.append_task_log_line(task_id, line).await;
-            }
-        });
-
-        (log_tx, log_persist_task)
-    }
-
     pub(crate) fn register_output_heartbeat(
         &self,
         task_id: Uuid,
@@ -1305,6 +1264,10 @@ impl Engine {
         }
     }
 
+    fn wake_scheduler(&self) {
+        self.scheduler_wake_notify.notify_waiters();
+    }
+
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
         if let Some(master_task_id) = task.master_task_id {
             self.task_state_service()
@@ -1337,7 +1300,9 @@ impl Engine {
                 break;
             }
 
-            debug!(
+            slog!(
+                &self.structured_logger,
+                debug,
                 "Waiting for {} running task(s) before scheduling workflow {}",
                 running_tasks.len(),
                 workflow_run_id
@@ -1373,6 +1338,7 @@ impl Engine {
 
         for task in tasks {
             self.state_adapter.lock().await.save_task(&task).await?;
+            self.wake_scheduler();
             self.emit_task_created(&task).await;
 
             if task.is_master {
@@ -1463,9 +1429,19 @@ impl Engine {
 
                 triggered = true;
                 triggered_task_ids.push(task_id);
-                info!("Triggered task {} ({})", task_id, task.node_id);
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Triggered task {} ({})",
+                    task_id,
+                    task.node_id
+                );
             } else {
-                warn!("Task {task_id} is not awaiting trigger");
+                slog!(
+                    &self.structured_logger,
+                    warn,
+                    "Task {task_id} is not awaiting trigger"
+                );
             }
         }
 
@@ -1530,12 +1506,20 @@ impl Engine {
                 self.task_state_service()
                     .mark_workflow_completed(workflow_run_id)
                     .await?;
-                info!("Workflow run {workflow_run_id} is now complete");
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Workflow run {workflow_run_id} is now complete"
+                );
                 return Ok(true);
             }
 
             // If we reached here, it means the workflow is still running but no tasks need triggers
-            info!("No tasks in workflow run {workflow_run_id} are awaiting triggers");
+            slog!(
+                &self.structured_logger,
+                info,
+                "No tasks in workflow run {workflow_run_id} are awaiting triggers"
+            );
             return Ok(false);
         }
 
@@ -1550,7 +1534,13 @@ impl Engine {
 
             triggered = true;
             triggered_task_ids.push(task.id);
-            info!("Triggered task {} ({})", task.id, task.node_id);
+            slog!(
+                &self.structured_logger,
+                info,
+                "Triggered task {} ({})",
+                task.id,
+                task.node_id
+            );
         }
 
         // If no tasks were triggered, it means they're all done or in progress
@@ -1617,7 +1607,13 @@ impl Engine {
                 .task_state_service()
                 .mark_failed(task.id, "Canceled by user")
                 .await?;
-            info!("Canceled task {} ({})", task.id, task.node_id);
+            slog!(
+                &self.structured_logger,
+                info,
+                "Canceled task {} ({})",
+                task.id,
+                task.node_id
+            );
             self.update_parent_matrix_master_for_task(&updated_task)
                 .await?;
         }
@@ -1627,6 +1623,7 @@ impl Engine {
             .await?;
 
         self.task_completion_notify.notify_waiters();
+        self.wake_scheduler();
 
         Ok(())
     }
@@ -1726,7 +1723,11 @@ impl Engine {
             .mark_workflow_running(workflow_run_id)
             .await?;
 
-        info!("Starting workflow run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            info,
+            "Starting workflow run {workflow_run_id}"
+        );
 
         // Create tasks for all nodes if they don't exist yet
         let existing_tasks = self
@@ -1744,6 +1745,10 @@ impl Engine {
 
         // Main execution loop
         loop {
+            // Register before reading state so a scheduler wake cannot be
+            // missed between deciding there is no runnable work and awaiting.
+            let scheduler_wake = self.scheduler_wake_notify.notified();
+
             // Get the current workflow run state
             let current_workflow_run = self
                 .state_adapter
@@ -1805,7 +1810,11 @@ impl Engine {
 
                 if state_changed {
                     last_state_hash = Some(current_hash);
-                    debug!("State changed, triggering matrix recompilation for workflow {workflow_run_id}");
+                    slog!(
+                        &self.structured_logger,
+                        debug,
+                        "State changed, triggering matrix recompilation for workflow {workflow_run_id}"
+                    );
                 }
 
                 state_changed
@@ -1814,7 +1823,11 @@ impl Engine {
             };
 
             if should_recompile {
-                debug!("Starting matrix task recompilation for workflow {workflow_run_id}");
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Starting matrix task recompilation for workflow {workflow_run_id}"
+                );
                 if let Err(e) = self
                     .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
                     .await
@@ -1825,7 +1838,11 @@ impl Engine {
                     // Decide how to handle recompilation errors, e.g., fail the workflow?
                     // For now, we log and continue, but this might need refinement.
                 }
-                debug!("Completed matrix task recompilation for workflow {workflow_run_id}");
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Completed matrix task recompilation for workflow {workflow_run_id}"
+                );
             }
 
             // Get potentially updated tasks after recompilation (only if we ran recompilation)
@@ -1863,7 +1880,9 @@ impl Engine {
                         .await?;
                 }
 
-                info!(
+                slog!(
+                    &self.structured_logger,
+                    info,
                     "Workflow run {} {}",
                     workflow_run_id,
                     if any_failed { "failed" } else { "completed" }
@@ -1959,7 +1978,11 @@ impl Engine {
                     .mark_workflow_awaiting_trigger(workflow_run_id)
                     .await?;
 
-                info!("Workflow run {workflow_run_id} is awaiting triggers");
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Workflow run {workflow_run_id} is awaiting triggers"
+                );
 
                 // Exit the execution loop, will be resumed when triggers are received
                 break;
@@ -2013,7 +2036,12 @@ impl Engine {
 
             // Only wait if no tasks were executed (to avoid busy waiting)
             if runnable_tasks_is_empty {
-                time::sleep(Duration::from_secs(1)).await;
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Waiting for scheduler wake for workflow {workflow_run_id}"
+                );
+                scheduler_wake.await;
             }
         }
 
@@ -2028,7 +2056,11 @@ impl Engine {
         workflow_run: &WorkflowRun,
         tasks: &[Task],
     ) -> Result<()> {
-        debug!("Starting matrix task recompilation for run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Starting matrix task recompilation for run {workflow_run_id}"
+        );
 
         let state = self
             .state_adapter
@@ -2045,31 +2077,53 @@ impl Engine {
 
         // Create new tasks
         for task in changes.new_tasks {
-            debug!("Creating new matrix task for node '{}'", task.node_id);
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Creating new matrix task for node '{}'",
+                task.node_id
+            );
             self.state_adapter.lock().await.save_task(&task).await?;
+            self.wake_scheduler();
             self.emit_task_created(&task).await;
         }
 
         // Mark tasks as WontDo
         for task_id in changes.tasks_to_mark_wont_do {
-            debug!("Marking task {task_id} as WontDo");
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Marking task {task_id} as WontDo"
+            );
             self.task_state_service().mark_wont_do(task_id).await?;
         }
 
         for task_id in changes.tasks_to_reset_to_pending {
-            debug!("Resetting task {task_id} from Failed to Pending");
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Resetting task {task_id} from Failed to Pending"
+            );
             self.task_state_service().reset_to_pending(task_id).await?;
         }
 
         // Update master task status
         for master_task_id in changes.master_tasks_to_update {
-            debug!("Updating master task {master_task_id} status");
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Updating master task {master_task_id} status"
+            );
             self.task_state_service()
                 .update_matrix_master_status(master_task_id)
                 .await?;
         }
 
-        debug!("Finished matrix task recompilation for run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Finished matrix task recompilation for run {workflow_run_id}"
+        );
         Ok(())
     }
 
@@ -2097,7 +2151,13 @@ impl Engine {
 
         self.update_parent_matrix_master_for_task(&task).await?;
 
-        info!("Executing task {} ({})", task_id, node.id);
+        slog!(
+            &self.structured_logger,
+            info,
+            "Executing task {} ({})",
+            task_id,
+            node.id
+        );
 
         // Workflows that declare git outputs should use the managed branch/commit/PR path
         // in both cloud and local runs.
@@ -2214,12 +2274,6 @@ impl Engine {
             let quiet_capture = self.workflow_run_config.output.quiet
                 && self.workflow_run_config.output.capture_stdout_in_quiet_mode
                 && !self.structured_logger.is_jsonl();
-            let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
-                let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
-                (Some(log_tx), Some(log_persist_task))
-            } else {
-                (None, None)
-            };
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
             // Any println!, console.log, etc. from child processes, AI agents,
@@ -2232,9 +2286,8 @@ impl Engine {
                 && self.workflow_run_config.output.capture_stdout_in_quiet_mode
             {
                 let output_heartbeat_callbacks = Arc::clone(&self.output_heartbeat_callbacks);
-                let line_callback = quiet_log_tx.as_ref().map(|log_tx| {
-                    let log_tx = log_tx.clone();
-                    Arc::new(move |line: String| {
+                let line_callback = quiet_capture.then(|| {
+                    Arc::new(move |_line: String| {
                         let heartbeat = output_heartbeat_callbacks
                             .lock()
                             .ok()
@@ -2242,10 +2295,9 @@ impl Engine {
                         if let Some(heartbeat) = heartbeat {
                             heartbeat();
                         }
-                        let _ = log_tx.send(line);
                     }) as crate::structured_log::CapturedLineCallback
                 });
-                StdoutCaptureGuard::start(None, line_callback)
+                StdoutCaptureGuard::start(Some(&step_logger), line_callback)
             } else {
                 None
             };
@@ -2281,9 +2333,8 @@ impl Engine {
             // Drop the capture guard to restore stdout before emitting step_end.
             // This ensures all captured output is flushed and attributed to this step.
             drop(_stdout_capture);
-            drop(quiet_log_tx);
-            if let Some(log_persist_task) = quiet_log_persist_task {
-                let _ = log_persist_task.await;
+            for line in step_logger.drain_logs() {
+                let _ = self.append_task_log(task_id, line).await;
             }
 
             if self.is_task_canceled(workflow_run.id, task_id).await? {
@@ -2394,7 +2445,11 @@ impl Engine {
         let _ = self
             .append_task_log(task_id, "Marking task as completed")
             .await;
-        debug!("Task {task_id} finished all steps; preparing completion state");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Task {task_id} finished all steps; preparing completion state"
+        );
         let mut env = HashMap::new();
 
         // Add workflow parameters
@@ -2416,19 +2471,33 @@ impl Engine {
 
         let completed_task = self.task_state_service().mark_completed(task_id).await?;
 
-        info!("Task {task_id} ({}) completed", node.id);
+        slog!(
+            &self.structured_logger,
+            info,
+            "Task {task_id} ({}) completed",
+            node.id
+        );
 
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = completed_task.master_task_id {
-            debug!("Updating matrix master task {master_task_id} after task {task_id} completed");
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Updating matrix master task {master_task_id} after task {task_id} completed"
+            );
             self.task_state_service()
                 .update_matrix_master_status(master_task_id)
                 .await?;
         }
 
         // Notify that a task has completed (for event-driven waiting)
-        debug!("Notifying task completion listeners for task {task_id}");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Notifying task completion listeners for task {task_id}"
+        );
         self.task_completion_notify.notify_one();
+        self.wake_scheduler();
 
         Ok(())
     }
@@ -2667,7 +2736,6 @@ impl Engine {
                 if let Some(executable) = find_agent_executable(canonical) {
                     return self
                         .launch_agent(
-                            task.id,
                             canonical,
                             &executable,
                             ai_config.system_prompt.as_deref(),
@@ -2706,7 +2774,6 @@ impl Engine {
                     if let Some(executable) = find_agent_executable(canonical) {
                         return self
                             .launch_agent(
-                                task.id,
                                 canonical,
                                 &executable,
                                 ai_config.system_prompt.as_deref(),
@@ -2753,7 +2820,7 @@ impl Engine {
                                 &resolved_prompt,
                             );
                             if !self.workflow_run_config.output.quiet {
-                                eprintln!();
+                                logger.user_line("");
                             }
                             selection_result = callback(&agents);
                             continue;
@@ -2772,7 +2839,6 @@ impl Engine {
                             if let Some(executable) = find_agent_executable(selected) {
                                 return self
                                     .launch_agent(
-                                        task.id,
                                         selected,
                                         &executable,
                                         ai_config.system_prompt.as_deref(),
@@ -3248,6 +3314,7 @@ impl Engine {
                 fields,
             })
             .await?;
+        self.wake_scheduler();
 
         Ok(())
     }
@@ -3495,9 +3562,9 @@ impl Engine {
             && !logger.is_jsonl()
             && !self.workflow_run_config.output.quiet
         {
-            eprintln!();
-            eprintln!("{notice}");
-            eprintln!();
+            logger.user_line("");
+            logger.user_line(&notice);
+            logger.user_line("");
         }
 
         if let Some(approval_callback) = &self
@@ -3698,7 +3765,11 @@ impl Engine {
                 (k, DiffOperation::Update, v)
             } else {
                 // Malformed line, log and skip
-                warn!("Malformed state output line: {line}");
+                slog!(
+                    &self.structured_logger,
+                    warn,
+                    "Malformed state output line: {line}"
+                );
                 continue;
             };
 
@@ -3730,6 +3801,7 @@ impl Engine {
                     fields: state_diff,
                 })
                 .await?;
+            self.wake_scheduler();
         }
         Ok(())
     }
@@ -3746,6 +3818,7 @@ impl Clone for Engine {
             metrics_context: self.metrics_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
+            scheduler_wake_notify: Arc::clone(&self.scheduler_wake_notify),
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
@@ -4132,15 +4205,6 @@ export default function transform(ast) {
         assert!(should_stream_agent_output_live(false, &text_logger));
         assert!(!should_stream_agent_output_live(true, &text_logger));
         assert!(!should_stream_agent_output_live(false, &jsonl_logger));
-    }
-
-    #[test]
-    fn captured_agent_output_is_only_relogged_in_jsonl_mode() {
-        let text_logger = StructuredLogger::default();
-        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
-
-        assert!(!should_relog_captured_agent_output(&text_logger));
-        assert!(should_relog_captured_agent_output(&jsonl_logger));
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ use butterflow_models::{
 use butterflow_state::StateAdapter;
 use chrono::Utc;
 use log::debug;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
@@ -16,11 +16,20 @@ use crate::workflow_runtime::{publish_event, WorkflowEvent};
 #[derive(Clone)]
 pub(crate) struct TaskStateService {
     state_adapter: Arc<Mutex<Box<dyn StateAdapter>>>,
+    scheduler_wake_notify: Option<Arc<Notify>>,
 }
 
 impl TaskStateService {
     pub(crate) fn new(state_adapter: Arc<Mutex<Box<dyn StateAdapter>>>) -> Self {
-        Self { state_adapter }
+        Self {
+            state_adapter,
+            scheduler_wake_notify: None,
+        }
+    }
+
+    pub(crate) fn with_scheduler_wake_notify(mut self, notify: Arc<Notify>) -> Self {
+        self.scheduler_wake_notify = Some(notify);
+        self
     }
 
     pub(crate) async fn append_task_log(
@@ -35,22 +44,6 @@ impl TaskStateService {
         adapter.save_task(&task).await?;
         Self::emit_task_log_appended(task.workflow_run_id, task_id, message);
         Ok(())
-    }
-
-    pub(crate) async fn append_task_log_line(&self, task_id: Uuid, line: String) {
-        let line = line.trim_end_matches(['\r', '\n']).to_string();
-        if line.is_empty() {
-            return;
-        }
-
-        let mut adapter = self.state_adapter.lock().await;
-        let Ok(mut task) = adapter.get_task(task_id).await else {
-            return;
-        };
-        task.logs.push(line.clone());
-        if adapter.save_task(&task).await.is_ok() {
-            Self::emit_task_log_appended(task.workflow_run_id, task_id, line);
-        }
     }
 
     pub(crate) async fn mark_running(&self, task_id: Uuid) -> Result<Task> {
@@ -294,6 +287,7 @@ impl TaskStateService {
         let workflow_run = adapter.get_workflow_run(workflow_run_id).await?;
         drop(adapter);
         Self::publish_workflow_status_changed(workflow_run_id, workflow_run.status);
+        self.notify_scheduler();
         Ok(workflow_run)
     }
 
@@ -308,7 +302,14 @@ impl TaskStateService {
         let task = adapter.get_task(task_id).await?;
         drop(adapter);
         Self::publish_task_updated(task.clone());
+        self.notify_scheduler();
         Ok(task)
+    }
+
+    fn notify_scheduler(&self) {
+        if let Some(notify) = &self.scheduler_wake_notify {
+            notify.notify_waiters();
+        }
     }
 
     fn publish_task_updated(task: Task) {
@@ -356,5 +357,195 @@ impl TaskStateService {
             operation: DiffOperation::Update,
             value: Some(serde_json::Value::Null),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use butterflow_models::{Workflow, WorkflowStatus};
+    use butterflow_state::mock_adapter::MockStateAdapter;
+
+    fn workflow_run(workflow_run_id: Uuid) -> WorkflowRun {
+        WorkflowRun {
+            id: workflow_run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: Vec::new(),
+                nodes: Vec::new(),
+            },
+            status: WorkflowStatus::Pending,
+            params: HashMap::new(),
+            tasks: Vec::new(),
+            started_at: Utc::now(),
+            ended_at: None,
+            bundle_path: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        }
+    }
+
+    fn task(workflow_run_id: Uuid, node_id: &str, status: TaskStatus) -> Task {
+        let mut task = Task::new(workflow_run_id, node_id.to_string(), false);
+        task.status = status;
+        task
+    }
+
+    async fn setup_service(
+        workflow_run: WorkflowRun,
+        tasks: Vec<Task>,
+    ) -> (TaskStateService, Arc<Mutex<Box<dyn StateAdapter>>>) {
+        let adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
+            Arc::new(Mutex::new(Box::new(MockStateAdapter::new())));
+        {
+            let mut locked_adapter = adapter.lock().await;
+            locked_adapter
+                .save_workflow_run(&workflow_run)
+                .await
+                .unwrap();
+            for task in tasks {
+                locked_adapter.save_task(&task).await.unwrap();
+            }
+        }
+        (TaskStateService::new(Arc::clone(&adapter)), adapter)
+    }
+
+    #[tokio::test]
+    async fn task_lifecycle_transitions_update_status_metadata() {
+        let workflow_run_id = Uuid::new_v4();
+        let workflow_run = workflow_run(workflow_run_id);
+        let mut initial_task = task(workflow_run_id, "node", TaskStatus::Failed);
+        initial_task.started_at = Some(Utc::now());
+        initial_task.ended_at = Some(Utc::now());
+        initial_task.error = Some("previous failure".to_string());
+        let task_id = initial_task.id;
+        let (service, adapter) = setup_service(workflow_run, vec![initial_task]).await;
+
+        let running = service.mark_running(task_id).await.unwrap();
+        assert_eq!(running.status, TaskStatus::Running);
+        assert!(running.started_at.is_some());
+        assert!(running.ended_at.is_none());
+        assert!(running.error.is_none());
+
+        let completed = service.mark_completed(task_id).await.unwrap();
+        assert_eq!(completed.status, TaskStatus::Completed);
+        assert!(completed.ended_at.is_some());
+
+        let failed = service.mark_failed(task_id, "boom").await.unwrap();
+        assert_eq!(failed.status, TaskStatus::Failed);
+        assert_eq!(failed.error.as_deref(), Some("boom"));
+        assert!(failed.ended_at.is_some());
+
+        let awaiting = service.mark_awaiting_trigger(task_id).await.unwrap();
+        assert_eq!(awaiting.status, TaskStatus::AwaitingTrigger);
+        assert!(awaiting.started_at.is_none());
+        assert!(awaiting.ended_at.is_none());
+        assert!(awaiting.error.is_none());
+
+        let failed = service.mark_failed(task_id, "retry failed").await.unwrap();
+        assert_eq!(failed.error.as_deref(), Some("retry failed"));
+
+        let pending = service.reset_to_pending(task_id).await.unwrap();
+        assert_eq!(pending.status, TaskStatus::Pending);
+        assert!(pending.ended_at.is_none());
+        assert!(pending.error.is_none());
+
+        let persisted_task = adapter.lock().await.get_task(task_id).await.unwrap();
+        assert_eq!(persisted_task.status, TaskStatus::Pending);
+        assert!(persisted_task.ended_at.is_none());
+        assert!(persisted_task.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn matrix_master_status_tracks_child_priority_and_terminal_state() {
+        let workflow_run_id = Uuid::new_v4();
+        let workflow_run = workflow_run(workflow_run_id);
+        let master_task = Task::new(workflow_run_id, "matrix-node".to_string(), true);
+        let master_task_id = master_task.id;
+        let child_one = Task::new_matrix(
+            workflow_run_id,
+            "matrix-node".to_string(),
+            master_task_id,
+            HashMap::from([("index".to_string(), serde_json::json!(1))]),
+        );
+        let child_one_id = child_one.id;
+        let child_two = Task::new_matrix(
+            workflow_run_id,
+            "matrix-node".to_string(),
+            master_task_id,
+            HashMap::from([("index".to_string(), serde_json::json!(2))]),
+        );
+        let child_two_id = child_two.id;
+        let (service, adapter) =
+            setup_service(workflow_run, vec![master_task, child_one, child_two]).await;
+
+        service
+            .update_matrix_master_status(master_task_id)
+            .await
+            .unwrap();
+        let master = adapter.lock().await.get_task(master_task_id).await.unwrap();
+        assert_eq!(master.status, TaskStatus::Pending);
+        assert!(master.ended_at.is_none());
+
+        service.mark_running(child_one_id).await.unwrap();
+        service
+            .update_matrix_master_status(master_task_id)
+            .await
+            .unwrap();
+        let master = adapter.lock().await.get_task(master_task_id).await.unwrap();
+        assert_eq!(master.status, TaskStatus::Running);
+        assert!(master.ended_at.is_none());
+
+        service.mark_awaiting_trigger(child_two_id).await.unwrap();
+        service
+            .update_matrix_master_status(master_task_id)
+            .await
+            .unwrap();
+        let master = adapter.lock().await.get_task(master_task_id).await.unwrap();
+        assert_eq!(master.status, TaskStatus::AwaitingTrigger);
+        assert!(master.ended_at.is_none());
+
+        service
+            .mark_failed(child_one_id, "failed shard")
+            .await
+            .unwrap();
+        service
+            .update_matrix_master_status(master_task_id)
+            .await
+            .unwrap();
+        let master = adapter.lock().await.get_task(master_task_id).await.unwrap();
+        assert_eq!(master.status, TaskStatus::Failed);
+        assert!(master.ended_at.is_some());
+
+        service.mark_completed(child_one_id).await.unwrap();
+        service.mark_completed(child_two_id).await.unwrap();
+        service
+            .update_matrix_master_status(master_task_id)
+            .await
+            .unwrap();
+        let master = adapter.lock().await.get_task(master_task_id).await.unwrap();
+        assert_eq!(master.status, TaskStatus::Completed);
+        assert!(master.ended_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn state_transitions_wake_scheduler_waiters() {
+        let workflow_run_id = Uuid::new_v4();
+        let workflow_run = workflow_run(workflow_run_id);
+        let initial_task = task(workflow_run_id, "node", TaskStatus::Pending);
+        let task_id = initial_task.id;
+        let (service, _) = setup_service(workflow_run, vec![initial_task]).await;
+        let wake_notify = Arc::new(Notify::new());
+        let service = service.with_scheduler_wake_notify(Arc::clone(&wake_notify));
+
+        let notified = wake_notify.notified();
+        service.mark_running(task_id).await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), notified)
+            .await
+            .expect("task state transition should wake scheduler waiters");
     }
 }

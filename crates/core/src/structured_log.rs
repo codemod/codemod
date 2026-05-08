@@ -175,6 +175,7 @@ pub struct StructuredLogger {
     /// Collects log messages for persistence to task.logs (shared across clones).
     collected_logs: Arc<Mutex<Vec<String>>>,
     text_step_headings: bool,
+    text_log_fallthrough: bool,
 }
 
 impl Default for StructuredLogger {
@@ -193,6 +194,7 @@ impl StructuredLogger {
             override_fd: Arc::new(Mutex::new(None)),
             collected_logs: Arc::new(Mutex::new(Vec::new())),
             text_step_headings: false,
+            text_log_fallthrough: true,
         }
     }
 
@@ -202,22 +204,46 @@ impl StructuredLogger {
         self
     }
 
+    pub fn set_text_step_headings(&mut self, enabled: bool) {
+        self.text_step_headings = enabled;
+    }
+
+    /// Enable or disable forwarding text-mode `slog!` messages to the global logger.
+    ///
+    /// Quiet/TUI runs keep logs task-scoped, so they should collect messages
+    /// without writing through env_logger and corrupting the terminal UI.
+    pub fn with_text_log_fallthrough(mut self, enabled: bool) -> Self {
+        self.text_log_fallthrough = enabled;
+        self
+    }
+
+    pub fn set_text_log_fallthrough(&mut self, enabled: bool) {
+        self.text_log_fallthrough = enabled;
+    }
+
     /// Return a clone with the given step context set.
     /// Shares the same `seq` counter and `override_fd` with the parent.
+    /// Log collection is isolated per context so task log persistence cannot
+    /// drain messages that belong to another concurrently running step.
     pub fn with_context(&self, ctx: StepContext) -> Self {
         Self {
             format: self.format,
             seq: Arc::clone(&self.seq),
             context: Some(ctx),
             override_fd: Arc::clone(&self.override_fd),
-            collected_logs: Arc::clone(&self.collected_logs),
+            collected_logs: Arc::new(Mutex::new(Vec::new())),
             text_step_headings: self.text_step_headings,
+            text_log_fallthrough: self.text_log_fallthrough,
         }
     }
 
     /// Check if JSONL mode is active.
     pub fn is_jsonl(&self) -> bool {
         self.format == OutputFormat::Jsonl
+    }
+
+    pub fn should_fallthrough_to_log(&self) -> bool {
+        self.format != OutputFormat::Jsonl && self.text_log_fallthrough
     }
 
     /// Write a line to the output target. When `override_fd` is set (during
@@ -251,6 +277,17 @@ impl StructuredLogger {
     /// In both modes the message is collected for task log persistence.
     pub fn log(&self, level: &str, msg: &str) {
         self.log_with_metadata(level, msg, None, None);
+    }
+
+    /// Emit an intentional user-facing line through the structured output path.
+    ///
+    /// JSONL mode records the line as an info log. Text mode writes directly to
+    /// the logger output target instead of bypassing it with `println!`.
+    pub fn user_line(&self, line: &str) {
+        self.log("info", line);
+        if self.format != OutputFormat::Jsonl {
+            self.write_output(line);
+        }
     }
 
     pub fn log_with_metadata(
@@ -527,7 +564,7 @@ macro_rules! slog {
         {
             let msg = format!($($arg)*);
             $logger.log(stringify!($level), &msg);
-            if !$logger.is_jsonl() {
+            if $logger.should_fallthrough_to_log() {
                 log::$level!("{}", msg);
             }
         }
@@ -568,6 +605,34 @@ mod tests {
         assert_eq!(logger.seq.load(Ordering::Relaxed), 0);
         child.log("info", "hello");
         assert_eq!(logger.seq.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_context_log_collections_are_isolated() {
+        let logger = StructuredLogger::new(OutputFormat::Text);
+        let first = logger.with_context(StepContext {
+            step_name: "first".to_string(),
+            step_index: 0,
+            node_id: "n1".to_string(),
+            node_name: "Node 1".to_string(),
+            task_id: "t1".to_string(),
+            step_id: None,
+        });
+        let second = logger.with_context(StepContext {
+            step_name: "second".to_string(),
+            step_index: 1,
+            node_id: "n1".to_string(),
+            node_name: "Node 1".to_string(),
+            task_id: "t2".to_string(),
+            step_id: None,
+        });
+
+        first.log("info", "first message");
+        second.log("info", "second message");
+
+        assert_eq!(first.drain_logs(), vec!["first message".to_string()]);
+        assert_eq!(second.drain_logs(), vec!["second message".to_string()]);
+        assert!(logger.drain_logs().is_empty());
     }
 
     #[test]
