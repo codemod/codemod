@@ -29,6 +29,7 @@ use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
+use crate::nested_codemod_service::NestedCodemodService;
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
@@ -50,7 +51,7 @@ use crate::registry::ResolvedPackage;
 use crate::step_executor::{StepExecutionRequest, StepExecutor};
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff,
@@ -572,7 +573,7 @@ pub struct Engine {
 #[derive(Debug, Clone)]
 pub struct CodemodDependency {
     /// Source identifier (registry package or local path)
-    source: String,
+    pub(crate) source: String,
 }
 
 impl Default for Engine {
@@ -2006,49 +2007,9 @@ impl Engine {
         workflow: &Workflow,
         dependency_chain: &[CodemodDependency],
     ) -> Result<()> {
-        for node in &workflow.nodes {
-            for step in &node.steps {
-                if let StepAction::Codemod(codemod) = &step.action {
-                    // Check if this codemod is already in the dependency chain
-                    if let Some(cycle_start) =
-                        self.find_cycle_in_chain(&codemod.source, dependency_chain)
-                    {
-                        let chain_str = dependency_chain
-                            .iter()
-                            .map(|d| d.source.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" → ");
-
-                        return Err(Error::Other(format!(
-                            "Codemod dependency cycle detected!\n\
-                            Cycle: {} → {} → {}\n\
-                            This would cause infinite recursion during execution.\n\
-                            Please review your codemod dependencies to remove the circular reference.",
-                            cycle_start,
-                            if chain_str.is_empty() { "(root)" } else { &chain_str },
-                            codemod.source
-                        )));
-                    }
-
-                    // Resolve the codemod package to validate its workflow
-                    match self
-                        .resolve_and_validate_codemod(&codemod.source, dependency_chain)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!(
-                                "Failed to validate codemod dependency {}: {}",
-                                codemod.source, e
-                            );
-                            // We'll continue validation but log the warning
-                            // The actual execution will handle the error appropriately
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
+        NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
+            .validate_workflow_dependencies(workflow, dependency_chain)
+            .await
     }
 
     /// Find if a codemod source creates a cycle in the dependency chain
@@ -2057,54 +2018,7 @@ impl Engine {
         source: &str,
         dependency_chain: &[CodemodDependency],
     ) -> Option<String> {
-        for dep in dependency_chain {
-            if dep.source == source {
-                return Some(dep.source.clone());
-            }
-        }
-        None
-    }
-
-    /// Resolve a codemod and recursively validate its dependencies
-    async fn resolve_and_validate_codemod(
-        &self,
-        source: &str,
-        dependency_chain: &[CodemodDependency],
-    ) -> Result<()> {
-        // Resolve the package
-        let resolved_package = self
-            .workflow_run_config
-            .execution
-            .registry_client
-            .resolve_package(source, None, false, None)
-            .await
-            .map_err(|e| Error::Other(format!("Failed to resolve codemod {source}: {e}")))?;
-
-        // Load the codemod's workflow
-        let workflow_path = resolved_package.package_dir.join("workflow.yaml");
-        if !workflow_path.exists() {
-            return Err(Error::Other(format!(
-                "Workflow file not found in codemod package: {}",
-                workflow_path.display()
-            )));
-        }
-
-        let workflow_content = std::fs::read_to_string(&workflow_path)
-            .map_err(|e| Error::Other(format!("Failed to read workflow file: {e}")))?;
-
-        let codemod_workflow: Workflow = serde_yaml::from_str(&workflow_content)
-            .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
-
-        // Create new dependency chain including this codemod
-        let mut new_chain = dependency_chain.to_vec();
-        new_chain.push(CodemodDependency {
-            source: source.to_string(),
-        });
-
-        // Recursively validate the codemod's workflow dependencies
-        Box::pin(self.validate_codemod_dependencies(&codemod_workflow, &new_chain)).await?;
-
-        Ok(())
+        NestedCodemodService::find_cycle_in_chain(source, dependency_chain)
     }
 
     /// Execute a workflow
@@ -3556,55 +3470,22 @@ impl Engine {
     ) -> Result<()> {
         slog!(logger, info, "Executing codemod step: {}", codemod.source);
 
-        // Check for runtime cycles before execution
-        if let Some(cycle_start) = self.find_cycle_in_chain(&codemod.source, dependency_chain) {
-            let chain_str = dependency_chain
-                .iter()
-                .map(|d| d.source.as_str())
-                .collect::<Vec<_>>()
-                .join(" → ");
-
-            return Err(Error::Other(format!(
-                "Runtime codemod dependency cycle detected!\n\
-                Cycle: {} → {} → {}\n\
-                This cycle was not caught during validation, indicating a dynamic dependency.\n\
-                Please review your codemod dependencies to remove the circular reference.",
-                cycle_start,
-                if chain_str.is_empty() {
-                    "(root)"
-                } else {
-                    &chain_str
-                },
-                codemod.source
-            )));
-        }
-
-        // Resolve the package (local path or registry package)
-        let resolved_package = self
-            .workflow_run_config
-            .execution
-            .registry_client
-            .resolve_package(&codemod.source, None, false, None)
-            .await
-            .map_err(|e| Error::Other(format!("Failed to resolve package: {e}")))?;
+        let resolved =
+            NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
+                .resolve(&codemod.source, dependency_chain)
+                .await?;
 
         slog!(
             logger,
             info,
             "Resolved codemod package: {} -> {}",
             codemod.source,
-            resolved_package.package_dir.display()
+            resolved.package.package_dir.display()
         );
 
-        // Create new dependency chain including this codemod
-        let mut new_chain = dependency_chain.to_vec();
-        new_chain.push(CodemodDependency {
-            source: codemod.source.clone(),
-        });
-
-        // Execute the resolved codemod workflow
         self.run_codemod_workflow_with_chain(
-            &resolved_package,
+            &resolved.package,
+            &resolved.workflow,
             codemod,
             step_env,
             node,
@@ -3612,7 +3493,7 @@ impl Engine {
             params,
             state,
             bundle_path,
-            &new_chain,
+            &resolved.dependency_chain,
             capabilities,
             logger,
         )
@@ -3623,6 +3504,7 @@ impl Engine {
     async fn run_codemod_workflow_with_chain(
         &self,
         resolved_package: &ResolvedPackage,
+        codemod_workflow: &Workflow,
         codemod: &UseCodemod,
         step_env: &Option<HashMap<String, String>>,
         _node: &Node,
@@ -3634,22 +3516,6 @@ impl Engine {
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let workflow_path = resolved_package.package_dir.join("workflow.yaml");
-
-        if !workflow_path.exists() {
-            return Err(Error::Other(format!(
-                "Workflow file not found in codemod package: {}",
-                workflow_path.display()
-            )));
-        }
-
-        // Load the codemod workflow
-        let workflow_content = std::fs::read_to_string(&workflow_path)
-            .map_err(|e| Error::Other(format!("Failed to read workflow file: {e}")))?;
-
-        let codemod_workflow: Workflow = serde_yaml::from_str(&workflow_content)
-            .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
-
         // Prepare parameters for the codemod workflow
         let mut codemod_params = HashMap::new();
 
@@ -3757,7 +3623,7 @@ impl Engine {
                         task,
                         params,
                         state,
-                        workflow: &codemod_workflow,
+                        workflow: codemod_workflow,
                         bundle_path: &codemod_bundle_path,
                         dependency_chain,
                         capabilities,
