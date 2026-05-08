@@ -689,6 +689,7 @@ name = "butterflow-core"
 version = "1.9.3"
 dependencies = [
  "anyhow",
+ "ast-grep-config",
  "async-trait",
  "base64 0.22.1",
  "butterflow-models",

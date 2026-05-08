@@ -9,7 +9,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::io::{BufRead, BufReader};
-use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,26 +21,21 @@ use crate::ai_handoff::{
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
 use crate::config::{
-    CapabilitiesSecurityCallback, DeferredInteractionError, DryRunChange,
-    InstallSkillExecutionRequest, InstallSkillExecutor, ManagedGitWorktree,
-    ShellCommandExecutionRequest, WorkflowRunConfig,
+    CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
+    ManagedGitWorktree, ShellCommandExecutionRequest, WorkflowRunConfig,
 };
-use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
+use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
-use crate::periodic::spawn_periodic;
+use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
-use codemod_sandbox::sandbox::engine::{
-    extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
-    SelectorEngineOptions,
-};
-use codemod_sandbox::sandbox::errors::ExecutionError as SandboxExecutionError;
+use codemod_sandbox::sandbox::engine::CodemodOutput;
 use codemod_sandbox::sandbox::runtime_module::{
-    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
+    RuntimeEvent, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
 };
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::{debug, error, info, warn};
@@ -52,12 +46,10 @@ use tokio::time;
 use uuid::Uuid;
 
 use crate::registry::ResolvedPackage;
+use crate::step_executor::{StepExecutionRequest, StepExecutor};
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseCodemod,
-    UseJSAstGrep,
-};
+use butterflow_models::step::{StepAction, UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff,
@@ -73,13 +65,7 @@ use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::{
-    sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
-    utils::project_discovery::find_tsconfig,
-    MetricsContext, SharedStateContext,
-};
-use language_core::SemanticProvider;
-use semantic_factory::LazySemanticProvider;
+use codemod_sandbox::MetricsContext;
 
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
@@ -150,7 +136,7 @@ fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, se
         .unwrap_or_else(|| workflow_run.params.clone())
 }
 
-fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
+pub(crate) fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
 {
@@ -161,7 +147,7 @@ where
     }
 }
 
-async fn execute_install_skill_in_isolated_runtime(
+pub(crate) async fn execute_install_skill_in_isolated_runtime(
     executor: Arc<dyn InstallSkillExecutor>,
     request: InstallSkillExecutionRequest,
 ) -> std::result::Result<String, anyhow::Error> {
@@ -184,10 +170,10 @@ async fn execute_install_skill_in_isolated_runtime(
     })
 }
 
-struct PreparedStepExecution {
-    env: HashMap<String, String>,
-    state_outputs_path: PathBuf,
-    state_input_path: PathBuf,
+pub(crate) struct PreparedStepExecution {
+    pub(crate) env: HashMap<String, String>,
+    pub(crate) state_outputs_path: PathBuf,
+    pub(crate) state_input_path: PathBuf,
 }
 
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
@@ -362,7 +348,7 @@ pub fn build_js_ast_grep_idle_timeout_message(
     }
 }
 
-fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
+pub(crate) fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
     let prefix = match event.kind {
         RuntimeEventKind::Progress => "[progress]",
         RuntimeEventKind::Warn => "[warn]",
@@ -377,7 +363,7 @@ fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
     Some(message)
 }
 
-fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
+pub(crate) fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
     let prefix = match failure.kind {
         RuntimeFailureKind::File => "[error] file failed:",
         RuntimeFailureKind::Step => "[error] step failed:",
@@ -445,7 +431,7 @@ pub async fn await_js_ast_grep_execution_task(
     Err(Error::Runtime(message))
 }
 
-fn log_step_output(logger: &StructuredLogger, output: &str) {
+pub(crate) fn log_step_output(logger: &StructuredLogger, output: &str) {
     if !logger.is_jsonl() {
         return;
     }
@@ -509,7 +495,7 @@ fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String
 
 /// Resolve an optional list of glob patterns, expanding `${{ }}` expressions.
 /// Returns `None` when the input is `None` or all items resolve to empty strings.
-fn resolve_optional_glob_list(
+pub(crate) fn resolve_optional_glob_list(
     items: &Option<Vec<String>>,
     params: &HashMap<String, serde_json::Value>,
     state: &HashMap<String, serde_json::Value>,
@@ -532,7 +518,7 @@ fn resolve_optional_glob_list(
 ///
 /// This enables automatic scoping of ast-grep / js-ast-grep steps to the files
 /// produced by a preceding shard step
-fn auto_meta_files_include(
+pub(crate) fn auto_meta_files_include(
     state: &HashMap<String, serde_json::Value>,
     matrix_values: Option<&HashMap<String, serde_json::Value>>,
 ) -> Option<Vec<String>> {
@@ -1056,6 +1042,18 @@ impl Engine {
     /// Get a mutable reference to the workflow run config
     pub fn workflow_run_config_mut(&mut self) -> &mut WorkflowRunConfig {
         &mut self.workflow_run_config
+    }
+
+    pub(crate) fn workflow_run_config(&self) -> &WorkflowRunConfig {
+        &self.workflow_run_config
+    }
+
+    pub(crate) fn state_adapter(&self) -> Arc<Mutex<Box<dyn StateAdapter>>> {
+        Arc::clone(&self.state_adapter)
+    }
+
+    pub(crate) fn file_writer(&self) -> Arc<AsyncFileWriter> {
+        Arc::clone(&self.file_writer)
     }
 
     /// Create a new engine with a custom state adapter
@@ -1652,7 +1650,11 @@ impl Engine {
         });
     }
 
-    async fn append_task_log(&self, task_id: Uuid, message: impl Into<String>) -> Result<()> {
+    pub(crate) async fn append_task_log(
+        &self,
+        task_id: Uuid,
+        message: impl Into<String>,
+    ) -> Result<()> {
         let mut adapter = self.state_adapter.lock().await;
         let mut task = adapter.get_task(task_id).await?;
         let message = message.into();
@@ -1710,25 +1712,29 @@ impl Engine {
         (log_tx, log_persist_task)
     }
 
-    fn register_output_heartbeat(&self, task_id: Uuid, callback: ProgressHeartbeatCallback) {
+    pub(crate) fn register_output_heartbeat(
+        &self,
+        task_id: Uuid,
+        callback: ProgressHeartbeatCallback,
+    ) {
         if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
             callbacks.insert(task_id, callback);
         }
     }
 
-    fn unregister_output_heartbeat(&self, task_id: Uuid) {
+    pub(crate) fn unregister_output_heartbeat(&self, task_id: Uuid) {
         if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
             callbacks.remove(&task_id);
         }
     }
 
-    fn register_step_cancel_signal(&self, task_id: Uuid, signal: Arc<AtomicBool>) {
+    pub(crate) fn register_step_cancel_signal(&self, task_id: Uuid, signal: Arc<AtomicBool>) {
         if let Ok(mut signals) = self.step_cancel_signals.lock() {
             signals.insert(task_id, signal);
         }
     }
 
-    fn unregister_step_cancel_signal(&self, task_id: Uuid) {
+    pub(crate) fn unregister_step_cancel_signal(&self, task_id: Uuid) {
         if let Ok(mut signals) = self.step_cancel_signals.lock() {
             signals.remove(&task_id);
         }
@@ -3111,22 +3117,24 @@ impl Engine {
                 None
             };
 
-            let result = std::panic::AssertUnwindSafe(self.execute_step_action(
-                runner.as_ref(),
-                &step.action,
-                &step.name,
-                &step.env,
-                &step.id,
-                node,
-                &task,
-                &resolved_params,
-                &state,
-                &workflow_run.workflow,
-                &workflow_run.bundle_path,
-                &[],
-                &self.workflow_run_config.execution.capabilities,
-                task_expr_ctx.as_ref(),
-                &step_logger,
+            let result = std::panic::AssertUnwindSafe(StepExecutor::new(self).execute(
+                StepExecutionRequest {
+                    runner: runner.as_ref(),
+                    action: &step.action,
+                    step_name: &step.name,
+                    step_env: &step.env,
+                    step_id: &step.id,
+                    node,
+                    task: &task,
+                    params: &resolved_params,
+                    state: &state,
+                    workflow: &workflow_run.workflow,
+                    bundle_path: &workflow_run.bundle_path,
+                    dependency_chain: &[],
+                    capabilities: &self.workflow_run_config.execution.capabilities,
+                    task_expr_ctx: task_expr_ctx.as_ref(),
+                    logger: &step_logger,
+                },
             ))
             .catch_unwind()
             .await
@@ -3514,272 +3522,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Execute a specific step action with dependency chain tracking for cycle detection
-    #[allow(clippy::too_many_arguments)]
-    async fn execute_step_action(
-        &self,
-        runner: &dyn Runner,
-        action: &StepAction,
-        step_name: &str,
-        step_env: &Option<HashMap<String, String>>,
-        step_id: &Option<String>,
-        node: &Node,
-        task: &Task,
-        params: &HashMap<String, serde_json::Value>,
-        state: &HashMap<String, serde_json::Value>,
-        workflow: &Workflow,
-        bundle_path: &Option<PathBuf>,
-        dependency_chain: &[CodemodDependency],
-        capabilities: &Option<HashSet<LlrtSupportedModules>>,
-        task_expr_ctx: Option<&TaskExpressionContext>,
-        logger: &StructuredLogger,
-    ) -> Result<()> {
-        match action {
-            StepAction::RunScript(run) => {
-                // Skip run script steps in dry-run mode
-                if self.workflow_run_config.execution.dry_run {
-                    return Ok(());
-                }
-                self.execute_run_script_step(
-                    runner,
-                    run,
-                    step_name,
-                    step_env,
-                    step_id,
-                    node,
-                    task,
-                    params,
-                    state,
-                    bundle_path,
-                    logger,
-                )
-                .await
-            }
-            StepAction::UseTemplate(template_use) => {
-                // Find the template using the passed workflow reference
-                let template = workflow
-                    .templates
-                    .iter()
-                    .find(|t| t.id == template_use.template)
-                    .ok_or_else(|| {
-                        Error::Template(format!("Template not found: {}", template_use.template))
-                    })?;
-
-                // Combine workflow params with template-specific inputs
-                let mut combined_params = params.clone();
-                combined_params.extend(template_use.inputs.clone());
-
-                for template_step in &template.steps {
-                    if let Some(condition) = &template_step.condition {
-                        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-                        let should_execute = evaluate_condition(
-                            condition,
-                            &combined_params,
-                            state,
-                            task.matrix_values.as_ref(),
-                            None, // step outputs
-                            task_expr_ctx,
-                        )?;
-
-                        if !should_execute {
-                            info!(
-                                "Skipping template step '{}' - condition not met: {}",
-                                template_step.name, condition
-                            );
-                            continue;
-                        }
-                    }
-
-                    Box::pin(self.execute_step_action(
-                        runner,
-                        &template_step.action,
-                        &template_step.name,
-                        &template_step.env,
-                        &template_step.id,
-                        node,
-                        task,
-                        &combined_params,
-                        state,
-                        workflow,
-                        bundle_path,
-                        dependency_chain,
-                        capabilities,
-                        task_expr_ctx,
-                        logger,
-                    ))
-                    .await?;
-                }
-                Ok(())
-            }
-            StepAction::AstGrep(ast_grep) => {
-                // Resolve ${{ }} expressions in include/exclude globs
-                let mut resolved_ast_grep = ast_grep.clone();
-                resolved_ast_grep.include = resolve_optional_glob_list(
-                    &ast_grep.include,
-                    params,
-                    state,
-                    task.matrix_values.as_ref(),
-                    task_expr_ctx,
-                )?
-                .or_else(|| auto_meta_files_include(state, task.matrix_values.as_ref()));
-                resolved_ast_grep.exclude = resolve_optional_glob_list(
-                    &ast_grep.exclude,
-                    params,
-                    state,
-                    task.matrix_values.as_ref(),
-                    task_expr_ctx,
-                )?;
-                self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
-                    .await
-            }
-            StepAction::JSAstGrep(js_ast_grep) => {
-                self.execute_js_ast_grep_step(
-                    task.id.to_string(),
-                    step_id.clone().unwrap_or_default(),
-                    js_ast_grep,
-                    Some(params.clone()),
-                    task.matrix_values.clone(),
-                    &CapabilitiesData {
-                        capabilities: capabilities
-                            .as_ref()
-                            .map(|v| v.clone().into_iter().collect()),
-                        capabilities_security_callback: self
-                            .workflow_run_config
-                            .execution
-                            .capabilities_security_callback
-                            .clone(),
-                    },
-                    bundle_path,
-                    Some(task.workflow_run_id),
-                    Some(state),
-                    logger,
-                    None,
-                    None,
-                    task_expr_ctx,
-                )
-                .await
-            }
-            StepAction::Codemod(codemod) => {
-                Box::pin(self.execute_codemod_step(
-                    codemod,
-                    step_env,
-                    node,
-                    task,
-                    params,
-                    state,
-                    bundle_path,
-                    dependency_chain,
-                    capabilities,
-                    logger,
-                ))
-                .await
-            }
-            StepAction::AI(ai_config) => {
-                if self.workflow_run_config.execution.dry_run {
-                    info!("Skipping AI step in dry-run mode");
-                    return Ok(());
-                }
-                self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
-                    .await
-            }
-            StepAction::Shard(shard_config) => {
-                if self.workflow_run_config.execution.skip_shard_steps {
-                    info!("Skipping shard step in dry-run preview mode");
-                    return Ok(());
-                }
-                self.execute_shard_step(shard_config, task, params, state, task_expr_ctx, logger)
-                    .await
-            }
-            StepAction::InstallSkill(install_skill) => {
-                if self
-                    .workflow_run_config
-                    .skill_install
-                    .skip_install_skill_steps
-                {
-                    if self.workflow_run_config.interaction.no_interactive {
-                        eprintln!(
-                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
-                            install_skill.package
-                        );
-                    } else {
-                        eprintln!(
-                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
-                            install_skill.package
-                        );
-                    }
-                    return Ok(());
-                }
-
-                if self.workflow_run_config.execution.dry_run {
-                    eprintln!(
-                        "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
-                        install_skill.package
-                    );
-                    return Ok(());
-                }
-
-                let Some(install_skill_executor) = self
-                    .workflow_run_config
-                    .skill_install
-                    .install_skill_executor
-                    .as_ref()
-                else {
-                    return Err(Error::Runtime(
-                        "install-skill step requested but no install-skill executor is configured"
-                            .to_string(),
-                    ));
-                };
-                let install_skill_executor = Arc::clone(install_skill_executor);
-
-                let prepared =
-                    self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
-                let request = InstallSkillExecutionRequest {
-                    install_skill: install_skill.clone(),
-                    no_interactive: self.workflow_run_config.interaction.no_interactive,
-                    quiet: self.workflow_run_config.output.quiet,
-                    bundle_path: bundle_path.clone(),
-                    target_path: self.workflow_run_config.execution.target_path.clone(),
-                    env: prepared.env.clone(),
-                    output_format: self.workflow_run_config.output.output_format,
-                    selection_prompt_callback: self
-                        .workflow_run_config
-                        .interaction
-                        .selection_prompt_callback
-                        .clone(),
-                };
-                let output =
-                    execute_install_skill_in_isolated_runtime(install_skill_executor, request)
-                        .await
-                        .map_err(|error| {
-                            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>()
-                            {
-                                Error::Deferred(deferred.message().to_string())
-                            } else {
-                                Error::Runtime(format!(
-                                    "Failed to execute install-skill step: {error}"
-                                ))
-                            }
-                        });
-
-                let output = match output {
-                    Ok(output) => output,
-                    Err(Error::Deferred(message)) => return Err(Error::Deferred(message)),
-                    Err(error) => return Err(error),
-                };
-
-                for line in output
-                    .lines()
-                    .map(str::trim_end)
-                    .filter(|line| !line.is_empty())
-                {
-                    let _ = self.append_task_log(task.id, line.to_string()).await;
-                }
-                log_step_output(logger, &output);
-                self.finalize_step_execution(task, output, prepared).await
-            }
-        }
-    }
-
     pub async fn execute_ast_grep_step(
         &self,
         id: String,
@@ -3934,911 +3676,28 @@ impl Engine {
         selector_matched_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
         task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
-        let metrics_context = self.metrics_context.clone();
-        let task_log_task_id = Uuid::parse_str(&id).ok();
-
-        // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
-        let effective_bundle_path = bundle_path
-            .as_ref()
-            .unwrap_or(&self.workflow_run_config.execution.bundle_path);
-        let js_file_path = effective_bundle_path.join(&js_ast_grep.js_file);
-
-        // Combine target_path with base_path if base_path is specified
-        let target_path = if let Some(base_path) = &js_ast_grep.base_path {
-            self.workflow_run_config
-                .execution
-                .target_path
-                .join(base_path)
-        } else {
-            self.workflow_run_config.execution.target_path.clone()
-        };
-
-        if let Some(pre_run_callback) = self
-            .workflow_run_config
-            .execution
-            .pre_run_callback
-            .as_deref()
-        {
-            pre_run_callback(
-                target_path.as_path(),
-                js_ast_grep.dry_run.unwrap_or(false),
-                &self.workflow_run_config,
-            )
-            .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
-        }
-
-        if !js_file_path.exists() {
-            return Err(Error::StepExecution(format!(
-                "JavaScript file '{}' does not exist",
-                js_file_path.display()
-            )));
-        }
-
-        let script_base_dir = js_file_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
-
-        let tsconfig_path = find_tsconfig(&script_base_dir);
-
-        let resolver = Arc::new(
-            OxcResolver::new(script_base_dir.clone(), tsconfig_path)
-                .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
-        );
-
-        let capabilities_security_callback_clone =
-            capabilities_data.capabilities_security_callback.clone();
-        let quiet = self.workflow_run_config.output.quiet;
-        let pre_run_callback = PreRunCallback {
-            callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
-                if let Some(callback) = &capabilities_security_callback_clone {
-                    callback(config).map_err(|e| {
-                        if !quiet {
-                            error!("Failed to check capabilities: {e}");
-                        }
-                        Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                            "Failed to check capabilities: {e}"
-                        ))
-                    })?;
-                }
-                Ok(())
-            })),
-        };
-        // Resolve ${{ }} expressions in include/exclude globs.
-        let empty_params = HashMap::new();
-        let empty_state = HashMap::new();
-        let resolved_params_ref = params.as_ref().unwrap_or(&empty_params);
-        let resolved_state_ref = initial_state.unwrap_or(&empty_state);
-
-        let resolved_include = resolve_optional_glob_list(
-            &js_ast_grep.include,
-            resolved_params_ref,
-            resolved_state_ref,
-            matrix_input.as_ref(),
-            task_expr_ctx,
-        )?
-        .or_else(|| auto_meta_files_include(resolved_state_ref, matrix_input.as_ref()));
-
-        let resolved_exclude = resolve_optional_glob_list(
-            &js_ast_grep.exclude,
-            resolved_params_ref,
-            resolved_state_ref,
-            matrix_input.as_ref(),
-            task_expr_ctx,
-        )?;
-        let explicit_files = matrix_input
-            .as_ref()
-            .and_then(|m| m.get("_meta_files"))
-            .and_then(butterflow_models::variable::value_to_string_vec)
-            .map(|files| {
-                files
-                    .into_iter()
-                    .map(|file| target_path.join(file))
-                    .collect()
-            });
-
-        let config = CodemodExecutionConfig {
-            pre_run_callback: Some(pre_run_callback),
-            progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
-            target_path: Some(target_path.clone()),
-            base_path: None,
-            include_globs: resolved_include,
-            explicit_files,
-            exclude_globs: resolved_exclude,
-            dry_run: js_ast_grep.dry_run.unwrap_or(false)
-                || self.workflow_run_config.execution.dry_run,
-            languages: Some(vec![js_ast_grep
-                .language
-                .clone()
-                .unwrap_or("typescript".to_string())]),
-            threads: js_ast_grep.max_threads,
-            capabilities: capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
-        };
-
-        // Set language first to get default extensions
-        let language = if let Some(lang_str) = &js_ast_grep.language {
-            lang_str
-                .parse()
-                .map_err(|e| Error::StepExecution(format!("Invalid language '{lang_str}': {e}")))?
-        } else {
-            // Parse TypeScript as default
-            "typescript".parse().map_err(|e| {
-                Error::StepExecution(format!("Failed to parse default language: {e}"))
-            })?
-        };
-
-        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
-            script_path: &js_file_path,
-            language,
-            resolver: Arc::clone(&resolver),
-            capabilities: capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
-            target_directory: Some(&target_path),
-        })
-        .await
-        {
-            Ok(selector_config) => selector_config,
-            Err(e) => {
-                let message = format!("Failed to extract js-ast-grep selector: {e}");
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self.append_task_log(task_id, &message).await;
-                }
-                slog!(logger, warn, "{}", message);
-                None
-            }
-        };
-
-        let semantic_provider: Option<Arc<dyn SemanticProvider>> =
-            match &js_ast_grep.semantic_analysis {
-                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)) => {
-                    Some(Arc::new(LazySemanticProvider::file_scope()))
-                }
-                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => {
-                    // use target_path as workspace root by default
-                    Some(Arc::new(LazySemanticProvider::workspace_scope(
-                        target_path.clone(),
-                    )))
-                }
-                Some(SemanticAnalysisConfig::Detailed(detailed)) => {
-                    match detailed.mode {
-                        SemanticAnalysisMode::File => {
-                            Some(Arc::new(LazySemanticProvider::file_scope()))
-                        }
-                        SemanticAnalysisMode::Workspace => {
-                            // use custom root if provided, otherwise use target_path
-                            let root = detailed
-                                .root
-                                .as_ref()
-                                .map(PathBuf::from)
-                                .unwrap_or_else(|| target_path.clone());
-                            Some(Arc::new(LazySemanticProvider::workspace_scope(root)))
-                        }
-                    }
-                }
-                None => None,
-            };
-
-        // For workspace scope semantic analysis, pre-index all target files
-        // This ensures cross-file references work correctly
-        if let Some(ref provider) = semantic_provider {
-            if provider.mode() == language_core::ProviderMode::WorkspaceScope {
-                let target_files: Vec<PathBuf> = config.collect_files();
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self
-                        .append_task_log(
-                            task_id,
-                            format!(
-                                "Preparing workspace semantic index for {} file(s)",
-                                target_files.len()
-                            ),
-                        )
-                        .await;
-                }
-
-                for file_path in &target_files {
-                    if file_path.is_file() {
-                        if let Ok(content) = std::fs::read_to_string(file_path) {
-                            if let Err(e) = provider.notify_file_processed(file_path, &content) {
-                                slog!(
-                                    logger,
-                                    debug,
-                                    "Failed to pre-index file {} for semantic analysis: {}",
-                                    file_path.display(),
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self
-                        .append_task_log(task_id, "Workspace semantic index ready")
-                        .await;
-                }
-            }
-        }
-
-        // Capture variables for use in parallel threads
-        let runtime_handle = tokio::runtime::Handle::current();
-        let js_file_path_clone = js_file_path.clone();
-        let resolver_clone = resolver.clone();
-        let id_clone = Arc::new(id);
-        let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
-        let file_writer = Arc::clone(&self.file_writer);
-        let selector_config = selector_config.map(Arc::new);
-        let shared_state_context = if let Some(state) = initial_state {
-            SharedStateContext::with_initial_state(state.clone())
-        } else {
-            SharedStateContext::new()
-        };
-        let metrics_context_clone = metrics_context.clone();
-        let shared_state_context_clone = shared_state_context.clone();
-        let logger = logger.clone();
-        let modified_files_collector_clone = modified_files_collector.clone();
-        let selector_matched_files_collector_clone = selector_matched_files_collector.clone();
-        let target_path_for_logs = target_path.clone();
-        let canceled_during_execution = Arc::new(AtomicBool::new(false));
-        let idle_timeout = js_ast_grep_idle_timeout();
-        let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        let idle_timed_out = Arc::new(AtomicBool::new(false));
-        let idle_notify = Arc::new(Notify::new());
-        let watchdog_done = Arc::new(AtomicBool::new(false));
-        let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
-        let has_selector = selector_config.is_some();
-
-        // Collect deferred file deletions from renames — applied after all transforms complete
-        let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
-        let logger_for_deferred = logger.clone();
-        let deferred_deletions_clone = Arc::clone(&deferred_deletions);
-        let canceled_flag_for_closure = Arc::clone(&canceled_during_execution);
-        let progress_state_for_closure = Arc::clone(&progress_state);
-        let progress_state_for_watchdog = Arc::clone(&progress_state);
-        let idle_timed_out_for_watchdog = Arc::clone(&idle_timed_out);
-        let idle_notify_for_watchdog = Arc::clone(&idle_notify);
-        let watchdog_done_for_watchdog = Arc::clone(&watchdog_done);
-        let idle_failure_message_for_watchdog = Arc::clone(&idle_failure_message);
-        let state_adapter_for_watchdog = Arc::clone(&self.state_adapter);
-
-        if let Some(task_id) = task_log_task_id {
-            let progress_state_for_output = Arc::clone(&progress_state);
-            self.register_output_heartbeat(
-                task_id,
-                Arc::new(move || {
-                    record_output_progress(&progress_state_for_output);
-                }),
-            );
-        }
-
-        let watchdog_task = spawn_periodic(
-            Duration::from_secs(1),
-            Arc::clone(&watchdog_done_for_watchdog),
-            move || {
-                let progress_state = Arc::clone(&progress_state_for_watchdog);
-                let idle_timed_out = Arc::clone(&idle_timed_out_for_watchdog);
-                let idle_failure_message = Arc::clone(&idle_failure_message_for_watchdog);
-                let idle_notify = Arc::clone(&idle_notify_for_watchdog);
-                let state_adapter = Arc::clone(&state_adapter_for_watchdog);
-                async move {
-                    let timed_out_message = {
-                        let state = progress_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if state.global_last_progress_at.elapsed() > idle_timeout {
-                            Some(build_js_ast_grep_idle_timeout_message(&state, idle_timeout))
-                        } else {
-                            None
-                        }
-                    };
-
-                    let Some(message) = timed_out_message else {
-                        return ControlFlow::Continue(());
-                    };
-
-                    idle_timed_out.store(true, Ordering::Release);
-                    if let Ok(mut slot) = idle_failure_message.lock() {
-                        *slot = Some(message.clone());
-                    }
-                    idle_notify.notify_waiters();
-
-                    if let Some(task_id) = task_log_task_id {
-                        let mut adapter = state_adapter.lock().await;
-                        if let Ok(mut task) = adapter.get_task(task_id).await {
-                            task.logs.push(message.clone());
-                            let _ = adapter.save_task(&task).await;
-                            publish_event(
-                                task.workflow_run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: task.workflow_run_id,
-                                    task_id,
-                                    line: message,
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                    }
-                    ControlFlow::Break(())
-                }
-            },
-        );
-
-        // Register an in-process cancel signal for this step so cancel_workflow
-        // can flip `canceled_during_execution` directly (TUI path). CLI/cloud
-        // cancellation goes through SIGTERM and doesn't need this hook.
-        if let Some(task_id) = task_log_task_id {
-            self.register_step_cancel_signal(task_id, Arc::clone(&canceled_during_execution));
-        }
-
-        // Execute the codemod on each file using the config's multi-threading
-        let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
-        let idle_notify_for_closure = Arc::clone(&idle_notify);
-        let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
-        let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
-        let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
-
-        let execute_result = config
-            .execute(move |file_path, config| {
-                if canceled_flag_for_closure.load(Ordering::Acquire)
-                    || idle_timed_out_for_closure.load(Ordering::Acquire)
-                {
-                    return;
-                }
-
-                // Only process files
-                if !file_path.is_file() {
-                    return;
-                }
-
-                let relative_path = file_path
-                    .strip_prefix(&target_path_for_logs)
-                    .unwrap_or(file_path)
-                    .display()
-                    .to_string();
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileQueued,
-                );
-
-                // Read file content synchronously
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(content) => content,
-                    Err(e) => {
-                        slog!(
-                            logger,
-                            warn,
-                            "Failed to read file {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &relative_path,
-                            StepPhase::ExecutionErrored,
-                        );
-                        return;
-                    }
-                };
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileLoaded,
-                );
-
-                // Execute the async codemod using the captured runtime handle
-                std::env::set_var("CODEMOD_STEP_ID", &step_id);
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::ExecutionStarted,
-                );
-                let dry_run = config.dry_run;
-                let relative_path_for_execution = relative_path.clone();
-                let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
-                let cancellation_flag_for_execution = Arc::clone(&canceled_flag_for_closure);
-                let current_runtime_unit = Arc::new(std::sync::Mutex::new(relative_path.clone()));
-                let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
-                let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
-                let relative_path_for_runtime_events = relative_path.clone();
-                let runtime_event_task_id = task_log_task_id;
-                let runtime_event_run_id = workflow_run_id;
-                let runtime_event_callback: RuntimeEventCallback =
-                    Arc::new(move |event| match event.kind {
-                        RuntimeEventKind::SetCurrentUnit => {
-                            let new_runtime_unit =
-                                format!("{relative_path_for_runtime_events} :: {}", event.message);
-                            let previous_runtime_unit = {
-                                let mut current_runtime_unit = current_runtime_unit_for_callback
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                let previous_runtime_unit = current_runtime_unit.clone();
-                                *current_runtime_unit = new_runtime_unit.clone();
-                                previous_runtime_unit
-                            };
-
-                            finish_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &previous_runtime_unit,
-                                StepPhase::ExecutionFinished,
-                            );
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &new_runtime_unit,
-                                StepPhase::ExecutionStarted,
-                            );
-                        }
-                        RuntimeEventKind::Progress | RuntimeEventKind::Warn => {
-                            let runtime_unit = current_runtime_unit_for_callback
-                                .lock()
-                                .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &runtime_unit,
-                                StepPhase::Output,
-                            );
-                            if let (Some(task_id), Some(run_id), Some(message)) = (
-                                runtime_event_task_id,
-                                runtime_event_run_id,
-                                format_runtime_event_log(&event),
-                            ) {
-                                publish_event(
-                                    run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: run_id,
-                                        task_id,
-                                        line: message,
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                        }
-                    });
-                let execution_result = block_on_runtime_handle(&runtime_handle, async {
-                    let local = tokio::task::LocalSet::new();
-                    let file_path_owned = file_path.to_path_buf();
-                    let content_owned = content.clone();
-                    let js_file_path_owned = js_file_path_clone.clone();
-                    let resolver_owned = resolver_clone.clone();
-                    let selector_config_owned = selector_config.clone();
-                    let params_owned = params.clone();
-                    let matrix_input_owned = matrix_input.clone();
-                    let capabilities_owned = config.capabilities.clone();
-                    let semantic_provider_owned = semantic_provider.clone();
-                    let metrics_context_owned = metrics_context_clone.clone();
-                    let shared_state_context_owned = shared_state_context_clone.clone();
-                    let target_path_owned = target_path.clone();
-                    let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
-                    let idle_notify = Arc::clone(&idle_notify_for_closure);
-                    let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
-
-                    local
-                        .run_until(async move {
-                            let execution_task = tokio::task::spawn_local(async move {
-                                execute_codemod_with_quickjs(JssgExecutionOptions {
-                                    script_path: &js_file_path_owned,
-                                    resolver: resolver_owned,
-                                    language,
-                                    file_path: &file_path_owned,
-                                    content: &content_owned,
-                                    selector_config: selector_config_owned,
-                                    params: params_owned,
-                                    matrix_values: matrix_input_owned,
-                                    capabilities: capabilities_owned,
-                                    semantic_provider: semantic_provider_owned,
-                                    metrics_context: Some(metrics_context_owned),
-                                    shared_state_context: Some(shared_state_context_owned),
-                                    runtime_event_callback: Some(runtime_event_callback),
-                                    cancellation_flag: Some(cancellation_flag_for_execution),
-                                    test_mode: false,
-                                    dry_run,
-                                    target_directory: &target_path_owned,
-                                })
-                                .await
-                            });
-
-                            await_js_ast_grep_execution_task(
-                                execution_task,
-                                idle_timed_out,
-                                idle_notify,
-                                idle_failure_message,
-                                progress_state_for_execution,
-                                idle_timeout,
-                                &relative_path_for_execution,
-                            )
-                            .await
-                        })
-                        .await
-                });
-
-                if canceled_flag_for_closure.load(Ordering::Acquire) {
-                    finish_unit_progress(
-                        &progress_state_for_closure,
-                        &relative_path,
-                        StepPhase::ExecutionErrored,
-                    );
-                    return;
-                }
-
-                match execution_result {
-                    Ok(Ok(CodemodOutput { primary, secondary })) => {
-                        let apply_change = |change_path: &Path, result: &ExecutionResult| {
-                            match result {
-                                ExecutionResult::Modified(ref modified) => {
-                                    let write_path =
-                                        modified.rename_to.as_deref().unwrap_or(change_path);
-                                    if config.dry_run {
-                                        self.execution_stats
-                                            .files_modified
-                                            .fetch_add(1, Ordering::Relaxed);
-
-                                        // Report the change via callback if provided
-                                        if let Some(callback) =
-                                            &self.workflow_run_config.output.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
-
-                                        slog!(
-                                            logger,
-                                            debug,
-                                            "Would modify file (dry run): {}",
-                                            change_path.display()
-                                        );
-                                    } else {
-                                        // Capture diff for report before writing (original content is still on disk)
-                                        if let Some(callback) =
-                                            &self.workflow_run_config.output.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
-
-                                        // Use async file writing to avoid blocking the thread
-                                        let write_result =
-                                            block_on_runtime_handle(&runtime_handle, async {
-                                                file_writer
-                                                    .write_file(
-                                                        write_path.to_path_buf(),
-                                                        modified.content.clone(),
-                                                    )
-                                                    .await
-                                            });
-
-                                        if let Err(e) = write_result {
-                                            slog!(
-                                                logger,
-                                                error,
-                                                "Failed to write modified file {}: {}",
-                                                write_path.display(),
-                                                e
-                                            );
-                                            self.execution_stats
-                                                .files_with_errors
-                                                .fetch_add(1, Ordering::Relaxed);
-                                        } else {
-                                            // If renamed, defer deletion of the original file
-                                            if modified.rename_to.is_some()
-                                                && write_path != change_path
-                                            {
-                                                if let Ok(mut deletions) =
-                                                    deferred_deletions_clone.lock()
-                                                {
-                                                    deletions.push(change_path.to_path_buf());
-                                                }
-                                                slog!(
-                                                    logger,
-                                                    debug,
-                                                    "Renamed file: {} -> {} (deferred deletion)",
-                                                    change_path.display(),
-                                                    write_path.display()
-                                                );
-                                            } else {
-                                                slog!(
-                                                    logger,
-                                                    debug,
-                                                    "Modified file: {}",
-                                                    change_path.display()
-                                                );
-                                            }
-                                            if let Some(ref provider) = semantic_provider {
-                                                let _ = provider.notify_file_processed(
-                                                    write_path,
-                                                    &modified.content,
-                                                );
-                                            }
-                                            self.execution_stats
-                                                .files_modified
-                                                .fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                }
-                                ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
-                            }
-                        };
-
-                        match &primary {
-                            ExecutionResult::Modified(_) => {
-                                apply_change(file_path, &primary);
-                                if let Some(ref collector) = modified_files_collector_clone {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                                if let Some(ref collector) = selector_matched_files_collector_clone
-                                {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                            }
-                            ExecutionResult::Unmodified => {
-                                if has_selector {
-                                    if let Some(ref collector) =
-                                        selector_matched_files_collector_clone
-                                    {
-                                        collector
-                                            .lock()
-                                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                            .push(file_path.to_path_buf());
-                                    }
-                                }
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            }
-                            ExecutionResult::Skipped => {
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-
-                        for change in &secondary {
-                            apply_change(&change.path, &change.result);
-                        }
-
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &current_runtime_unit
-                                .lock()
-                                .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path.clone()),
-                            StepPhase::ExecutionFinished,
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        if let SandboxExecutionError::RuntimeHook { source } = &e {
-                            let message = format_runtime_failure_message(source);
-                            if let (Some(task_id), Some(run_id)) =
-                                (task_log_task_id, workflow_run_id)
-                            {
-                                publish_event(
-                                    run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: run_id,
-                                        task_id,
-                                        line: message.clone(),
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                            canceled_flag_for_closure.store(true, Ordering::Release);
-                            if let Ok(mut runtime_failure_message) =
-                                runtime_failure_message_for_closure.lock()
-                            {
-                                if runtime_failure_message.is_none() {
-                                    *runtime_failure_message = Some(message);
-                                }
-                            }
-                        }
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {:?}",
-                            relative_path,
-                            e
-                        );
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        self.execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {:?}",
-                            relative_path,
-                            e
-                        );
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        self.execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-
-                if let Some(callback) = progress_callback.as_ref() {
-                    let callback = callback.callback.clone();
-                    callback(
-                        &id_clone,
-                        &file_path.to_string_lossy(),
-                        "next",
-                        Some(&1),
-                        &0,
-                    );
-                }
+        return JssgExecutionService::new(self)
+            .execute(JssgExecutionRequest {
+                id,
+                step_id,
+                js_ast_grep,
+                params,
+                matrix_input,
+                capabilities_data,
+                bundle_path,
+                workflow_run_id,
+                initial_state,
+                logger,
+                modified_files_collector,
+                selector_matched_files_collector,
+                task_expr_ctx,
             })
-            .map_err(|e| Error::StepExecution(e.to_string()));
-
-        watchdog_done.store(true, Ordering::Release);
-        let _ = watchdog_task.await;
-        if let Some(task_id) = task_log_task_id {
-            self.unregister_output_heartbeat(task_id);
-            self.unregister_step_cancel_signal(task_id);
-        }
-
-        if idle_timed_out.load(Ordering::Acquire) {
-            let message = idle_failure_message
-                .lock()
-                .ok()
-                .and_then(|message| message.clone())
-                .unwrap_or_else(|| {
-                    let snapshot = progress_state.lock().ok();
-                    snapshot
-                        .as_deref()
-                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "No progress observed for {}s during js-ast-grep execution",
-                                idle_timeout.as_secs()
-                            )
-                        })
-                });
-            return Err(Error::Runtime(message));
-        }
-
-        execute_result?;
-
-        if let Some(message) = runtime_failure_message
-            .lock()
-            .ok()
-            .and_then(|message| message.clone())
-        {
-            return Err(Error::StepExecution(message));
-        }
-
-        if canceled_during_execution.load(Ordering::Acquire) {
-            return Err(Error::Runtime("Canceled by user".to_string()));
-        }
-
-        // Apply deferred file deletions from renames now that all transforms are complete
-        if let Ok(deletions) = deferred_deletions.lock() {
-            for path in deletions.iter() {
-                if let Err(e) = std::fs::remove_file(path) {
-                    slog!(
-                        logger_for_deferred,
-                        error,
-                        "Failed to remove original file {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
-            }
-        }
-
-        // Persist shared state to the workflow state adapter. Dry-run executions
-        // use the shared state context in-memory only, including shard pre-scans.
-        if let Some(wf_run_id) = workflow_run_id {
-            if !self.workflow_run_config.execution.skip_state_writes && !config.dry_run {
-                let persistable = shared_state_context.get_persistable();
-                let removals = shared_state_context.get_removals();
-
-                if !persistable.is_empty() || !removals.is_empty() {
-                    let mut fields = HashMap::new();
-                    for (key, value) in persistable {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(value),
-                            },
-                        );
-                    }
-                    for key in removals {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Remove,
-                                value: None,
-                            },
-                        );
-                    }
-
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_state_diff(&StateDiff {
-                            workflow_run_id: wf_run_id,
-                            fields,
-                        })
-                        .await?;
-                }
-            }
-        }
-
-        Ok(())
+            .await;
     }
 
     /// Execute an AI agent step
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_ai_step(
+    pub(crate) async fn execute_ai_step(
         &self,
         ai_config: &UseAI,
         _step_env: &Option<HashMap<String, String>>,
@@ -5169,7 +4028,7 @@ impl Engine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_codemod_step(
+    pub(crate) async fn execute_codemod_step(
         &self,
         codemod: &UseCodemod,
         step_env: &Option<HashMap<String, String>>,
@@ -5348,6 +4207,7 @@ impl Engine {
         // Build task expression context for variable resolution in codemod steps
         let codemod_task_expr_ctx =
             crate::git_ops::build_task_expression_context(&task.id.to_string());
+        let codemod_bundle_path = Some(resolved_package.package_dir.clone());
 
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
@@ -5373,24 +4233,25 @@ impl Engine {
                     }
                 }
 
-                Box::pin(self.execute_step_action(
-                    runner.as_ref(),
-                    &step.action,
-                    &step.name,
-                    &step.env,
-                    &step.id,
-                    node,
-                    task, // Use the current task context
-                    params,
-                    state,
-                    &codemod_workflow,
-                    &Some(resolved_package.package_dir.clone()),
-                    dependency_chain,
-                    capabilities,
-                    Some(&codemod_task_expr_ctx),
-                    logger,
-                ))
-                .await?;
+                StepExecutor::new(self)
+                    .execute(StepExecutionRequest {
+                        runner: runner.as_ref(),
+                        action: &step.action,
+                        step_name: &step.name,
+                        step_env: &step.env,
+                        step_id: &step.id,
+                        node,
+                        task,
+                        params,
+                        state,
+                        workflow: &codemod_workflow,
+                        bundle_path: &codemod_bundle_path,
+                        dependency_chain,
+                        capabilities,
+                        task_expr_ctx: Some(&codemod_task_expr_ctx),
+                        logger,
+                    })
+                    .await?;
             }
         }
 
@@ -5400,7 +4261,7 @@ impl Engine {
 
     /// Execute a shard step — evaluate file shards and write results to workflow state.
     #[allow(clippy::too_many_arguments)]
-    async fn execute_shard_step(
+    pub(crate) async fn execute_shard_step(
         &self,
         shard_config: &butterflow_models::step::UseShard,
         task: &Task,
@@ -5728,7 +4589,7 @@ impl Engine {
 
     /// Execute a single RunScript step
     #[allow(clippy::too_many_arguments)]
-    async fn execute_run_script_step(
+    pub(crate) async fn execute_run_script_step(
         &self,
         runner: &dyn Runner,
         run: &str,
@@ -5846,7 +4707,7 @@ impl Engine {
         self.finalize_step_execution(task, output?, prepared).await
     }
 
-    fn prepare_step_execution(
+    pub(crate) fn prepare_step_execution(
         &self,
         step_env: &Option<HashMap<String, String>>,
         node: &Node,
@@ -5943,7 +4804,7 @@ impl Engine {
         })
     }
 
-    async fn finalize_step_execution(
+    pub(crate) async fn finalize_step_execution(
         &self,
         task: &Task,
         _output: String,
@@ -6229,6 +5090,7 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
+    use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode};
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
