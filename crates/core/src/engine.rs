@@ -22,12 +22,13 @@ use crate::ai_handoff::{
 };
 use crate::config::{
     CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
-    ManagedGitWorktree, ShellCommandExecutionRequest, WorkflowRunConfig,
+    ShellCommandExecutionRequest, WorkflowRunConfig,
 };
 use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
+use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::utils::validate_workflow;
@@ -105,17 +106,17 @@ impl Drop for TaskCleanupGuard {
     }
 }
 
-struct ResolvedPullRequestConfig {
-    title: String,
-    body: Option<String>,
-    draft: bool,
-    base: Option<String>,
-    branch: String,
+pub(crate) struct ResolvedPullRequestConfig {
+    pub(crate) title: String,
+    pub(crate) body: Option<String>,
+    pub(crate) draft: bool,
+    pub(crate) base: Option<String>,
+    pub(crate) branch: String,
 }
 
-const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+pub(crate) const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
 
-fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+pub(crate) fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
     format!(
         "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
         serde_json::json!({
@@ -127,7 +128,9 @@ fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
     )
 }
 
-fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, serde_json::Value> {
+pub(crate) fn resolve_workflow_run_params(
+    workflow_run: &WorkflowRun,
+) -> HashMap<String, serde_json::Value> {
     workflow_run
         .workflow
         .params
@@ -266,7 +269,7 @@ pub fn select_shard_scan_eligible_files(
     }
 }
 
-fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
+pub(crate) fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
     crate::git_ops::is_cloud_mode()
         || (enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some()))
 }
@@ -812,164 +815,20 @@ impl Engine {
         }
     }
 
-    fn resolve_pull_request_config(
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve_pull_request_config(
         &self,
         task: &Task,
         node: &Node,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Option<ResolvedPullRequestConfig>> {
-        if !should_manage_git_for_node(
-            node,
-            self.workflow_run_config.managed_git.enable_managed_git,
-        ) {
-            return Ok(None);
-        }
-
-        let task_expr_ctx = crate::git_ops::build_task_expression_context(&task.id.to_string());
-        let configured_branch = node.branch_name.as_ref().map(|tmpl| {
-            resolve_string_with_expression(
-                tmpl,
-                params,
-                &HashMap::new(),
-                task.matrix_values.as_ref(),
-                None,
-                Some(&task_expr_ctx),
-            )
-            .unwrap_or_else(|_| format!("codemod-{}", task_expr_ctx.signature))
-        });
-        let branch = crate::git_ops::resolve_branch_name(
-            configured_branch.as_deref(),
-            &task_expr_ctx.signature,
-        );
-
-        let (title, body, draft, base) = if let Some(pr_config) = &node.pull_request {
-            let title = resolve_string_with_expression(
-                &pr_config.title,
-                params,
-                &HashMap::new(),
-                task.matrix_values.as_ref(),
-                None,
-                Some(&task_expr_ctx),
-            )
-            .unwrap_or_else(|_| pr_config.title.clone());
-
-            let body = pr_config.body.as_ref().map(|b| {
-                resolve_string_with_expression(
-                    b,
-                    params,
-                    &HashMap::new(),
-                    task.matrix_values.as_ref(),
-                    None,
-                    Some(&task_expr_ctx),
-                )
-                .unwrap_or_else(|_| b.clone())
-            });
-
-            (
-                title,
-                body,
-                pr_config.draft.unwrap_or(false),
-                pr_config.base.clone(),
-            )
-        } else {
-            (node.name.clone(), None, false, None)
-        };
-
-        Ok(Some(ResolvedPullRequestConfig {
-            title,
-            body,
-            draft,
-            base,
-            branch,
-        }))
+        ManagedGitService::new(self).resolve_pull_request_config(task, node, params)
     }
 
     pub async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
-        let task = self.state_adapter.lock().await.get_task(task_id).await?;
-        let workflow_run = self
-            .state_adapter
-            .lock()
+        ManagedGitService::new(self)
+            .create_pull_request_for_task(task_id)
             .await
-            .get_workflow_run(task.workflow_run_id)
-            .await?;
-        let node = workflow_run
-            .workflow
-            .nodes
-            .iter()
-            .find(|node| node.id == task.node_id)
-            .ok_or_else(|| Error::Runtime(format!("Node '{}' not found for task", task.node_id)))?;
-        let resolved_params = resolve_workflow_run_params(&workflow_run);
-
-        let pr = self
-            .resolve_pull_request_config(&task, node, &resolved_params)?
-            .ok_or_else(|| {
-                Error::Runtime("Task is not eligible for pull request creation".to_string())
-            })?;
-
-        let _ = self
-            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
-            .await;
-
-        let _ = self
-            .append_task_log(task_id, "Publishing branch and creating pull request")
-            .await;
-
-        let pr_url = match async {
-            crate::git_ops::push_branch(
-                &pr.branch,
-                &self.workflow_run_config.execution.target_path,
-            )
-            .await?;
-
-            crate::git_ops::create_pull_request(
-                &pr.title,
-                pr.body.as_deref(),
-                pr.draft,
-                &pr.branch,
-                pr.base.as_deref(),
-                &task.id.to_string(),
-                &self.workflow_run_config.execution.target_path,
-            )
-            .await
-        }
-        .await
-        {
-            Ok(pr_url) => pr_url,
-            Err(error) => {
-                let _ = self
-                    .append_task_log(
-                        task_id,
-                        format!("Branch publication and pull request creation failed: {error}"),
-                    )
-                    .await;
-                let _ = self
-                    .append_task_log(
-                        task_id,
-                        "Use create-pr to retry after fixing the remote or permissions",
-                    )
-                    .await;
-                self.emit_error(format!(
-                    "Task {} ({}) branch publication/PR creation failed: {}",
-                    task.id, node.id, error
-                ));
-                return Ok(None);
-            }
-        };
-
-        match &pr_url {
-            Some(pr_url) => {
-                let _ = self
-                    .append_task_log(task_id, format!("Pull request created: {}", pr_url))
-                    .await;
-            }
-            None => {
-                let _ = self
-                    .append_task_log(task_id, "Pull request created successfully")
-                    .await;
-            }
-        }
-
-        Ok(pr_url)
     }
 
     fn emit_ai_instructions(
@@ -1083,7 +942,7 @@ impl Engine {
         self.workflow_run_config.output.quiet = quiet;
     }
 
-    fn emit_error(&self, message: String) {
+    pub(crate) fn emit_error(&self, message: String) {
         if !self.workflow_run_config.output.quiet {
             error!("{message}");
         }
@@ -1217,7 +1076,8 @@ impl Engine {
         let task_completion_notify = Arc::clone(&self.task_completion_notify);
         let panic_task_completion_notify = Arc::clone(&self.task_completion_notify);
 
-        let shared_worktree_cleanup = Arc::new(std::sync::Mutex::new(None::<(PathBuf, PathBuf)>));
+        let shared_worktree_cleanup: WorktreeCleanup =
+            Arc::new(std::sync::Mutex::new(None::<(PathBuf, PathBuf)>));
         let shared_worktree_cleanup_for_task = Arc::clone(&shared_worktree_cleanup);
         let shared_worktree_cleanup_for_panic = Arc::clone(&shared_worktree_cleanup);
 
@@ -1231,224 +1091,86 @@ impl Engine {
             rt.block_on(async move {
                 let mut engine = engine;
                 let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
-                    let _ = engine
-                        .append_task_log(task_id, "Task execution starting")
-                        .await;
-                    let task_after_log = {
+
+                let _ = engine.append_task_log(task_id, "Task execution starting").await;
+                let task_after_log = {
+                    let adapter = engine.state_adapter.lock().await;
+                    adapter.get_task(task_id).await.ok()
+                };
+                if let Some(task_after_log) = task_after_log {
+                    debug!(
+                        "task {} startup log persisted; count={}, last={:?}",
+                        task_id,
+                        task_after_log.logs.len(),
+                        task_after_log.logs.last()
+                    );
+                }
+
+                let task = {
+                    let adapter = engine.state_adapter.lock().await;
+                    adapter.get_task(task_id).await.ok()
+                };
+                if let Some(task) = task {
+                    let workflow_run = {
                         let adapter = engine.state_adapter.lock().await;
-                        adapter.get_task(task_id).await.ok()
+                        adapter.get_workflow_run(task.workflow_run_id).await.ok()
                     };
-                    if let Some(task_after_log) = task_after_log {
-                        debug!(
-                            "task {} startup log persisted; count={}, last={:?}",
-                            task_id,
-                            task_after_log.logs.len(),
-                            task_after_log.logs.last()
-                        );
-                    }
-                    let task = {
-                        let adapter = engine.state_adapter.lock().await;
-                        adapter.get_task(task_id).await.ok()
-                    };
-                    if let Some(task) = task {
-                        let workflow_run = {
-                            let adapter = engine.state_adapter.lock().await;
-                            adapter.get_workflow_run(task.workflow_run_id).await.ok()
-                        };
-                        if let Some(workflow_run) = workflow_run {
-                            if let Some(node) = workflow_run
-                                .workflow
-                                .nodes
-                                .iter()
-                                .find(|node| node.id == task.node_id)
-                            {
-                                if engine.workflow_run_config.managed_git.enable_worktrees
-                                    && should_manage_git_for_node(
+                    if let Some(workflow_run) = workflow_run {
+                        if let Some(node) = workflow_run
+                            .workflow
+                            .nodes
+                            .iter()
+                            .find(|node| node.id == task.node_id)
+                        {
+                                if let Err(error) = ManagedGitService::prepare_task_worktree(
+                                        &mut engine,
+                                        task_id,
+                                        &task,
+                                        &workflow_run,
                                         node,
-                                        engine.workflow_run_config.managed_git.enable_managed_git,
+                                        &shared_worktree_cleanup_for_task,
                                     )
-                                {
-                                    let resolved_params =
-                                        resolve_workflow_run_params(&workflow_run);
-                                    let ctx =
-                                        crate::git_ops::build_task_expression_context(&task.id.to_string());
-                                    let configured_branch =
-                                        node.branch_name.as_ref().map(|tmpl| {
-                                            resolve_string_with_expression(
-                                                tmpl,
-                                                &resolved_params,
-                                                &HashMap::new(),
-                                                task.matrix_values.as_ref(),
-                                                None,
-                                                Some(&ctx),
-                                            )
-                                            .unwrap_or_else(|_| {
-                                                format!("codemod-{}", ctx.signature)
-                                            })
-                                        });
-                                    let branch = crate::git_ops::resolve_branch_name(
-                                        configured_branch.as_deref(),
-                                        &ctx.signature,
-                                    );
-                                    let base_target_path =
-                                        engine.workflow_run_config.execution.target_path.clone();
-                                    let _ = engine
-                                        .append_task_log(
-                                            task_id,
-                                            format!("Resolving git repo root for branch {branch}"),
-                                        )
-                                        .await;
-                                    match tokio::time::timeout(
-                                        tokio::time::Duration::from_secs(15),
-                                        crate::git_ops::repo_root(&base_target_path),
-                                    )
-                                    .await
-                                    {
-                                        Err(_) => {
-                                            let message = format!(
-                                                "Timed out resolving repo root for git worktree on branch {branch}"
-                                            );
-                                            let _ = engine.append_task_log(task_id, &message).await;
-                                            engine.emit_error(format!(
-                                                "Failed to resolve repo root for task {}: {}",
-                                                task_id, message
-                                            ));
-                                            let _ =
-                                                engine.mark_task_as_failed(task_id, &message).await;
-                                            return;
-                                        }
-                                        Ok(Err(error)) => {
-                                            let message = format!(
-                                                "Failed to resolve repo root for git worktree: {}",
-                                                error
-                                            );
-                                            let _ = engine.append_task_log(task_id, &message).await;
-                                            engine.emit_error(format!(
-                                                "Failed to resolve repo root for task {}: {}",
-                                                task_id, error
-                                            ));
-                                            let _ =
-                                                engine.mark_task_as_failed(task_id, &message).await;
-                                            return;
-                                        }
-                                        Ok(Ok(repo_root)) => {
-                                            let _ = engine
-                                                .append_task_log(
-                                                    task_id,
-                                                    format!(
-                                                        "Creating git worktree for branch {} in {}",
-                                                        branch,
-                                                        repo_root.display()
-                                                    ),
-                                                )
-                                                .await;
-                                            match tokio::time::timeout(
-                                                tokio::time::Duration::from_secs(120),
-                                                crate::git_ops::create_worktree(
-                                                    &repo_root,
-                                                    &branch,
-                                                    &task.id.to_string(),
-                                                ),
-                                            )
-                                            .await
-                                            {
-                                                Err(_) => {
-                                                    let message = format!(
-                                                        "Timed out creating git worktree for branch {branch}"
-                                                    );
-                                                    let _ = engine
-                                                        .append_task_log(task_id, &message)
-                                                        .await;
-                                                    engine.emit_error(format!(
-                                                        "Failed to prepare git worktree for task {}: {}",
-                                                        task_id, message
-                                                    ));
-                                                    let _ = engine
-                                                        .mark_task_as_failed(task_id, &message)
-                                                        .await;
-                                                    return;
-                                                }
-                                                Ok(Err(error)) => {
-                                                    let message = format!(
-                                                        "Failed to prepare git worktree: {}",
-                                                        error
-                                                    );
-                                                    let _ = engine
-                                                        .append_task_log(task_id, &message)
-                                                        .await;
-                                                    engine.emit_error(format!(
-                                                        "Failed to prepare git worktree for task {}: {}",
-                                                        task_id, error
-                                                    ));
-                                                    let _ = engine
-                                                        .mark_task_as_failed(task_id, &message)
-                                                        .await;
-                                                    return;
-                                                }
-                                                Ok(Ok(worktree_path)) => {
-                                                    engine.workflow_run_config.execution.target_path =
-                                                        worktree_path.clone();
-                                                    engine.workflow_run_config.managed_git.managed_git_worktree =
-                                                        Some(ManagedGitWorktree {
-                                                            branch,
-                                                            path: worktree_path.clone(),
-                                                        });
-                                                    let _ = engine
-                                                        .append_task_log(
-                                                            task_id,
-                                                            format!(
-                                                                "Git worktree ready at {}",
-                                                                worktree_path.display()
-                                                            ),
-                                                        )
-                                                        .await;
-                                                    if let Ok(mut cleanup) =
-                                                        shared_worktree_cleanup_for_task.lock()
-                                                    {
-                                                        *cleanup = Some((repo_root, worktree_path));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                .await
+                            {
+                                let message = error.to_string();
+                                let _ = engine.append_task_log(task_id, &message).await;
+                                engine.emit_error(format!(
+                                    "Failed to prepare git worktree for task {}: {}",
+                                    task_id, message
+                                ));
+                                let _ = engine.mark_task_as_failed(task_id, &message).await;
+                                return;
                             }
                         }
                     }
+                }
 
-                    let task_timeout = tokio::time::Duration::from_secs(45 * 60);
-                    let _ = engine
-                        .append_task_log(task_id, "Pre-execution setup complete")
-                        .await;
-                    let _ = engine
-                        .append_task_log(task_id, "Entering execute_task")
-                        .await;
+                let task_timeout = tokio::time::Duration::from_secs(45 * 60);
+                let _ = engine
+                    .append_task_log(task_id, "Pre-execution setup complete")
+                    .await;
+                let _ = engine
+                    .append_task_log(task_id, "Entering execute_task")
+                    .await;
 
-                    match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
-                        Ok(Ok(())) => {
-                            debug!("Task {} completed successfully", task_id);
-                            cleanup_guard.mark_sent();
-                        }
-                        Ok(Err(Error::Deferred(message))) => {
-                            let _ = engine
-                                .append_task_log(
-                                    task_id,
-                                    format!(
-                                        "Task returned to awaiting trigger: {message}"
-                                    ),
-                                )
-                                .await;
-                            let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
-                            cleanup_guard.mark_sent();
-                        }
-                        Ok(Err(e)) => {
-                            let needs_fallback_failure_mark = match engine
-                                .state_adapter
-                                .lock()
-                                .await
-                                .get_task(task_id)
-                                .await
-                            {
+                match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
+                    Ok(Ok(())) => {
+                        debug!("Task {} completed successfully", task_id);
+                        cleanup_guard.mark_sent();
+                    }
+                    Ok(Err(Error::Deferred(message))) => {
+                        let _ = engine
+                            .append_task_log(
+                                task_id,
+                                format!("Task returned to awaiting trigger: {message}"),
+                            )
+                            .await;
+                        let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
+                        cleanup_guard.mark_sent();
+                    }
+                    Ok(Err(e)) => {
+                        let needs_fallback_failure_mark =
+                            match engine.state_adapter.lock().await.get_task(task_id).await {
                                 Ok(current_task) => !matches!(
                                     current_task.status,
                                     TaskStatus::Failed
@@ -1459,48 +1181,36 @@ impl Engine {
                                 Err(_) => true,
                             };
 
-                            if needs_fallback_failure_mark {
-                                let _ = engine
-                                    .append_task_log(
-                                        task_id,
-                                        format!("Task execution failed before completion: {}", e),
-                                    )
-                                    .await;
-                                let _ = engine.mark_task_as_failed(task_id, &e.to_string()).await;
-                            }
-                            engine.emit_error(format!("Task {} execution failed: {}", task_id, e));
+                        if needs_fallback_failure_mark {
+                            let _ = engine
+                                .append_task_log(
+                                    task_id,
+                                    format!("Task execution failed before completion: {}", e),
+                                )
+                                .await;
+                            let _ = engine.mark_task_as_failed(task_id, &e.to_string()).await;
                         }
-                        Err(_) => {
-                            engine.emit_error(format!(
-                                "Task {} timed out after {} seconds",
-                                task_id,
-                                task_timeout.as_secs()
-                            ));
-                            if let Err(e) =
-                                engine.mark_task_as_failed(task_id, "Task timed out").await
-                            {
-                                engine.emit_error(format!(
-                                    "Failed to mark task {} as failed: {}",
-                                    task_id, e
-                                ));
-                            }
-                        }
+                        engine.emit_error(format!("Task {} execution failed: {}", task_id, e));
                     }
-
-                    let worktree_cleanup = shared_worktree_cleanup
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .take();
-                    if let Some((repo_root, worktree_path)) = worktree_cleanup {
-                        if let Err(error) =
-                            crate::git_ops::remove_worktree(&repo_root, &worktree_path).await
+                    Err(_) => {
+                        engine.emit_error(format!(
+                            "Task {} timed out after {} seconds",
+                            task_id,
+                            task_timeout.as_secs()
+                        ));
+                        if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
                         {
                             engine.emit_error(format!(
-                                "Failed to clean up git worktree for task {}: {}",
-                                task_id, error
+                                "Failed to mark task {} as failed: {}",
+                                task_id, e
                             ));
                         }
+                    }
                 }
+
+                ManagedGitService::new(&engine)
+                    .cleanup_worktree(task_id, &shared_worktree_cleanup, false)
+                    .await;
             });
         });
 
@@ -1514,20 +1224,9 @@ impl Engine {
                 cleanup_rt.block_on(async move {
                     let engine = panic_engine;
                     let message = format!("Task thread panicked: {panic_message}");
-                    let worktree_cleanup = shared_worktree_cleanup_for_panic
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .take();
-                    if let Some((repo_root, worktree_path)) = worktree_cleanup {
-                        if let Err(error) =
-                            crate::git_ops::remove_worktree(&repo_root, &worktree_path).await
-                        {
-                            engine.emit_error(format!(
-                                "Failed to clean up git worktree for panicked task {}: {}",
-                                task_id, error
-                            ));
-                        }
-                    }
+                    ManagedGitService::new(&engine)
+                        .cleanup_worktree(task_id, &shared_worktree_cleanup_for_panic, true)
+                        .await;
                     let _ = engine.append_task_log(task_id, &message).await;
                     let _ = engine.mark_task_as_failed(task_id, &message).await;
                     panic_task_completion_notify.notify_one();
@@ -2957,32 +2656,14 @@ impl Engine {
             &task.id.to_string(),
         ));
         let managed_branch_name = if manage_git {
-            if let Some(worktree) = &self.workflow_run_config.managed_git.managed_git_worktree {
-                Some(worktree.branch.clone())
-            } else {
-                let ctx = task_expr_ctx.as_ref().unwrap();
-                let configured_branch = node.branch_name.as_ref().map(|tmpl| {
-                    resolve_string_with_expression(
-                        tmpl,
-                        &resolved_params,
-                        &HashMap::new(),
-                        task.matrix_values.as_ref(),
-                        None,
-                        Some(ctx),
-                    )
-                    .unwrap_or_else(|_| format!("codemod-{}", ctx.signature))
-                });
-                let branch = crate::git_ops::resolve_branch_name(
-                    configured_branch.as_deref(),
-                    &ctx.signature,
-                );
-                crate::git_ops::checkout_branch(
-                    &branch,
-                    &self.workflow_run_config.execution.target_path,
+            ManagedGitService::new(self)
+                .begin_task_branch(
+                    &task,
+                    node,
+                    &resolved_params,
+                    task_expr_ctx.as_ref().unwrap(),
                 )
-                .await?;
-                Some(branch)
-            }
+                .await?
         } else {
             None
         };
@@ -3277,176 +2958,16 @@ impl Engine {
 
         // Managed git mode: finalize — fallback commit if needed, then push + create PR
         if manage_git {
-            let _ = self
-                .append_task_log(task_id, "Step execution finished; finalizing git state")
-                .await;
-            if let Some(ref branch) = managed_branch_name {
-                let target_path = &self.workflow_run_config.execution.target_path;
-
-                let git_step_logger = self.structured_logger.with_context(StepContext {
-                    step_name: "Push & create pull request".to_string(),
-                    step_index: node.steps.len(),
-                    node_id: node.id.clone(),
-                    node_name: node.name.clone(),
-                    task_id: task_id.to_string(),
-                    step_id: Some("_codemod_auto_push".to_string()),
-                });
-
-                git_step_logger.step_start();
-                if !git_step_logger.is_jsonl() && !self.workflow_run_config.output.quiet {
-                    println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
-                }
-                let git_step_start = std::time::Instant::now();
-
-                // If no explicit commit checkpoints were created but there are
-                // uncommitted changes, create a fallback commit using the node name.
-                if !had_commit_checkpoint {
-                    let _ = self
-                        .append_task_log(task_id, "Checking worktree for remaining changes")
-                        .await;
-                    if let Ok(true) = crate::git_ops::has_changes(target_path).await {
-                        slog!(
-                            git_step_logger,
-                            info,
-                            "No commit checkpoints in node '{}' but changes detected — creating fallback commit",
-                            node.name
-                        );
-                        match crate::git_ops::commit(&node.name, &[], true, target_path).await {
-                            Ok(true) => {
-                                had_commit_checkpoint = true;
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                self.emit_error(format!("Fallback commit failed: {}", e));
-                                // Non-fatal: continue to PR creation attempt
-                            }
-                        }
-                    }
-                }
-
-                // Push and create PR if any commits were made
-                if had_commit_checkpoint {
-                    enum PullRequestOutcome {
-                        Deferred,
-                        Created(Option<String>),
-                    }
-
-                    let _ = self
-                        .append_task_log(task_id, "Publishing branch and creating pull request")
-                        .await;
-                    let push_and_pr_result: Result<PullRequestOutcome> = async {
-                        let pr = self
-                            .resolve_pull_request_config(&task, node, &resolved_params)?
-                            .ok_or_else(|| {
-                                Error::Runtime(
-                                    "Task is not eligible for pull request creation".to_string(),
-                                )
-                            })?;
-                        let _ = self
-                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
-                            .await;
-
-                        if let Some(approval_callback) =
-                            &self.workflow_run_config.interaction.pull_request_approval_callback
-                        {
-                            let approved = approval_callback(&crate::config::PullRequestCreationRequest {
-                                title: pr.title.clone(),
-                                body: pr.body.clone(),
-                                draft: pr.draft,
-                                head: pr.branch.clone(),
-                                base: pr.base.clone(),
-                                node_id: node.id.clone(),
-                                node_name: node.name.clone(),
-                                task_id: task.id.to_string(),
-                            })
-                            .map_err(|error| Error::Runtime(error.to_string()))?;
-                            if !approved {
-                                let _ = self
-                                    .append_task_log(
-                                    task_id,
-                                        "Branch publication and pull request creation deferred; use create-pr to continue later",
-                                    )
-                                    .await;
-                                return Ok(PullRequestOutcome::Deferred);
-                            }
-                        }
-
-                        crate::git_ops::push_branch(branch, target_path).await?;
-
-                        crate::git_ops::create_pull_request(
-                            &pr.title,
-                            pr.body.as_deref(),
-                            pr.draft,
-                            &pr.branch,
-                            pr.base.as_deref(),
-                            &task.id.to_string(),
-                            target_path,
-                        )
-                        .await
-                        .map(PullRequestOutcome::Created)
-                    }
-                    .await;
-
-                    match &push_and_pr_result {
-                        Ok(PullRequestOutcome::Created(Some(pr_url))) => {
-                            slog!(git_step_logger, info, "Pull request created: {}", pr_url);
-                            let _ = self
-                                .append_task_log(
-                                    task_id,
-                                    format!("Pull request created: {}", pr_url),
-                                )
-                                .await;
-                        }
-                        Ok(PullRequestOutcome::Created(None)) => {
-                            slog!(git_step_logger, info, "Pull request created successfully");
-                            let _ = self
-                                .append_task_log(task_id, "Pull request created successfully")
-                                .await;
-                        }
-                        Ok(PullRequestOutcome::Deferred) => {
-                            slog!(git_step_logger, info, "Pull request creation deferred");
-                        }
-                        _ => {}
-                    }
-
-                    if let Err(e) = push_and_pr_result {
-                        git_step_logger
-                            .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-                        let _ = self
-                            .append_task_log(
-                                task_id,
-                                format!("Branch publication and pull request creation failed: {e}"),
-                            )
-                            .await;
-                        let _ = self
-                            .append_task_log(
-                                task_id,
-                                "Use create-pr to retry after fixing the remote or permissions",
-                            )
-                            .await;
-                        self.emit_error(format!(
-                            "Task {} ({}) branch publication/PR creation failed: {}",
-                            task_id, node.id, e
-                        ));
-                        return Err(e);
-                    } else {
-                        git_step_logger
-                            .step_end("success", git_step_start.elapsed().as_millis() as u64);
-                    }
-                } else {
-                    let _ = self
-                        .append_task_log(task_id, "No changes detected; no PR created")
-                        .await;
-                    slog!(
-                        git_step_logger,
-                        info,
-                        "No changes detected in node '{}' — skipping push and PR creation",
-                        node.name
-                    );
-                    git_step_logger
-                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
-                }
-            }
+            ManagedGitService::new(self)
+                .finalize_task(
+                    task_id,
+                    &task,
+                    node,
+                    &resolved_params,
+                    managed_branch_name.as_ref(),
+                    &mut had_commit_checkpoint,
+                )
+                .await?;
         }
 
         // Prepare environment variables

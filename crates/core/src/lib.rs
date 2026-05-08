@@ -7,6 +7,7 @@ pub(crate) mod execution_stats;
 pub mod file_ops;
 pub mod git_ops;
 pub(crate) mod jssg_execution_service;
+pub(crate) mod managed_git_service;
 pub(crate) mod periodic;
 pub mod registry;
 pub mod report;
