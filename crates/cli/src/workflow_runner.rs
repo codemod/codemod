@@ -41,8 +41,9 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         "Failed to parse workflow file: {}",
         engine.get_workflow_file_path().display()
     ))?;
-    let auto_launch_tui =
-        !config.no_interactive && !config.dry_run && workflow_has_manual_steps(&workflow);
+    let auto_launch_tui = !config.interaction.no_interactive
+        && !config.execution.dry_run
+        && workflow_has_manual_steps(&workflow);
 
     let started = std::time::Instant::now();
 
@@ -56,9 +57,9 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
             engine.clone(),
             workflow_run_id,
             workflow,
-            config.params,
-            Some(config.bundle_path),
-            config.capabilities.as_ref(),
+            config.execution.params,
+            Some(config.execution.bundle_path),
+            config.execution.capabilities.as_ref(),
         )
         .await
         .context("Failed to run workflow")?;
@@ -69,9 +70,9 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         let workflow_run_id = engine
             .run_workflow(
                 workflow,
-                config.params,
-                Some(config.bundle_path),
-                config.capabilities.as_ref(),
+                config.execution.params,
+                Some(config.execution.bundle_path),
+                config.execution.capabilities.as_ref(),
             )
             .await
             .context("Failed to run workflow")?;
@@ -79,9 +80,13 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         workflow_run_id
     };
 
-    if !auto_launch_tui && config.wait_for_completion {
-        wait_for_workflow_completion(engine, workflow_run_id.to_string(), config.no_interactive)
-            .await?;
+    if !auto_launch_tui && config.execution.wait_for_completion {
+        wait_for_workflow_completion(
+            engine,
+            workflow_run_id.to_string(),
+            config.interaction.no_interactive,
+        )
+        .await?;
     }
 
     let seconds = started.elapsed().as_millis() as f64 / 1000.0;

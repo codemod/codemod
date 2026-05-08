@@ -53,6 +53,38 @@ type MatrixTaskSnapshot = Vec<(
     Vec<String>,
 )>;
 
+macro_rules! workflow_run_config {
+    ($($field:ident : $value:expr,)* ..WorkflowRunConfig::default() $(,)?) => {{
+        let mut config = WorkflowRunConfig::default();
+        $(workflow_run_config!(@set config, $field, $value);)*
+        config
+    }};
+    (@set $config:ident, shell_command_approval_callback, $value:expr) => {
+        $config.interaction.shell_command_approval_callback = $value;
+    };
+    (@set $config:ident, install_skill_executor, $value:expr) => {
+        $config.skill_install.install_skill_executor = $value;
+    };
+    (@set $config:ident, target_path, $value:expr) => {
+        $config.execution.target_path = $value;
+    };
+    (@set $config:ident, bundle_path, $value:expr) => {
+        $config.execution.bundle_path = $value;
+    };
+    (@set $config:ident, quiet, $value:expr) => {
+        $config.output.quiet = $value;
+    };
+    (@set $config:ident, enable_managed_git, $value:expr) => {
+        $config.managed_git.enable_managed_git = $value;
+    };
+    (@set $config:ident, enable_worktrees, $value:expr) => {
+        $config.managed_git.enable_worktrees = $value;
+    };
+    (@set $config:ident, capabilities, $value:expr) => {
+        $config.execution.capabilities = $value;
+    };
+}
+
 fn debarrel_bundle_path() -> Option<PathBuf> {
     let configured = std::env::var("CODEMOD_TEST_DEBARREL_BUNDLE")
         .ok()
@@ -1448,7 +1480,7 @@ async fn test_run_script_approval_callback_receives_command_to_be_executed() {
         })
     };
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         shell_command_approval_callback: Some(approval_callback),
         ..WorkflowRunConfig::default()
     };
@@ -1488,7 +1520,7 @@ async fn test_run_script_approval_callback_can_reject_execution() {
     let approval_callback: ShellCommandApprovalCallback =
         Arc::new(|_request: &ShellCommandExecutionRequest| Ok(false));
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         shell_command_approval_callback: Some(approval_callback),
         ..WorkflowRunConfig::default()
     };
@@ -1890,7 +1922,7 @@ async fn test_trigger_all_clears_matrix_master_terminal_metadata() {
 #[tokio::test]
 async fn test_panicking_task_thread_fails_child_and_reconciles_matrix_master() {
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
     };
@@ -1973,7 +2005,7 @@ async fn test_panicking_task_thread_cleans_up_git_worktree() {
     init_test_git_repo(repo_dir.path());
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
@@ -2047,7 +2079,7 @@ async fn test_panicking_task_thread_cleans_up_git_worktree() {
 #[tokio::test]
 async fn test_failing_install_skill_child_reconciles_matrix_master() {
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(FailingInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
     };
@@ -2133,7 +2165,7 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
     let bundle_dir = TempDir::new().unwrap();
     let config_bundle_dir = TempDir::new().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: config_bundle_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
@@ -2196,7 +2228,7 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
 async fn test_quiet_install_skill_request_stays_interactive() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "installed".to_string(),
@@ -2255,7 +2287,7 @@ async fn test_quiet_install_skill_request_stays_interactive() {
 async fn test_deferred_single_install_skill_can_be_retriggered() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let attempts = Arc::new(Mutex::new(0usize));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
             attempts: Arc::clone(&attempts),
         })),
@@ -2354,7 +2386,7 @@ async fn test_deferred_single_install_skill_can_be_retriggered() {
 async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let attempts = Arc::new(Mutex::new(0usize));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
             attempts: Arc::clone(&attempts),
         })),
@@ -2436,7 +2468,7 @@ async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting(
 async fn test_install_skill_success_output_is_appended_to_task_logs() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "Installed package skill `debarrel` for `claude` (project)".to_string(),
@@ -2715,7 +2747,7 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
     init_test_git_repo(repo_dir.path());
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         enable_managed_git: true,
         enable_worktrees: true,
@@ -2818,7 +2850,7 @@ async fn non_tui_workflow_run_skips_worktree_and_pull_request_flow() {
         .unwrap();
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         enable_managed_git: false,
         enable_worktrees: false,
@@ -2933,7 +2965,7 @@ export default function transform(ast) {
         .unwrap();
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: repo_dir.path().to_path_buf(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -3083,7 +3115,7 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -3217,7 +3249,7 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -4433,7 +4465,7 @@ message: "Found var declaration"
     };
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4504,7 +4536,7 @@ message: "Found interface declaration"
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4540,7 +4572,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
     create_test_file(temp_path, "test.js", "console.log('test');");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4599,7 +4631,7 @@ message: "Found console.log statement"
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4668,7 +4700,7 @@ function helper() {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4762,7 +4794,7 @@ interface ApiResponse {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4836,7 +4868,7 @@ function main() {
 "#,
     );
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4907,7 +4939,7 @@ var count = 0;
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4959,7 +4991,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     create_test_file(temp_path, "test.js", "console.log('test');");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5032,7 +5064,7 @@ export default function transform(root) {
     create_test_file(temp_path, "skipped_a.js", "var a = 2;\n");
     create_test_file(temp_path, "skipped_b.js", "var b = 3;\n");
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         target_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5201,7 +5233,7 @@ export default function transform(root) {
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: temp_path.to_path_buf(),
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5347,7 +5379,7 @@ export default function transform(root) {
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: temp_path.to_path_buf(),
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5429,7 +5461,7 @@ build/
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5535,7 +5567,7 @@ export default function transform(ast) {
     create_test_file(temp_path, "regular.js", "const normal = 'visible';");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5652,7 +5684,7 @@ export default function transform(ast) {
 
     // Create engine with workflow
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };

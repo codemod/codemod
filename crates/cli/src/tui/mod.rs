@@ -217,6 +217,7 @@ pub async fn run_workflow_tui(
     engine.set_quiet(true);
     engine
         .workflow_run_config_mut()
+        .output
         .capture_stdout_in_quiet_mode = false;
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -258,6 +259,7 @@ pub async fn run_workflow_tui_with_session(
     engine.set_quiet(true);
     engine
         .workflow_run_config_mut()
+        .output
         .capture_stdout_in_quiet_mode = false;
 
     let backend = CrosstermBackend::new(io::stdout());

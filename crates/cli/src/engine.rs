@@ -161,7 +161,11 @@ pub fn create_engine(
 
     let pre_run_callback: PreRunCallback = Box::new(move |path: &Path, dirty: bool, config| {
         if !allow_dirty {
-            dirty_check(path, dirty, config.dirty_git_approval_callback.as_ref())?;
+            dirty_check(
+                path,
+                dirty,
+                config.interaction.dirty_git_approval_callback.as_ref(),
+            )?;
         }
         Ok(())
     });
@@ -187,24 +191,35 @@ pub fn create_engine(
     let shell_command_approval_callback = create_shell_command_approval_callback(no_interactive);
 
     let config = WorkflowRunConfig {
-        pre_run_callback: Arc::new(Some(pre_run_callback)),
-        progress_callback: Arc::new(progress_callback),
-        dry_run,
-        target_path,
-        workflow_file_path,
-        bundle_path,
-        params,
-        registry_client,
-        capabilities_security_callback: Some(capabilities_security_callback),
-        capabilities,
-        no_interactive,
-        agent,
-        agent_selection_callback,
-        dry_run_callback,
-        skip_install_skill_steps,
-        output_format,
-        shell_command_approval_callback,
-        install_skill_executor,
+        execution: butterflow_core::config::WorkflowExecutionSettings {
+            workflow_file_path,
+            bundle_path,
+            target_path,
+            params,
+            progress_callback: Arc::new(progress_callback),
+            pre_run_callback: Arc::new(Some(pre_run_callback)),
+            dry_run,
+            registry_client,
+            capabilities,
+            capabilities_security_callback: Some(capabilities_security_callback),
+            ..Default::default()
+        },
+        interaction: butterflow_core::config::WorkflowInteractionSettings {
+            no_interactive,
+            agent,
+            agent_selection_callback,
+            shell_command_approval_callback,
+            ..Default::default()
+        },
+        output: butterflow_core::config::WorkflowOutputSettings {
+            output_format,
+            dry_run_callback,
+            ..Default::default()
+        },
+        skill_install: butterflow_core::config::SkillInstallSettings {
+            skip_install_skill_steps,
+            install_skill_executor,
+        },
         ..WorkflowRunConfig::default()
     };
 

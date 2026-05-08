@@ -95,11 +95,11 @@ fn apply_workflow_run_mode_to_config(
     cfg: &mut butterflow_core::config::WorkflowRunConfig,
     auto_launch_tui: bool,
 ) {
-    cfg.enable_managed_git = auto_launch_tui;
-    cfg.enable_worktrees = auto_launch_tui;
+    cfg.managed_git.enable_managed_git = auto_launch_tui;
+    cfg.managed_git.enable_worktrees = auto_launch_tui;
     if auto_launch_tui {
-        cfg.quiet = true;
-        cfg.capture_stdout_in_quiet_mode = false;
+        cfg.output.quiet = true;
+        cfg.output.capture_stdout_in_quiet_mode = false;
     }
 }
 
@@ -327,10 +327,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -341,10 +341,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(cfg.enable_managed_git);
-        assert!(cfg.enable_worktrees);
-        assert!(cfg.quiet);
-        assert!(!cfg.capture_stdout_in_quiet_mode);
+        assert!(cfg.managed_git.enable_managed_git);
+        assert!(cfg.managed_git.enable_worktrees);
+        assert!(cfg.output.quiet);
+        assert!(!cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -355,10 +355,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]

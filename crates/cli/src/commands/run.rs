@@ -329,10 +329,10 @@ pub async fn handler(
     // Set on both engine (used at runtime) and config (passed to run_workflow).
     if resolved_package.dry_run_only {
         let engine_config = engine.workflow_run_config_mut();
-        engine_config.auto_trigger_manual_steps = true;
-        engine_config.skip_shard_steps = true;
-        engine_config.skip_state_writes = true;
-        engine_config.flatten_matrix_tasks = true;
+        engine_config.execution.auto_trigger_manual_steps = true;
+        engine_config.execution.skip_shard_steps = true;
+        engine_config.execution.skip_state_writes = true;
+        engine_config.execution.flatten_matrix_tasks = true;
     }
 
     let run_result = run_workflow(&mut engine, config).await;
@@ -564,11 +564,11 @@ fn apply_package_run_mode_to_config(
     cfg: &mut butterflow_core::config::WorkflowRunConfig,
     auto_launch_tui: bool,
 ) {
-    cfg.enable_managed_git = auto_launch_tui;
-    cfg.enable_worktrees = auto_launch_tui;
+    cfg.managed_git.enable_managed_git = auto_launch_tui;
+    cfg.managed_git.enable_worktrees = auto_launch_tui;
     if auto_launch_tui {
-        cfg.quiet = true;
-        cfg.capture_stdout_in_quiet_mode = false;
+        cfg.output.quiet = true;
+        cfg.output.capture_stdout_in_quiet_mode = false;
     }
 }
 
@@ -1018,10 +1018,10 @@ mod tests {
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -1032,10 +1032,10 @@ mod tests {
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(cfg.enable_managed_git);
-        assert!(cfg.enable_worktrees);
-        assert!(cfg.quiet);
-        assert!(!cfg.capture_stdout_in_quiet_mode);
+        assert!(cfg.managed_git.enable_managed_git);
+        assert!(cfg.managed_git.enable_worktrees);
+        assert!(cfg.output.quiet);
+        assert!(!cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -1046,10 +1046,10 @@ mod tests {
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]

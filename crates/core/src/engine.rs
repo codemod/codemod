@@ -607,7 +607,7 @@ impl Engine {
         prompt: &str,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let working_dir = &self.workflow_run_config.target_path;
+        let working_dir = &self.workflow_run_config.execution.target_path;
         let full_prompt = if let Some(sys) = system_prompt {
             format!("{}\n\n{}", sys, prompt)
         } else {
@@ -664,7 +664,8 @@ impl Engine {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
         let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
-        let stream_live = should_stream_agent_output_live(self.workflow_run_config.quiet, logger);
+        let stream_live =
+            should_stream_agent_output_live(self.workflow_run_config.output.quiet, logger);
         let capture_output_for_relog = should_relog_captured_agent_output(logger);
         let stdout_reader = child.stdout.take().map(|stdout| {
             let log_tx = log_tx.clone();
@@ -831,7 +832,10 @@ impl Engine {
         node: &Node,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Option<ResolvedPullRequestConfig>> {
-        if !should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git) {
+        if !should_manage_git_for_node(
+            node,
+            self.workflow_run_config.managed_git.enable_managed_git,
+        ) {
             return Ok(None);
         }
 
@@ -925,7 +929,11 @@ impl Engine {
             .await;
 
         let pr_url = match async {
-            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
+            crate::git_ops::push_branch(
+                &pr.branch,
+                &self.workflow_run_config.execution.target_path,
+            )
+            .await?;
 
             crate::git_ops::create_pull_request(
                 &pr.title,
@@ -934,7 +942,7 @@ impl Engine {
                 &pr.branch,
                 pr.base.as_deref(),
                 &task.id.to_string(),
-                &self.workflow_run_config.target_path,
+                &self.workflow_run_config.execution.target_path,
             )
             .await
         }
@@ -991,7 +999,7 @@ impl Engine {
             }
             logger.log("info", resolved_prompt);
             logger.log("info", "[/AI INSTRUCTIONS]");
-        } else if !self.workflow_run_config.quiet {
+        } else if !self.workflow_run_config.output.quiet {
             println!();
             println!("[AI INSTRUCTIONS]");
             println!();
@@ -1029,7 +1037,7 @@ impl Engine {
     pub fn with_workflow_run_config(workflow_run_config: WorkflowRunConfig) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
@@ -1056,7 +1064,7 @@ impl Engine {
         workflow_run_config: WorkflowRunConfig,
     ) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> = Arc::new(Mutex::new(state_adapter));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
@@ -1074,11 +1082,11 @@ impl Engine {
 
     /// Enable or disable quiet mode (suppresses stdout/stderr when TUI is active)
     pub fn set_quiet(&mut self, quiet: bool) {
-        self.workflow_run_config.quiet = quiet;
+        self.workflow_run_config.output.quiet = quiet;
     }
 
     fn emit_error(&self, message: String) {
-        if !self.workflow_run_config.quiet {
+        if !self.workflow_run_config.output.quiet {
             error!("{message}");
         }
     }
@@ -1159,42 +1167,45 @@ impl Engine {
 
     /// Replace the progress callback used by workflow execution.
     pub fn set_progress_callback(&mut self, progress_callback: Arc<Option<ProgressCallback>>) {
-        self.workflow_run_config.progress_callback = progress_callback;
+        self.workflow_run_config.execution.progress_callback = progress_callback;
     }
 
     /// Set the human-readable name for this workflow run
     pub fn set_name(&mut self, name: Option<String>) {
-        self.workflow_run_config.name = name;
+        self.workflow_run_config.output.name = name;
     }
 
     /// Get the workflow file path
     pub fn get_workflow_file_path(&self) -> PathBuf {
-        self.workflow_run_config.workflow_file_path.clone()
+        self.workflow_run_config
+            .execution
+            .workflow_file_path
+            .clone()
     }
 
     /// Get the target path for this workflow run
     pub fn get_target_path(&self) -> PathBuf {
-        self.workflow_run_config.target_path.clone()
+        self.workflow_run_config.execution.target_path.clone()
     }
 
     /// Check if the engine is in dry-run mode
     pub fn is_dry_run(&self) -> bool {
-        self.workflow_run_config.dry_run
+        self.workflow_run_config.execution.dry_run
     }
 
     /// Enable or disable dry-run mode
     pub fn set_dry_run(&mut self, dry_run: bool) {
-        self.workflow_run_config.dry_run = dry_run;
+        self.workflow_run_config.execution.dry_run = dry_run;
     }
 
     /// Get the current capabilities
     pub fn get_capabilities(&self) -> &Option<HashSet<LlrtSupportedModules>> {
-        &self.workflow_run_config.capabilities
+        &self.workflow_run_config.execution.capabilities
     }
 
     /// Set the capabilities
     pub fn set_capabilities(&mut self, capabilities: Option<HashSet<LlrtSupportedModules>>) {
-        self.workflow_run_config.capabilities = capabilities;
+        self.workflow_run_config.execution.capabilities = capabilities;
     }
 
     /// Spawn a task asynchronously on a dedicated thread with its own runtime.
@@ -1253,10 +1264,10 @@ impl Engine {
                                 .iter()
                                 .find(|node| node.id == task.node_id)
                             {
-                                if engine.workflow_run_config.enable_worktrees
+                                if engine.workflow_run_config.managed_git.enable_worktrees
                                     && should_manage_git_for_node(
                                         node,
-                                        engine.workflow_run_config.enable_managed_git,
+                                        engine.workflow_run_config.managed_git.enable_managed_git,
                                     )
                                 {
                                     let resolved_params =
@@ -1282,7 +1293,7 @@ impl Engine {
                                         &ctx.signature,
                                     );
                                     let base_target_path =
-                                        engine.workflow_run_config.target_path.clone();
+                                        engine.workflow_run_config.execution.target_path.clone();
                                     let _ = engine
                                         .append_task_log(
                                             task_id,
@@ -1377,9 +1388,9 @@ impl Engine {
                                                     return;
                                                 }
                                                 Ok(Ok(worktree_path)) => {
-                                                    engine.workflow_run_config.target_path =
+                                                    engine.workflow_run_config.execution.target_path =
                                                         worktree_path.clone();
-                                                    engine.workflow_run_config.managed_git_worktree =
+                                                    engine.workflow_run_config.managed_git.managed_git_worktree =
                                                         Some(ManagedGitWorktree {
                                                             branch,
                                                             path: worktree_path.clone(),
@@ -1790,7 +1801,7 @@ impl Engine {
 
         // Flatten matrix nodes: replace all master+children with a single
         // regular task per node so it runs exactly once.
-        if self.workflow_run_config.flatten_matrix_tasks {
+        if self.workflow_run_config.execution.flatten_matrix_tasks {
             let mut matrix_node_ids = std::collections::BTreeSet::new();
             // Collect all node IDs that have matrix tasks
             for task in &tasks {
@@ -1852,8 +1863,8 @@ impl Engine {
             started_at: Utc::now(),
             ended_at: None,
             capabilities: capabilities.cloned(),
-            name: self.workflow_run_config.name.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
+            name: self.workflow_run_config.output.name.clone(),
+            target_path: Some(self.workflow_run_config.execution.target_path.clone()),
         };
 
         self.state_adapter
@@ -2366,6 +2377,7 @@ impl Engine {
         // Resolve the package
         let resolved_package = self
             .workflow_run_config
+            .execution
             .registry_client
             .resolve_package(source, None, false, None)
             .await
@@ -2412,7 +2424,7 @@ impl Engine {
         // operates on the correct directory, even when launched from a
         // different cwd selected by the caller.
         if let Some(target_path) = &workflow_run.target_path {
-            self.workflow_run_config.target_path = target_path.clone();
+            self.workflow_run_config.execution.target_path = target_path.clone();
         }
 
         // Create a workflow run diff to update the status
@@ -2489,7 +2501,7 @@ impl Engine {
             // Check if state has changed for matrix recompilation
             // Skip recompilation when matrix tasks are flattened (no dynamic expansion)
             let should_recompile = if has_matrix_strategies
-                && !self.workflow_run_config.flatten_matrix_tasks
+                && !self.workflow_run_config.execution.flatten_matrix_tasks
             {
                 let current_state = self
                     .state_adapter
@@ -2614,7 +2626,7 @@ impl Engine {
             let tasks_to_await_trigger = runnable_tasks_result.tasks_to_await_trigger;
             let mut runnable_tasks = runnable_tasks_result.runnable_tasks;
 
-            if self.workflow_run_config.auto_trigger_manual_steps {
+            if self.workflow_run_config.execution.auto_trigger_manual_steps {
                 // In auto-trigger mode (e.g. pro codemod dry-run), treat manual
                 // steps as immediately runnable instead of blocking — but only
                 // if their dependencies are satisfied (the scheduler adds manual
@@ -2929,15 +2941,17 @@ impl Engine {
 
         // Workflows that declare git outputs should use the managed branch/commit/PR path
         // in both cloud and local runs.
-        let manage_git =
-            should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git);
+        let manage_git = should_manage_git_for_node(
+            node,
+            self.workflow_run_config.managed_git.enable_managed_git,
+        );
         // Always build task expression context so CODEMOD_TASK_* env vars are
         // available as `task.*` template variables regardless of mode.
         let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
             &task.id.to_string(),
         ));
         let managed_branch_name = if manage_git {
-            if let Some(worktree) = &self.workflow_run_config.managed_git_worktree {
+            if let Some(worktree) = &self.workflow_run_config.managed_git.managed_git_worktree {
                 Some(worktree.branch.clone())
             } else {
                 let ctx = task_expr_ctx.as_ref().unwrap();
@@ -2956,8 +2970,11 @@ impl Engine {
                     configured_branch.as_deref(),
                     &ctx.signature,
                 );
-                crate::git_ops::checkout_branch(&branch, &self.workflow_run_config.target_path)
-                    .await?;
+                crate::git_ops::checkout_branch(
+                    &branch,
+                    &self.workflow_run_config.execution.target_path,
+                )
+                .await?;
                 Some(branch)
             }
         } else {
@@ -3021,9 +3038,9 @@ impl Engine {
             let step_logger = self.structured_logger.with_context(step_context);
 
             let runner: Box<dyn Runner> = match runtime_type {
-                RuntimeType::Direct => {
-                    Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet))
-                }
+                RuntimeType::Direct => Box::new(DirectRunner::with_quiet(
+                    self.workflow_run_config.output.quiet,
+                )),
                 RuntimeType::Docker => {
                     #[cfg(feature = "docker")]
                     {
@@ -3050,13 +3067,13 @@ impl Engine {
                 .append_task_log(task_id, format!("Step started: {}", step.name))
                 .await;
             step_logger.step_start();
-            if !step_logger.is_jsonl() && !self.workflow_run_config.quiet {
+            if !step_logger.is_jsonl() && !self.workflow_run_config.output.quiet {
                 println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
             }
             let step_start_time = std::time::Instant::now();
 
-            let quiet_capture = self.workflow_run_config.quiet
-                && self.workflow_run_config.capture_stdout_in_quiet_mode
+            let quiet_capture = self.workflow_run_config.output.quiet
+                && self.workflow_run_config.output.capture_stdout_in_quiet_mode
                 && !self.structured_logger.is_jsonl();
             let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
                 let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
@@ -3072,8 +3089,8 @@ impl Engine {
             // by writing directly to the saved real stdout fd.
             let _stdout_capture = if self.structured_logger.is_jsonl() {
                 StdoutCaptureGuard::start(Some(&step_logger), None)
-            } else if self.workflow_run_config.quiet
-                && self.workflow_run_config.capture_stdout_in_quiet_mode
+            } else if self.workflow_run_config.output.quiet
+                && self.workflow_run_config.output.capture_stdout_in_quiet_mode
             {
                 let output_heartbeat_callbacks = Arc::clone(&self.output_heartbeat_callbacks);
                 let line_callback = quiet_log_tx.as_ref().map(|log_tx| {
@@ -3107,7 +3124,7 @@ impl Engine {
                 &workflow_run.workflow,
                 &workflow_run.bundle_path,
                 &[],
-                &self.workflow_run_config.capabilities,
+                &self.workflow_run_config.execution.capabilities,
                 task_expr_ctx.as_ref(),
                 &step_logger,
             ))
@@ -3160,7 +3177,7 @@ impl Engine {
                                 &resolved_message,
                                 &paths,
                                 commit_config.allow_empty,
-                                &self.workflow_run_config.target_path,
+                                &self.workflow_run_config.execution.target_path,
                             )
                             .await
                             {
@@ -3256,7 +3273,7 @@ impl Engine {
                 .append_task_log(task_id, "Step execution finished; finalizing git state")
                 .await;
             if let Some(ref branch) = managed_branch_name {
-                let target_path = &self.workflow_run_config.target_path;
+                let target_path = &self.workflow_run_config.execution.target_path;
 
                 let git_step_logger = self.structured_logger.with_context(StepContext {
                     step_name: "Push & create pull request".to_string(),
@@ -3268,7 +3285,7 @@ impl Engine {
                 });
 
                 git_step_logger.step_start();
-                if !git_step_logger.is_jsonl() && !self.workflow_run_config.quiet {
+                if !git_step_logger.is_jsonl() && !self.workflow_run_config.output.quiet {
                     println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
                 }
                 let git_step_start = std::time::Instant::now();
@@ -3322,7 +3339,7 @@ impl Engine {
                             .await;
 
                         if let Some(approval_callback) =
-                            &self.workflow_run_config.pull_request_approval_callback
+                            &self.workflow_run_config.interaction.pull_request_approval_callback
                         {
                             let approved = approval_callback(&crate::config::PullRequestCreationRequest {
                                 title: pr.title.clone(),
@@ -3520,7 +3537,7 @@ impl Engine {
         match action {
             StepAction::RunScript(run) => {
                 // Skip run script steps in dry-run mode
-                if self.workflow_run_config.dry_run {
+                if self.workflow_run_config.execution.dry_run {
                     return Ok(());
                 }
                 self.execute_run_script_step(
@@ -3628,6 +3645,7 @@ impl Engine {
                             .map(|v| v.clone().into_iter().collect()),
                         capabilities_security_callback: self
                             .workflow_run_config
+                            .execution
                             .capabilities_security_callback
                             .clone(),
                     },
@@ -3657,7 +3675,7 @@ impl Engine {
                 .await
             }
             StepAction::AI(ai_config) => {
-                if self.workflow_run_config.dry_run {
+                if self.workflow_run_config.execution.dry_run {
                     info!("Skipping AI step in dry-run mode");
                     return Ok(());
                 }
@@ -3665,7 +3683,7 @@ impl Engine {
                     .await
             }
             StepAction::Shard(shard_config) => {
-                if self.workflow_run_config.skip_shard_steps {
+                if self.workflow_run_config.execution.skip_shard_steps {
                     info!("Skipping shard step in dry-run preview mode");
                     return Ok(());
                 }
@@ -3673,8 +3691,12 @@ impl Engine {
                     .await
             }
             StepAction::InstallSkill(install_skill) => {
-                if self.workflow_run_config.skip_install_skill_steps {
-                    if self.workflow_run_config.no_interactive {
+                if self
+                    .workflow_run_config
+                    .skill_install
+                    .skip_install_skill_steps
+                {
+                    if self.workflow_run_config.interaction.no_interactive {
                         eprintln!(
                             "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
                             install_skill.package
@@ -3688,7 +3710,7 @@ impl Engine {
                     return Ok(());
                 }
 
-                if self.workflow_run_config.dry_run {
+                if self.workflow_run_config.execution.dry_run {
                     eprintln!(
                         "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
                         install_skill.package
@@ -3696,8 +3718,11 @@ impl Engine {
                     return Ok(());
                 }
 
-                let Some(install_skill_executor) =
-                    self.workflow_run_config.install_skill_executor.as_ref()
+                let Some(install_skill_executor) = self
+                    .workflow_run_config
+                    .skill_install
+                    .install_skill_executor
+                    .as_ref()
                 else {
                     return Err(Error::Runtime(
                         "install-skill step requested but no install-skill executor is configured"
@@ -3710,14 +3735,15 @@ impl Engine {
                     self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
                 let request = InstallSkillExecutionRequest {
                     install_skill: install_skill.clone(),
-                    no_interactive: self.workflow_run_config.no_interactive,
-                    quiet: self.workflow_run_config.quiet,
+                    no_interactive: self.workflow_run_config.interaction.no_interactive,
+                    quiet: self.workflow_run_config.output.quiet,
                     bundle_path: bundle_path.clone(),
-                    target_path: self.workflow_run_config.target_path.clone(),
+                    target_path: self.workflow_run_config.execution.target_path.clone(),
                     env: prepared.env.clone(),
-                    output_format: self.workflow_run_config.output_format,
+                    output_format: self.workflow_run_config.output.output_format,
                     selection_prompt_callback: self
                         .workflow_run_config
+                        .interaction
                         .selection_prompt_callback
                         .clone(),
                 };
@@ -3760,7 +3786,7 @@ impl Engine {
         ast_grep: &UseAstGrep,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let bundle_path = self.workflow_run_config.bundle_path.clone();
+        let bundle_path = self.workflow_run_config.execution.bundle_path.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
 
@@ -3771,10 +3797,11 @@ impl Engine {
             )));
         }
 
-        if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_ref() {
+        if let Some(pre_run_callback) = self.workflow_run_config.execution.pre_run_callback.as_ref()
+        {
             pre_run_callback(
-                &self.workflow_run_config.target_path,
-                self.workflow_run_config.dry_run,
+                &self.workflow_run_config.execution.target_path,
+                self.workflow_run_config.execution.dry_run,
                 &self.workflow_run_config,
             )
             .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
@@ -3790,13 +3817,13 @@ impl Engine {
 
                 let execution_config = CodemodExecutionConfig {
                     pre_run_callback: None,
-                    progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    target_path: Some(self.workflow_run_config.target_path.clone()),
+                    progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
+                    target_path: Some(self.workflow_run_config.execution.target_path.clone()),
                     base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
                     explicit_files: None,
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-                    dry_run: self.workflow_run_config.dry_run,
+                    dry_run: self.workflow_run_config.execution.dry_run,
                     languages: Some(languages.iter().map(|l| l.to_string()).collect()),
                     threads: ast_grep.max_threads,
                     capabilities: None,
@@ -3871,7 +3898,12 @@ impl Engine {
                         }
                     };
 
-                    if let Some(callback) = self.workflow_run_config.progress_callback.as_ref() {
+                    if let Some(callback) = self
+                        .workflow_run_config
+                        .execution
+                        .progress_callback
+                        .as_ref()
+                    {
                         let callback = callback.callback.clone();
                         callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
                     }
@@ -3908,17 +3940,25 @@ impl Engine {
         // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
         let effective_bundle_path = bundle_path
             .as_ref()
-            .unwrap_or(&self.workflow_run_config.bundle_path);
+            .unwrap_or(&self.workflow_run_config.execution.bundle_path);
         let js_file_path = effective_bundle_path.join(&js_ast_grep.js_file);
 
         // Combine target_path with base_path if base_path is specified
         let target_path = if let Some(base_path) = &js_ast_grep.base_path {
-            self.workflow_run_config.target_path.join(base_path)
+            self.workflow_run_config
+                .execution
+                .target_path
+                .join(base_path)
         } else {
-            self.workflow_run_config.target_path.clone()
+            self.workflow_run_config.execution.target_path.clone()
         };
 
-        if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_deref() {
+        if let Some(pre_run_callback) = self
+            .workflow_run_config
+            .execution
+            .pre_run_callback
+            .as_deref()
+        {
             pre_run_callback(
                 target_path.as_path(),
                 js_ast_grep.dry_run.unwrap_or(false),
@@ -3948,7 +3988,7 @@ impl Engine {
 
         let capabilities_security_callback_clone =
             capabilities_data.capabilities_security_callback.clone();
-        let quiet = self.workflow_run_config.quiet;
+        let quiet = self.workflow_run_config.output.quiet;
         let pre_run_callback = PreRunCallback {
             callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
                 if let Some(callback) = &capabilities_security_callback_clone {
@@ -3999,13 +4039,14 @@ impl Engine {
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
-            progress_callback: self.workflow_run_config.progress_callback.clone(),
+            progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
             target_path: Some(target_path.clone()),
             base_path: None,
             include_globs: resolved_include,
             explicit_files,
             exclude_globs: resolved_exclude,
-            dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
+            dry_run: js_ast_grep.dry_run.unwrap_or(false)
+                || self.workflow_run_config.execution.dry_run,
             languages: Some(vec![js_ast_grep
                 .language
                 .clone()
@@ -4128,7 +4169,7 @@ impl Engine {
         let js_file_path_clone = js_file_path.clone();
         let resolver_clone = resolver.clone();
         let id_clone = Arc::new(id);
-        let progress_callback = self.workflow_run_config.progress_callback.clone();
+        let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
         let file_writer = Arc::clone(&self.file_writer);
         let selector_config = selector_config.map(Arc::new);
         let shared_state_context = if let Some(state) = initial_state {
@@ -4439,7 +4480,7 @@ impl Engine {
 
                                         // Report the change via callback if provided
                                         if let Some(callback) =
-                                            &self.workflow_run_config.dry_run_callback
+                                            &self.workflow_run_config.output.dry_run_callback
                                         {
                                             let original = if change_path == file_path {
                                                 content.clone()
@@ -4463,7 +4504,7 @@ impl Engine {
                                     } else {
                                         // Capture diff for report before writing (original content is still on disk)
                                         if let Some(callback) =
-                                            &self.workflow_run_config.dry_run_callback
+                                            &self.workflow_run_config.output.dry_run_callback
                                         {
                                             let original = if change_path == file_path {
                                                 content.clone()
@@ -4755,7 +4796,7 @@ impl Engine {
         // Persist shared state to the workflow state adapter. Dry-run executions
         // use the shared state context in-memory only, including shard pre-scans.
         if let Some(wf_run_id) = workflow_run_id {
-            if !self.workflow_run_config.skip_state_writes && !config.dry_run {
+            if !self.workflow_run_config.execution.skip_state_writes && !config.dry_run {
                 let persistable = shared_state_context.get_persistable();
                 let removals = shared_state_context.get_removals();
 
@@ -4850,7 +4891,7 @@ impl Engine {
         }
 
         // 2. Check if agent was explicitly specified via --agent
-        if let Some(ref agent_name) = self.workflow_run_config.agent {
+        if let Some(ref agent_name) = self.workflow_run_config.interaction.agent {
             if let Some(canonical) = resolve_agent_name(agent_name) {
                 slog!(logger, info, "Agent specified via --agent: {}", canonical);
                 if let Some(executable) = find_agent_executable(canonical) {
@@ -4923,8 +4964,12 @@ impl Engine {
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
-        if !self.workflow_run_config.no_interactive {
-            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
+        if !self.workflow_run_config.interaction.no_interactive {
+            if let Some(ref callback) = self
+                .workflow_run_config
+                .interaction
+                .agent_selection_callback
+            {
                 let agents = discover_installed_agents();
                 // Loop to allow preview → re-select flow
                 let mut selection_result = callback(&agents);
@@ -4937,7 +4982,7 @@ impl Engine {
                                 ai_config.system_prompt.as_deref(),
                                 &resolved_prompt,
                             );
-                            if !self.workflow_run_config.quiet {
+                            if !self.workflow_run_config.output.quiet {
                                 eprintln!();
                             }
                             selection_result = callback(&agents);
@@ -5047,7 +5092,7 @@ impl Engine {
             max_steps: ai_config.max_steps,
             tools: ai_config.tools.clone(),
             prompt: resolved_prompt,
-            working_dir: self.workflow_run_config.target_path.clone(),
+            working_dir: self.workflow_run_config.execution.target_path.clone(),
             llm_protocol: llm_provider,
         };
 
@@ -5165,6 +5210,7 @@ impl Engine {
         // Resolve the package (local path or registry package)
         let resolved_package = self
             .workflow_run_config
+            .execution
             .registry_client
             .resolve_package(&codemod.source, None, false, None)
             .await
@@ -5295,8 +5341,9 @@ impl Engine {
         slog!(logger, info, "Executing codemod workflow steps directly");
 
         // Create a direct runner for executing the codemod steps
-        let runner: Box<dyn Runner> =
-            Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet));
+        let runner: Box<dyn Runner> = Box::new(DirectRunner::with_quiet(
+            self.workflow_run_config.output.quiet,
+        ));
 
         // Build task expression context for variable resolution in codemod steps
         let codemod_task_expr_ctx =
@@ -5365,7 +5412,7 @@ impl Engine {
         use crate::shard::evaluate_builtin_shards;
         use butterflow_models::step::ShardMethod;
 
-        let target_path = self.workflow_run_config.target_path.clone();
+        let target_path = self.workflow_run_config.execution.target_path.clone();
 
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
@@ -5508,6 +5555,7 @@ impl Engine {
 
         let capabilities = self
             .workflow_run_config
+            .execution
             .capabilities
             .as_ref()
             .map(|v| v.clone().into_iter().collect());
@@ -5522,6 +5570,7 @@ impl Engine {
                 capabilities,
                 capabilities_security_callback: self
                     .workflow_run_config
+                    .execution
                     .capabilities_security_callback
                     .as_ref()
                     .map(|callback| callback.clone()),
@@ -5601,7 +5650,7 @@ impl Engine {
         use codemod_sandbox::sandbox::resolvers::OxcResolver;
         use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
-        let effective_bundle_path = &self.workflow_run_config.bundle_path;
+        let effective_bundle_path = &self.workflow_run_config.execution.bundle_path;
         let func_path = effective_bundle_path.join(&func.function);
 
         if !func_path.exists() {
@@ -5663,7 +5712,7 @@ impl Engine {
             script_path: &func_path,
             resolver,
             input,
-            capabilities: self.workflow_run_config.capabilities.clone(),
+            capabilities: self.workflow_run_config.execution.capabilities.clone(),
             target_directory: Some(target_path),
         };
 
@@ -5716,17 +5765,22 @@ impl Engine {
 
         if self
             .workflow_run_config
+            .interaction
             .shell_command_approval_callback
             .is_none()
             && !logger.is_jsonl()
-            && !self.workflow_run_config.quiet
+            && !self.workflow_run_config.output.quiet
         {
             eprintln!();
             eprintln!("{notice}");
             eprintln!();
         }
 
-        if let Some(approval_callback) = &self.workflow_run_config.shell_command_approval_callback {
+        if let Some(approval_callback) = &self
+            .workflow_run_config
+            .interaction
+            .shell_command_approval_callback
+        {
             let approved = approval_callback(&request).map_err(|error| {
                 Error::StepExecution(format!(
                     "Failed to confirm shell command execution for step '{}': {error}",
@@ -5804,7 +5858,7 @@ impl Engine {
         let mut env: HashMap<String, String> = std::env::vars().collect();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
-        if self.workflow_run_config.no_interactive {
+        if self.workflow_run_config.interaction.no_interactive {
             env.insert("npm_config_yes".to_string(), "true".to_string());
         }
 
@@ -5943,7 +5997,7 @@ impl Engine {
             );
         }
 
-        if !self.workflow_run_config.skip_state_writes {
+        if !self.workflow_run_config.execution.skip_state_writes {
             self.state_adapter
                 .lock()
                 .await
@@ -6256,8 +6310,11 @@ export default function transform(ast) {
 
         let workflow_run_id = Uuid::new_v4();
         let config = WorkflowRunConfig {
-            bundle_path: temp_path.to_path_buf(),
-            target_path: temp_path.to_path_buf(),
+            execution: crate::config::WorkflowExecutionSettings {
+                bundle_path: temp_path.to_path_buf(),
+                target_path: temp_path.to_path_buf(),
+                ..WorkflowRunConfig::default().execution
+            },
             ..WorkflowRunConfig::default()
         };
         let engine = Engine::with_state_adapter(
@@ -6563,7 +6620,10 @@ export default function transform(ast) {
                 temp_dir.path().join("state"),
             )),
             WorkflowRunConfig {
-                enable_managed_git: true,
+                managed_git: crate::config::ManagedGitSettings {
+                    enable_managed_git: true,
+                    ..WorkflowRunConfig::default().managed_git
+                },
                 ..WorkflowRunConfig::default()
             },
         );
