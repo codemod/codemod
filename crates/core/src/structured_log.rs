@@ -1,10 +1,22 @@
 use chrono::Utc;
 use serde::Serialize;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub type CapturedLineCallback = Arc<dyn Fn(String) + Send + Sync>;
+
+const CYAN_BOLD: &str = "\x1b[1;36m";
+const RESET: &str = "\x1b[0m";
+
+fn print_step_heading(label: &str) {
+    if std::io::stdout().is_terminal() {
+        println!("{CYAN_BOLD}⏺ {label}{RESET}");
+    } else {
+        println!("⏺ {label}");
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedLogLine {
@@ -162,6 +174,7 @@ pub struct StructuredLogger {
     override_fd: Arc<Mutex<Option<i32>>>,
     /// Collects log messages for persistence to task.logs (shared across clones).
     collected_logs: Arc<Mutex<Vec<String>>>,
+    text_step_headings: bool,
 }
 
 impl Default for StructuredLogger {
@@ -179,7 +192,14 @@ impl StructuredLogger {
             context: None,
             override_fd: Arc::new(Mutex::new(None)),
             collected_logs: Arc::new(Mutex::new(Vec::new())),
+            text_step_headings: false,
         }
+    }
+
+    /// Enable or disable text-mode step headings.
+    pub fn with_text_step_headings(mut self, enabled: bool) -> Self {
+        self.text_step_headings = enabled;
+        self
     }
 
     /// Return a clone with the given step context set.
@@ -191,6 +211,7 @@ impl StructuredLogger {
             context: Some(ctx),
             override_fd: Arc::clone(&self.override_fd),
             collected_logs: Arc::clone(&self.collected_logs),
+            text_step_headings: self.text_step_headings,
         }
     }
 
@@ -272,13 +293,16 @@ impl StructuredLogger {
 
     /// Emit a step_start event.
     pub fn step_start(&self) {
-        if self.format != OutputFormat::Jsonl {
-            return;
-        }
         let ctx = match &self.context {
             Some(c) => c,
             None => return,
         };
+        if self.format != OutputFormat::Jsonl {
+            if self.text_step_headings {
+                print_step_heading(&ctx.step_name);
+            }
+            return;
+        }
         let record = JsonlRecord {
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
             ts: Utc::now().to_rfc3339(),

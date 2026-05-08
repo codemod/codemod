@@ -417,9 +417,6 @@ impl<'a> ManagedGitService<'a> {
         });
 
         git_step_logger.step_start();
-        if !git_step_logger.is_jsonl() && !self.engine.workflow_run_config().output.quiet {
-            println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
-        }
         let git_step_start = std::time::Instant::now();
 
         if !*had_commit_checkpoint {

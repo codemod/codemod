@@ -32,6 +32,7 @@ use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
+use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
@@ -54,7 +55,7 @@ use butterflow_models::runtime::RuntimeType;
 use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
-    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff,
+    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task,
     TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
@@ -101,7 +102,7 @@ impl TaskCleanupGuard {
 impl Drop for TaskCleanupGuard {
     fn drop(&mut self) {
         if !self.sent {
-            debug!("TaskCleanupGuard: Sending task completion notification on cleanup");
+            debug!("Sending task completion notification from cleanup guard");
             self.notify.notify_one();
         }
     }
@@ -542,6 +543,8 @@ pub struct Engine {
     /// State adapter for persisting workflow state
     state_adapter: Arc<Mutex<Box<dyn StateAdapter>>>,
 
+    task_state_service: TaskStateService,
+
     scheduler: Scheduler,
 
     workflow_run_config: WorkflowRunConfig,
@@ -857,13 +860,14 @@ impl Engine {
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
             scheduler: Scheduler::new(),
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
-            structured_logger: StructuredLogger::default(),
+            structured_logger: StructuredLogger::default().with_text_step_headings(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -873,10 +877,12 @@ impl Engine {
     pub fn with_workflow_run_config(workflow_run_config: WorkflowRunConfig) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format);
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
+            .with_text_step_headings(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
@@ -902,6 +908,10 @@ impl Engine {
         Arc::clone(&self.state_adapter)
     }
 
+    pub(crate) fn task_state_service(&self) -> TaskStateService {
+        self.task_state_service.clone()
+    }
+
     pub(crate) fn file_writer(&self) -> Arc<AsyncFileWriter> {
         Arc::clone(&self.file_writer)
     }
@@ -912,10 +922,12 @@ impl Engine {
         workflow_run_config: WorkflowRunConfig,
     ) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> = Arc::new(Mutex::new(state_adapter));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format);
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
+            .with_text_step_headings(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
@@ -984,30 +996,6 @@ impl Engine {
             task.workflow_run_id,
             WorkflowEvent::TaskCreated {
                 task: task.clone(),
-                at: Utc::now(),
-            },
-        );
-    }
-
-    async fn emit_task_updated(&self, task_id: Uuid) {
-        if let Ok(task) = self.state_adapter.lock().await.get_task(task_id).await {
-            publish_event(
-                task.workflow_run_id,
-                WorkflowEvent::TaskUpdated {
-                    task,
-                    at: Utc::now(),
-                },
-            );
-        }
-    }
-
-    fn emit_task_log_appended(&self, workflow_run_id: Uuid, task_id: Uuid, line: String) {
-        publish_event(
-            workflow_run_id,
-            WorkflowEvent::TaskLogAppended {
-                workflow_run_id,
-                task_id,
-                line,
                 at: Utc::now(),
             },
         );
@@ -1233,94 +1221,21 @@ impl Engine {
 
     /// Mark a task as failed due to timeout or other issues
     async fn mark_task_as_failed(&self, task_id: Uuid, error_message: &str) -> Result<()> {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        fields.insert(
-            "error".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Add,
-                value: Some(serde_json::to_value(error_message.to_string())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
+        let task = self
+            .task_state_service()
+            .mark_failed(task_id, error_message)
             .await?;
-        self.emit_task_updated(task_id).await;
-
-        let task_result = {
-            let adapter = self.state_adapter.lock().await;
-            adapter.get_task(task_id).await
-        };
-        if let Ok(task) = task_result {
-            self.update_parent_matrix_master_for_task(&task).await?;
-        }
+        self.update_parent_matrix_master_for_task(&task).await?;
 
         Ok(())
     }
 
     async fn mark_task_as_awaiting_trigger(&self, task_id: Uuid) -> Result<()> {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        fields.insert(
-            "started_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        fields.insert(
-            "error".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
+        let task = self
+            .task_state_service()
+            .mark_awaiting_trigger(task_id)
             .await?;
-        self.emit_task_updated(task_id).await;
-
-        let task_result = {
-            let adapter = self.state_adapter.lock().await;
-            adapter.get_task(task_id).await
-        };
-        if let Ok(task) = task_result {
-            self.update_parent_matrix_master_for_task(&task).await?;
-        }
+        self.update_parent_matrix_master_for_task(&task).await?;
 
         Ok(())
     }
@@ -1347,13 +1262,9 @@ impl Engine {
         task_id: Uuid,
         message: impl Into<String>,
     ) -> Result<()> {
-        let mut adapter = self.state_adapter.lock().await;
-        let mut task = adapter.get_task(task_id).await?;
-        let message = message.into();
-        task.logs.push(message.clone());
-        adapter.save_task(&task).await?;
-        self.emit_task_log_appended(task.workflow_run_id, task_id, message);
-        Ok(())
+        self.task_state_service()
+            .append_task_log(task_id, message)
+            .await
     }
 
     async fn is_task_canceled(&self, workflow_run_id: Uuid, task_id: Uuid) -> Result<bool> {
@@ -1375,29 +1286,10 @@ impl Engine {
         tokio::task::JoinHandle<()>,
     ) {
         let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let state_adapter = Arc::clone(&self.state_adapter);
+        let task_state_service = self.task_state_service();
         let log_persist_task = tokio::spawn(async move {
             while let Some(line) = log_rx.recv().await {
-                let line = line.trim_end_matches(['\r', '\n']).to_string();
-                if line.is_empty() {
-                    continue;
-                }
-
-                let mut adapter = state_adapter.lock().await;
-                let Ok(mut current_task) = adapter.get_task(task_id).await else {
-                    continue;
-                };
-                current_task.logs.push(line.clone());
-                let _ = adapter.save_task(&current_task).await;
-                publish_event(
-                    current_task.workflow_run_id,
-                    WorkflowEvent::TaskLogAppended {
-                        workflow_run_id: current_task.workflow_run_id,
-                        task_id,
-                        line,
-                        at: Utc::now(),
-                    },
-                );
+                task_state_service.append_task_log_line(task_id, line).await;
             }
         });
 
@@ -1450,13 +1342,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Wait for all currently running tasks to complete using pure notification-based approach
+    /// Wait for all currently running tasks to complete.
     async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
-        let mut consecutive_empty_checks = 0;
-        const MAX_EMPTY_CHECKS: u8 = 3;
-
         loop {
-            // Check the actual task status from the database (source of truth)
+            // Register before reading state so a completion signal cannot be
+            // missed between the database check and the await below.
+            let notified = self.task_completion_notify.notified();
+
             let current_tasks = self
                 .state_adapter
                 .lock()
@@ -1470,25 +1362,16 @@ impl Engine {
                 .collect();
 
             if running_tasks.is_empty() {
-                consecutive_empty_checks += 1;
-                if consecutive_empty_checks >= MAX_EMPTY_CHECKS {
-                    // Multiple checks confirm no running tasks
-                    break;
-                }
-                // Brief pause to ensure task status updates are fully propagated
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                continue;
+                break;
             }
 
-            // Reset counter if we found running tasks
-            consecutive_empty_checks = 0;
-
             debug!(
-                "Waiting for {} running tasks to complete before matrix recompilation",
-                running_tasks.len()
+                "Waiting for {} running task(s) before scheduling workflow {}",
+                running_tasks.len(),
+                workflow_run_id
             );
 
-            self.task_completion_notify.notified().await;
+            notified.await;
         }
         Ok(())
     }
@@ -1602,43 +1485,7 @@ impl Engine {
                 if let Some(master_task_id) = task.master_task_id {
                     parent_master_ids.insert(master_task_id);
                 }
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(TaskStatus::Running)?),
-                    },
-                );
-                fields.insert(
-                    "started_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-                fields.insert(
-                    "error".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-                let task_diff = TaskDiff { task_id, fields };
-
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_task_diff(&task_diff)
-                    .await?;
-                self.emit_task_updated(task_id).await;
+                self.task_state_service().mark_running(task_id).await?;
 
                 triggered = true;
                 triggered_task_ids.push(task_id);
@@ -1755,46 +1602,7 @@ impl Engine {
             if let Some(master_task_id) = task.master_task_id {
                 parent_master_ids.insert(master_task_id);
             }
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Running)?),
-                },
-            );
-            fields.insert(
-                "started_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: task.id,
-                fields,
-            };
-
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task.id).await;
+            self.task_state_service().mark_running(task.id).await?;
 
             triggered = true;
             triggered_task_ids.push(task.id);
@@ -1875,43 +1683,13 @@ impl Engine {
 
         // Cancel all running tasks
         for task in tasks.iter().filter(|t| t.status == TaskStatus::Running) {
-            // Create a task diff to update the status
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                },
-            );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Add,
-                    value: Some(serde_json::to_value("Canceled by user")?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: task.id,
-                fields,
-            };
-
-            // Apply the diff
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
+            let updated_task = self
+                .task_state_service()
+                .mark_failed(task.id, "Canceled by user")
                 .await?;
-
             info!("Canceled task {} ({})", task.id, task.node_id);
-            self.update_parent_matrix_master_for_task(task).await?;
+            self.update_parent_matrix_master_for_task(&updated_task)
+                .await?;
         }
 
         // Create a workflow run diff to update the status
@@ -2278,24 +2056,9 @@ impl Engine {
                         }
                     }
 
-                    // Create a task diff to update the status
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "status".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
-                        },
-                    );
-                    let task_diff = TaskDiff { task_id, fields };
-
-                    // Apply the diff
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_task_diff(&task_diff)
+                    self.task_state_service()
+                        .set_status(task_id, TaskStatus::AwaitingTrigger)
                         .await?;
-                    self.emit_task_updated(task_id).await;
                 }
 
                 for master_task_id in parent_master_ids {
@@ -2440,54 +2203,12 @@ impl Engine {
         // Mark tasks as WontDo
         for task_id in changes.tasks_to_mark_wont_do {
             debug!("Marking task {task_id} as WontDo");
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::WontDo)?),
-                },
-            );
-            let task_diff = TaskDiff { task_id, fields };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task_id).await;
+            self.task_state_service().mark_wont_do(task_id).await?;
         }
 
         for task_id in changes.tasks_to_reset_to_pending {
             debug!("Resetting task {task_id} from Failed to Pending");
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Pending)?),
-                },
-            );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            let task_diff = TaskDiff { task_id, fields };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task_id).await;
+            self.task_state_service().reset_to_pending(task_id).await?;
         }
 
         // Update master task status
@@ -2520,31 +2241,7 @@ impl Engine {
             .find(|n| n.id == task.node_id)
             .ok_or_else(|| Error::NodeNotFound(task.node_id.clone()))?;
 
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Running)?),
-            },
-        );
-        fields.insert(
-            "started_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
-            .await?;
-        self.emit_task_updated(task_id).await;
+        self.task_state_service().mark_running(task_id).await?;
 
         self.update_parent_matrix_master_for_task(&task).await?;
 
@@ -2660,9 +2357,6 @@ impl Engine {
                 .append_task_log(task_id, format!("Step started: {}", step.name))
                 .await;
             step_logger.step_start();
-            if !step_logger.is_jsonl() && !self.workflow_run_config.output.quiet {
-                println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
-            }
             let step_start_time = std::time::Instant::now();
 
             let quiet_capture = self.workflow_run_config.output.quiet
@@ -2810,47 +2504,15 @@ impl Engine {
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
-                    let _ = self
-                        .append_task_log(task_id, format!("Step {} failed: {}", step.name, e))
-                        .await;
+                    let failure_message = format!("Step {} failed: {}", step.name, e);
+                    let _ = self.append_task_log(task_id, failure_message.clone()).await;
 
-                    // Create a task diff to update the status
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "status".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                        },
-                    );
-                    fields.insert(
-                        "ended_at".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(Utc::now())?),
-                        },
-                    );
-                    fields.insert(
-                        "error".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Add,
-                            value: Some(serde_json::to_value(format!(
-                                "Step {} failed: {}",
-                                step.name, e
-                            ))?),
-                        },
-                    );
-                    let task_diff = TaskDiff { task_id, fields };
-
-                    // Apply the diff
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_task_diff(&task_diff)
+                    let failed_task = self
+                        .task_state_service()
+                        .mark_failed(task_id, failure_message)
                         .await?;
-                    self.emit_task_updated(task_id).await;
-
-                    self.update_parent_matrix_master_for_task(&task).await?;
+                    self.update_parent_matrix_master_for_task(&failed_task)
+                        .await?;
 
                     self.emit_error(format!(
                         "Task {} ({}) step {} failed: {}",
@@ -2877,8 +2539,10 @@ impl Engine {
         }
 
         // Prepare environment variables
-        let _ = self.append_task_log(task_id, "Marking task complete").await;
-        info!("Task {} all steps finished; preparing completion", task_id);
+        let _ = self
+            .append_task_log(task_id, "Marking task as completed")
+            .await;
+        debug!("Task {task_id} finished all steps; preparing completion state");
         let mut env = HashMap::new();
 
         // Add workflow parameters
@@ -2898,53 +2562,19 @@ impl Engine {
             }
         }
 
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Completed)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
+        let completed_task = self.task_state_service().mark_completed(task_id).await?;
 
-        // Apply the diff
-        info!("Task {} applying completed status diff", task_id);
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
-            .await?;
-        self.emit_task_updated(task_id).await;
-        info!("Task {} completed status diff applied", task_id);
-
-        info!("Task {} ({}) completed", task_id, node.id);
+        info!("Task {task_id} ({}) completed", node.id);
 
         // If this is a matrix task, update the master task status
-        if let Some(master_task_id) = task.master_task_id {
-            info!(
-                "Task {} updating matrix master task status for {}",
-                task_id, master_task_id
-            );
+        if let Some(master_task_id) = completed_task.master_task_id {
+            debug!("Updating matrix master task {master_task_id} after task {task_id} completed");
             self.update_matrix_master_status(master_task_id).await?;
-            info!(
-                "Task {} finished updating matrix master task status for {}",
-                task_id, master_task_id
-            );
         }
 
         // Notify that a task has completed (for event-driven waiting)
-        info!("Task {} notifying task completion listeners", task_id);
+        debug!("Notifying task completion listeners for task {task_id}");
         self.task_completion_notify.notify_one();
-        info!("Task {} completion notification sent", task_id);
 
         Ok(())
     }
@@ -4284,34 +3914,9 @@ impl Engine {
                 TaskStatus::Completed // If children existed and were removed, it's Completed.
             };
 
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(final_status)?),
-                },
-            );
-            // Add ended_at if moving to Completed/Failed
-            if final_status == TaskStatus::Completed || final_status == TaskStatus::Failed {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-            }
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
+            self.task_state_service()
+                .set_status_with_ended_at(master_task_id, final_status, Some(Utc::now()))
                 .await?;
-            self.emit_task_updated(master_task_id).await;
             return Ok(());
         }
 
@@ -4337,31 +3942,9 @@ impl Engine {
                 "All child tasks for master {master_task_id} are terminal. Setting master status to: {final_status:?}"
             );
 
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(final_status)?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
+            self.task_state_service()
+                .set_status_with_ended_at(master_task_id, final_status, Some(Utc::now()))
                 .await?;
-            self.emit_task_updated(master_task_id).await;
             return Ok(());
         }
 
@@ -4426,18 +4009,9 @@ impl Engine {
                 );
             }
 
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-
-            // Apply the diff
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
+            self.task_state_service()
+                .apply_task_fields(master_task_id, fields)
                 .await?;
-            self.emit_task_updated(master_task_id).await;
         } else {
             debug!("Master task {master_task_id} status {new_status:?} remains unchanged.");
         }
@@ -4450,6 +4024,7 @@ impl Clone for Engine {
     fn clone(&self) -> Self {
         Self {
             state_adapter: Arc::clone(&self.state_adapter),
+            task_state_service: self.task_state_service.clone(),
             scheduler: Scheduler::new(),
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),

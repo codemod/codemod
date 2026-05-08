@@ -372,7 +372,7 @@ fn apply_compaction_result(
         retrieval_docs,
     } = compaction;
 
-    tracing::info!(
+    tracing::debug!(
         "AI memory compaction applied: attempt={}, trigger={:?}, before_chars={}, after_chars={}, archived_docs={}, retrieved_docs={}",
         stats.attempt,
         stats.trigger,
