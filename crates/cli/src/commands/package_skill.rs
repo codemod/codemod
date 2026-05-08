@@ -144,39 +144,6 @@ pub fn create_install_skill_executor(
     Arc::new(CliInstallSkillExecutor { telemetry })
 }
 
-pub async fn install_from_run_prompt(
-    package_id: &str,
-    target_path: Option<PathBuf>,
-    telemetry: &TelemetrySenderMutex,
-) -> Result<()> {
-    install_from_run_request(package_id, false, target_path, telemetry).await?;
-    Ok(())
-}
-
-pub async fn install_from_run_request(
-    package_id: &str,
-    no_interactive: bool,
-    target_path: Option<PathBuf>,
-    telemetry: &TelemetrySenderMutex,
-) -> Result<String> {
-    let request = PackageSkillInstallRequest {
-        package_id: package_id.to_string(),
-        configured_path: None,
-        harness: Harness::Auto,
-        scope: InstallScope::Project,
-        scope_was_explicit: false,
-        force: false,
-        no_interactive,
-        format: OutputFormat::Logs,
-        emit_output: true,
-        package_dir_hint: None,
-        working_directory: target_path,
-        environment: None,
-        selection_prompt_callback: None,
-    };
-    install_package_skill(&request, telemetry).await
-}
-
 pub async fn install_package_skill(
     request: &PackageSkillInstallRequest,
     telemetry: &TelemetrySenderMutex,

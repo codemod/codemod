@@ -121,6 +121,26 @@ pub(crate) fn validate_package_behavior_structure(
     Ok(())
 }
 
+pub(crate) fn package_has_install_skill_steps(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<bool> {
+    Ok(workflow_behavior_summary(package_path, manifest)?.has_install_skill_steps)
+}
+
+pub(crate) fn package_has_authored_skill_layout(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<bool> {
+    let authored_skill_candidate =
+        authored_skill_file_candidate(package_path, Some(manifest), &manifest.name)?;
+    Ok(if authored_skill_candidate.explicit {
+        authored_skill_candidate.path.is_file()
+    } else {
+        find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
+    })
+}
+
 pub(crate) fn detect_package_behavior_shape(
     package_path: &Path,
     manifest: &CodemodManifest,

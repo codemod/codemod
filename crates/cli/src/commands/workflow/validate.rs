@@ -1,8 +1,8 @@
 use crate::utils::ancestor_search::find_in_ancestors;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_paths, validate_package_behavior_structure,
-    validate_skill_behavior, PackageBehaviorShape, DEFAULT_WORKFLOW_FILE_NAME,
+    expected_workflow_paths, package_has_authored_skill_layout, package_has_install_skill_steps,
+    validate_package_behavior_structure, validate_skill_behavior, DEFAULT_WORKFLOW_FILE_NAME,
 };
 use anyhow::{anyhow, Context, Result};
 use butterflow_core::utils;
@@ -51,39 +51,25 @@ fn validate_package(package_root: &Path) -> Result<()> {
     let manifest = load_manifest(package_root)?;
     validate_package_behavior_structure(package_root, &manifest)?;
 
-    let behavior_shape = detect_package_behavior_shape(package_root, &manifest);
-    if behavior_shape == PackageBehaviorShape::Missing {
-        return Err(anyhow!(
-            "❌ Package at {} must include executable workflow steps and/or skill installation steps.",
-            package_root.display()
-        ));
-    }
-
-    println!(
-        "✅ Package behavior detected: {} ({})",
-        manifest.name,
-        behavior_shape.as_str()
-    );
-
-    if behavior_shape.includes_workflow() {
-        for resolved in expected_workflow_paths(package_root, &manifest)? {
-            if !resolved.path.is_file() {
-                return Err(anyhow!(
-                    "❌ Workflow behavior declared but workflow `{}` not found at {}.",
-                    resolved.entry.name,
-                    resolved.path.display()
-                ));
-            }
-            println!(
-                "─── Workflow `{}` ({}) ───",
+    for resolved in expected_workflow_paths(package_root, &manifest)? {
+        if !resolved.path.is_file() {
+            return Err(anyhow!(
+                "❌ Workflow `{}` not found at {}.",
                 resolved.entry.name,
                 resolved.path.display()
-            );
-            validate_workflow_file(&resolved.path)?;
+            ));
         }
+        println!(
+            "─── Workflow `{}` ({}) ───",
+            resolved.entry.name,
+            resolved.path.display()
+        );
+        validate_workflow_file(&resolved.path)?;
     }
 
-    if behavior_shape.includes_skill() {
+    if package_has_install_skill_steps(package_root, &manifest)?
+        || package_has_authored_skill_layout(package_root, &manifest)?
+    {
         let skill_summary = validate_skill_behavior(package_root, &manifest)?;
         println!(
             "✅ Skill structure: Valid ({})",
@@ -95,10 +81,7 @@ fn validate_package(package_root: &Path) -> Result<()> {
         );
     }
 
-    println!(
-        "✅ Package validation successful ({})",
-        behavior_shape.as_str()
-    );
+    println!("✅ Package validation successful");
     Ok(())
 }
 
