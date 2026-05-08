@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use butterflow_models::{DiffOperation, FieldDiff, Result, Task, TaskDiff, TaskStatus};
+use butterflow_models::{
+    DiffOperation, FieldDiff, Result, Task, TaskDiff, TaskStatus, WorkflowRun, WorkflowRunDiff,
+    WorkflowStatus,
+};
 use butterflow_state::StateAdapter;
 use chrono::Utc;
+use log::debug;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -142,6 +146,157 @@ impl TaskStateService {
         self.apply_task_fields(task_id, fields).await
     }
 
+    pub(crate) async fn update_matrix_master_status(&self, master_task_id: Uuid) -> Result<()> {
+        let adapter = self.state_adapter.lock().await;
+        let master_task = adapter.get_task(master_task_id).await?;
+        let tasks = adapter.get_tasks(master_task.workflow_run_id).await?;
+        drop(adapter);
+
+        let child_tasks: Vec<&Task> = tasks
+            .iter()
+            .filter(|task| task.master_task_id == Some(master_task_id))
+            .collect();
+
+        if child_tasks.is_empty() {
+            debug!(
+                "No child tasks found for master task {master_task_id}; marking master completed"
+            );
+            self.set_status_with_ended_at(master_task_id, TaskStatus::Completed, Some(Utc::now()))
+                .await?;
+            return Ok(());
+        }
+
+        let all_terminal = child_tasks.iter().all(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
+            )
+        });
+
+        if all_terminal {
+            let final_status = if child_tasks
+                .iter()
+                .any(|task| task.status == TaskStatus::Failed)
+            {
+                TaskStatus::Failed
+            } else {
+                TaskStatus::Completed
+            };
+
+            debug!(
+                "All child tasks for master task {master_task_id} are terminal; setting master status to {final_status:?}"
+            );
+            self.set_status_with_ended_at(master_task_id, final_status, Some(Utc::now()))
+                .await?;
+            return Ok(());
+        }
+
+        let new_status = if child_tasks
+            .iter()
+            .any(|task| task.status == TaskStatus::Failed)
+        {
+            TaskStatus::Failed
+        } else if child_tasks
+            .iter()
+            .any(|task| task.status == TaskStatus::AwaitingTrigger)
+        {
+            TaskStatus::AwaitingTrigger
+        } else if child_tasks
+            .iter()
+            .any(|task| task.status == TaskStatus::Running)
+        {
+            TaskStatus::Running
+        } else if child_tasks
+            .iter()
+            .any(|task| task.status == TaskStatus::Pending)
+        {
+            TaskStatus::Pending
+        } else {
+            master_task.status
+        };
+
+        if new_status == master_task.status {
+            debug!("Master task {master_task_id} status {new_status:?} remains unchanged");
+            return Ok(());
+        }
+
+        debug!(
+            "Updating master task {} status from {:?} to {:?}",
+            master_task_id, master_task.status, new_status
+        );
+
+        let ended_at = match new_status {
+            TaskStatus::Pending
+            | TaskStatus::Running
+            | TaskStatus::AwaitingTrigger
+            | TaskStatus::Blocked => None,
+            TaskStatus::Completed | TaskStatus::Failed => Some(Utc::now()),
+            TaskStatus::WontDo => None,
+        };
+        self.set_status_with_ended_at(master_task_id, new_status, ended_at)
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn mark_workflow_running(&self, workflow_run_id: Uuid) -> Result<WorkflowRun> {
+        self.set_workflow_status(workflow_run_id, WorkflowStatus::Running, None)
+            .await
+    }
+
+    pub(crate) async fn mark_workflow_awaiting_trigger(
+        &self,
+        workflow_run_id: Uuid,
+    ) -> Result<WorkflowRun> {
+        self.set_workflow_status(workflow_run_id, WorkflowStatus::AwaitingTrigger, None)
+            .await
+    }
+
+    pub(crate) async fn mark_workflow_completed(
+        &self,
+        workflow_run_id: Uuid,
+    ) -> Result<WorkflowRun> {
+        self.set_workflow_status(workflow_run_id, WorkflowStatus::Completed, Some(Utc::now()))
+            .await
+    }
+
+    pub(crate) async fn mark_workflow_failed(&self, workflow_run_id: Uuid) -> Result<WorkflowRun> {
+        self.set_workflow_status(workflow_run_id, WorkflowStatus::Failed, Some(Utc::now()))
+            .await
+    }
+
+    pub(crate) async fn mark_workflow_canceled(
+        &self,
+        workflow_run_id: Uuid,
+    ) -> Result<WorkflowRun> {
+        self.set_workflow_status(workflow_run_id, WorkflowStatus::Canceled, Some(Utc::now()))
+            .await
+    }
+
+    pub(crate) async fn set_workflow_status(
+        &self,
+        workflow_run_id: Uuid,
+        status: WorkflowStatus,
+        ended_at: Option<chrono::DateTime<Utc>>,
+    ) -> Result<WorkflowRun> {
+        let mut fields = HashMap::new();
+        fields.insert("status".to_string(), Self::update_json(status)?);
+        if let Some(ended_at) = ended_at {
+            fields.insert("ended_at".to_string(), Self::update_json(ended_at)?);
+        }
+
+        let workflow_run_diff = WorkflowRunDiff {
+            workflow_run_id,
+            fields,
+        };
+        let mut adapter = self.state_adapter.lock().await;
+        adapter.apply_workflow_run_diff(&workflow_run_diff).await?;
+        let workflow_run = adapter.get_workflow_run(workflow_run_id).await?;
+        drop(adapter);
+        Self::publish_workflow_status_changed(workflow_run_id, workflow_run.status);
+        Ok(workflow_run)
+    }
+
     pub(crate) async fn apply_task_fields(
         &self,
         task_id: Uuid,
@@ -161,6 +316,17 @@ impl TaskStateService {
             task.workflow_run_id,
             WorkflowEvent::TaskUpdated {
                 task,
+                at: Utc::now(),
+            },
+        );
+    }
+
+    fn publish_workflow_status_changed(workflow_run_id: Uuid, status: WorkflowStatus) {
+        publish_event(
+            workflow_run_id,
+            WorkflowEvent::WorkflowStatusChanged {
+                workflow_run_id,
+                status,
                 at: Utc::now(),
             },
         );

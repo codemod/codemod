@@ -56,7 +56,7 @@ use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task,
-    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
+    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -961,36 +961,6 @@ impl Engine {
         );
     }
 
-    async fn emit_workflow_status_changed(&self, workflow_run_id: Uuid) {
-        if let Ok(workflow_run) = self
-            .state_adapter
-            .lock()
-            .await
-            .get_workflow_run(workflow_run_id)
-            .await
-        {
-            publish_event(
-                workflow_run_id,
-                WorkflowEvent::WorkflowStatusChanged {
-                    workflow_run_id,
-                    status: workflow_run.status,
-                    at: Utc::now(),
-                },
-            );
-        }
-    }
-
-    fn emit_workflow_status(&self, workflow_run_id: Uuid, status: WorkflowStatus) {
-        publish_event(
-            workflow_run_id,
-            WorkflowEvent::WorkflowStatusChanged {
-                workflow_run_id,
-                status,
-                at: Utc::now(),
-            },
-        );
-    }
-
     async fn emit_task_created(&self, task: &Task) {
         publish_event(
             task.workflow_run_id,
@@ -1337,7 +1307,9 @@ impl Engine {
 
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
         if let Some(master_task_id) = task.master_task_id {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
         Ok(())
     }
@@ -1404,7 +1376,9 @@ impl Engine {
             self.emit_task_created(&task).await;
 
             if task.is_master {
-                self.update_matrix_master_status(task.id).await?;
+                self.task_state_service()
+                    .update_matrix_master_status(task.id)
+                    .await?;
             }
         }
 
@@ -1500,28 +1474,14 @@ impl Engine {
         }
 
         for master_task_id in parent_master_ids {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
-        self.emit_workflow_status(workflow_run_id, WorkflowStatus::Running);
 
         for task_id in triggered_task_ids {
             if let Err(e) = self.spawn_task_with_handle(task_id).await {
@@ -1567,25 +1527,9 @@ impl Engine {
 
             // If no tasks are active, mark the workflow as completed
             if !active_tasks {
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(WorkflowStatus::Completed)?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
-
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
+                self.task_state_service()
+                    .mark_workflow_completed(workflow_run_id)
                     .await?;
-
                 info!("Workflow run {workflow_run_id} is now complete");
                 return Ok(true);
             }
@@ -1616,28 +1560,14 @@ impl Engine {
         }
 
         for master_task_id in parent_master_ids {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
-        self.emit_workflow_status(workflow_run_id, WorkflowStatus::Running);
 
         for task_id in triggered_task_ids {
             if let Err(e) = self.spawn_task_with_handle(task_id).await {
@@ -1692,32 +1622,8 @@ impl Engine {
                 .await?;
         }
 
-        // Create a workflow run diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Canceled)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_canceled(workflow_run_id)
             .await?;
 
         self.task_completion_notify.notify_waiters();
@@ -1816,25 +1722,8 @@ impl Engine {
             self.workflow_run_config.execution.target_path = target_path.clone();
         }
 
-        // Create a workflow run diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
 
         info!("Starting workflow run {workflow_run_id}");
@@ -1964,38 +1853,15 @@ impl Engine {
                     .iter()
                     .any(|t| t.status == TaskStatus::Failed);
 
-                // Create a workflow run diff to update the status
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(if any_failed {
-                            WorkflowStatus::Failed
-                        } else {
-                            WorkflowStatus::Completed
-                        })?),
-                    },
-                );
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
-
-                // Apply the diff
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
-                    .await?;
-                self.emit_workflow_status_changed(workflow_run_id).await;
+                if any_failed {
+                    self.task_state_service()
+                        .mark_workflow_failed(workflow_run_id)
+                        .await?;
+                } else {
+                    self.task_state_service()
+                        .mark_workflow_completed(workflow_run_id)
+                        .await?;
+                }
 
                 info!(
                     "Workflow run {} {}",
@@ -2062,7 +1928,9 @@ impl Engine {
                 }
 
                 for master_task_id in parent_master_ids {
-                    self.update_matrix_master_status(master_task_id).await?;
+                    self.task_state_service()
+                        .update_matrix_master_status(master_task_id)
+                        .await?;
                 }
             }
 
@@ -2087,27 +1955,9 @@ impl Engine {
             // If there are tasks awaiting trigger and no runnable tasks and no running tasks,
             // then we need to pause the workflow and wait for manual triggers
             if awaiting_trigger && runnable_tasks.is_empty() && !any_running && !any_pending {
-                // Create a workflow run diff to update the status
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(WorkflowStatus::AwaitingTrigger)?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
-
-                // Apply the diff
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
+                self.task_state_service()
+                    .mark_workflow_awaiting_trigger(workflow_run_id)
                     .await?;
-                self.emit_workflow_status_changed(workflow_run_id).await;
 
                 info!("Workflow run {workflow_run_id} is awaiting triggers");
 
@@ -2214,7 +2064,9 @@ impl Engine {
         // Update master task status
         for master_task_id in changes.master_tasks_to_update {
             debug!("Updating master task {master_task_id} status");
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
         debug!("Finished matrix task recompilation for run {workflow_run_id}");
@@ -2569,7 +2421,9 @@ impl Engine {
         // If this is a matrix task, update the master task status
         if let Some(master_task_id) = completed_task.master_task_id {
             debug!("Updating matrix master task {master_task_id} after task {task_id} completed");
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
         // Notify that a task has completed (for event-driven waiting)
@@ -3877,145 +3731,6 @@ impl Engine {
                 })
                 .await?;
         }
-        Ok(())
-    }
-
-    /// Update the status of a matrix master task
-    async fn update_matrix_master_status(&self, master_task_id: Uuid) -> Result<()> {
-        // Get the master task
-        let master_task = self
-            .state_adapter
-            .lock()
-            .await
-            .get_task(master_task_id)
-            .await?;
-
-        // Get all child tasks
-        let tasks = self
-            .state_adapter
-            .lock()
-            .await
-            .get_tasks(master_task.workflow_run_id)
-            .await?;
-        let child_tasks: Vec<&Task> = tasks
-            .iter()
-            .filter(|t| t.master_task_id == Some(master_task_id))
-            .collect();
-
-        // If there are no child tasks (e.g., state was empty or cleared), the master should reflect that.
-        if child_tasks.is_empty() {
-            debug!("No child tasks found for master task {master_task_id}, setting status to Completed (or Pending if master just created).");
-            let final_status = if master_task.status == TaskStatus::Pending {
-                // If the master was just created and has no children yet (empty state)
-                // Keep it Pending until state potentially provides children.
-                // Or should it be Completed? Let's try Completed.
-                TaskStatus::Completed // Or Pending? Needs careful consideration. Let's assume Completed for empty state.
-            } else {
-                TaskStatus::Completed // If children existed and were removed, it's Completed.
-            };
-
-            self.task_state_service()
-                .set_status_with_ended_at(master_task_id, final_status, Some(Utc::now()))
-                .await?;
-            return Ok(());
-        }
-
-        // Check status based on existing children
-        let all_terminal = child_tasks.iter().all(|t| {
-            t.status == TaskStatus::Completed
-                || t.status == TaskStatus::Failed
-                || t.status == TaskStatus::WontDo
-        });
-
-        // If all children are in a terminal state, determine the final master status
-        if all_terminal {
-            let any_failed = child_tasks.iter().any(|t| t.status == TaskStatus::Failed);
-            // Consider WontDo: If some are WontDo and others Completed, is master Completed or Failed?
-            // Let's say Failed if any child failed, otherwise Completed (even if some are WontDo).
-            let final_status = if any_failed {
-                TaskStatus::Failed
-            } else {
-                TaskStatus::Completed
-            };
-
-            debug!(
-                "All child tasks for master {master_task_id} are terminal. Setting master status to: {final_status:?}"
-            );
-
-            self.task_state_service()
-                .set_status_with_ended_at(master_task_id, final_status, Some(Utc::now()))
-                .await?;
-            return Ok(());
-        }
-
-        // If not all children are terminal, determine intermediate status
-        let any_failed = child_tasks.iter().any(|t| t.status == TaskStatus::Failed);
-        let any_running = child_tasks.iter().any(|t| t.status == TaskStatus::Running);
-        let any_awaiting = child_tasks
-            .iter()
-            .any(|t| t.status == TaskStatus::AwaitingTrigger);
-        let any_pending = child_tasks.iter().any(|t| t.status == TaskStatus::Pending); // Added check for pending
-
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-
-        // Determine the new status based on priority: Failed > Awaiting > Running > Pending
-        let new_status = if any_failed {
-            TaskStatus::Failed
-        } else if any_awaiting {
-            TaskStatus::AwaitingTrigger
-        } else if any_running {
-            TaskStatus::Running
-        } else if any_pending {
-            TaskStatus::Pending // If some are pending and others completed/wontdo, master is still pending/running implicitly
-        } else {
-            // This case should ideally be covered by the 'all_terminal' check above,
-            // but as a fallback, keep the current status.
-            master_task.status
-        };
-
-        // Only apply diff if the status is actually changing
-        if new_status != master_task.status {
-            debug!(
-                "Updating master task {} status from {:?} to {:?}",
-                master_task_id, master_task.status, new_status
-            );
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(new_status)?),
-                },
-            );
-
-            if matches!(
-                new_status,
-                TaskStatus::Pending | TaskStatus::Running | TaskStatus::AwaitingTrigger
-            ) {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-            } else if matches!(new_status, TaskStatus::Completed | TaskStatus::Failed) {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-            }
-
-            self.task_state_service()
-                .apply_task_fields(master_task_id, fields)
-                .await?;
-        } else {
-            debug!("Master task {master_task_id} status {new_status:?} remains unchanged.");
-        }
-
         Ok(())
     }
 }
