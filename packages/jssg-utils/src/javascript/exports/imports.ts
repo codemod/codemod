@@ -881,19 +881,19 @@ function getSpecifierRangeWithSeparator<T extends Language>(
 }
 
 function hasTrailingComma<T extends Language>(nodes: SgNode<T>[]) {
-  const closeBraceIdx = nodes.findLastIndex(n => n.is('}'))
+  const closeBraceIdx = nodes.findLastIndex((n) => n.is("}"));
   // check if the node before the closing brace `}` is a comma, ignoring comments.
-  for (let i = closeBraceIdx-1; i > 0; i--) {
-    const node = nodes[i]
+  for (let i = closeBraceIdx - 1; i > 0; i--) {
+    const node = nodes[i];
 
-    if(node?.is('comment')) {
-      continue
+    if (node?.is("comment")) {
+      continue;
     }
 
-    return node?.is(',')
+    return node?.is(",");
   }
 
-  return false
+  return false;
 }
 
 // ============================================================================
@@ -1021,32 +1021,34 @@ export function addImport<T extends Language>(
         const namedImports = findNamedImports(existingImport);
         if (namedImports) {
           // Add to existing named_imports: insert before the closing brace
-          
+
           const isMultiline = namedImports.range().start.line !== namedImports.range().end.line;
-          const separator = isMultiline ? `,\n  ` : ', ';
+          const separator = isMultiline ? `,\n  ` : ", ";
 
-          const trailingComma = hasTrailingComma(namedImports.children()) ? ',' : ''
+          const trailingComma = hasTrailingComma(namedImports.children()) ? "," : "";
 
-          const namedImportsNodes = namedImports.children().filter(n => n.isNamed() && !n.is('comment'));
+          const namedImportsNodes = namedImports
+            .children()
+            .filter((n) => n.isNamed() && !n.is("comment"));
 
-          const lines = Object.values(Object.groupBy(namedImportsNodes, (node) => {
-            return node.range().start.line
-          }));
+          const lines = Object.values(
+            Object.groupBy(namedImportsNodes, (node) => {
+              return node.range().start.line;
+            }),
+          );
 
-          const namedImportsText = lines.map(line => {
-            return line?.map(node => node.text()).join(' ')
-          })
+          const namedImportsText = lines.map((line) => {
+            return line?.map((node) => node.text()).join(" ");
+          });
 
           const specifierStr = newSpecifiers.map(formatSpecifier);
 
-          const importsUpdatedStr = namedImportsText
-            .concat(specifierStr)
-            .join(separator)
-            + trailingComma
+          const importsUpdatedStr =
+            namedImportsText.concat(specifierStr).join(separator) + trailingComma;
 
           return isMultiline
             ? namedImports.replace(`{\n  ${importsUpdatedStr}\n}`)
-            : namedImports.replace(`{ ${importsUpdatedStr} }`)
+            : namedImports.replace(`{ ${importsUpdatedStr} }`);
         } else {
           // Import exists but has no named_imports (e.g., default import only)
           // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'

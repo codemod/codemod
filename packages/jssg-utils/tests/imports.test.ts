@@ -577,7 +577,10 @@ function testAddImportMergesNamedSpecifiers() {
 }
 
 function testAddImportMergesMultilineNamedSpecifiers() {
-  const program = parseProgram("javascript", "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more\n} from 'mod'\n");
+  const program = parseProgram(
+    "javascript",
+    "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more\n} from 'mod'\n",
+  );
   const edit = addImport(program, {
     type: "named",
     specifiers: [{ name: "bar" }],
@@ -592,9 +595,11 @@ function testAddImportMergesMultilineNamedSpecifiers() {
   );
 }
 
-
 function testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma() {
-  const program = parseProgram("javascript", "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n} from 'mod'\n");
+  const program = parseProgram(
+    "javascript",
+    "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n} from 'mod'\n",
+  );
   const edit = addImport(program, {
     type: "named",
     specifiers: [{ name: "bar" }],
