@@ -9,7 +9,9 @@ use crate::ast_grep::AstGrepModule;
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
-use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeHooksContext, RuntimeModule};
+use crate::sandbox::runtime_module::{
+    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext, RuntimeModule,
+};
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
@@ -18,7 +20,8 @@ use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime};
+use rquickjs::prelude::Rest;
+use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -35,6 +38,73 @@ pub struct ExecutionModeFlag {
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
     type Changed<'to> = ExecutionModeFlag;
+}
+
+fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+    let console = Object::new(ctx.clone())?;
+    console.set("log", Function::new(ctx.clone(), console_log)?)?;
+    console.set("info", Function::new(ctx.clone(), console_log)?)?;
+    console.set("debug", Function::new(ctx.clone(), console_log)?)?;
+    console.set("warn", Function::new(ctx.clone(), console_warn)?)?;
+    console.set("error", Function::new(ctx.clone(), console_warn)?)?;
+    ctx.globals().set("console", console)?;
+    Ok(())
+}
+
+fn console_log<'js>(ctx: Ctx<'js>, items: Rest<Value<'js>>) -> rquickjs::Result<()> {
+    emit_console_event(ctx, RuntimeEventKind::Progress, items)
+}
+
+fn console_warn<'js>(ctx: Ctx<'js>, items: Rest<Value<'js>>) -> rquickjs::Result<()> {
+    emit_console_event(ctx, RuntimeEventKind::Warn, items)
+}
+
+fn emit_console_event<'js>(
+    ctx: Ctx<'js>,
+    kind: RuntimeEventKind,
+    items: Rest<Value<'js>>,
+) -> rquickjs::Result<()> {
+    let runtime_hooks_context = ctx
+        .userdata::<RuntimeHooksContext>()
+        .ok_or_else(|| rquickjs::Exception::throw_message(&ctx, "RuntimeHooksContext not found"))?
+        .clone();
+    runtime_hooks_context.emit(RuntimeEvent {
+        kind,
+        message: console_items_to_string(&ctx, items)?,
+        meta: Some("console".to_string()),
+    });
+    Ok(())
+}
+
+fn console_items_to_string<'js>(
+    ctx: &Ctx<'js>,
+    items: Rest<Value<'js>>,
+) -> rquickjs::Result<String> {
+    let mut parts = Vec::new();
+    for item in items.0 {
+        parts.push(console_value_to_string(ctx, item)?);
+    }
+    Ok(parts.join(" "))
+}
+
+fn console_value_to_string<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<String> {
+    match value.type_of() {
+        Type::Uninitialized | Type::Undefined => Ok("undefined".to_string()),
+        Type::Null => Ok("null".to_string()),
+        Type::Bool => Ok(value.as_bool().unwrap_or_default().to_string()),
+        Type::Int => Ok(value.as_int().unwrap_or_default().to_string()),
+        Type::Float => Ok(value.as_float().unwrap_or_default().to_string()),
+        Type::String => value
+            .as_string()
+            .map(|value| value.to_string())
+            .transpose()
+            .map(|value| value.unwrap_or_default()),
+        _ => Ok(ctx
+            .json_stringify(value)?
+            .map(|json| json.to_string())
+            .transpose()?
+            .unwrap_or_else(|| "<unprintable>".to_string())),
+    }
 }
 
 /// Execution context passed to `jssgTransform` via QuickJS userdata.
@@ -363,6 +433,11 @@ where
                 message: format!("Failed to attach global modules: {e}"),
             },
         })?;
+        install_console_bridge(&ctx).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to attach console bridge: {e}"),
+            },
+        })?;
 
         let execution = async {
             let module = Module::declare(ctx.clone(), "__codemod_entry.js", js_code)
@@ -616,6 +691,11 @@ where
                 message: format!("Failed to attach global modules: {e}"),
             },
         })?;
+        install_console_bridge(&ctx).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to attach console bridge: {e}"),
+            },
+        })?;
 
         let execution = async {
             // Place the entry module in the same directory as the script for proper resolution
@@ -806,6 +886,11 @@ where
         global_attachment.attach(&ctx).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to attach global modules: {e}"),
+            },
+        })?;
+        install_console_bridge(&ctx).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to attach console bridge: {e}"),
             },
         })?;
 

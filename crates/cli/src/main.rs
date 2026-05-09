@@ -11,6 +11,7 @@ mod auth;
 mod auth_provider;
 mod capabilities_security_callback;
 mod commands;
+mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod progress_bar;
@@ -372,7 +373,14 @@ async fn handle_implicit_run_command(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(error) = run_cli().await {
+        diagnostics::render_anyhow_error(&error);
+        exit_with_code(1);
+    }
+}
+
+async fn run_cli() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
 

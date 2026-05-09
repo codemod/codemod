@@ -354,6 +354,10 @@ pub fn build_js_ast_grep_idle_timeout_message(
 }
 
 pub(crate) fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
+    if event.meta.as_deref() == Some("console") {
+        return Some(event.message.clone());
+    }
+
     let prefix = match event.kind {
         RuntimeEventKind::Progress => "[progress]",
         RuntimeEventKind::Warn => "[warn]",
@@ -929,6 +933,10 @@ impl Engine {
         self.workflow_run_config.output.quiet = quiet;
         self.structured_logger.set_text_step_headings(!quiet);
         self.structured_logger.set_text_log_fallthrough(!quiet);
+    }
+
+    pub fn set_text_log_fallthrough(&mut self, enabled: bool) {
+        self.structured_logger.set_text_log_fallthrough(enabled);
     }
 
     pub(crate) fn emit_error(&self, message: String) {

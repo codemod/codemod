@@ -50,6 +50,8 @@ pub fn download_progress_bar() -> Arc<Box<dyn Fn(u64, u64) + Send + Sync>> {
 pub enum ProgressAction {
     Start { total_files: Option<u64> },
     Update { current_file: String },
+    Log { title: String, line: String },
+    Diagnostic { title: String, message: String },
     Increment,
     Finish { message: Option<String> },
 }
@@ -78,6 +80,7 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
 
     let multi_progress = Arc::new(MultiProgress::new());
     let progress_bars = Arc::new(Mutex::new(HashMap::<String, ProgressBar>::new()));
+    let active_log_title = Arc::new(Mutex::new(None::<String>));
 
     // Enable stderr output
     multi_progress.set_draw_target(indicatif::ProgressDrawTarget::stderr());
@@ -85,11 +88,13 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
     let reporter: ProgressReporter = Arc::new(Box::new(move |update: ProgressUpdate| {
         let bars = Arc::clone(&progress_bars);
         let mp = Arc::clone(&multi_progress);
+        let active_log_title = Arc::clone(&active_log_title);
         let task_id = update.task_id.clone();
 
         match update.action {
             ProgressAction::Start { total_files } => {
                 let mut bars_lock = bars.lock().unwrap();
+                *active_log_title.lock().unwrap() = None;
 
                 // Remove existing bar if it exists
                 if let Some(existing_pb) = bars_lock.remove(&task_id) {
@@ -133,9 +138,47 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                 }
             }
 
+            ProgressAction::Log { title, line } => {
+                if line.trim().is_empty() {
+                    return;
+                }
+
+                let mut active_title = active_log_title.lock().unwrap();
+                mp.suspend(|| {
+                    if active_title.as_deref() != Some(title.as_str()) {
+                        eprintln!();
+                        eprintln!("{}", style(&title).bold().cyan());
+                        *active_title = Some(title.clone());
+                    }
+                    for line in line.lines() {
+                        eprintln!("  {line}");
+                    }
+                });
+            }
+
+            ProgressAction::Diagnostic { title, message } => {
+                if message.trim().is_empty() {
+                    return;
+                }
+
+                let rendered = crate::diagnostics::render_error_message(&message);
+                let mut active_title = active_log_title.lock().unwrap();
+                mp.suspend(|| {
+                    if active_title.as_deref() != Some(title.as_str()) {
+                        eprintln!();
+                        eprintln!("{}", style(&title).bold().cyan());
+                        *active_title = Some(title.clone());
+                    }
+                    for line in rendered.lines() {
+                        eprintln!("  {line}");
+                    }
+                });
+            }
+
             ProgressAction::Finish { message } => {
-                let mut bars_lock = bars.lock().unwrap();
-                if let Some(pb) = bars_lock.remove(&task_id) {
+                let bars_lock = bars.lock().unwrap();
+                *active_log_title.lock().unwrap() = None;
+                if let Some(pb) = bars_lock.get(&task_id) {
                     let finish_message = message.unwrap_or_else(|| "✅ Completed".to_string());
                     pb.finish_with_message(style(finish_message).green().to_string());
                 }

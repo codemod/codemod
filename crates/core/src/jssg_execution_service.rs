@@ -40,7 +40,7 @@ use crate::{
         record_unit_progress, resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase,
         StepProgressState,
     },
-    execution::{CodemodExecutionConfig, PreRunCallback},
+    execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback},
     slog,
     structured_log::StructuredLogger,
     workflow_runtime::{publish_event, WorkflowEvent},
@@ -65,6 +65,90 @@ pub(crate) struct JssgExecutionRequest<'a> {
 
 pub(crate) struct JssgExecutionService<'a> {
     engine: &'a Engine,
+}
+
+#[derive(Default)]
+struct BufferedExecutionOutput {
+    order: Vec<String>,
+    entries: HashMap<String, BufferedExecutionOutputEntry>,
+}
+
+#[derive(Default)]
+struct BufferedExecutionOutputEntry {
+    logs: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+fn append_buffered_log(
+    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
+    title: String,
+    line: String,
+) {
+    if line.trim().is_empty() {
+        return;
+    }
+
+    let Ok(mut buffer) = buffer.lock() else {
+        return;
+    };
+    if !buffer.entries.contains_key(&title) {
+        buffer.order.push(title.clone());
+    }
+    buffer.entries.entry(title).or_default().logs.push(line);
+}
+
+fn append_buffered_diagnostic(
+    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
+    title: String,
+    diagnostic: String,
+) {
+    if diagnostic.trim().is_empty() {
+        return;
+    }
+
+    let Ok(mut buffer) = buffer.lock() else {
+        return;
+    };
+    if !buffer.entries.contains_key(&title) {
+        buffer.order.push(title.clone());
+    }
+    buffer
+        .entries
+        .entry(title)
+        .or_default()
+        .diagnostics
+        .push(diagnostic);
+}
+
+fn flush_buffered_execution_output(
+    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
+    progress_callback: &Arc<Option<ProgressCallback>>,
+    task_id: &str,
+) {
+    let Some(callback) = progress_callback.as_ref() else {
+        return;
+    };
+
+    let buffered = buffer
+        .lock()
+        .map(|mut buffer| std::mem::take(&mut *buffer))
+        .unwrap_or_default();
+
+    for title in buffered.order {
+        let Some(entry) = buffered.entries.get(&title) else {
+            continue;
+        };
+
+        for line in &entry.logs {
+            let payload = format!("{title}\n{line}");
+            (callback.callback)(task_id, &payload, "log", None, &0);
+        }
+
+        for diagnostic in &entry.diagnostics {
+            let payload = format!("{title}\n{diagnostic}");
+            (callback.callback)(task_id, &payload, "diagnostic", None, &0);
+        }
+    }
 }
 
 impl<'a> JssgExecutionService<'a> {
@@ -369,13 +453,15 @@ impl<'a> JssgExecutionService<'a> {
         let runtime_handle = tokio::runtime::Handle::current();
         let js_file_path_clone = js_file_path.clone();
         let resolver_clone = resolver.clone();
-        let id_clone = Arc::new(request.id);
+        let request_id = request.id.clone();
+        let id_clone = Arc::new(request_id.clone());
         let progress_callback = self
             .engine
             .workflow_run_config()
             .execution
             .progress_callback
             .clone();
+        let progress_callback_for_closure = progress_callback.clone();
         let file_writer = self.engine.file_writer();
         let shared_state_context = if let Some(state) = request.initial_state {
             SharedStateContext::with_initial_state(state.clone())
@@ -485,11 +571,22 @@ impl<'a> JssgExecutionService<'a> {
         let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
         let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
+        let execution_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+        let execution_failure_message_for_closure = Arc::clone(&execution_failure_message);
+        let buffered_execution_output =
+            Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+        let attempted_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let succeeded_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let failed_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine = self.engine;
         let step_id = request.step_id;
         let params = request.params;
         let matrix_input = request.matrix_input;
         let workflow_run_id = request.workflow_run_id;
+        let buffered_execution_output_for_closure = Arc::clone(&buffered_execution_output);
+        let attempted_file_count_for_closure = Arc::clone(&attempted_file_count);
+        let succeeded_file_count_for_closure = Arc::clone(&succeeded_file_count);
+        let failed_file_count_for_closure = Arc::clone(&failed_file_count);
 
         let execute_result = config
             .execute(move |file_path, config| {
@@ -502,6 +599,7 @@ impl<'a> JssgExecutionService<'a> {
                 if !file_path.is_file() {
                     return;
                 }
+                attempted_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
 
                 let relative_path = file_path
                     .strip_prefix(&target_path_for_logs)
@@ -530,6 +628,7 @@ impl<'a> JssgExecutionService<'a> {
                             &relative_path,
                             StepPhase::ExecutionErrored,
                         );
+                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
                         return;
                     }
                 };
@@ -555,6 +654,8 @@ impl<'a> JssgExecutionService<'a> {
                 let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
                 let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
                 let relative_path_for_runtime_events = relative_path.clone();
+                let buffered_execution_output_for_runtime_events =
+                    Arc::clone(&buffered_execution_output_for_closure);
                 let runtime_event_task_id = task_log_task_id;
                 let runtime_event_run_id = workflow_run_id;
                 let progress_tx_for_runtime_events = progress_tx_for_closure.clone();
@@ -589,17 +690,23 @@ impl<'a> JssgExecutionService<'a> {
                                 .lock()
                                 .map(|runtime_unit| runtime_unit.clone())
                                 .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
+                            let formatted_log = format_runtime_event_log(&event);
                             record_unit_progress(
                                 &progress_state_for_runtime_events,
                                 &runtime_unit,
                                 StepPhase::Output,
                             );
                             Self::signal_progress(&progress_tx_for_runtime_events);
-                            if let (Some(task_id), Some(run_id), Some(message)) = (
-                                runtime_event_task_id,
-                                runtime_event_run_id,
-                                format_runtime_event_log(&event),
-                            ) {
+                            if let Some(message) = formatted_log.as_ref() {
+                                append_buffered_log(
+                                    &buffered_execution_output_for_runtime_events,
+                                    runtime_unit.clone(),
+                                    message.clone(),
+                                );
+                            }
+                            if let (Some(task_id), Some(run_id), Some(message)) =
+                                (runtime_event_task_id, runtime_event_run_id, formatted_log)
+                            {
                                 publish_event(
                                     run_id,
                                     WorkflowEvent::TaskLogAppended {
@@ -680,6 +787,7 @@ impl<'a> JssgExecutionService<'a> {
 
                 match execution_result {
                     Ok(Ok(CodemodOutput { primary, secondary })) => {
+                        succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
                         let apply_change =
                             |change_path: &Path, result: &ExecutionResult| match result {
                                 ExecutionResult::Modified(ref modified) => {
@@ -884,17 +992,31 @@ impl<'a> JssgExecutionService<'a> {
                         slog!(
                             logger,
                             error,
-                            "Failed to execute codemod on {}: {:?}",
+                            "Failed to execute codemod on {}: {}",
                             relative_path,
                             e
                         );
+                        let execution_message = format!("Failed to process {relative_path}: {e}");
+                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                        append_buffered_diagnostic(
+                            &buffered_execution_output_for_closure,
+                            runtime_unit.clone(),
+                            e.to_string(),
+                        );
+                        if let Ok(mut execution_failure_message) =
+                            execution_failure_message_for_closure.lock()
+                        {
+                            if execution_failure_message.is_none() {
+                                *execution_failure_message = Some(execution_message.clone());
+                            }
+                        }
                         if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
                             publish_event(
                                 run_id,
                                 WorkflowEvent::TaskLogAppended {
                                     workflow_run_id: run_id,
                                     task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
+                                    line: execution_message,
                                     at: Utc::now(),
                                 },
                             );
@@ -917,17 +1039,31 @@ impl<'a> JssgExecutionService<'a> {
                         slog!(
                             logger,
                             error,
-                            "Failed to execute codemod on {}: {:?}",
+                            "Failed to execute codemod on {}: {}",
                             relative_path,
                             e
                         );
+                        let execution_message = format!("Failed to process {relative_path}: {e}");
+                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                        append_buffered_diagnostic(
+                            &buffered_execution_output_for_closure,
+                            runtime_unit.clone(),
+                            e.to_string(),
+                        );
+                        if let Ok(mut execution_failure_message) =
+                            execution_failure_message_for_closure.lock()
+                        {
+                            if execution_failure_message.is_none() {
+                                *execution_failure_message = Some(execution_message.clone());
+                            }
+                        }
                         if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
                             publish_event(
                                 run_id,
                                 WorkflowEvent::TaskLogAppended {
                                     workflow_run_id: run_id,
                                     task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
+                                    line: execution_message,
                                     at: Utc::now(),
                                 },
                             );
@@ -939,7 +1075,7 @@ impl<'a> JssgExecutionService<'a> {
                     }
                 }
 
-                if let Some(callback) = progress_callback.as_ref() {
+                if let Some(callback) = progress_callback_for_closure.as_ref() {
                     let callback = callback.callback.clone();
                     callback(
                         &id_clone,
@@ -980,7 +1116,20 @@ impl<'a> JssgExecutionService<'a> {
             return Err(Error::Runtime(message));
         }
 
-        execute_result?;
+        if let Err(error) = execute_result {
+            flush_buffered_execution_output(
+                &buffered_execution_output,
+                &progress_callback,
+                &request_id,
+            );
+            return Err(error);
+        }
+
+        flush_buffered_execution_output(
+            &buffered_execution_output,
+            &progress_callback,
+            &request_id,
+        );
 
         if let Some(message) = runtime_failure_message
             .lock()
@@ -988,6 +1137,19 @@ impl<'a> JssgExecutionService<'a> {
             .and_then(|message| message.clone())
         {
             return Err(Error::StepExecution(message));
+        }
+
+        let attempted_files = attempted_file_count.load(Ordering::Relaxed);
+        let failed_files = failed_file_count.load(Ordering::Relaxed);
+        let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
+        if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
+            if let Some(message) = execution_failure_message
+                .lock()
+                .ok()
+                .and_then(|message| message.clone())
+            {
+                return Err(Error::StepExecution(message));
+            }
         }
 
         if canceled_during_execution.load(Ordering::Acquire) {

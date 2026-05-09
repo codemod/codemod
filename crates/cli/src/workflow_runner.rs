@@ -5,7 +5,7 @@ use butterflow_core::utils;
 use butterflow_models::node::NodeType;
 use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
-use log::{error, info};
+use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -132,7 +132,9 @@ pub async fn wait_for_workflow_completion(
                     wait_started.elapsed().as_secs_f64(),
                     format_summary_suffix(&summary)
                 );
-                error!("Workflow failed");
+                if failed_workflow_error_message(&tasks).is_some() {
+                    return Err(crate::diagnostics::SilentExit::new("Workflow failed").into());
+                }
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
             WorkflowStatus::AwaitingTrigger => {
@@ -196,6 +198,80 @@ pub async fn wait_for_workflow_completion(
     }
 
     Ok(())
+}
+
+fn failed_workflow_error_message(tasks: &[Task]) -> Option<String> {
+    tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::Failed)
+        .and_then(failed_task_error_message)
+}
+
+fn failed_task_error_message(task: &Task) -> Option<String> {
+    task.error
+        .as_ref()
+        .map(|error| strip_error_prefixes(error))
+        .filter(|error| !error.trim().is_empty())
+        .or_else(|| {
+            task.logs
+                .iter()
+                .rev()
+                .find(|line| line.contains("Error:") || line.contains("failed"))
+                .map(|line| strip_error_prefixes(line))
+        })
+}
+
+fn strip_error_prefixes(message: &str) -> String {
+    let mut cleaned = message.trim().to_string();
+
+    loop {
+        let before = cleaned.clone();
+        let mut current = cleaned.as_str().trim();
+
+        if let Some((_, rest)) = current.split_once(" failed: ") {
+            current = rest.trim();
+        }
+
+        for prefix in [
+            "Step execution error: ",
+            "Runtime error ",
+            "JavaScript execution failed: ",
+        ] {
+            if let Some(rest) = current.strip_prefix(prefix) {
+                current = rest.trim();
+            }
+        }
+
+        if let Some(rest) = current.strip_prefix("Failed to process ") {
+            if let Some((_, error)) = rest.split_once(": ") {
+                current = error.trim();
+            }
+        }
+
+        cleaned = current.to_string();
+        if cleaned == before {
+            break;
+        }
+    }
+
+    cleaned
+}
+
+#[cfg(test)]
+mod failure_message_tests {
+    use super::*;
+
+    #[test]
+    fn strips_workflow_step_and_runtime_prefixes_from_js_errors() {
+        let message = strip_error_prefixes(
+            "Step Scan typescript files and apply fixes failed: Step execution error: Failed to process codemod.ts: Runtime error JavaScript execution failed: Error: Test error\n    at codemod (/tmp/codemod.ts:16:13)",
+        );
+
+        assert_eq!(
+            message,
+            "Error: Test error\n    at codemod (/tmp/codemod.ts:16:13)"
+        );
+    }
 }
 
 #[derive(Default)]

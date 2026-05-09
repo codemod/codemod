@@ -67,6 +67,28 @@ pub fn create_progress_callback() -> ProgressCallback {
                             });
                         }
                     }
+                    "log" => {
+                        if let Some((title, line)) = path.split_once('\n') {
+                            progress_reporter(progress_bar::ProgressUpdate {
+                                task_id: task_id.to_string(),
+                                action: progress_bar::ProgressAction::Log {
+                                    title: title.to_string(),
+                                    line: line.to_string(),
+                                },
+                            });
+                        }
+                    }
+                    "diagnostic" => {
+                        if let Some((title, message)) = path.split_once('\n') {
+                            progress_reporter(progress_bar::ProgressUpdate {
+                                task_id: task_id.to_string(),
+                                action: progress_bar::ProgressAction::Diagnostic {
+                                    title: title.to_string(),
+                                    message: message.to_string(),
+                                },
+                            });
+                        }
+                    }
                     "increment" => {
                         progress_reporter(progress_bar::ProgressUpdate {
                             task_id: task_id.to_string(),
@@ -176,6 +198,7 @@ pub fn create_engine(
     } else {
         Some(create_progress_callback())
     };
+    let progress_owns_terminal = progress_callback.is_some();
 
     let registry_client = create_registry_client(registry)?;
 
@@ -234,14 +257,19 @@ pub fn create_engine(
         if backend == "cloud" {
             // Create API state adapter
             let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
-            return Ok((
-                Engine::with_state_adapter(state_adapter, config.clone()),
-                config.clone(),
-            ));
+            let mut engine = Engine::with_state_adapter(state_adapter, config.clone());
+            if progress_owns_terminal {
+                engine.set_text_log_fallthrough(false);
+            }
+            return Ok((engine, config.clone()));
         }
     }
 
-    Ok((Engine::with_workflow_run_config(config.clone()), config))
+    let mut engine = Engine::with_workflow_run_config(config.clone());
+    if progress_owns_terminal {
+        engine.set_text_log_fallthrough(false);
+    }
+    Ok((engine, config))
 }
 
 pub fn create_registry_client(registry: Option<String>) -> Result<RegistryClient> {
