@@ -569,11 +569,44 @@ function testAddImportMergesNamedSpecifiers() {
   const result = program.commitEdits([edit!]);
   // Check that both foo and bar are in the same import statement
   assert(
-    result.includes("foo") && result.includes("bar") && result.includes("from 'mod'"),
+    result === "import { foo, bar } from 'mod';\nconsole.log(foo);\n",
     "Should merge bar into existing named imports",
   );
   // Make sure we didn't create a new import statement
   assert((result.match(/import/g) || []).length === 1, "Should have only one import statement");
+}
+
+function testAddImportMergesMultilineNamedSpecifiers() {
+  const program = parseProgram("javascript", "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more\n} from 'mod'\n");
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit to merge");
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n  bar\n} from 'mod'\n",
+    "Should merge bar into existing multiline named imports",
+  );
+}
+
+
+function testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma() {
+  const program = parseProgram("javascript", "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n} from 'mod'\n");
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit to merge");
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n  bar,\n} from 'mod'\n",
+    "Should merge bar into existing multiline named imports",
+  );
 }
 
 function testAddImportAfterExisting() {
@@ -1054,6 +1087,8 @@ function run() {
   testAddImportSkipsExistingDefault();
   testAddImportSkipsExistingNamed();
   testAddImportMergesNamedSpecifiers();
+  testAddImportMergesMultilineNamedSpecifiers();
+  testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma();
   testAddImportAfterExisting();
   testAddImportAfterExistingKeepsSeparateLines();
   testAddImportAfterMixedImportsUsesLastSourcePosition();
