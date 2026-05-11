@@ -738,3 +738,222 @@ fn copy_dir_recursively(src: &Path, dst: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::{Cursor, Write};
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn resolve_package_downloads_from_resolved_unscoped_package_info_path() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "alias-package@1.0.0",
+            "/api/v1/registry/packages/alias-package",
+            "canonical-package",
+            None,
+            "/api/v1/registry/packages/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_package_downloads_from_resolved_scoped_package_info_path() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "@alias/alias-package@1.0.0",
+            "/api/v1/registry/packages/@alias/alias-package",
+            "canonical-package",
+            Some("@codemod"),
+            "/api/v1/registry/packages/@codemod/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_package_preserves_resolved_scope_format_without_at_prefix() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "@alias/alias-package@1.0.0",
+            "/api/v1/registry/packages/@alias/alias-package",
+            "canonical-package",
+            Some("codemod"),
+            "/api/v1/registry/packages/codemod/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    async fn assert_resolve_package_downloads_from_resolved_path(
+        source: &str,
+        info_path: &str,
+        resolved_name: &str,
+        resolved_scope: Option<&str>,
+        expected_download_path: &str,
+    ) {
+        let archive = package_archive();
+        let package_info = package_info_response(resolved_name, resolved_scope);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (registry_url, server) = spawn_registry_server(
+            info_path.to_string(),
+            package_info,
+            expected_download_path.to_string(),
+            archive,
+            Arc::clone(&requests),
+        )
+        .await;
+
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: registry_url.clone(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        let resolved = client
+            .resolve_package(source, Some(&registry_url), true, None)
+            .await
+            .expect("package should resolve and download");
+
+        assert!(resolved.package_dir.join("codemod.yaml").exists());
+        assert!(resolved.package_dir.join("workflow.yaml").exists());
+
+        let requests = requests.lock().expect("requests lock");
+        assert!(
+            requests.iter().any(|(method, path)| method == "HEAD"
+                && path == expected_download_path),
+            "expected HEAD request to resolved download path {expected_download_path}, got {requests:?}"
+        );
+        assert!(
+            requests.iter().any(|(method, path)| method == "GET"
+                && path == expected_download_path),
+            "expected GET request to resolved download path {expected_download_path}, got {requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|(_, path)| path.contains("alias-package/download")),
+            "download should not use parsed input alias path, got {requests:?}"
+        );
+
+        server.abort();
+    }
+
+    async fn spawn_registry_server(
+        info_path: String,
+        package_info: String,
+        download_path: String,
+        archive: Vec<u8>,
+        requests: Arc<Mutex<Vec<(String, String)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test registry");
+        let addr = listener.local_addr().expect("test registry address");
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let info_path = info_path.clone();
+                let package_info = package_info.clone();
+                let download_path = download_path.clone();
+                let archive = archive.clone();
+                let requests = Arc::clone(&requests);
+
+                tokio::spawn(async move {
+                    let mut buffer = [0; 4096];
+                    let Ok(size) = stream
+                        .readable()
+                        .await
+                        .and_then(|_| stream.try_read(&mut buffer))
+                    else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..size]);
+                    let Some(request_line) = request.lines().next() else {
+                        return;
+                    };
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or_default().to_string();
+                    let path = parts.next().unwrap_or_default().to_string();
+
+                    requests
+                        .lock()
+                        .expect("requests lock")
+                        .push((method.clone(), path.clone()));
+
+                    let (status, content_type, body) = if method == "GET" && path == info_path {
+                        ("200 OK", "application/json", package_info.into_bytes())
+                    } else if path == download_path && method == "HEAD" {
+                        ("200 OK", "application/gzip", Vec::new())
+                    } else if path == download_path && method == "GET" {
+                        ("200 OK", "application/gzip", archive)
+                    } else {
+                        ("404 Not Found", "text/plain", b"not found".to_vec())
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+
+                    let _ = stream.writable().await;
+                    let _ = stream.try_write(response.as_bytes());
+                    if method != "HEAD" && !body.is_empty() {
+                        let _ = stream.writable().await;
+                        let _ = stream.try_write(&body);
+                    }
+                });
+            }
+        });
+
+        (format!("http://{addr}"), handle)
+    }
+
+    fn package_info_response(name: &str, scope: Option<&str>) -> String {
+        serde_json::json!({
+            "id": "pkg_1",
+            "name": name,
+            "scope": scope,
+            "is_legacy": false,
+            "latest_version": "1.0.0",
+            "versions": {
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "description": null,
+                    "checksum": "sha256:test",
+                    "size": 1
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn package_archive() -> Vec<u8> {
+        let mut tar_buffer = Vec::new();
+        {
+            let mut archive = tar::Builder::new(&mut tar_buffer);
+            append_tar_file(&mut archive, "codemod.yaml", b"name: test\n");
+            append_tar_file(&mut archive, "workflow.yaml", b"version: '1'\n");
+            archive.finish().expect("finish tar");
+        }
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&tar_buffer).expect("write gzip");
+        encoder.finish().expect("finish gzip")
+    }
+
+    fn append_tar_file(archive: &mut tar::Builder<&mut Vec<u8>>, path: &str, contents: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).expect("set tar path");
+        header.set_size(contents.len() as u64);
+        header.set_cksum();
+        archive
+            .append(&header, Cursor::new(contents))
+            .expect("append tar file");
+    }
+}
