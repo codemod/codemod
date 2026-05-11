@@ -142,7 +142,7 @@ registry:
 
 When the package is consumed:
 
-- **CLI:** `codemod run @scope/pkg --workflow <name>` selects a variant. Without `--workflow`, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin is interactive and no flag is given, the CLI shows a picker.
+- **CLI:** `npx codemod <package-id> --workflow <name>` selects a variant for a published package. Without `--workflow`, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin is interactive and no flag is given, the CLI shows a picker.
 - **Local directory runs:** `codemod workflow run -w ./pkg --workflow-name <name>` mirrors the same selection.
 - **Codemod campaigns:** the campaign creation flow allows the user to pick the preferred workflow variant.
 
@@ -216,7 +216,7 @@ Path must be package-relative; absolute paths and `..` segments are rejected at 
 <ParamField path="workflows" type="WorkflowEntry[]">
 List of named workflow variants this package ships. Mutually exclusive with `workflow`. Each entry has:
 
-- `name` (required) — package-local identifier matching `^[A-Za-z0-9_-]+$`. Used by `codemod run --workflow <name>` and the cloud campaign picker.
+- `name` (required) — package-local identifier matching `^[A-Za-z0-9_-]+$`. Used by `npx codemod <package-id> --workflow <name>` and the cloud campaign picker.
 - `path` (required) — package-relative path to the workflow YAML. Absolute paths and `..` segments are rejected.
 - `description` (optional) — short blurb shown in the picker UI.
 - `default` (optional) — at most one entry may set `default: true`. If none is flagged, the first entry is the default.
