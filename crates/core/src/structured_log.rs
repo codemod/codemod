@@ -290,6 +290,13 @@ impl StructuredLogger {
         }
     }
 
+    /// Emit user-facing text without adding it to persisted task logs.
+    pub fn transient_user_line(&self, line: &str) {
+        if self.format != OutputFormat::Jsonl {
+            self.write_output(line);
+        }
+    }
+
     pub fn log_with_metadata(
         &self,
         level: &str,

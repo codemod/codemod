@@ -358,14 +358,6 @@ fn classify_detection(
     reasons.extend(signals.iter().map(|s| s.reason.clone()));
     let best_agent = choose_best_agent(&signals).map(str::to_string);
 
-    if process_failed {
-        return DetectionResult {
-            confidence: DetectionConfidence::Uncertain,
-            agent_name: best_agent,
-            reasons,
-        };
-    }
-
     if signals
         .iter()
         .any(|signal| signal.strength == SignalStrength::Strong)
@@ -381,6 +373,14 @@ fn classify_detection(
         .iter()
         .filter(|signal| signal.strength != SignalStrength::Strong)
         .count();
+
+    if process_failed && non_strong < 2 {
+        return DetectionResult {
+            confidence: DetectionConfidence::Uncertain,
+            agent_name: best_agent,
+            reasons,
+        };
+    }
 
     let confidence = if non_strong >= 2 {
         DetectionConfidence::Detected

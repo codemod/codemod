@@ -506,13 +506,6 @@ fn write_agent_stream_line_live(stream: &str, line: &str) {
     }
 }
 
-fn format_shell_command_log_notice(request: &ShellCommandExecutionRequest) -> String {
-    format!(
-        "About to execute shell command for step '{}' in node '{}'.",
-        request.step_name, request.node_name
-    )
-}
-
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
     let mut message = format!(
         "About to execute shell command for step '{}' in node '{}':",
@@ -3726,7 +3719,6 @@ impl Engine {
             task_id: task.id.to_string(),
         };
         let notice = format_shell_command_notice(&request);
-        logger.log("info", &format_shell_command_log_notice(&request));
 
         if self
             .workflow_run_config
@@ -3736,9 +3728,9 @@ impl Engine {
             && !logger.is_jsonl()
             && !self.workflow_run_config.output.quiet
         {
-            logger.user_line("");
-            logger.user_line(&notice);
-            logger.user_line("");
+            logger.transient_user_line("");
+            logger.transient_user_line(&notice);
+            logger.transient_user_line("");
         }
 
         if let Some(approval_callback) = &self
@@ -4090,7 +4082,7 @@ import { setState } from "codemod:workflow";
 
 export default function transform(ast) {
   setState("preScanMutation", "leaked");
-  return ast;
+  return null;
 }
 "#,
         )
