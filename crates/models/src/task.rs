@@ -29,6 +29,20 @@ pub enum TaskStatus {
     WontDo,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskErrorDetails {
+    ShellCommand {
+        command: String,
+        exit_code: i32,
+        output: String,
+    },
+    AstGrep {
+        message: String,
+        help: Option<String>,
+    },
+}
+
 /// Represents a task (runtime instance of a node)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Task {
@@ -72,6 +86,11 @@ pub struct Task {
     #[ts(optional=nullable)]
     pub error: Option<String>,
 
+    /// Structured error details (if failed)
+    #[serde(default)]
+    #[ts(optional=nullable)]
+    pub error_details: Option<TaskErrorDetails>,
+
     /// Logs from the task
     #[serde(default)]
     pub logs: Vec<String>,
@@ -91,6 +110,7 @@ impl Task {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: Vec::new(),
         }
     }
@@ -112,6 +132,7 @@ impl Task {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: Vec::new(),
             is_master: false,
         }

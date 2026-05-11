@@ -29,10 +29,16 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
             match serde_json::from_str::<Workflow>(&content) {
                 Ok(workflow) => Ok(workflow),
                 Err(json_err) => {
-                    // Both parsing attempts failed
-                    Err(Error::WorkflowValidation(format!(
-                        "Failed to parse workflow file. YAML error: {yaml_err}, JSON error: {json_err}"
-                    )))
+                    let yaml_location = yaml_err.location();
+                    Err(Error::WorkflowParse {
+                        path: path.as_ref().to_path_buf(),
+                        yaml_error: yaml_err.to_string().into_boxed_str(),
+                        yaml_line: yaml_location.as_ref().map(|location| location.line()),
+                        yaml_column: yaml_location.as_ref().map(|location| location.column()),
+                        json_error: json_err.to_string().into_boxed_str(),
+                        json_line: Some(json_err.line()),
+                        json_column: Some(json_err.column()),
+                    })
                 }
             }
         }

@@ -108,6 +108,7 @@ mod tests {
                     )])),
                     is_master: false,
                     error: None,
+                    error_details: None,
                 }
             })
             .collect();

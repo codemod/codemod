@@ -59,7 +59,7 @@ use butterflow_models::runtime::RuntimeType;
 use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
-    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task,
+    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskErrorDetails,
     TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
@@ -177,6 +177,29 @@ pub(crate) async fn execute_install_skill_in_isolated_runtime(
             "install-skill executor task failed to join: {error}"
         ))
     })
+}
+
+fn task_error_details(error: &Error) -> Option<TaskErrorDetails> {
+    match error {
+        Error::ShellCommandStepFailed {
+            command,
+            exit_code,
+            output,
+        } => Some(TaskErrorDetails::ShellCommand {
+            command: command.clone(),
+            exit_code: *exit_code,
+            output: output.clone(),
+        }),
+        Error::AstGrepStepFailed { message, help } => Some(TaskErrorDetails::AstGrep {
+            message: message.clone(),
+            help: help.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn ast_grep_step_help() -> Option<String> {
+    Some("Fix the ast-grep rule or target file issue and rerun the workflow.".to_string())
 }
 
 pub(crate) struct PreparedStepExecution {
@@ -2027,7 +2050,13 @@ impl Engine {
                     });
                 if let Err(e) = execution_result {
                     let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
-                    if current_task.status == TaskStatus::AwaitingTrigger {
+                    if matches!(
+                        current_task.status,
+                        TaskStatus::Failed
+                            | TaskStatus::Completed
+                            | TaskStatus::WontDo
+                            | TaskStatus::AwaitingTrigger
+                    ) {
                         continue;
                     }
                     if let Error::Deferred(message) = &e {
@@ -2420,11 +2449,12 @@ impl Engine {
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
                     let failure_message = format!("Step {} failed: {}", step.name, e);
+                    let error_details = task_error_details(&e);
                     let _ = self.append_task_log(task_id, failure_message.clone()).await;
 
                     let failed_task = self
                         .task_state_service()
-                        .mark_failed(task_id, failure_message)
+                        .mark_failed_with_details(task_id, failure_message, error_details)
                         .await?;
                     self.update_parent_matrix_master_for_task(&failed_task)
                         .await?;
@@ -2538,7 +2568,10 @@ impl Engine {
             if let Ok(task_id) = Uuid::parse_str(&id) {
                 let _ = self.append_task_log(task_id, &message).await;
             }
-            return Err(Error::StepExecution(message));
+            return Err(Error::AstGrepStepFailed {
+                message,
+                help: ast_grep_step_help(),
+            });
         }
 
         if let Some(pre_run_callback) = self.workflow_run_config.execution.pre_run_callback.as_ref()
@@ -2771,7 +2804,10 @@ impl Engine {
             if let Ok(task_id) = Uuid::parse_str(&id) {
                 let _ = self.append_task_log(task_id, &message).await;
             }
-            return Err(Error::StepExecution(message));
+            return Err(Error::AstGrepStepFailed {
+                message,
+                help: ast_grep_step_help(),
+            });
         }
 
         Ok(())
@@ -3768,7 +3804,18 @@ impl Engine {
                 &prepared.env,
                 Some(Arc::clone(&output_callback)),
             )
-            .await;
+            .await
+            .map_err(|error| {
+                if let Error::ShellCommandFailed { exit_code, output } = error {
+                    Error::ShellCommandStepFailed {
+                        command: resolved_command.clone(),
+                        exit_code,
+                        output,
+                    }
+                } else {
+                    Error::StepExecution(format!("Shell command failed: {error}"))
+                }
+            });
         drop(output_callback);
         let _ = log_persist_task.await;
 

@@ -1,20 +1,8 @@
+use butterflow_models::Error as ModelError;
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, NamedSource, SourceSpan};
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use thiserror::Error;
-
-#[derive(Debug, Error)]
-#[error("{message}")]
-pub(crate) struct SilentExit {
-    message: String,
-}
-
-impl SilentExit {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("{message}")]
@@ -47,6 +35,56 @@ struct AstGrepDiagnostic {
     help: Option<String>,
 }
 
+#[derive(Debug, Error, Diagnostic)]
+#[error("{message}")]
+#[diagnostic(code(codemod::workflow::config))]
+struct WorkflowConfigDiagnostic {
+    message: String,
+    #[help]
+    help: Option<String>,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("{message}")]
+#[diagnostic(code(codemod::workflow::config))]
+struct WorkflowConfigSourceDiagnostic {
+    message: String,
+    #[source_code]
+    source_code: NamedSource<String>,
+    #[label("invalid workflow field")]
+    span: SourceSpan,
+    #[help]
+    help: Option<String>,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("{message}")]
+#[diagnostic(code(codemod::runtime::shell))]
+struct ShellCommandDiagnostic {
+    message: String,
+    #[source_code]
+    source_code: NamedSource<String>,
+    #[label("command failed here")]
+    span: SourceSpan,
+    #[help]
+    help: Option<String>,
+}
+
+#[derive(Debug, Error)]
+#[error("Shell command failed with exit code {exit_code}")]
+pub(crate) struct ShellCommandFailure {
+    pub(crate) command: String,
+    pub(crate) exit_code: i32,
+    pub(crate) output: String,
+}
+
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub(crate) struct AstGrepFailure {
+    pub(crate) message: String,
+    pub(crate) help: Option<String>,
+}
+
 #[derive(Debug)]
 struct JsStackLocation {
     path: String,
@@ -54,11 +92,22 @@ struct JsStackLocation {
     column: usize,
 }
 
-pub(crate) fn render_anyhow_error(error: &anyhow::Error) {
-    if error.downcast_ref::<SilentExit>().is_some() {
-        return;
-    }
+#[derive(Debug)]
+struct LineColumnLocation {
+    line: usize,
+    column: usize,
+}
 
+#[derive(Debug)]
+struct WorkflowParseDetails {
+    path: PathBuf,
+    yaml_error: String,
+    yaml_line: Option<usize>,
+    yaml_column: Option<usize>,
+    json_error: String,
+}
+
+pub(crate) fn render_anyhow_error(error: &anyhow::Error) {
     let rendered = render_error_text(error);
     eprintln!("{rendered}");
 }
@@ -71,7 +120,13 @@ fn render_error_text(error: &anyhow::Error) -> String {
     if let Some(rendered) = render_javascript_runtime_error(error) {
         return rendered;
     }
+    if let Some(rendered) = render_workflow_config_error(error) {
+        return rendered;
+    }
     if let Some(rendered) = render_ast_grep_error(error) {
+        return rendered;
+    }
+    if let Some(rendered) = render_shell_command_error(error) {
         return rendered;
     }
 
@@ -97,7 +152,109 @@ fn render_javascript_runtime_error(error: &anyhow::Error) -> Option<String> {
     Some(render_report(&diagnostic))
 }
 
+fn render_workflow_config_error(error: &anyhow::Error) -> Option<String> {
+    if let Some(parse_error) = workflow_parse_error_from_chain(error) {
+        let message = workflow_parse_message(&parse_error);
+        if let Some(diagnostic) = workflow_parse_source_diagnostic(&parse_error, &message) {
+            return Some(render_report(&diagnostic));
+        }
+
+        let diagnostic = WorkflowConfigDiagnostic {
+            help: workflow_config_help(&message),
+            message,
+        };
+        return Some(render_report(&diagnostic));
+    }
+
+    let error_text = format!("{error:#}");
+    let message = workflow_config_error_message(&error_text)?;
+    if let Some(diagnostic) = workflow_config_source_diagnostic(&error_text, &message) {
+        return Some(render_report(&diagnostic));
+    }
+
+    let diagnostic = WorkflowConfigDiagnostic {
+        help: workflow_config_help(&message),
+        message,
+    };
+    Some(render_report(&diagnostic))
+}
+
+fn workflow_parse_error_from_chain(error: &anyhow::Error) -> Option<WorkflowParseDetails> {
+    error.chain().find_map(|cause| {
+        let ModelError::WorkflowParse {
+            path,
+            yaml_error,
+            yaml_line,
+            yaml_column,
+            json_error,
+            ..
+        } = cause.downcast_ref::<ModelError>()?
+        else {
+            return None;
+        };
+
+        Some(WorkflowParseDetails {
+            path: path.clone(),
+            yaml_error: yaml_error.to_string(),
+            yaml_line: *yaml_line,
+            yaml_column: *yaml_column,
+            json_error: json_error.to_string(),
+        })
+    })
+}
+
+fn workflow_parse_message(parse_error: &WorkflowParseDetails) -> String {
+    format!(
+        "YAML error: {}, JSON error: {}",
+        parse_error.yaml_error, parse_error.json_error
+    )
+}
+
+fn workflow_parse_source_diagnostic(
+    parse_error: &WorkflowParseDetails,
+    message: &str,
+) -> Option<WorkflowConfigSourceDiagnostic> {
+    let source = std::fs::read_to_string(&parse_error.path).ok()?;
+    let line = parse_error.yaml_line?;
+    let column = parse_error.yaml_column?;
+    let offset = line_column_to_byte_offset(&source, line, column)?;
+    let span_len = token_span_len_at(&source, offset).unwrap_or(1);
+
+    Some(WorkflowConfigSourceDiagnostic {
+        message: message.to_string(),
+        source_code: NamedSource::new(parse_error.path.display().to_string(), source),
+        span: (offset, span_len).into(),
+        help: workflow_config_help(message),
+    })
+}
+
+fn workflow_config_source_diagnostic(
+    error_text: &str,
+    message: &str,
+) -> Option<WorkflowConfigSourceDiagnostic> {
+    let path = workflow_file_path_from_error(error_text)?;
+    let source = std::fs::read_to_string(&path).ok()?;
+    let location = yaml_error_location(message)?;
+    let offset = line_column_to_byte_offset(&source, location.line, location.column)?;
+    let span_len = token_span_len_at(&source, offset).unwrap_or(1);
+
+    Some(WorkflowConfigSourceDiagnostic {
+        message: message.to_string(),
+        source_code: NamedSource::new(path, source),
+        span: (offset, span_len).into(),
+        help: workflow_config_help(message),
+    })
+}
+
 fn render_ast_grep_error(error: &anyhow::Error) -> Option<String> {
+    if let Some(failure) = error.downcast_ref::<AstGrepFailure>() {
+        let diagnostic = AstGrepDiagnostic {
+            help: failure.help.clone(),
+            message: failure.message.clone(),
+        };
+        return Some(render_report(&diagnostic));
+    }
+
     let error_text = format!("{error:#}");
     let message = first_ast_grep_error_line(&error_text)?;
     let diagnostic = AstGrepDiagnostic {
@@ -105,6 +262,64 @@ fn render_ast_grep_error(error: &anyhow::Error) -> Option<String> {
         message,
     };
     Some(render_report(&diagnostic))
+}
+
+fn render_shell_command_error(error: &anyhow::Error) -> Option<String> {
+    if let Some(failure) = error.downcast_ref::<ShellCommandFailure>() {
+        return Some(render_shell_command_failure(
+            &failure.command,
+            failure.exit_code,
+            Some(&failure.output),
+        ));
+    }
+
+    let error_text = format!("{error:#}");
+    let start = error_text.find("Shell command failed")?;
+    let failure = &error_text[start..];
+    let (message, body) = failure.split_once("\n\nCommand:\n")?;
+    let (command, output) = body
+        .split_once("\n\nOutput:\n")
+        .map_or((body, None), |(command, output)| (command, Some(output)));
+    let command = command.trim_end().to_string();
+    if command.is_empty() {
+        return None;
+    }
+
+    Some(render_shell_command_failure(
+        &command,
+        parse_shell_exit_code(message).unwrap_or(1),
+        output,
+    ))
+}
+
+fn render_shell_command_failure(command: &str, exit_code: i32, output: Option<&str>) -> String {
+    let help = output
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+        .map(|output| format!("Process output:\n{}", truncate_help_output(output)));
+    let diagnostic = ShellCommandDiagnostic {
+        message: format!("Shell command failed with exit code {exit_code}"),
+        source_code: NamedSource::new("shell command", command.to_string()),
+        span: (0usize, command.len()).into(),
+        help,
+    };
+    render_report(&diagnostic)
+}
+
+fn parse_shell_exit_code(message: &str) -> Option<i32> {
+    message
+        .strip_prefix("Shell command failed with exit code ")?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn workflow_config_help(message: &str) -> Option<String> {
+    if let Some(help) = invalid_type_help(message) {
+        return Some(help);
+    }
+
+    Some("Check the workflow YAML shape and field types, then rerun the workflow.".to_string())
 }
 
 fn ast_grep_help(message: &str) -> Option<String> {
@@ -123,6 +338,21 @@ fn ast_grep_help(message: &str) -> Option<String> {
     } else {
         Some("Fix the ast-grep rule or target file issue and rerun the workflow.".to_string())
     }
+}
+
+fn truncate_help_output(output: &str) -> String {
+    const MAX_CHARS: usize = 2000;
+    if output.len() <= MAX_CHARS {
+        return output.to_string();
+    }
+
+    let mut truncated = output
+        .char_indices()
+        .take_while(|(index, _)| *index < MAX_CHARS)
+        .map(|(_, ch)| ch)
+        .collect::<String>();
+    truncated.push_str("\n... output truncated ...");
+    truncated
 }
 
 fn render_report(diagnostic: &(dyn Diagnostic + Send + Sync + 'static)) -> String {
@@ -171,6 +401,94 @@ fn first_ast_grep_error_line(error_text: &str) -> Option<String> {
             .filter_map(|marker| line.find(marker).map(|index| line[index..].to_string()))
             .next()
     })
+}
+
+fn workflow_config_error_message(error_text: &str) -> Option<String> {
+    if !is_workflow_config_error(error_text) {
+        return None;
+    }
+
+    error_text.lines().map(str::trim).find_map(|line| {
+        line.find("YAML error:")
+            .or_else(|| line.find("Workflow validation error:"))
+            .map(|index| line[index..].to_string())
+    })
+}
+
+fn is_workflow_config_error(error_text: &str) -> bool {
+    error_text.contains("Failed to parse workflow file")
+        || error_text.contains("Failed to validate workflow file")
+        || error_text.contains("Failed to validate workflow")
+}
+
+fn invalid_type_help(message: &str) -> Option<String> {
+    let (field, rest) = message.split_once(": invalid type: ")?;
+    let field = field
+        .strip_prefix("YAML error: ")
+        .or_else(|| field.strip_prefix("JSON error: "))
+        .unwrap_or(field)
+        .trim();
+    if field.is_empty() {
+        return None;
+    }
+
+    let expected = rest
+        .split_once(", expected ")
+        .map(|(_, expected)| expected)
+        .and_then(|expected| expected.split(" at line ").next())
+        .map(str::trim)
+        .filter(|expected| !expected.is_empty())?;
+    let actual = rest
+        .split_once(", expected ")
+        .map(|(actual, _)| actual.trim())
+        .filter(|actual| !actual.is_empty())?;
+
+    Some(format!(
+        "Check `{field}` in the workflow YAML: expected {expected}, but got {actual}."
+    ))
+}
+
+fn workflow_file_path_from_error(error_text: &str) -> Option<String> {
+    error_text.lines().map(str::trim).find_map(|line| {
+        let path = line.strip_prefix("Failed to parse workflow file: ")?;
+        let path = path
+            .split_once(": Workflow validation error:")
+            .map(|(path, _)| path)
+            .unwrap_or(path)
+            .trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
+    })
+}
+
+fn yaml_error_location(message: &str) -> Option<LineColumnLocation> {
+    let yaml_message = message
+        .split_once(", JSON error:")
+        .map(|(yaml, _)| yaml)
+        .unwrap_or(message);
+    let (_, rest) = yaml_message.rsplit_once(" at line ")?;
+    let (line, rest) = rest.split_once(" column ")?;
+    let column = rest
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()
+        .unwrap_or_default();
+    Some(LineColumnLocation {
+        line: line.parse().ok()?,
+        column: column.parse().ok()?,
+    })
+}
+
+fn token_span_len_at(source: &str, offset: usize) -> Option<usize> {
+    let tail = source.get(offset..)?;
+    let len = tail
+        .char_indices()
+        .take_while(|(_, ch)| !ch.is_whitespace() && !matches!(ch, ',' | '}' | ']'))
+        .last()
+        .map(|(index, ch)| index + ch.len_utf8())?;
+    Some(len.max(1))
 }
 
 fn first_error_line(error_text: &str) -> Option<String> {
@@ -283,5 +601,81 @@ mod tests {
         .expect("error line");
 
         assert_eq!(message, "Config error: invalid pattern");
+    }
+
+    #[test]
+    fn workflow_yaml_parse_error_is_not_rendered_as_ast_grep() {
+        let rendered = render_error_message(
+            "Failed to parse workflow file. YAML error: nodes[0].trigger: invalid type: string \"manual\", expected struct Trigger at line 8 column 14, JSON error: expected value at line 1 column 1",
+        );
+
+        assert!(rendered.contains("codemod::workflow::config"));
+        assert!(rendered.contains("nodes[0].trigger"));
+        assert!(rendered.contains(
+            "Check `nodes[0].trigger` in the workflow YAML: expected struct Trigger, but got string \"manual\"."
+        ));
+        assert!(!rendered.contains("codemod::runtime::ast_grep"));
+        assert!(!rendered.contains("Fix the ast-grep rule"));
+    }
+
+    #[test]
+    fn workflow_yaml_parse_error_uses_source_span_when_path_is_available() {
+        let file = tempfile::NamedTempFile::new().expect("temp workflow");
+        std::fs::write(
+            file.path(),
+            "nodes:\n  - id: apply-transforms\n    name: Apply AST Transformations\n    trigger: manual\n    type: automatic\n",
+        )
+        .expect("write workflow");
+        let rendered = render_error_message(&format!(
+            "Failed to parse workflow file: {}\nFailed to parse workflow file. YAML error: nodes[0].trigger: invalid type: string \"manual\", expected struct Trigger at line 4 column 14, JSON error: expected value at line 1 column 1",
+            file.path().display()
+        ));
+
+        assert!(rendered.contains("codemod::workflow::config"));
+        assert!(rendered.contains("manual"));
+        assert!(rendered.contains("invalid workflow field"));
+        assert!(rendered.contains(
+            "Check `nodes[0].trigger` in the workflow YAML: expected struct Trigger, but got string \"manual\"."
+        ));
+    }
+
+    #[test]
+    fn structured_workflow_parse_error_uses_source_span() {
+        let file = tempfile::NamedTempFile::new().expect("temp workflow");
+        std::fs::write(
+            file.path(),
+            "nodes:\n  - id: apply-transforms\n    name: Apply AST Transformations\n    trigger: manual\n    type: automatic\n",
+        )
+        .expect("write workflow");
+        let error = anyhow::anyhow!(ModelError::WorkflowParse {
+            path: file.path().to_path_buf(),
+            yaml_error: "nodes[0].trigger: invalid type: string \"manual\", expected struct Trigger at line 4 column 14".into(),
+            yaml_line: Some(4),
+            yaml_column: Some(14),
+            json_error: "expected value at line 1 column 1".into(),
+            json_line: Some(1),
+            json_column: Some(1),
+        });
+        let rendered = render_error_text(&error);
+
+        assert!(rendered.contains("codemod::workflow::config"));
+        assert!(rendered.contains(":4:14"));
+        assert!(rendered.contains("manual"));
+        assert!(rendered.contains("invalid workflow field"));
+    }
+
+    #[test]
+    fn renders_shell_command_failure_with_command_source() {
+        let rendered = render_error_message(
+            "Shell command failed with exit code 1\n\nCommand:\necho 'hello'\nfalse\n\nOutput:\nhello",
+        );
+
+        assert!(rendered.contains("codemod::runtime::shell"));
+        assert!(rendered.contains("Shell command failed with exit code 1"));
+        assert!(rendered.contains("echo 'hello'"));
+        assert!(rendered.contains("false"));
+        assert!(rendered.contains("command failed here"));
+        assert!(rendered.contains("Process output:"));
+        assert!(rendered.contains("hello"));
     }
 }

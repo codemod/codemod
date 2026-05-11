@@ -3,6 +3,7 @@ use butterflow_core::config::WorkflowRunConfig;
 use butterflow_core::engine::Engine;
 use butterflow_core::utils;
 use butterflow_models::node::NodeType;
+use butterflow_models::task::TaskErrorDetails;
 use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
 use log::info;
@@ -132,11 +133,8 @@ pub async fn wait_for_workflow_completion(
                     wait_started.elapsed().as_secs_f64(),
                     format_summary_suffix(&summary)
                 );
-                if failed_workflow_error_was_reported(&tasks) {
-                    return Err(crate::diagnostics::SilentExit::new("Workflow failed").into());
-                }
-                if let Some(message) = failed_workflow_error_message(&tasks) {
-                    return Err(anyhow::anyhow!(message));
+                if let Some(error) = failed_workflow_error(&tasks) {
+                    return Err(error);
                 }
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
@@ -203,21 +201,40 @@ pub async fn wait_for_workflow_completion(
     Ok(())
 }
 
-fn failed_workflow_error_message(tasks: &[Task]) -> Option<String> {
+fn failed_workflow_error(tasks: &[Task]) -> Option<anyhow::Error> {
     tasks
         .iter()
         .find(|task| task.status == TaskStatus::Failed)
-        .and_then(failed_task_error_message)
+        .and_then(failed_task_error)
 }
 
-fn failed_workflow_error_was_reported(tasks: &[Task]) -> bool {
-    tasks
-        .iter()
-        .find(|task| task.status == TaskStatus::Failed)
-        .is_some_and(|task| task.logs.iter().any(|line| is_error_log_line(line)))
-}
+fn failed_task_error(task: &Task) -> Option<anyhow::Error> {
+    if let Some(TaskErrorDetails::ShellCommand {
+        command,
+        exit_code,
+        output,
+    }) = &task.error_details
+    {
+        return Some(
+            crate::diagnostics::ShellCommandFailure {
+                command: command.clone(),
+                exit_code: *exit_code,
+                output: output.clone(),
+            }
+            .into(),
+        );
+    }
 
-fn failed_task_error_message(task: &Task) -> Option<String> {
+    if let Some(TaskErrorDetails::AstGrep { message, help }) = &task.error_details {
+        return Some(
+            crate::diagnostics::AstGrepFailure {
+                message: message.clone(),
+                help: help.clone(),
+            }
+            .into(),
+        );
+    }
+
     task.error
         .as_ref()
         .map(|error| strip_error_prefixes(error))
@@ -229,6 +246,7 @@ fn failed_task_error_message(task: &Task) -> Option<String> {
                 .find(|line| is_error_log_line(line))
                 .map(|line| strip_error_prefixes(line))
         })
+        .map(anyhow::Error::msg)
 }
 
 fn is_error_log_line(line: &str) -> bool {
@@ -540,6 +558,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: Vec::new(),
         }
     }

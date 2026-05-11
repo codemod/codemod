@@ -1495,6 +1495,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.reduce(AppEvent::Workflow(WorkflowEvent::TaskLogAppended {
             workflow_run_id: run_id,
@@ -1532,6 +1533,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.reduce(AppEvent::Workflow(WorkflowEvent::TaskProgressUpdated {
@@ -1563,6 +1565,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: vec![],
         });
         state.tasks.push(Task {
@@ -1576,6 +1579,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: vec![],
         });
 
@@ -1620,6 +1624,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
             Task {
                 id: Uuid::new_v4(),
@@ -1633,6 +1638,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
         ];
 
@@ -1683,6 +1689,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         }];
 
         assert_eq!(state.display_run_status(), "Running");
@@ -1723,6 +1730,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("boom".to_string()),
+            error_details: None,
         }];
 
         assert_eq!(state.display_run_status(), "Failed");
@@ -1897,6 +1905,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -1922,6 +1931,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -1948,6 +1958,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -1978,6 +1989,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -2007,6 +2019,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -2147,6 +2160,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.open_log_modal(4);
@@ -2171,6 +2185,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.open_log_modal(3);
@@ -2216,6 +2231,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("Failed to execute install-skill step".to_string()),
+            error_details: None,
         });
 
         assert_eq!(
@@ -2241,6 +2257,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 })
                 .collect(),
             ..TuiState::default()
@@ -2278,6 +2295,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -2302,6 +2320,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -2326,6 +2345,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -2414,6 +2434,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
             Task {
                 id: blocked_task_id,
@@ -2427,6 +2448,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
         ];
         state.selected_task = 1;
@@ -2519,6 +2541,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 },
                 Task {
                     id: normal_task_id,
@@ -2532,6 +2555,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 },
             ],
             ..TuiState::default()
@@ -2595,6 +2619,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -2662,6 +2687,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_display_name(&task), "Apply migration");
@@ -2718,6 +2744,7 @@ mod tests {
             )])),
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_display_name(&task), "Debarrel · unowned-10");
@@ -2775,6 +2802,7 @@ mod tests {
             ])),
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -2797,6 +2825,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(TuiState::default().task_elapsed_text(&task), "-");
@@ -2821,6 +2850,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -2845,6 +2875,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(state.selected_task_completion_detail(), None);
@@ -2871,6 +2902,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2902,6 +2934,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2932,6 +2965,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2960,6 +2994,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -3197,6 +3232,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3276,6 +3312,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3415,6 +3452,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
             request_id,
@@ -3487,6 +3525,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3514,6 +3553,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_elapsed_text(&task), "-");

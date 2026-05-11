@@ -147,8 +147,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| args.workflow.clone());
-    let workflow_definition = utils::parse_workflow_file(&workflow_file_path)
-        .context("Failed to parse workflow before run")?;
+    let workflow_definition = utils::parse_workflow_file(&workflow_file_path).context(format!(
+        "Failed to parse workflow file: {}",
+        workflow_file_path.display()
+    ))?;
     let auto_launch_tui =
         should_auto_launch_workflow_tui(args.no_interactive, args.dry_run, &workflow_definition);
 

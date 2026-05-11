@@ -856,6 +856,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.task_progress.insert(
             task_id,
@@ -943,6 +944,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -997,6 +999,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -1055,6 +1058,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -1108,6 +1112,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 })
                 .collect(),
             selected_task: 5,
@@ -1156,6 +1161,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.open_log_modal(6);
         state.set_log_modal_notice("Copied full log to clipboard");
@@ -1192,6 +1198,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("boom".to_string()),
+            error_details: None,
         });
         state.open_log_modal(6);
 

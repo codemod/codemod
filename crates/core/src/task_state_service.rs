@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use butterflow_models::{
-    DiffOperation, FieldDiff, Result, Task, TaskDiff, TaskStatus, WorkflowRun, WorkflowRunDiff,
-    WorkflowStatus,
+    DiffOperation, FieldDiff, Result, Task, TaskDiff, TaskErrorDetails, TaskStatus, WorkflowRun,
+    WorkflowRunDiff, WorkflowStatus,
 };
 use butterflow_state::StateAdapter;
 use chrono::Utc;
@@ -55,6 +55,7 @@ impl TaskStateService {
         fields.insert("started_at".to_string(), Self::update_json(Utc::now())?);
         fields.insert("ended_at".to_string(), Self::update_null());
         fields.insert("error".to_string(), Self::update_null());
+        fields.insert("error_details".to_string(), Self::update_null());
         self.apply_task_fields(task_id, fields).await
     }
 
@@ -67,6 +68,7 @@ impl TaskStateService {
         fields.insert("ended_at".to_string(), Self::update_null());
         fields.insert("started_at".to_string(), Self::update_null());
         fields.insert("error".to_string(), Self::update_null());
+        fields.insert("error_details".to_string(), Self::update_null());
         self.apply_task_fields(task_id, fields).await
     }
 
@@ -74,6 +76,16 @@ impl TaskStateService {
         &self,
         task_id: Uuid,
         error_message: impl Into<String>,
+    ) -> Result<Task> {
+        self.mark_failed_with_details(task_id, error_message, None)
+            .await
+    }
+
+    pub(crate) async fn mark_failed_with_details(
+        &self,
+        task_id: Uuid,
+        error_message: impl Into<String>,
+        error_details: Option<TaskErrorDetails>,
     ) -> Result<Task> {
         let mut fields = HashMap::new();
         fields.insert("status".to_string(), Self::update_json(TaskStatus::Failed)?);
@@ -83,6 +95,16 @@ impl TaskStateService {
             FieldDiff {
                 operation: DiffOperation::Add,
                 value: Some(serde_json::to_value(error_message.into())?),
+            },
+        );
+        fields.insert(
+            "error_details".to_string(),
+            match error_details {
+                Some(error_details) => FieldDiff {
+                    operation: DiffOperation::Add,
+                    value: Some(serde_json::to_value(error_details)?),
+                },
+                None => Self::update_null(),
             },
         );
         self.apply_task_fields(task_id, fields).await
@@ -111,6 +133,7 @@ impl TaskStateService {
             Self::update_json(TaskStatus::Pending)?,
         );
         fields.insert("error".to_string(), Self::update_null());
+        fields.insert("error_details".to_string(), Self::update_null());
         fields.insert("ended_at".to_string(), Self::update_null());
         self.apply_task_fields(task_id, fields).await
     }

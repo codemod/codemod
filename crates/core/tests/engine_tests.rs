@@ -3572,6 +3572,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3590,6 +3591,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3634,6 +3636,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3652,6 +3655,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3711,6 +3715,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -4462,6 +4467,7 @@ message: "Found var declaration"
         ended_at: None,
         logs: vec![],
         error: None,
+        error_details: None,
     };
 
     // Create engine with correct bundle path
@@ -6022,6 +6028,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6040,6 +6047,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6094,6 +6102,7 @@ async fn test_workflow_with_state_write_and_matrix() {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: Vec::new(),
         };
 
@@ -6187,6 +6196,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6205,6 +6215,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6244,6 +6255,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6264,6 +6276,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6324,6 +6337,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6344,6 +6358,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6432,6 +6447,7 @@ async fn test_empty_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6450,6 +6466,7 @@ async fn test_empty_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6537,6 +6554,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6555,6 +6573,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6655,6 +6674,7 @@ async fn test_matrix_hash_based_deduplication() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 

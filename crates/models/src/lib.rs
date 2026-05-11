@@ -19,7 +19,7 @@ pub use schema::{SimpleSchema, SimpleSchemaProperty, SimpleSchemaType, SimpleSch
 pub use state_diff::{DiffOperation, FieldDiff, StateDiff, TaskDiff, WorkflowRunDiff};
 pub use step::{CommitConfig, PullRequestConfig, Step, TemplateUse};
 pub use strategy::{Strategy, StrategyType};
-pub use task::{Task, TaskStatus};
+pub use task::{Task, TaskErrorDetails, TaskStatus};
 pub use template::{Template, TemplateInput, TemplateOutput};
 pub use trigger::{Trigger, TriggerType};
 pub use variable::{
