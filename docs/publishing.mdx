@@ -150,7 +150,7 @@ jobs:
           path: codemods/${{ steps.extract.outputs.codemod_name }}
 ```
 
-You can also run `npx codemod init` to generate this workflow automatically. It creates the single-codemod or monorepo format based on your project structure.
+You can also run `npx codemod init` to scaffold a Codemod package, including publish workflow templates you can adapt for your repository layout. For monorepos, use the package path and tag pattern that match how you organize packages in your repo.
 
 ### Individual Packages (Manual Configuration)
 
