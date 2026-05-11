@@ -1027,24 +1027,35 @@ export function addImport<T extends Language>(
 
           const trailingComma = hasTrailingComma(namedImports.children()) ? "," : "";
 
-          const namedImportsNodes = namedImports
+          const namedImportNodes = namedImports
             .children()
-            .filter((n) => n.isNamed() && !n.is("comment"));
+            .filter((n) => n.isNamed() || n.is("comment"));
 
-          const lines = Object.values(
-            Object.groupBy(namedImportsNodes, (node) => {
-              return node.range().start.line;
-            }),
-          );
+          const namedImportsText: string[] = [];
 
-          const namedImportsText = lines.map((line) => {
-            return line?.map((node) => node.text()).join(" ");
-          });
+          for (let i = 0; i < namedImportNodes.length; i++) {
+            if (isMultiline) {
+              if (namedImportNodes[i + 1]?.is("comment")) {
+                namedImportsText[i] = namedImportNodes[i]?.text() + ",";
+                continue;
+              }
+
+              if (namedImportNodes[i]?.is("comment")) {
+                namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
+                continue;
+              }
+
+              namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
+              continue;
+            }
+
+            namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
+          }
 
           const specifierStr = newSpecifiers.map(formatSpecifier);
 
           const importsUpdatedStr =
-            namedImportsText.concat(specifierStr).join(separator) + trailingComma;
+            namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
 
           return isMultiline
             ? namedImports.replace(`{\n  ${importsUpdatedStr}\n}`)

@@ -576,6 +576,27 @@ function testAddImportMergesNamedSpecifiers() {
   assert((result.match(/import/g) || []).length === 1, "Should have only one import statement");
 }
 
+function testAddImportMergesNamedSpecifiersWithMultiplePreviousImports() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo, baz } from 'mod';\nconsole.log(foo);\n",
+  );
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit to merge");
+  const result = program.commitEdits([edit!]);
+  // Check that both foo and bar are in the same import statement
+  assert(
+    result === "import { foo, baz, bar } from 'mod';\nconsole.log(foo);\n",
+    "Should merge bar into existing multiple named imports",
+  );
+  // Make sure we didn't create a new import statement
+  assert((result.match(/import/g) || []).length === 1, "Should have only one import statement");
+}
+
 function testAddImportMergesMultilineNamedSpecifiers() {
   const program = parseProgram(
     "javascript",
@@ -592,6 +613,26 @@ function testAddImportMergesMultilineNamedSpecifiers() {
   assert(
     result === "import {\n  foo,\n  baz,\n  fiz,\n  test,\n  more,\n  bar\n} from 'mod'\n",
     "Should merge bar into existing multiline named imports",
+  );
+}
+
+function testAddImportMergesMultilineNamedSpecifiersWithComment() {
+  const program = parseProgram(
+    "javascript",
+    "import {\n  foo,\n  baz,// this is a comment\n  fiz,\n  test,\n  more\n} from 'mod'\n",
+  );
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit to merge");
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result ===
+      "import {\n  foo,\n  baz,// this is a comment\n  fiz,\n  test,\n  more,\n  bar\n} from 'mod'\n",
+    "Should merge bar into existing multiline named imports with comment",
   );
 }
 
@@ -1092,7 +1133,9 @@ function run() {
   testAddImportSkipsExistingDefault();
   testAddImportSkipsExistingNamed();
   testAddImportMergesNamedSpecifiers();
+  testAddImportMergesNamedSpecifiersWithMultiplePreviousImports();
   testAddImportMergesMultilineNamedSpecifiers();
+  testAddImportMergesMultilineNamedSpecifiersWithComment();
   testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma();
   testAddImportAfterExisting();
   testAddImportAfterExistingKeepsSeparateLines();
