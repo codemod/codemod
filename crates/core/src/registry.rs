@@ -209,6 +209,12 @@ impl RegistryClient {
             });
         }
 
+        let resolved_package_spec = PackageSpec {
+            name: package_info.name.clone(),
+            scope: package_info.scope.clone(),
+            version: None,
+        };
+
         // Determine version to use
         let version = determine_version(&package_spec, &package_info)?;
 
@@ -227,7 +233,7 @@ impl RegistryClient {
             let (dir, dry_run_only) = self
                 .download_and_extract_package(
                     registry,
-                    &package_spec,
+                    &resolved_package_spec,
                     &version,
                     &package_cache_dir,
                     progress_bar,
