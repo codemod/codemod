@@ -9,6 +9,7 @@ pub mod git_ops;
 pub(crate) mod jssg_execution_service;
 pub(crate) mod managed_git_service;
 pub(crate) mod nested_codemod_service;
+pub(crate) mod progress_output;
 pub mod registry;
 pub mod report;
 pub mod shard;

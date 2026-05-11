@@ -38,6 +38,15 @@ struct JavaScriptRuntimeDiagnostic {
     help: Option<String>,
 }
 
+#[derive(Debug, Error, Diagnostic)]
+#[error("{message}")]
+#[diagnostic(code(codemod::runtime::ast_grep))]
+struct AstGrepDiagnostic {
+    message: String,
+    #[help]
+    help: Option<String>,
+}
+
 #[derive(Debug)]
 struct JsStackLocation {
     path: String,
@@ -62,6 +71,9 @@ fn render_error_text(error: &anyhow::Error) -> String {
     if let Some(rendered) = render_javascript_runtime_error(error) {
         return rendered;
     }
+    if let Some(rendered) = render_ast_grep_error(error) {
+        return rendered;
+    }
 
     let diagnostic = CliErrorDiagnostic {
         message: error.to_string(),
@@ -83,6 +95,34 @@ fn render_javascript_runtime_error(error: &anyhow::Error) -> Option<String> {
         help: Some("Fix the thrown JavaScript/TypeScript error and rerun the codemod.".to_string()),
     };
     Some(render_report(&diagnostic))
+}
+
+fn render_ast_grep_error(error: &anyhow::Error) -> Option<String> {
+    let error_text = format!("{error:#}");
+    let message = first_ast_grep_error_line(&error_text)?;
+    let diagnostic = AstGrepDiagnostic {
+        help: ast_grep_help(&message),
+        message,
+    };
+    Some(render_report(&diagnostic))
+}
+
+fn ast_grep_help(message: &str) -> Option<String> {
+    if message.starts_with("Config error:") || message.contains("rule configuration") {
+        Some(
+            "Check the ast-grep YAML rule syntax, pattern language, and fixer configuration."
+                .to_string(),
+        )
+    } else if message.starts_with("Language error:") {
+        Some(
+            "Check that the target file extension maps to a supported ast-grep language."
+                .to_string(),
+        )
+    } else if message.starts_with("IO error:") {
+        Some("Check that the target file exists and is readable, and that modified files are writable.".to_string())
+    } else {
+        Some("Fix the ast-grep rule or target file issue and rerun the workflow.".to_string())
+    }
 }
 
 fn render_report(diagnostic: &(dyn Diagnostic + Send + Sync + 'static)) -> String {
@@ -110,6 +150,27 @@ fn error_chain_help(error: &anyhow::Error) -> Option<String> {
         let _ = write!(help, "\n  - {cause}");
     }
     Some(help)
+}
+
+fn first_ast_grep_error_line(error_text: &str) -> Option<String> {
+    const AST_GREP_ERROR_MARKERS: &[&str] = &[
+        "Config error:",
+        "Language error:",
+        "IO error:",
+        "Path error:",
+        "Glob error:",
+        "YAML error:",
+        "JSON error:",
+        "AST grep config file not found:",
+        "AST-grep rule configuration error",
+    ];
+
+    error_text.lines().map(str::trim).find_map(|line| {
+        AST_GREP_ERROR_MARKERS
+            .iter()
+            .filter_map(|marker| line.find(marker).map(|index| line[index..].to_string()))
+            .next()
+    })
 }
 
 fn first_error_line(error_text: &str) -> Option<String> {
@@ -212,5 +273,15 @@ mod tests {
         .expect("error line");
 
         assert_eq!(message, "Error: Test error");
+    }
+
+    #[test]
+    fn extracts_ast_grep_error_line_from_wrapped_step_error() {
+        let message = first_ast_grep_error_line(
+            "Step ast-grep failed: Failed to process input.ts: Config error: invalid pattern",
+        )
+        .expect("error line");
+
+        assert_eq!(message, "Config error: invalid pattern");
     }
 }

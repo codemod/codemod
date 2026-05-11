@@ -132,8 +132,11 @@ pub async fn wait_for_workflow_completion(
                     wait_started.elapsed().as_secs_f64(),
                     format_summary_suffix(&summary)
                 );
-                if failed_workflow_error_message(&tasks).is_some() {
+                if failed_workflow_error_was_reported(&tasks) {
                     return Err(crate::diagnostics::SilentExit::new("Workflow failed").into());
+                }
+                if let Some(message) = failed_workflow_error_message(&tasks) {
+                    return Err(anyhow::anyhow!(message));
                 }
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
@@ -207,6 +210,13 @@ fn failed_workflow_error_message(tasks: &[Task]) -> Option<String> {
         .and_then(failed_task_error_message)
 }
 
+fn failed_workflow_error_was_reported(tasks: &[Task]) -> bool {
+    tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::Failed)
+        .is_some_and(|task| task.logs.iter().any(|line| is_error_log_line(line)))
+}
+
 fn failed_task_error_message(task: &Task) -> Option<String> {
     task.error
         .as_ref()
@@ -216,9 +226,19 @@ fn failed_task_error_message(task: &Task) -> Option<String> {
             task.logs
                 .iter()
                 .rev()
-                .find(|line| line.contains("Error:") || line.contains("failed"))
+                .find(|line| is_error_log_line(line))
                 .map(|line| strip_error_prefixes(line))
         })
+}
+
+fn is_error_log_line(line: &str) -> bool {
+    line.contains("Error:")
+        || line.contains("error:")
+        || line.contains("failed")
+        || line.contains("Failed")
+        || line.contains("AST grep config file not found")
+        || line.contains("Config error:")
+        || line.contains("Language error:")
 }
 
 fn strip_error_prefixes(message: &str) -> String {

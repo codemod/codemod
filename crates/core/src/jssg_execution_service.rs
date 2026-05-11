@@ -40,7 +40,11 @@ use crate::{
         record_unit_progress, resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase,
         StepProgressState,
     },
-    execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback},
+    execution::{CodemodExecutionConfig, PreRunCallback},
+    progress_output::{
+        append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
+        BufferedExecutionOutput,
+    },
     slog,
     structured_log::StructuredLogger,
     workflow_runtime::{publish_event, WorkflowEvent},
@@ -65,90 +69,6 @@ pub(crate) struct JssgExecutionRequest<'a> {
 
 pub(crate) struct JssgExecutionService<'a> {
     engine: &'a Engine,
-}
-
-#[derive(Default)]
-struct BufferedExecutionOutput {
-    order: Vec<String>,
-    entries: HashMap<String, BufferedExecutionOutputEntry>,
-}
-
-#[derive(Default)]
-struct BufferedExecutionOutputEntry {
-    logs: Vec<String>,
-    diagnostics: Vec<String>,
-}
-
-fn append_buffered_log(
-    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
-    title: String,
-    line: String,
-) {
-    if line.trim().is_empty() {
-        return;
-    }
-
-    let Ok(mut buffer) = buffer.lock() else {
-        return;
-    };
-    if !buffer.entries.contains_key(&title) {
-        buffer.order.push(title.clone());
-    }
-    buffer.entries.entry(title).or_default().logs.push(line);
-}
-
-fn append_buffered_diagnostic(
-    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
-    title: String,
-    diagnostic: String,
-) {
-    if diagnostic.trim().is_empty() {
-        return;
-    }
-
-    let Ok(mut buffer) = buffer.lock() else {
-        return;
-    };
-    if !buffer.entries.contains_key(&title) {
-        buffer.order.push(title.clone());
-    }
-    buffer
-        .entries
-        .entry(title)
-        .or_default()
-        .diagnostics
-        .push(diagnostic);
-}
-
-fn flush_buffered_execution_output(
-    buffer: &Arc<std::sync::Mutex<BufferedExecutionOutput>>,
-    progress_callback: &Arc<Option<ProgressCallback>>,
-    task_id: &str,
-) {
-    let Some(callback) = progress_callback.as_ref() else {
-        return;
-    };
-
-    let buffered = buffer
-        .lock()
-        .map(|mut buffer| std::mem::take(&mut *buffer))
-        .unwrap_or_default();
-
-    for title in buffered.order {
-        let Some(entry) = buffered.entries.get(&title) else {
-            continue;
-        };
-
-        for line in &entry.logs {
-            let payload = format!("{title}\n{line}");
-            (callback.callback)(task_id, &payload, "log", None, &0);
-        }
-
-        for diagnostic in &entry.diagnostics {
-            let payload = format!("{title}\n{diagnostic}");
-            (callback.callback)(task_id, &payload, "diagnostic", None, &0);
-        }
-    }
 }
 
 impl<'a> JssgExecutionService<'a> {

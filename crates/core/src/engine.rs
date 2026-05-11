@@ -30,6 +30,10 @@ use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
 use crate::nested_codemod_service::NestedCodemodService;
+use crate::progress_output::{
+    append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
+    BufferedExecutionOutput,
+};
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
@@ -2517,14 +2521,24 @@ impl Engine {
         logger: &StructuredLogger,
     ) -> Result<()> {
         let bundle_path = self.workflow_run_config.execution.bundle_path.clone();
+        let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
 
         if !config_path.exists() {
-            return Err(Error::StepExecution(format!(
-                "AST grep config file not found: {}",
-                config_path.display()
-            )));
+            let message = format!("AST grep config file not found: {}", config_path.display());
+            let buffered_output =
+                Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+            append_buffered_diagnostic(
+                &buffered_output,
+                "ast-grep config".to_string(),
+                message.clone(),
+            );
+            flush_buffered_execution_output(&buffered_output, &progress_callback, &id);
+            if let Ok(task_id) = Uuid::parse_str(&id) {
+                let _ = self.append_task_log(task_id, &message).await;
+            }
+            return Err(Error::StepExecution(message));
         }
 
         if let Some(pre_run_callback) = self.workflow_run_config.execution.pre_run_callback.as_ref()
@@ -2539,7 +2553,7 @@ impl Engine {
 
         let config_path_clone = config_path.clone();
 
-        with_combined_scan(
+        let scan_result = with_combined_scan(
             &config_path_clone.to_string_lossy(),
             |combined_scan_with_rule| {
                 let rule_refs = combined_scan_with_rule.rule_refs.clone();
@@ -2560,89 +2574,205 @@ impl Engine {
                 };
 
                 // Clone variables needed in the closure
-                let id_clone = id.clone();
+                let progress_task_id = id.clone();
+                let callback_task_id = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
                 let logger = logger.clone();
+                let progress_callback =
+                    self.workflow_run_config.execution.progress_callback.clone();
+                let target_path_for_logs = self.workflow_run_config.execution.target_path.clone();
+                let buffered_execution_output =
+                    Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+                let buffered_execution_output_for_closure = Arc::clone(&buffered_execution_output);
+                let attempted_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let succeeded_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let failed_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let first_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+                let attempted_file_count_for_closure = Arc::clone(&attempted_file_count);
+                let succeeded_file_count_for_closure = Arc::clone(&succeeded_file_count);
+                let failed_file_count_for_closure = Arc::clone(&failed_file_count);
+                let first_failure_message_for_closure = Arc::clone(&first_failure_message);
 
-                let _ = execution_config.execute(move |path, config| {
-                    // Only process files, not directories
-                    if !path.is_file() {
-                        return;
-                    }
+                let execute_result = execution_config.execute_with_task_id(
+                    &progress_task_id,
+                    move |path, config| {
+                        // Only process files, not directories
+                        if !path.is_file() {
+                            return;
+                        }
+                        attempted_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
 
-                    // Execute ast-grep on this file
-                    match scan_file_with_combined_scan(
-                        path,
-                        &combined_scan_with_rule.combined_scan,
-                        !config.dry_run, // apply_fixes = !dry_run
-                    ) {
-                        Ok((matches, file_modified, new_content)) => {
-                            if !matches.is_empty() {
-                                slog!(
-                                    logger,
-                                    info,
-                                    "Found {} matches in {}",
-                                    matches.len(),
-                                    path.display()
-                                );
-                            }
-                            if file_modified {
-                                if let Some(new_content) = new_content {
-                                    // Use async file writing to avoid blocking the thread
-                                    let write_result =
-                                        block_on_runtime_handle(&runtime_handle, async {
-                                            file_writer
-                                                .write_file(path.to_path_buf(), new_content)
-                                                .await
-                                        });
+                        let execution_title = path
+                            .strip_prefix(&target_path_for_logs)
+                            .unwrap_or(path)
+                            .display()
+                            .to_string();
 
-                                    if let Err(e) = write_result {
-                                        slog!(
-                                            logger,
-                                            error,
-                                            "Failed to write modified file {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                        self.execution_stats
-                                            .files_with_errors
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        return;
-                                    }
+                        let record_failure = |message: String| {
+                            failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            append_buffered_diagnostic(
+                                &buffered_execution_output_for_closure,
+                                execution_title.clone(),
+                                message.clone(),
+                            );
+                            if let Ok(mut first_failure_message) =
+                                first_failure_message_for_closure.lock()
+                            {
+                                if first_failure_message.is_none() {
+                                    *first_failure_message = Some(format!(
+                                        "Failed to process {execution_title}: {message}"
+                                    ));
                                 }
-                                self.execution_stats
-                                    .files_modified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
                             }
-                        }
-                        Err(e) => {
-                            slog!(logger, error, "{e}");
-                            self.execution_stats
-                                .files_with_errors
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                    };
+                        };
 
-                    if let Some(callback) = self
-                        .workflow_run_config
-                        .execution
-                        .progress_callback
-                        .as_ref()
+                        // Execute ast-grep on this file
+                        match scan_file_with_combined_scan(
+                            path,
+                            &combined_scan_with_rule.combined_scan,
+                            !config.dry_run, // apply_fixes = !dry_run
+                        ) {
+                            Ok((matches, file_modified, new_content)) => {
+                                if !matches.is_empty() {
+                                    slog!(
+                                        logger,
+                                        info,
+                                        "Found {} matches in {}",
+                                        matches.len(),
+                                        path.display()
+                                    );
+                                    append_buffered_log(
+                                        &buffered_execution_output_for_closure,
+                                        execution_title.clone(),
+                                        format!("Found {} matches", matches.len()),
+                                    );
+                                }
+                                if file_modified {
+                                    if let Some(new_content) = new_content {
+                                        // Use async file writing to avoid blocking the thread
+                                        let write_result =
+                                            block_on_runtime_handle(&runtime_handle, async {
+                                                file_writer
+                                                    .write_file(path.to_path_buf(), new_content)
+                                                    .await
+                                            });
+
+                                        if let Err(e) = write_result {
+                                            slog!(
+                                                logger,
+                                                error,
+                                                "Failed to write modified file {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                            self.execution_stats
+                                                .files_with_errors
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            record_failure(format!(
+                                                "Failed to write modified file {}: {e}",
+                                                path.display()
+                                            ));
+                                            return;
+                                        }
+                                    }
+                                    self.execution_stats
+                                        .files_modified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    append_buffered_log(
+                                        &buffered_execution_output_for_closure,
+                                        execution_title.clone(),
+                                        if config.dry_run {
+                                            "Would modify file".to_string()
+                                        } else {
+                                            "Modified file".to_string()
+                                        },
+                                    );
+                                } else {
+                                    self.execution_stats
+                                        .files_unmodified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                                succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                slog!(logger, error, "{e}");
+                                self.execution_stats
+                                    .files_with_errors
+                                    .fetch_add(1, Ordering::Relaxed);
+                                record_failure(e.to_string());
+                            }
+                        };
+
+                        if let Some(callback) = self
+                            .workflow_run_config
+                            .execution
+                            .progress_callback
+                            .as_ref()
+                        {
+                            let callback = callback.callback.clone();
+                            callback(
+                                &callback_task_id,
+                                &path.to_string_lossy(),
+                                "next",
+                                Some(&1),
+                                &0,
+                            );
+                        }
+                    },
+                );
+
+                if let Err(error) = execute_result {
+                    flush_buffered_execution_output(
+                        &buffered_execution_output,
+                        &progress_callback,
+                        &id,
+                    );
+                    return Err(error);
+                }
+
+                flush_buffered_execution_output(
+                    &buffered_execution_output,
+                    &progress_callback,
+                    &id,
+                );
+
+                let attempted_files = attempted_file_count.load(Ordering::Relaxed);
+                let failed_files = failed_file_count.load(Ordering::Relaxed);
+                let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
+                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
+                    if let Some(message) = first_failure_message
+                        .lock()
+                        .ok()
+                        .and_then(|message| message.clone())
                     {
-                        let callback = callback.callback.clone();
-                        callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
+                        return Err(Box::new(std::io::Error::other(message)));
                     }
-                });
+                }
 
                 Ok(())
             },
-        )
-        .map_err(|e| Error::StepExecution(e.to_string()))?;
+        );
+
+        if let Err(error) = scan_result {
+            let message = error.to_string();
+            let buffered_output =
+                Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+            append_buffered_diagnostic(
+                &buffered_output,
+                config_path
+                    .strip_prefix(&bundle_path)
+                    .unwrap_or(&config_path)
+                    .display()
+                    .to_string(),
+                message.clone(),
+            );
+            flush_buffered_execution_output(&buffered_output, &progress_callback, &id);
+            if let Ok(task_id) = Uuid::parse_str(&id) {
+                let _ = self.append_task_log(task_id, &message).await;
+            }
+            return Err(Error::StepExecution(message));
+        }
 
         Ok(())
     }
