@@ -178,6 +178,20 @@ Example machine-readable failure (`--format json`):
 }
 ```
 
+### `codemod mcp`
+
+Start the Codemod Model Context Protocol server over stdio.
+
+This is the command that `codemod ai` installs into supported MCP client configurations.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for debugging MCP client integrations.
+</ResponseField>
+
 ### `codemod workflow`
 
 Manage and execute [Codemod packages](/package-structure).
