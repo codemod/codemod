@@ -135,9 +135,15 @@ pub fn build_agent_command(
         "claude-code" => {
             // Claude Code supports piping the prompt over stdin in print mode.
             // This avoids very long argv payloads and is more compatible with
-            // the Bun-based CLI entrypoint.
+            // the Bun-based CLI entrypoint. Use stream-json so the workflow UI
+            // can show progress instead of waiting for one final text blob.
             let _ = full_prompt;
-            cmd.arg("--dangerously-skip-permissions").arg("-p");
+            cmd.arg("--dangerously-skip-permissions")
+                .arg("-p")
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--include-partial-messages");
         }
         "codex" => {
             // Pipe the prompt via stdin using `codex e -`
@@ -761,6 +767,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.get_current_dir(), Some(temp_dir.path()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_claude_code_output() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd = build_agent_command("claude-code", executable, "prompt", None, temp_dir.path())
+            .unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+        assert!(args.contains(&"--verbose".to_string()));
+        assert!(args.contains(&"--include-partial-messages".to_string()));
     }
 
     #[test]

@@ -713,8 +713,13 @@ async fn run_tui_loop(
                             state.begin_create_pr_confirmation();
                         }
                         KeyCode::Char('c') => {
-                            if let Some(session) = runtime.session.as_ref() {
-                                spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
+                            if state.can_cancel_current_run() {
+                                if let Some(session) = runtime.session.as_ref() {
+                                    spawn_command(
+                                        session.handle(),
+                                        WorkflowCommand::CancelWorkflow,
+                                    );
+                                }
                             }
                         }
                         _ => {}

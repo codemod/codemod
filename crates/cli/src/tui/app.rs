@@ -263,6 +263,16 @@ impl TuiState {
         self.display_status_for_run_with_tasks(run, &self.tasks)
     }
 
+    pub fn can_cancel_current_run(&self) -> bool {
+        self.current_run.as_ref().is_some_and(|run| {
+            matches!(
+                run.status,
+                butterflow_models::WorkflowStatus::Running
+                    | butterflow_models::WorkflowStatus::AwaitingTrigger
+            )
+        })
+    }
+
     pub fn display_status_for_list_run(&self, run: &WorkflowRun) -> String {
         self.run_tasks
             .get(&run.id)
@@ -1352,7 +1362,9 @@ impl TuiState {
         if self.selected_task_is_pr_eligible().is_some() {
             parts.push("p create-pr".to_string());
         }
-        parts.push("c cancel".to_string());
+        if self.can_cancel_current_run() {
+            parts.push("c cancel".to_string());
+        }
         parts.push("esc back".to_string());
         parts.push("q quit".to_string());
         parts.join("  ")
@@ -1425,6 +1437,28 @@ mod tests {
     use uuid::Uuid;
 
     use super::{AppEvent, Screen, TaskProgressView, TuiState};
+
+    fn test_workflow_run(id: Uuid, status: WorkflowStatus) -> WorkflowRun {
+        WorkflowRun {
+            id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        }
+    }
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
@@ -2283,6 +2317,7 @@ mod tests {
     fn task_help_text_hides_trigger_for_completed_task() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Completed));
         state.tasks.push(Task {
             id: Uuid::new_v4(),
             workflow_run_id: run_id,
@@ -2298,16 +2333,33 @@ mod tests {
             error_details: None,
         });
 
-        assert_eq!(
-            state.task_help_text(),
-            "Enter logs  c cancel  esc back  q quit"
-        );
+        assert_eq!(state.task_help_text(), "Enter logs  esc back  q quit");
+    }
+
+    #[test]
+    fn cancel_is_available_only_for_active_runs() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::Running)),
+            ..Default::default()
+        };
+        assert!(state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
+        assert!(state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Completed));
+        assert!(!state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Failed));
+        assert!(!state.can_cancel_current_run());
     }
 
     #[test]
     fn task_help_text_shows_trigger_for_awaiting_task() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
         state.tasks.push(Task {
             id: Uuid::new_v4(),
             workflow_run_id: run_id,
@@ -2333,6 +2385,7 @@ mod tests {
     fn task_help_text_shows_individual_trigger_only_for_install_skill() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
         state.tasks.push(Task {
             id: Uuid::new_v4(),
             workflow_run_id: run_id,

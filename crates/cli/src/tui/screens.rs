@@ -616,6 +616,53 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         height: size.height / 3,
     };
     frame.render_widget(Clear, area);
+    match approval {
+        ApprovalPrompt::AgentSelection {
+            options, selected, ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                "Select Coding Agent",
+                "↑/↓ move  Enter choose  esc skip",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_canonical, label, available))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: *available,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        ApprovalPrompt::Selection {
+            title,
+            options,
+            selected,
+            ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                title,
+                "↑/↓ move  Enter choose  esc cancel",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, label))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: true,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        _ => {}
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -672,51 +719,7 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
                 "y/Enter approve  n/esc cancel".to_string(),
             )
         }
-        ApprovalPrompt::AgentSelection {
-            options, selected, ..
-        } => {
-            let options_text = options
-                .iter()
-                .enumerate()
-                .map(|(index, (_canonical, label, _available))| {
-                    if index == *selected {
-                        format!("▶ {label}")
-                    } else {
-                        format!("  {label}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (
-                "Select Coding Agent".to_string(),
-                options_text,
-                "↑/↓ move  Enter choose  esc skip".to_string(),
-            )
-        }
-        ApprovalPrompt::Selection {
-            title,
-            options,
-            selected,
-            ..
-        } => {
-            let options_text = options
-                .iter()
-                .enumerate()
-                .map(|(index, (_, label))| {
-                    if index == *selected {
-                        format!("▶ {label}")
-                    } else {
-                        format!("  {label}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (
-                title.clone(),
-                options_text,
-                "↑/↓ move  Enter choose  esc cancel".to_string(),
-            )
-        }
+        ApprovalPrompt::AgentSelection { .. } | ApprovalPrompt::Selection { .. } => unreachable!(),
     };
     let modal = Paragraph::new(body).wrap(Wrap { trim: false }).block(
         Block::default().borders(Borders::ALL).title(Span::styled(
@@ -730,10 +733,64 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
     render_help_bar(frame, chunks[1], &help_text);
 }
 
+struct OptionModalRow {
+    label: String,
+    selected: bool,
+    enabled: bool,
+}
+
+fn render_option_modal(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    help_text: &str,
+    rows: &[OptionModalRow],
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let list_items = rows
+        .iter()
+        .map(|row| {
+            let marker = if row.selected { "▶" } else { " " };
+            let style = if row.selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.enabled {
+                Style::default()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            ListItem::new(Line::from(vec![
+                Span::raw(format!("{marker} ")),
+                Span::styled(
+                    truncate_text(&row.label, area.width.saturating_sub(6) as usize),
+                    style,
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let list = List::new(list_items).block(
+        Block::default().borders(Borders::ALL).title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    );
+
+    frame.render_widget(list, chunks[0]);
+    render_help_bar(frame, chunks[1], help_text);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{log_modal_copy_hint, render};
-    use crate::tui::app::{Screen, TaskProgressView, TuiState};
+    use crate::tui::app::{ApprovalPrompt, Screen, TaskProgressView, TuiState};
     use butterflow_core::config::DirtyGitApprovalKind;
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
@@ -902,6 +959,36 @@ mod tests {
         assert!(params_line.contains("mode=safe"));
         assert!(params_line.contains("npmToken=********"));
         assert!(!params_line.contains("secret-value"));
+    }
+
+    #[test]
+    fn render_agent_selection_modal_keeps_options_on_single_rows() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(ApprovalPrompt::AgentSelection {
+                request_id: Uuid::new_v4(),
+                options: vec![
+                    ("claude-code".to_string(), "Claude Code".to_string(), true),
+                    ("opencode".to_string(), "OpenCode".to_string(), false),
+                ],
+                selected: 0,
+            }),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 24);
+        let claude_line = lines
+            .iter()
+            .find(|line| line.contains("▶ Claude Code"))
+            .expect("selected agent should render as one row");
+        let opencode_line = lines
+            .iter()
+            .find(|line| line.contains("OpenCode"))
+            .expect("unavailable agent should render as one row");
+
+        assert!(claude_line.contains("▶ Claude Code"));
+        assert!(opencode_line.contains("OpenCode"));
+        assert!(!lines.iter().any(|line| line.trim() == "C"));
     }
 
     #[test]
