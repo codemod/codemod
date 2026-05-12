@@ -3473,7 +3473,7 @@ mod tests {
             request_id,
             options: vec![butterflow_core::workflow_runtime::AgentSelectionOption {
                 canonical: "codex".to_string(),
-                label: "Codex CLI".to_string(),
+                label: "Codex".to_string(),
                 is_available: true,
             }],
             at: Utc::now(),

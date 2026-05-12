@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::io::IsTerminal;
 use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -17,6 +16,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+use crate::ai_agent_stream::{
+    agent_display_name, agent_header, agent_status_line, clear_agent_spinner_live,
+    render_agent_stream_line, should_emit_agent_wait_notice, should_stream_agent_output_live,
+    write_agent_spinner_live, write_agent_stream_fragment_live, write_agent_stream_render_live,
+    write_agent_wait_notice_live, AgentStreamRender, ClaudeStreamRenderer, CodexStreamRenderer,
+    OpenCodeStreamRenderer,
+};
 use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
@@ -36,9 +42,7 @@ use crate::progress_output::{
     BufferedExecutionOutput,
 };
 use crate::slog;
-use crate::structured_log::{
-    strip_ansi_escape_sequences, StdoutCaptureGuard, StepContext, StructuredLogger,
-};
+use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
@@ -49,7 +53,6 @@ use codemod_sandbox::sandbox::runtime_module::{
 };
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
 use log::debug;
-use similar::{ChangeTag, TextDiff};
 use std::path::Path;
 use tokio::fs::read_to_string;
 use tokio::sync::Mutex;
@@ -481,671 +484,6 @@ pub(crate) fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
-fn agent_display_name(canonical: &str) -> &str {
-    match canonical {
-        "claude-code" => "Claude Code",
-        "codex" => "Codex CLI",
-        "opencode" => "OpenCode",
-        "aider" => "Aider",
-        "goose" => "Goose",
-        "openclaw" => "OpenClaw",
-        _ => canonical,
-    }
-}
-
-fn should_preserve_agent_stream(canonical: &str) -> bool {
-    matches!(canonical, "claude-code" | "codex" | "opencode")
-}
-
-fn agent_colors_enabled() -> bool {
-    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
-fn agent_style(text: impl AsRef<str>, code: &str) -> String {
-    let text = text.as_ref();
-    if agent_colors_enabled() {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
-    }
-}
-
-fn agent_dim(text: impl AsRef<str>) -> String {
-    agent_style(text, "2")
-}
-
-fn agent_accent(text: impl AsRef<str>) -> String {
-    agent_style(text, "36")
-}
-
-fn agent_success(text: impl AsRef<str>) -> String {
-    agent_style(text, "32")
-}
-
-fn agent_warning(text: impl AsRef<str>) -> String {
-    agent_style(text, "33")
-}
-
-fn sanitize_agent_text(text: &str) -> String {
-    strip_ansi_escape_sequences(text)
-        .replace("[0m", "")
-        .replace("[1m", "")
-}
-
-fn agent_header(agent: &str) -> String {
-    format!("{} {}", agent_accent("AI"), agent_style(agent, "1;36"))
-}
-
-fn agent_tool_line(name: &str, summary: &str) -> String {
-    if summary.is_empty() {
-        format!("  {} {}", agent_success("•"), agent_style(name, "1"))
-    } else {
-        format!(
-            "  {} {} {}",
-            agent_success("•"),
-            agent_style(name, "1"),
-            agent_dim(summary)
-        )
-    }
-}
-
-fn agent_status_line(status: &str, detail: &str) -> String {
-    if detail.is_empty() {
-        format!("  {} {}", agent_accent("•"), status)
-    } else {
-        format!("  {} {} {}", agent_accent("•"), status, agent_dim(detail))
-    }
-}
-
-fn agent_warning_line(label: &str, detail: &str) -> String {
-    if detail.is_empty() {
-        format!("  {} {}", agent_warning("!"), label)
-    } else {
-        format!("  {} {} {}", agent_warning("!"), label, agent_dim(detail))
-    }
-}
-
-fn agent_message_prefix() -> String {
-    format!("  {} ", agent_accent("›"))
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum AgentStreamRender {
-    Suppress,
-    Line(String),
-    Fragment(String),
-}
-
-#[derive(Default)]
-struct ClaudeStreamRenderer {
-    active_tool_name: Option<String>,
-    active_tool_input: String,
-}
-
-impl ClaudeStreamRenderer {
-    fn render_line(&mut self, line: &str) -> Option<AgentStreamRender> {
-        let value: serde_json::Value = serde_json::from_str(line).ok()?;
-        match value.get("type").and_then(serde_json::Value::as_str) {
-            Some("stream_event") => self.render_stream_event(value.get("event")?),
-            Some("system") => Some(render_claude_system_event(&value)),
-            Some("rate_limit_event") => Some(render_claude_rate_limit_event(&value)),
-            Some("result") | Some("assistant") | Some("user") => Some(AgentStreamRender::Suppress),
-            Some(_) => Some(AgentStreamRender::Suppress),
-            None if value.is_object() => Some(AgentStreamRender::Suppress),
-            None => None,
-        }
-    }
-
-    fn render_stream_event(&mut self, event: &serde_json::Value) -> Option<AgentStreamRender> {
-        match event.get("type").and_then(serde_json::Value::as_str) {
-            Some("content_block_start") => {
-                let block = event.get("content_block")?;
-                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
-                    let name = block
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("tool");
-                    self.active_tool_name = Some(name.to_string());
-                    self.active_tool_input.clear();
-                    if let Some(input) = block.get("input").filter(|input| !input.is_null()) {
-                        let is_empty_object = input
-                            .as_object()
-                            .map(|object| object.is_empty())
-                            .unwrap_or(false);
-                        if !is_empty_object {
-                            self.active_tool_input = input.to_string();
-                        }
-                    }
-                    return Some(AgentStreamRender::Suppress);
-                }
-                Some(AgentStreamRender::Suppress)
-            }
-            Some("content_block_delta") => {
-                let delta = event.get("delta")?;
-                match delta.get("type").and_then(serde_json::Value::as_str) {
-                    Some("text_delta") => {
-                        let text = delta
-                            .get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        Some(AgentStreamRender::Fragment(text.to_string()))
-                    }
-                    Some("input_json_delta") => {
-                        if let Some(partial_json) = delta
-                            .get("partial_json")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            self.active_tool_input.push_str(partial_json);
-                        }
-                        Some(AgentStreamRender::Suppress)
-                    }
-                    _ => Some(AgentStreamRender::Suppress),
-                }
-            }
-            Some("content_block_stop") => {
-                if let Some(name) = self.active_tool_name.take() {
-                    let input = std::mem::take(&mut self.active_tool_input);
-                    return Some(AgentStreamRender::Line(format_claude_tool_call(
-                        &name, &input,
-                    )));
-                }
-                Some(AgentStreamRender::Suppress)
-            }
-            Some("message_start") | Some("message_delta") | Some("message_stop") => {
-                Some(AgentStreamRender::Suppress)
-            }
-            _ => None,
-        }
-    }
-}
-
-fn render_agent_stream_line(canonical: &str, stream: &str, line: String) -> AgentStreamRender {
-    if canonical == "claude-code" {
-        let mut renderer = ClaudeStreamRenderer::default();
-        return renderer
-            .render_line(&line)
-            .unwrap_or_else(|| AgentStreamRender::Line(line));
-    }
-
-    let line = if should_preserve_agent_stream(canonical) {
-        line
-    } else {
-        format!("[{stream}] {line}")
-    };
-    AgentStreamRender::Line(line)
-}
-
-#[cfg(test)]
-fn format_agent_stream_line(canonical: &str, stream: &str, line: String) -> String {
-    match render_agent_stream_line(canonical, stream, line) {
-        AgentStreamRender::Line(line) | AgentStreamRender::Fragment(line) => line,
-        AgentStreamRender::Suppress => String::new(),
-    }
-}
-
-fn render_claude_system_event(value: &serde_json::Value) -> AgentStreamRender {
-    let subtype = value
-        .get("subtype")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    match subtype {
-        "init" => {
-            let model = value
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .map(sanitize_agent_text)
-                .unwrap_or_else(|| "model".to_string());
-            AgentStreamRender::Line(agent_status_line("started", &model))
-        }
-        "api_retry" => AgentStreamRender::Line(agent_warning_line("API retrying", "")),
-        _ => AgentStreamRender::Suppress,
-    }
-}
-
-fn render_claude_rate_limit_event(value: &serde_json::Value) -> AgentStreamRender {
-    let info = value.get("rate_limit_info").unwrap_or(value);
-    let status = info
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("warning")
-        .replace('_', " ");
-    let limit_type = info
-        .get("rateLimitType")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("rate limit")
-        .replace('_', " ");
-    let utilization = info
-        .get("utilization")
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| format!("{:.0}%", value * 100.0));
-
-    let mut detail = format!("({limit_type}");
-    if let Some(utilization) = utilization {
-        detail.push_str(", ");
-        detail.push_str(&utilization);
-        detail.push_str(" used");
-    }
-    detail.push(')');
-    AgentStreamRender::Line(agent_warning_line(&format!("rate limit {status}"), &detail))
-}
-
-fn format_claude_tool_call(name: &str, input: &str) -> String {
-    let mut line = agent_tool_line(name, &summarize_claude_tool_input(name, input));
-    if let Some(diff) = format_claude_tool_diff(name, input) {
-        line.push('\n');
-        line.push_str(&diff);
-    }
-    line
-}
-
-fn summarize_claude_tool_input(name: &str, input: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed == "{}" {
-        return String::new();
-    }
-
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return truncate_tool_value(&sanitize_agent_text(trimmed), 120);
-    };
-    let Some(object) = value.as_object() else {
-        return truncate_tool_value(&sanitize_agent_text(&value.to_string()), 120);
-    };
-
-    if let Some(summary) = summarize_known_tool(name, object) {
-        return summary;
-    }
-
-    let preferred_keys = [
-        "file_path",
-        "path",
-        "pattern",
-        "command",
-        "cmd",
-        "url",
-        "query",
-        "description",
-    ];
-    let mut parts = Vec::new();
-    for key in preferred_keys {
-        if let Some(value) = object.get(key) {
-            parts.push(format!("{key}={}", format_tool_value(key, value)));
-        }
-        if parts.len() == 2 {
-            break;
-        }
-    }
-    if parts.is_empty() {
-        for (key, value) in object.iter().take(2) {
-            parts.push(format!("{key}={}", format_tool_value(key, value)));
-        }
-    }
-
-    parts.join(" ")
-}
-
-fn summarize_known_tool(
-    name: &str,
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    match name {
-        "Read" => object
-            .get("file_path")
-            .and_then(serde_json::Value::as_str)
-            .map(compact_path_display),
-        "Write" => {
-            let file_path = object
-                .get("file_path")
-                .and_then(serde_json::Value::as_str)
-                .map(compact_path_display)?;
-            let content_lines = object
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .map(count_display_lines)
-                .unwrap_or(0);
-            Some(if content_lines > 0 {
-                format!("{file_path} (+{content_lines} lines)")
-            } else {
-                file_path
-            })
-        }
-        "Edit" => object
-            .get("file_path")
-            .and_then(serde_json::Value::as_str)
-            .map(compact_path_display),
-        "MultiEdit" => {
-            let file_path = object
-                .get("file_path")
-                .and_then(serde_json::Value::as_str)
-                .map(compact_path_display)?;
-            let edits = object
-                .get("edits")
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0);
-            Some(format!("{file_path} ({edits} edits)"))
-        }
-        _ => None,
-    }
-}
-
-fn count_display_lines(content: &str) -> usize {
-    let count = content.lines().count();
-    if content.ends_with('\n') {
-        count
-    } else {
-        count.max(1)
-    }
-}
-
-fn format_tool_value(key: &str, value: &serde_json::Value) -> String {
-    let raw = value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string());
-    let sanitized = sanitize_agent_text(&raw);
-    if key.ends_with("path") || key == "path" {
-        return compact_path_display(&sanitized);
-    }
-    truncate_tool_value(&sanitized, 80)
-}
-
-fn compact_path_display(path: &str) -> String {
-    let path = Path::new(path);
-    let components = path
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    if components.len() <= 3 {
-        return components.join("/");
-    }
-
-    components[components.len().saturating_sub(3)..].join("/")
-}
-
-fn format_claude_tool_diff(name: &str, input: &str) -> Option<String> {
-    if !matches!(name, "Write" | "Edit" | "MultiEdit") {
-        return None;
-    }
-
-    let value = serde_json::from_str::<serde_json::Value>(input.trim()).ok()?;
-    match name {
-        "Write" => {
-            let file_path = value.get("file_path").and_then(serde_json::Value::as_str)?;
-            let content = value.get("content").and_then(serde_json::Value::as_str)?;
-            let original = std::fs::read_to_string(file_path).unwrap_or_default();
-            Some(if original.is_empty() {
-                format_create_preview(file_path, content)
-            } else {
-                format_compact_diff(file_path, &original, content)
-            })
-        }
-        "Edit" => {
-            let file_path = value.get("file_path").and_then(serde_json::Value::as_str)?;
-            let old = value
-                .get("old_string")
-                .and_then(serde_json::Value::as_str)?;
-            let new = value
-                .get("new_string")
-                .and_then(serde_json::Value::as_str)?;
-            Some(format_compact_diff(file_path, old, new))
-        }
-        "MultiEdit" => {
-            let file_path = value.get("file_path").and_then(serde_json::Value::as_str)?;
-            let edits = value
-                .get("edits")
-                .and_then(serde_json::Value::as_array)
-                .map(|edits| edits.len())
-                .unwrap_or(0);
-            Some(format!(
-                "    {} {}",
-                agent_dim("diff"),
-                agent_dim(format!(
-                    "{edits} edits in {}",
-                    compact_path_display(file_path)
-                ))
-            ))
-        }
-        _ => None,
-    }
-}
-
-fn format_compact_diff(file_path: &str, original: &str, modified: &str) -> String {
-    if original == modified {
-        return format!(
-            "    {} {}",
-            agent_dim("diff"),
-            agent_dim(format!("no changes in {}", compact_path_display(file_path)))
-        );
-    }
-
-    let diff = TextDiff::from_lines(original, modified);
-    let mut output = format!(
-        "    {} {}\n",
-        agent_dim("diff"),
-        agent_dim(compact_path_display(file_path))
-    );
-    let mut line_count = 0usize;
-    let max_lines = 8usize;
-
-    'hunks: for hunk in diff.unified_diff().context_radius(1).iter_hunks() {
-        let header = hunk.header().to_string();
-        output.push_str("    ");
-        output.push_str(&agent_accent(header.trim_end()));
-        output.push('\n');
-
-        for change in hunk.iter_changes() {
-            if line_count >= max_lines {
-                output.push_str("    ");
-                output.push_str(&agent_dim("... diff truncated"));
-                output.push('\n');
-                break 'hunks;
-            }
-
-            let (sign, styled) = match change.tag() {
-                ChangeTag::Delete => ("-", agent_style(change.to_string_lossy(), "31")),
-                ChangeTag::Insert => ("+", agent_style(change.to_string_lossy(), "32")),
-                ChangeTag::Equal => (" ", agent_dim(change.to_string_lossy())),
-            };
-            output.push_str("    ");
-            output.push_str(sign);
-            output.push_str(&styled);
-            if !output.ends_with('\n') {
-                output.push('\n');
-            }
-            line_count += 1;
-        }
-    }
-
-    output.trim_end().to_string()
-}
-
-fn format_create_preview(file_path: &str, content: &str) -> String {
-    let line_count = count_display_lines(content);
-    let mut output = format!(
-        "    {} {}\n",
-        agent_dim("creates"),
-        agent_dim(format!(
-            "{} (+{} lines)",
-            compact_path_display(file_path),
-            line_count
-        ))
-    );
-
-    let mut shown = 0usize;
-    for line in content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .take(4)
-    {
-        output.push_str("    ");
-        output.push_str(&agent_style(
-            format!("+{}", truncate_tool_value(line, 120)),
-            "32",
-        ));
-        output.push('\n');
-        shown += 1;
-    }
-
-    if shown == 0 {
-        output.push_str("    ");
-        output.push_str(&agent_dim("(empty file)"));
-        output.push('\n');
-    } else if content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .count()
-        > shown
-    {
-        output.push_str("    ");
-        output.push_str(&agent_dim("... preview truncated"));
-        output.push('\n');
-    }
-
-    output.trim_end().to_string()
-}
-
-fn truncate_tool_value(value: &str, max_chars: usize) -> String {
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let char_count = compact.chars().count();
-    if char_count <= max_chars {
-        return compact;
-    }
-
-    let mut truncated = compact
-        .chars()
-        .take(max_chars.saturating_sub(1))
-        .collect::<String>();
-    truncated.push('…');
-    truncated
-}
-
-fn write_agent_spinner_live(agent_name: &str, tick: usize) {
-    use std::io::Write;
-
-    if !std::io::stderr().is_terminal() {
-        return;
-    }
-
-    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let frame = FRAMES[tick % FRAMES.len()];
-    let line = format!(
-        "\r\x1b[2K  {} {}",
-        agent_accent(frame),
-        agent_dim(format!("{agent_name} is thinking..."))
-    );
-    let mut stderr = std::io::stderr().lock();
-    let _ = write!(stderr, "{line}");
-    let _ = stderr.flush();
-}
-
-fn clear_agent_spinner_live() {
-    use std::io::Write;
-
-    if !std::io::stderr().is_terminal() {
-        return;
-    }
-
-    let mut stderr = std::io::stderr().lock();
-    let _ = write!(stderr, "\r\x1b[2K");
-    let _ = stderr.flush();
-}
-
-fn write_agent_stream_render_live(
-    stream: &str,
-    render: &AgentStreamRender,
-    open_fragment: &AtomicBool,
-    spinner_active: &AtomicBool,
-) {
-    match render {
-        AgentStreamRender::Suppress => {}
-        AgentStreamRender::Line(line) => {
-            if spinner_active.swap(false, Ordering::Relaxed) {
-                clear_agent_spinner_live();
-            }
-            if open_fragment.swap(false, Ordering::Relaxed) {
-                write_agent_stream_fragment_live(stream, "\n");
-            }
-            write_agent_stream_line_live(stream, line);
-        }
-        AgentStreamRender::Fragment(fragment) => {
-            if !fragment.is_empty() {
-                if spinner_active.swap(false, Ordering::Relaxed) {
-                    clear_agent_spinner_live();
-                }
-                let was_open = open_fragment.load(Ordering::Relaxed);
-                let (formatted, is_open) = format_agent_message_fragment(fragment, was_open);
-                open_fragment.store(is_open, Ordering::Relaxed);
-                write_agent_stream_fragment_live(stream, &formatted);
-            }
-        }
-    }
-}
-
-fn format_agent_message_fragment(fragment: &str, already_open: bool) -> (String, bool) {
-    let mut output = String::new();
-    let mut line_open = already_open;
-
-    for segment in fragment.split_inclusive('\n') {
-        if !line_open && segment != "\n" {
-            output.push_str(&agent_message_prefix());
-        }
-        output.push_str(segment);
-        line_open = !segment.ends_with('\n');
-    }
-
-    if !fragment.ends_with('\n') && output.is_empty() {
-        line_open = already_open;
-    }
-
-    (output, line_open)
-}
-
-fn should_stream_agent_output_live(quiet: bool, logger: &StructuredLogger) -> bool {
-    !quiet && !logger.is_jsonl()
-}
-
-fn should_emit_agent_wait_notice(quiet: bool, logger: &StructuredLogger) -> bool {
-    !quiet && !logger.is_jsonl()
-}
-
-fn write_agent_stream_line_live(stream: &str, line: &str) {
-    use std::io::Write;
-
-    match stream {
-        "stderr" => {
-            let mut stderr = std::io::stderr().lock();
-            let _ = writeln!(stderr, "{line}");
-            let _ = stderr.flush();
-        }
-        _ => {
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "{line}");
-            let _ = stdout.flush();
-        }
-    }
-}
-
-fn write_agent_stream_fragment_live(stream: &str, fragment: &str) {
-    use std::io::Write;
-
-    match stream {
-        "stderr" => {
-            let mut stderr = std::io::stderr().lock();
-            let _ = write!(stderr, "{fragment}");
-            let _ = stderr.flush();
-        }
-        _ => {
-            let mut stdout = std::io::stdout().lock();
-            let _ = write!(stdout, "{fragment}");
-            let _ = stdout.flush();
-        }
-    }
-}
-
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
     let mut message = format!(
         "About to execute shell command for step '{}' in node '{}':",
@@ -1279,16 +617,12 @@ impl Engine {
                     ))
                 })?;
 
-        slog!(
-            logger,
-            info,
+        debug!(
             "Launching agent '{}' at {}",
             canonical,
             executable.display()
         );
-        slog!(
-            logger,
-            info,
+        debug!(
             "Agent launch details: cwd={}, prompt_len={} chars",
             working_dir.display(),
             full_prompt_len
@@ -1296,7 +630,7 @@ impl Engine {
 
         // Only agents whose `build_agent_command` pass the prompt via stdin
         if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
-            slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
+            debug!("{} prompt delivery: stdin pipe", canonical);
             cmd.stdin(Stdio::piped());
         } else {
             cmd.stdin(Stdio::inherit());
@@ -1307,9 +641,7 @@ impl Engine {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        slog!(
-            logger,
-            info,
+        debug!(
             "Agent argv: program={}, args={:?}",
             cmd.get_program().to_string_lossy(),
             launch_args
@@ -1338,6 +670,9 @@ impl Engine {
             std::thread::spawn(move || {
                 let mut claude_renderer =
                     (canonical == "claude-code").then(ClaudeStreamRenderer::default);
+                let mut opencode_renderer =
+                    (canonical == "opencode").then(OpenCodeStreamRenderer::default);
+                let mut codex_renderer = (canonical == "codex").then(CodexStreamRenderer::default);
                 for line in BufReader::new(stdout)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
@@ -1346,7 +681,15 @@ impl Engine {
                     let render = if let Some(renderer) = claude_renderer.as_mut() {
                         renderer
                             .render_line(&line)
-                            .unwrap_or_else(|| AgentStreamRender::Line(line))
+                            .unwrap_or(AgentStreamRender::Line(line))
+                    } else if let Some(renderer) = opencode_renderer.as_mut() {
+                        renderer
+                            .render_line(&line)
+                            .unwrap_or(AgentStreamRender::Line(line))
+                    } else if let Some(renderer) = codex_renderer.as_mut() {
+                        renderer
+                            .render_line(&line)
+                            .unwrap_or(AgentStreamRender::Line(line))
                     } else {
                         render_agent_stream_line(&canonical, "stdout", line)
                     };
@@ -1380,6 +723,9 @@ impl Engine {
             std::thread::spawn(move || {
                 let mut claude_renderer =
                     (canonical == "claude-code").then(ClaudeStreamRenderer::default);
+                let mut opencode_renderer =
+                    (canonical == "opencode").then(OpenCodeStreamRenderer::default);
+                let mut codex_renderer = (canonical == "codex").then(CodexStreamRenderer::default);
                 for line in BufReader::new(stderr)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
@@ -1388,7 +734,15 @@ impl Engine {
                     let render = if let Some(renderer) = claude_renderer.as_mut() {
                         renderer
                             .render_line(&line)
-                            .unwrap_or_else(|| AgentStreamRender::Line(line))
+                            .unwrap_or(AgentStreamRender::Line(line))
+                    } else if let Some(renderer) = opencode_renderer.as_mut() {
+                        renderer
+                            .render_line(&line)
+                            .unwrap_or(AgentStreamRender::Line(line))
+                    } else if let Some(renderer) = codex_renderer.as_mut() {
+                        renderer
+                            .render_line(&line)
+                            .unwrap_or(AgentStreamRender::Line(line))
                     } else {
                         render_agent_stream_line(&canonical, "stderr", line)
                     };
@@ -1448,18 +802,18 @@ impl Engine {
             })??;
         }
         let child_pid = child.id();
-        slog!(
-            logger,
-            info,
+        debug!(
             "Spawned agent '{}' with pid {:?}; waiting for it to exit",
-            canonical,
-            child_pid
+            canonical, child_pid
         );
 
         let started_waiting = std::time::Instant::now();
         let wait_task = tokio::task::spawn_blocking(move || child.wait());
         let mut wait_task = std::pin::pin!(wait_task);
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            Duration::from_secs(10),
+        );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut spinner = tokio::time::interval(Duration::from_millis(120));
         spinner.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1488,13 +842,11 @@ impl Engine {
                     if should_emit_agent_wait_notice(self.workflow_run_config.output.quiet, logger)
                         && !stream_seen.load(Ordering::Relaxed)
                     {
-                        logger.transient_user_line(&format!(
+                        write_agent_wait_notice_live(&format!(
                             "Still waiting for {agent_display_name} output ({waited}s elapsed)..."
                         ));
                     }
-                    slog!(
-                        logger,
-                        info,
+                    debug!(
                         "Still waiting on agent '{}' pid {:?} after {}s",
                         canonical,
                         child_pid,
@@ -1518,7 +870,7 @@ impl Engine {
         }
 
         if status.success() {
-            slog!(logger, info, "Agent '{}' completed successfully", canonical);
+            debug!("Agent '{}' completed successfully", canonical);
             Ok(())
         } else {
             let code = status.code().unwrap_or(-1);
@@ -1775,9 +1127,7 @@ impl Engine {
                 let mut engine = engine;
                 let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
 
-                let _ = engine
-                    .append_task_log(task_id, "Task execution starting")
-                    .await;
+                debug!("Task {task_id} execution starting");
 
                 let task = {
                     let adapter = engine.state_adapter.lock().await;
@@ -1819,12 +1169,8 @@ impl Engine {
                 }
 
                 let task_timeout = tokio::time::Duration::from_secs(45 * 60);
-                let _ = engine
-                    .append_task_log(task_id, "Pre-execution setup complete")
-                    .await;
-                let _ = engine
-                    .append_task_log(task_id, "Entering execute_task")
-                    .await;
+                debug!("Task {task_id} pre-execution setup complete");
+                debug!("Task {task_id} entering execute_task");
 
                 match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
                     Ok(Ok(())) => {
@@ -3021,9 +2367,7 @@ impl Engine {
                 }
             };
 
-            let _ = self
-                .append_task_log(task_id, format!("Step started: {}", step.name))
-                .await;
+            debug!("Task {task_id} step started: {}", step.name);
             step_logger.step_start();
             let step_start_time = std::time::Instant::now();
 
@@ -3199,9 +2543,7 @@ impl Engine {
         }
 
         // Prepare environment variables
-        let _ = self
-            .append_task_log(task_id, "Marking task as completed")
-            .await;
+        debug!("Marking task {task_id} as completed");
         slog!(
             &self.structured_logger,
             debug,
@@ -3588,19 +2930,12 @@ impl Engine {
             None, // task context
         )?;
 
-        slog!(
-            logger,
-            info,
-            "Executing AI agent step with prompt: {}",
-            resolved_prompt
-        );
+        debug!("Executing AI agent step with prompt: {}", resolved_prompt);
 
         // 1. Check if running inside a parent coding agent
         let handoff_detection = detect_parent_coding_agent();
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
-        slog!(
-            logger,
-            debug,
+        debug!(
             "AI handoff detection confidence={} agent={} reasons={}",
             handoff_detection.confidence.as_str(),
             detected_agent,
@@ -3609,9 +2944,7 @@ impl Engine {
 
         if handoff_detection.confidence == DetectionConfidence::Detected {
             self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
-            slog!(
-                logger,
-                info,
+            debug!(
                 "AI handoff mode=handoff confidence={} agent={}",
                 handoff_detection.confidence.as_str(),
                 detected_agent
@@ -3622,7 +2955,7 @@ impl Engine {
         // 2. Check if agent was explicitly specified via --agent
         if let Some(ref agent_name) = self.workflow_run_config.interaction.agent {
             if let Some(canonical) = resolve_agent_name(agent_name) {
-                slog!(logger, info, "Agent specified via --agent: {}", canonical);
+                debug!("Agent specified via --agent: {}", canonical);
                 if let Some(executable) = find_agent_executable(canonical) {
                     return self
                         .launch_agent(
@@ -3716,7 +3049,7 @@ impl Engine {
                             continue;
                         }
                         Some("__print_prompt__") => {
-                            slog!(logger, info, "User chose to print prompt and skip");
+                            debug!("User chose to print prompt and skip");
                             self.emit_ai_instructions(
                                 logger,
                                 ai_config.system_prompt.as_deref(),
@@ -3725,7 +3058,7 @@ impl Engine {
                             return Ok(());
                         }
                         Some(selected) => {
-                            slog!(logger, info, "User selected agent: {}", selected);
+                            debug!("User selected agent: {}", selected);
                             if let Some(executable) = find_agent_executable(selected) {
                                 return self
                                     .launch_agent(
@@ -3754,9 +3087,7 @@ impl Engine {
             }
         }
 
-        slog!(
-            logger,
-            info,
+        debug!(
             "AI handoff mode=rig confidence={} agent={}",
             handoff_detection.confidence.as_str(),
             detected_agent
@@ -3890,7 +3221,7 @@ impl Engine {
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
-        slog!(logger, info, "AI agent step completed successfully");
+        debug!("AI agent step completed successfully");
         Ok(())
     }
 
@@ -5079,102 +4410,6 @@ export default function transform(ast) {
         assert!(line.contains(r#""branch":"codemod-branch""#));
         assert!(!line.contains("secret body"));
         assert!(!line.contains(r#""body""#));
-    }
-
-    #[test]
-    fn codex_agent_output_is_not_tagged_as_stderr() {
-        assert_eq!(
-            format_agent_stream_line("codex", "stderr", "hello".to_string()),
-            "hello"
-        );
-        assert_eq!(
-            format_agent_stream_line("claude-code", "stdout", "hello".to_string()),
-            "hello"
-        );
-        assert_eq!(
-            format_agent_stream_line("opencode", "stderr", "hello".to_string()),
-            "hello"
-        );
-        assert_eq!(
-            format_agent_stream_line("aider", "stderr", "hello".to_string()),
-            "[stderr] hello"
-        );
-    }
-
-    #[test]
-    fn claude_stream_json_is_rendered_for_humans() {
-        let mut renderer = ClaudeStreamRenderer::default();
-        assert_eq!(
-            renderer.render_line(r#"{"type":"system","subtype":"init","model":"sonnet"}"#),
-            Some(AgentStreamRender::Line("  • started sonnet".to_string()))
-        );
-        assert_eq!(
-            renderer.render_line(
-                r#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Read"}}}"#
-            ),
-            Some(AgentStreamRender::Suppress)
-        );
-        assert_eq!(
-            renderer.render_line(
-                r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"README.md\"}"}}}"#
-            ),
-            Some(AgentStreamRender::Suppress)
-        );
-        assert_eq!(
-            renderer
-                .render_line(r#"{"type":"stream_event","event":{"type":"content_block_stop"}}"#),
-            Some(AgentStreamRender::Line("  • Read README.md".to_string()))
-        );
-        assert_eq!(
-            renderer.render_line(
-                r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}"#
-            ),
-            Some(AgentStreamRender::Fragment("hello".to_string()))
-        );
-        assert_eq!(
-            renderer.render_line(
-                r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.66}}"#
-            ),
-            Some(AgentStreamRender::Line(
-                "  ! rate limit allowed warning (seven day, 66% used)".to_string()
-            ))
-        );
-        assert_eq!(
-            renderer.render_line(r#"{"type":"assistant","message":{"content":[]}}"#),
-            Some(AgentStreamRender::Suppress)
-        );
-    }
-
-    #[test]
-    fn agent_message_fragments_are_labeled() {
-        assert_eq!(
-            format_agent_message_fragment("hello", false),
-            ("  › hello".to_string(), true)
-        );
-        assert_eq!(
-            format_agent_message_fragment(" world\nnext", true),
-            (" world\n  › next".to_string(), true)
-        );
-    }
-
-    #[test]
-    fn claude_write_tool_renders_compact_diff() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("summary.md");
-        std::fs::write(&file_path, "old\nsame\n").unwrap();
-        let input = serde_json::json!({
-            "file_path": file_path,
-            "content": "new\nsame\n"
-        })
-        .to_string();
-
-        let line = format_claude_tool_call("Write", &input);
-
-        assert!(line.contains("Write"));
-        assert!(line.contains("summary.md"));
-        assert!(line.contains("diff"));
-        assert!(line.contains("-old"));
-        assert!(line.contains("+new"));
     }
 
     #[test]

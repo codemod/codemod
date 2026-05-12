@@ -466,10 +466,10 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
 fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
     let area = ratatui::layout::Rect {
-        x: size.width / 10,
-        y: size.height / 5,
-        width: size.width * 4 / 5,
-        height: size.height * 3 / 5,
+        x: size.x.saturating_add(1),
+        y: size.y.saturating_add(1),
+        width: size.width.saturating_sub(2),
+        height: size.height.saturating_sub(2),
     };
     frame.render_widget(Clear, area);
 
@@ -493,7 +493,7 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
         })
         .unwrap_or_else(|| Line::from("Logs"));
 
-    let logs = Paragraph::new(state.selected_task_log_text())
+    let logs = Paragraph::new(ansi_log_lines(&state.selected_task_log_text()))
         .scroll((state.log_modal_scroll, 0))
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
@@ -511,6 +511,80 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
             Paragraph::new(notice).style(Style::default().fg(Color::DarkGray)),
             chunks[2],
         );
+    }
+}
+
+fn ansi_log_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut buffer = String::new();
+    let mut style = Style::default();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut sequence = String::new();
+            for sequence_char in chars.by_ref() {
+                if sequence_char == 'm' {
+                    flush_ansi_span(&mut spans, &mut buffer, style);
+                    apply_sgr_sequence(&sequence, &mut style);
+                    break;
+                }
+                sequence.push(sequence_char);
+            }
+            continue;
+        }
+
+        if ch == '\n' {
+            flush_ansi_span(&mut spans, &mut buffer, style);
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            continue;
+        }
+
+        buffer.push(ch);
+    }
+
+    flush_ansi_span(&mut spans, &mut buffer, style);
+    lines.push(Line::from(spans));
+    lines
+}
+
+fn flush_ansi_span(spans: &mut Vec<Span<'static>>, buffer: &mut String, style: Style) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    spans.push(Span::styled(std::mem::take(buffer), style));
+}
+
+fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
+    if sequence.is_empty() {
+        *style = Style::default();
+        return;
+    }
+
+    for code in sequence
+        .split(';')
+        .filter_map(|part| part.parse::<u16>().ok())
+    {
+        match code {
+            0 => *style = Style::default(),
+            1 => *style = style.add_modifier(Modifier::BOLD),
+            2 => *style = style.fg(Color::DarkGray),
+            22 => *style = style.remove_modifier(Modifier::BOLD),
+            30 => *style = style.fg(Color::Black),
+            31 => *style = style.fg(Color::Red),
+            32 => *style = style.fg(Color::Green),
+            33 => *style = style.fg(Color::Yellow),
+            34 => *style = style.fg(Color::Blue),
+            35 => *style = style.fg(Color::Magenta),
+            36 => *style = style.fg(Color::Cyan),
+            37 => *style = style.fg(Color::White),
+            39 => *style = style.fg(Color::Reset),
+            90 => *style = style.fg(Color::DarkGray),
+            _ => {}
+        }
     }
 }
 
@@ -789,12 +863,13 @@ fn render_option_modal(
 
 #[cfg(test)]
 mod tests {
-    use super::{log_modal_copy_hint, render};
+    use super::{ansi_log_lines, log_modal_copy_hint, render};
     use crate::tui::app::{ApprovalPrompt, Screen, TaskProgressView, TuiState};
     use butterflow_core::config::DirtyGitApprovalKind;
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
     use ratatui::Terminal;
     use serde_json::json;
     use uuid::Uuid;
@@ -1227,6 +1302,49 @@ mod tests {
         } else {
             assert_eq!(log_modal_copy_hint(), "ctrl+c copy");
         }
+    }
+
+    #[test]
+    fn ansi_log_lines_converts_sgr_to_styles() {
+        let lines = ansi_log_lines("plain \x1b[32mgreen\x1b[0m \x1b[1;36mbold cyan\x1b[0m");
+        let spans = &lines[0].spans;
+
+        assert_eq!(spans[0].content, "plain ");
+        assert_eq!(spans[1].content, "green");
+        assert_eq!(spans[1].style.fg, Some(Color::Green));
+        assert_eq!(spans[2].content, " ");
+        assert_eq!(spans[3].content, "bold cyan");
+        assert_eq!(spans[3].style.fg, Some(Color::Cyan));
+        assert!(spans[3].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn render_log_modal_does_not_print_raw_ansi_codes() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: vec!["\x1b[32mRead\x1b[0m clients/cal.diy/package.json".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+        state.open_log_modal(20);
+
+        let lines = render_state(&state, 100, 20);
+
+        assert!(lines.iter().any(|line| line.contains("Read clients")));
+        assert!(!lines.iter().any(|line| line.contains("[32m")));
     }
 
     #[test]

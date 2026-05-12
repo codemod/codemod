@@ -6,7 +6,7 @@ const MAX_PARENT_DEPTH: usize = 8;
 /// Agents that can be launched from the CLI with a command to execute the AI instructions.
 /// Each entry maps a canonical agent name to the executable names to search for on `$PATH`,
 /// plus the command template for invoking the agent with a prompt.
-const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
+pub(crate) const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
     LaunchableAgent {
         canonical: "claude-code",
         executables: &["claude"],
@@ -15,7 +15,7 @@ const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
     LaunchableAgent {
         canonical: "codex",
         executables: &["codex"],
-        label: "Codex CLI",
+        label: "Codex",
     },
     LaunchableAgent {
         canonical: "aider",
@@ -40,10 +40,10 @@ const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
 ];
 
 #[derive(Clone, Debug)]
-struct LaunchableAgent {
-    canonical: &'static str,
-    executables: &'static [&'static str],
-    label: &'static str,
+pub(crate) struct LaunchableAgent {
+    pub(crate) canonical: &'static str,
+    pub(crate) executables: &'static [&'static str],
+    pub(crate) label: &'static str,
 }
 
 /// An agent that was found (or not) on the system.
@@ -153,6 +153,7 @@ pub fn build_agent_command(
             cmd.env("RUST_LOG", "error");
             cmd.arg("--dangerously-bypass-approvals-and-sandbox")
                 .arg("e")
+                .arg("--json")
                 .arg("-");
         }
         "aider" => {
@@ -164,7 +165,10 @@ pub fn build_agent_command(
         }
         "opencode" => {
             let _ = full_prompt;
-            cmd.arg("run").arg("--dangerously-skip-permissions");
+            cmd.arg("run")
+                .arg("--dangerously-skip-permissions")
+                .arg("--format")
+                .arg("json");
         }
         "openclaw" => {
             cmd.arg("--dangerously-skip-permissions")
@@ -785,6 +789,39 @@ mod tests {
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--verbose".to_string()));
         assert!(args.contains(&"--include-partial-messages".to_string()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_codex_json_events() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd =
+            build_agent_command("codex", executable, "prompt", None, temp_dir.path()).unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--json".to_string()));
+        assert!(args.contains(&"-".to_string()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_opencode_json_events() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd =
+            build_agent_command("opencode", executable, "prompt", None, temp_dir.path()).unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--format".to_string()));
+        assert!(args.contains(&"json".to_string()));
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
     }
 
     #[test]
