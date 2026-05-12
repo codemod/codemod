@@ -107,6 +107,11 @@ export default codemod;
 
 Locate imports of a given module and return their alias/identifier nodes.
 
+Behavior notes:
+- Returns every matching import for the requested module, across both ESM and CJS forms.
+- If no typed match exists, namespace imports such as `import * as ns from "pkg"` are returned as a fallback.
+- When a typed match does exist, namespace fallbacks are omitted.
+
 ### Parameters
 
 <ParamField body="program" type="SgNode<T, 'program'>" required>
@@ -234,10 +239,12 @@ export default codemod;
 ## `removeImport`
 
 Remove an import from the program. Smart behavior:
-- **Default/namespace**: Removes the entire import statement.
+- **Default/namespace**: Removes the entire import statement unless it is part of a mixed import, in which case the remaining sibling import is preserved.
 - **Named (multiple specifiers)**: Removes only the specified specifiers, keeping the rest.
-- **Named (last specifier)**: Removes the entire import statement.
+- **Named (last specifier)**: Removes the entire import statement unless the statement also has a default import, in which case only the named clause is removed.
 - Handles both ESM and CJS formats.
+- Returns `null` instead of deleting unrelated bindings from multi-declarator `require()` statements.
+- Can also remove side-effect-only forms such as `import "pkg"` and `require("pkg")` when `removeSideEffectForms: true` is provided.
 
 ### Parameters
 
@@ -247,7 +254,7 @@ Remove an import from the program. Smart behavior:
 
 <ParamField body="options" type="RemoveImportOptions" required>
   One of:
-  - `{ type: "default", from: string }` — Remove the default import from a module.
+  - `{ type: "default", from: string, removeSideEffectForms?: boolean }` — Remove the default import from a module.
   - `{ type: "namespace", from: string }` — Remove the namespace import from a module.
   - `{ type: "named", specifiers: string[], from: string }` — Remove specific named imports.
 </ParamField>
@@ -279,6 +286,16 @@ const codemod: Codemod<TSX> = async (root) => {
 };
 
 export default codemod;
+```
+
+To also remove side-effect-only imports, pass `removeSideEffectForms: true`:
+
+```typescript
+const removeSideEffectEdit = removeImport(rootNode, {
+  type: "default",
+  from: "core-js/stable",
+  removeSideEffectForms: true,
+});
 ```
 
 ---
