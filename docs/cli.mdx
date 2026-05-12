@@ -16,13 +16,18 @@ The Codemod CLI provides different commands for different stages of development:
 
 ### High-Level Commands (Production)
 ```bash
+# Open the interactive launcher
+npx codemod
+
 # Run a published package from the registry
 npx codemod @org/my-package
 
 # Run a local workflow package
 npx codemod workflow run -w ./my-package/
 ```
-**Use for**: Production codemods, multi-step workflows, parameterized transforms
+**Use for**: Opening the interactive launcher, running production codemods, multi-step workflows, parameterized transforms
+
+In interactive terminals, bare `npx codemod` opens a launcher with shortcuts for installing Codemod AI integrations, creating a new package, or running a published package. In non-interactive contexts, it prints next steps and exits with status `1`.
 
 ### Quick Testing Commands (Development)
 ```bash
