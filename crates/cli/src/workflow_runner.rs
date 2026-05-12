@@ -14,6 +14,11 @@ use uuid::Uuid;
 
 use crate::tui::{create_tui_progress_callback, run_workflow_tui_with_session};
 use butterflow_core::workflow_runtime::WorkflowSession;
+use console::style;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Workflow failed")]
+pub(crate) struct WorkflowFailureAlreadyReported;
 
 pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
     workflow.nodes.iter().any(node_requires_manual_tui)
@@ -64,7 +69,11 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         )
         .await
         .context("Failed to run workflow")?;
-        println!("💥 Workflow started with ID: {workflow_run_id}");
+        println!(
+            "{} {}",
+            style("Workflow started").cyan(),
+            style(workflow_run_id).dim()
+        );
         run_workflow_tui_with_session(engine.clone(), session, 20).await?;
         workflow_run_id
     } else {
@@ -77,7 +86,11 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
             )
             .await
             .context("Failed to run workflow")?;
-        println!("💥 Workflow started with ID: {workflow_run_id}");
+        println!(
+            "{} {}",
+            style("Workflow started").cyan(),
+            style(workflow_run_id).dim()
+        );
         workflow_run_id
     };
 
@@ -90,10 +103,7 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         .await?;
     }
 
-    let seconds = started.elapsed().as_millis() as f64 / 1000.0;
-    println!("✨ Done in {seconds:.3}s");
-
-    Ok((workflow_run_id.to_string(), seconds))
+    Ok((workflow_run_id.to_string(), started.elapsed().as_secs_f64()))
 }
 
 /// Wait for workflow to complete or pause
@@ -116,8 +126,9 @@ pub async fn wait_for_workflow_completion(
         match status {
             WorkflowStatus::Completed => {
                 println!(
-                    "✅ Workflow completed successfully in {:.1}s",
-                    wait_started.elapsed().as_secs_f64()
+                    "{} {}",
+                    style("Workflow completed").green(),
+                    style(format!("in {:.1}s", wait_started.elapsed().as_secs_f64())).dim()
                 );
                 info!("Workflow completed successfully");
                 break;
@@ -128,14 +139,42 @@ pub async fn wait_for_workflow_completion(
                     .await
                     .context("Failed to get tasks")?;
                 let summary = summarize_tasks(&tasks);
-                println!(
-                    "❌ Workflow failed after {:.1}s{}",
-                    wait_started.elapsed().as_secs_f64(),
-                    format_summary_suffix(&summary)
-                );
-                if let Some(error) = failed_workflow_error(&tasks) {
-                    return Err(error);
+                if failed_workflow_error_was_reported_in_progress(&tasks) {
+                    println!(
+                        "{} {}{}",
+                        style("Workflow failed").red(),
+                        style(format!(
+                            "after {:.1}s",
+                            wait_started.elapsed().as_secs_f64()
+                        ))
+                        .dim(),
+                        style(format_summary_suffix(&summary)).dim()
+                    );
+                    return Err(WorkflowFailureAlreadyReported.into());
+                } else if let Some(error) = failed_workflow_error(&tasks) {
+                    crate::diagnostics::render_anyhow_error(&error);
+                    println!(
+                        "{} {}{}",
+                        style("Workflow failed").red(),
+                        style(format!(
+                            "after {:.1}s",
+                            wait_started.elapsed().as_secs_f64()
+                        ))
+                        .dim(),
+                        style(format_summary_suffix(&summary)).dim()
+                    );
+                    return Err(WorkflowFailureAlreadyReported.into());
                 }
+                println!(
+                    "{} {}{}",
+                    style("Workflow failed").red(),
+                    style(format!(
+                        "after {:.1}s",
+                        wait_started.elapsed().as_secs_f64()
+                    ))
+                    .dim(),
+                    style(format_summary_suffix(&summary)).dim()
+                );
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
             WorkflowStatus::AwaitingTrigger => {
@@ -208,6 +247,22 @@ fn failed_workflow_error(tasks: &[Task]) -> Option<anyhow::Error> {
         .and_then(failed_task_error)
 }
 
+fn failed_workflow_error_was_reported_in_progress(tasks: &[Task]) -> bool {
+    tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::Failed)
+        .is_some_and(task_error_was_reported_in_progress)
+}
+
+fn task_error_was_reported_in_progress(task: &Task) -> bool {
+    let Some(error) = task.error.as_deref() else {
+        return false;
+    };
+
+    let cleaned = strip_error_prefixes(error);
+    error.contains("Failed to process ") && is_javascript_runtime_error(&cleaned)
+}
+
 fn failed_task_error(task: &Task) -> Option<anyhow::Error> {
     if let Some(TaskErrorDetails::ShellCommand {
         command,
@@ -257,6 +312,15 @@ fn is_error_log_line(line: &str) -> bool {
         || line.contains("AST grep config file not found")
         || line.contains("Config error:")
         || line.contains("Language error:")
+}
+
+fn is_javascript_runtime_error(message: &str) -> bool {
+    message.contains("JavaScript execution failed:")
+        || message.contains("Error:")
+        || message.contains("TypeError:")
+        || message.contains("ReferenceError:")
+        || message.contains("SyntaxError:")
+        || message.contains("RangeError:")
 }
 
 fn strip_error_prefixes(message: &str) -> String {
@@ -309,6 +373,34 @@ mod failure_message_tests {
             message,
             "Error: Test error\n    at codemod (/tmp/codemod.ts:16:13)"
         );
+    }
+
+    #[test]
+    fn detects_failed_task_error_reported_through_progress_diagnostics() {
+        let mut task = Task::new(Uuid::new_v4(), "node".to_string(), false);
+        task.status = TaskStatus::Failed;
+        task.error = Some(
+            "Step Scan failed: Step execution error: Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+        task.logs.push(
+            "Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+
+        assert!(task_error_was_reported_in_progress(&task));
+    }
+
+    #[test]
+    fn detects_failed_task_error_reported_through_progress_without_persisted_log() {
+        let mut task = Task::new(Uuid::new_v4(), "node".to_string(), false);
+        task.status = TaskStatus::Failed;
+        task.error = Some(
+            "Step Scan failed: Step execution error: Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+
+        assert!(task_error_was_reported_in_progress(&task));
     }
 }
 

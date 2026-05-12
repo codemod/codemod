@@ -2620,7 +2620,7 @@ impl Engine {
                 let failed_file_count_for_closure = Arc::clone(&failed_file_count);
                 let first_failure_message_for_closure = Arc::clone(&first_failure_message);
 
-                let execute_result = execution_config.execute_with_task_id(
+                let execute_result = execution_config.execute_with_task_id_before_finish(
                     &progress_task_id,
                     move |path, config| {
                         // Only process files, not directories
@@ -2746,6 +2746,13 @@ impl Engine {
                             );
                         }
                     },
+                    || {
+                        flush_buffered_execution_output(
+                            &buffered_execution_output,
+                            &progress_callback,
+                            &id,
+                        );
+                    },
                 );
 
                 if let Err(error) = execute_result {
@@ -2756,12 +2763,6 @@ impl Engine {
                     );
                     return Err(error);
                 }
-
-                flush_buffered_execution_output(
-                    &buffered_execution_output,
-                    &progress_callback,
-                    &id,
-                );
 
                 let attempted_files = attempted_file_count.load(Ordering::Relaxed);
                 let failed_files = failed_file_count.load(Ordering::Relaxed);

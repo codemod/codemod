@@ -34,7 +34,7 @@ pub fn download_progress_bar() -> Arc<Box<dyn Fn(u64, u64) + Send + Sync>> {
                 .with_key("eta", |state: &ProgressState, w: &mut dyn std::fmt::Write| {
                     write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
                 })
-                .progress_chars("#>-")
+                .progress_chars("━╸ ")
             );
             *pb_guard = Some(pb);
         }
@@ -68,15 +68,16 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
 
     // Define styles for different progress bar states
     let progress_style = ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+        "{elapsed_precise:.dim} {bar:40.cyan/blue} {pos:>7}/{len:<7} {msg}",
     )
     .unwrap()
-    .progress_chars("##-");
+    .progress_chars("━╸ ");
 
-    let spinner_style =
-        ProgressStyle::with_template("{prefix:.bold.cyan} {spinner} {msg} [{elapsed_precise}]")
-            .unwrap()
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let spinner_style = ProgressStyle::with_template(
+        "{prefix:.bold.cyan} {spinner:.cyan} {msg} {elapsed_precise:.dim}",
+    )
+    .unwrap()
+    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
 
     let multi_progress = Arc::new(MultiProgress::new());
     let progress_bars = Arc::new(Mutex::new(HashMap::<String, ProgressBar>::new()));
@@ -104,14 +105,14 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                 let pb = if let Some(total) = total_files {
                     let pb = mp.add(ProgressBar::new(total));
                     pb.set_style(progress_style.clone());
-                    pb.set_prefix(format!("🔧 {task_id}"));
-                    pb.set_message("Starting...");
+                    pb.set_prefix(task_id.clone());
+                    pb.set_message(style("Starting").dim().to_string());
                     pb
                 } else {
                     let pb = mp.add(ProgressBar::new_spinner());
                     pb.set_style(spinner_style.clone());
-                    pb.set_prefix(format!("🔧 {task_id}"));
-                    pb.set_message("Starting...");
+                    pb.set_prefix(task_id.clone());
+                    pb.set_message(style("Starting").dim().to_string());
                     pb
                 };
 
@@ -126,7 +127,7 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                         .unwrap_or_default()
                         .to_string_lossy();
                     let truncated_filename = truncate_filename(&filename, 25);
-                    pb.set_message(format!("📁 {}", style(truncated_filename).green()));
+                    pb.set_message(style(truncated_filename).cyan().to_string());
                     pb.tick();
                 }
             }
@@ -179,7 +180,7 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                 let bars_lock = bars.lock().unwrap();
                 *active_log_title.lock().unwrap() = None;
                 if let Some(pb) = bars_lock.get(&task_id) {
-                    let finish_message = message.unwrap_or_else(|| "✅ Completed".to_string());
+                    let finish_message = message.unwrap_or_else(|| "Completed".to_string());
                     pb.finish_with_message(style(finish_message).green().to_string());
                 }
             }

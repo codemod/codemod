@@ -375,7 +375,12 @@ async fn handle_implicit_run_command(
 #[tokio::main]
 async fn main() {
     if let Err(error) = run_cli().await {
-        diagnostics::render_anyhow_error(&error);
+        if error
+            .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
+            .is_none()
+        {
+            diagnostics::render_anyhow_error(&error);
+        }
         exit_with_code(1);
     }
 }

@@ -19,7 +19,7 @@ use codemod_sandbox::sandbox::{
         extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
         SelectorEngineOptions,
     },
-    errors::ExecutionError as SandboxExecutionError,
+    errors::{ExecutionError as SandboxExecutionError, RuntimeError as SandboxRuntimeError},
     resolvers::OxcResolver,
     runtime_module::{RuntimeEventCallback, RuntimeEventKind},
 };
@@ -238,6 +238,12 @@ impl<'a> JssgExecutionService<'a> {
         {
             Ok(selector_config) => selector_config,
             Err(e) => {
+                if Self::is_runtime_initialization_failure(&e) {
+                    return Err(Error::StepExecution(format!(
+                        "Failed to initialize js-ast-grep codemod: {e}"
+                    )));
+                }
+
                 let message = format!("Failed to extract js-ast-grep selector: {e}");
                 if let Some(task_id) = task_log_task_id {
                     let _ = self.engine.append_task_log(task_id, &message).await;
@@ -354,6 +360,37 @@ impl<'a> JssgExecutionService<'a> {
 
     fn signal_progress(progress_tx: &mpsc::UnboundedSender<()>) {
         let _ = progress_tx.send(());
+    }
+
+    fn is_runtime_initialization_failure(error: &SandboxExecutionError) -> bool {
+        matches!(
+            error,
+            SandboxExecutionError::Runtime {
+                source: SandboxRuntimeError::InitializationFailed { .. }
+            }
+        )
+    }
+
+    fn is_codemod_source_reference_failure(
+        error: &SandboxExecutionError,
+        script_path: &Path,
+    ) -> bool {
+        let SandboxExecutionError::Runtime {
+            source: SandboxRuntimeError::ExecutionFailed { message },
+        } = error
+        else {
+            return false;
+        };
+
+        if !message.contains(" is not defined") {
+            return false;
+        }
+
+        let script_path = script_path.to_string_lossy();
+        message
+            .lines()
+            .map(str::trim)
+            .any(|line| line.starts_with("at ") && line.contains(script_path.as_ref()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -509,336 +546,367 @@ impl<'a> JssgExecutionService<'a> {
         let failed_file_count_for_closure = Arc::clone(&failed_file_count);
 
         let execute_result = config
-            .execute(move |file_path, config| {
-                if canceled_flag_for_closure.load(Ordering::Acquire)
-                    || idle_timed_out_for_closure.load(Ordering::Acquire)
-                {
-                    return;
-                }
-
-                if !file_path.is_file() {
-                    return;
-                }
-                attempted_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
-
-                let relative_path = file_path
-                    .strip_prefix(&target_path_for_logs)
-                    .unwrap_or(file_path)
-                    .display()
-                    .to_string();
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileQueued,
-                );
-                Self::signal_progress(&progress_tx_for_closure);
-
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(content) => content,
-                    Err(e) => {
-                        slog!(
-                            logger,
-                            warn,
-                            "Failed to read file {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &relative_path,
-                            StepPhase::ExecutionErrored,
-                        );
-                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+            .execute_before_finish(
+                move |file_path, config| {
+                    if canceled_flag_for_closure.load(Ordering::Acquire)
+                        || idle_timed_out_for_closure.load(Ordering::Acquire)
+                    {
                         return;
                     }
-                };
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileLoaded,
-                );
-                Self::signal_progress(&progress_tx_for_closure);
 
-                std::env::set_var("CODEMOD_STEP_ID", &step_id);
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::ExecutionStarted,
-                );
-                Self::signal_progress(&progress_tx_for_closure);
-                let dry_run = config.dry_run;
-                let relative_path_for_execution = relative_path.clone();
-                let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
-                let cancellation_flag_for_execution = Arc::clone(&canceled_flag_for_closure);
-                let current_runtime_unit = Arc::new(std::sync::Mutex::new(relative_path.clone()));
-                let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
-                let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
-                let relative_path_for_runtime_events = relative_path.clone();
-                let buffered_execution_output_for_runtime_events =
-                    Arc::clone(&buffered_execution_output_for_closure);
-                let runtime_event_task_id = task_log_task_id;
-                let runtime_event_run_id = workflow_run_id;
-                let progress_tx_for_runtime_events = progress_tx_for_closure.clone();
-                let runtime_event_callback: RuntimeEventCallback =
-                    Arc::new(move |event| match event.kind {
-                        RuntimeEventKind::SetCurrentUnit => {
-                            let new_runtime_unit =
-                                format!("{relative_path_for_runtime_events} :: {}", event.message);
-                            let previous_runtime_unit = {
-                                let mut current_runtime_unit = current_runtime_unit_for_callback
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                let previous_runtime_unit = current_runtime_unit.clone();
-                                *current_runtime_unit = new_runtime_unit.clone();
-                                previous_runtime_unit
-                            };
+                    if !file_path.is_file() {
+                        return;
+                    }
+                    attempted_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
 
+                    let relative_path = file_path
+                        .strip_prefix(&target_path_for_logs)
+                        .unwrap_or(file_path)
+                        .display()
+                        .to_string();
+                    record_unit_progress(
+                        &progress_state_for_closure,
+                        &relative_path,
+                        StepPhase::FileQueued,
+                    );
+                    Self::signal_progress(&progress_tx_for_closure);
+
+                    let content = match std::fs::read_to_string(file_path) {
+                        Ok(content) => content,
+                        Err(e) => {
+                            slog!(
+                                logger,
+                                warn,
+                                "Failed to read file {}: {}",
+                                file_path.display(),
+                                e
+                            );
                             finish_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &previous_runtime_unit,
-                                StepPhase::ExecutionFinished,
+                                &progress_state_for_closure,
+                                &relative_path,
+                                StepPhase::ExecutionErrored,
                             );
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &new_runtime_unit,
-                                StepPhase::ExecutionStarted,
+                            failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            let execution_message = format!(
+                                "Failed to process {relative_path}: Failed to read file: {e}"
                             );
-                            Self::signal_progress(&progress_tx_for_runtime_events);
-                        }
-                        RuntimeEventKind::Progress | RuntimeEventKind::Warn => {
-                            let runtime_unit = current_runtime_unit_for_callback
-                                .lock()
-                                .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
-                            let formatted_log = format_runtime_event_log(&event);
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &runtime_unit,
-                                StepPhase::Output,
+                            append_buffered_diagnostic(
+                                &buffered_execution_output_for_closure,
+                                relative_path.clone(),
+                                format!("Failed to read file: {e}"),
                             );
-                            Self::signal_progress(&progress_tx_for_runtime_events);
-                            if let Some(message) = formatted_log.as_ref() {
-                                append_buffered_log(
-                                    &buffered_execution_output_for_runtime_events,
-                                    runtime_unit.clone(),
-                                    message.clone(),
-                                );
+                            if let Ok(mut execution_failure_message) =
+                                execution_failure_message_for_closure.lock()
+                            {
+                                if execution_failure_message.is_none() {
+                                    *execution_failure_message = Some(execution_message.clone());
+                                }
                             }
-                            if let (Some(task_id), Some(run_id), Some(message)) =
-                                (runtime_event_task_id, runtime_event_run_id, formatted_log)
+                            if let (Some(task_id), Some(run_id)) =
+                                (task_log_task_id, workflow_run_id)
                             {
                                 publish_event(
                                     run_id,
                                     WorkflowEvent::TaskLogAppended {
                                         workflow_run_id: run_id,
                                         task_id,
-                                        line: message,
+                                        line: execution_message,
                                         at: Utc::now(),
                                     },
                                 );
                             }
+                            engine
+                                .execution_stats
+                                .files_with_errors
+                                .fetch_add(1, Ordering::Relaxed);
+                            return;
                         }
-                    });
-                let execution_result = block_on_runtime_handle(&runtime_handle, async {
-                    let local = tokio::task::LocalSet::new();
-                    let file_path_owned = file_path.to_path_buf();
-                    let content_owned = content.clone();
-                    let js_file_path_owned = js_file_path_clone.clone();
-                    let resolver_owned = resolver_clone.clone();
-                    let selector_config_owned = selector_config.clone();
-                    let params_owned = params.clone();
-                    let matrix_input_owned = matrix_input.clone();
-                    let capabilities_owned = config.capabilities.clone();
-                    let semantic_provider_owned = semantic_provider.clone();
-                    let metrics_context_owned = metrics_context_clone.clone();
-                    let shared_state_context_owned = shared_state_context_clone.clone();
-                    let target_path_owned = target_path.clone();
-                    let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
-                    let idle_notify = Arc::clone(&idle_notify_for_closure);
-                    let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
-
-                    local
-                        .run_until(async move {
-                            let execution_task = tokio::task::spawn_local(async move {
-                                execute_codemod_with_quickjs(JssgExecutionOptions {
-                                    script_path: &js_file_path_owned,
-                                    resolver: resolver_owned,
-                                    language,
-                                    file_path: &file_path_owned,
-                                    content: &content_owned,
-                                    selector_config: selector_config_owned,
-                                    params: params_owned,
-                                    matrix_values: matrix_input_owned,
-                                    capabilities: capabilities_owned,
-                                    semantic_provider: semantic_provider_owned,
-                                    metrics_context: Some(metrics_context_owned),
-                                    shared_state_context: Some(shared_state_context_owned),
-                                    runtime_event_callback: Some(runtime_event_callback),
-                                    cancellation_flag: Some(cancellation_flag_for_execution),
-                                    test_mode: false,
-                                    dry_run,
-                                    target_directory: &target_path_owned,
-                                })
-                                .await
-                            });
-
-                            await_js_ast_grep_execution_task(
-                                execution_task,
-                                idle_timed_out,
-                                idle_notify,
-                                idle_failure_message,
-                                progress_state_for_execution,
-                                idle_timeout,
-                                &relative_path_for_execution,
-                            )
-                            .await
-                        })
-                        .await
-                });
-
-                if canceled_flag_for_closure.load(Ordering::Acquire) {
-                    finish_unit_progress(
+                    };
+                    record_unit_progress(
                         &progress_state_for_closure,
                         &relative_path,
-                        StepPhase::ExecutionErrored,
+                        StepPhase::FileLoaded,
                     );
-                    return;
-                }
+                    Self::signal_progress(&progress_tx_for_closure);
 
-                match execution_result {
-                    Ok(Ok(CodemodOutput { primary, secondary })) => {
-                        succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
-                        let apply_change =
-                            |change_path: &Path, result: &ExecutionResult| match result {
-                                ExecutionResult::Modified(ref modified) => {
-                                    let write_path =
-                                        modified.rename_to.as_deref().unwrap_or(change_path);
-                                    if config.dry_run {
-                                        engine
-                                            .execution_stats
-                                            .files_modified
-                                            .fetch_add(1, Ordering::Relaxed);
+                    std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                    record_unit_progress(
+                        &progress_state_for_closure,
+                        &relative_path,
+                        StepPhase::ExecutionStarted,
+                    );
+                    Self::signal_progress(&progress_tx_for_closure);
+                    let dry_run = config.dry_run;
+                    let relative_path_for_execution = relative_path.clone();
+                    let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
+                    let cancellation_flag_for_execution = Arc::clone(&canceled_flag_for_closure);
+                    let current_runtime_unit =
+                        Arc::new(std::sync::Mutex::new(relative_path.clone()));
+                    let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
+                    let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
+                    let relative_path_for_runtime_events = relative_path.clone();
+                    let buffered_execution_output_for_runtime_events =
+                        Arc::clone(&buffered_execution_output_for_closure);
+                    let runtime_event_task_id = task_log_task_id;
+                    let runtime_event_run_id = workflow_run_id;
+                    let progress_tx_for_runtime_events = progress_tx_for_closure.clone();
+                    let runtime_event_callback: RuntimeEventCallback =
+                        Arc::new(move |event| match event.kind {
+                            RuntimeEventKind::SetCurrentUnit => {
+                                let new_runtime_unit = format!(
+                                    "{relative_path_for_runtime_events} :: {}",
+                                    event.message
+                                );
+                                let previous_runtime_unit = {
+                                    let mut current_runtime_unit =
+                                        current_runtime_unit_for_callback
+                                            .lock()
+                                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    let previous_runtime_unit = current_runtime_unit.clone();
+                                    *current_runtime_unit = new_runtime_unit.clone();
+                                    previous_runtime_unit
+                                };
 
-                                        if let Some(callback) =
-                                            &engine.workflow_run_config().output.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
+                                finish_unit_progress(
+                                    &progress_state_for_runtime_events,
+                                    &previous_runtime_unit,
+                                    StepPhase::ExecutionFinished,
+                                );
+                                record_unit_progress(
+                                    &progress_state_for_runtime_events,
+                                    &new_runtime_unit,
+                                    StepPhase::ExecutionStarted,
+                                );
+                                Self::signal_progress(&progress_tx_for_runtime_events);
+                            }
+                            RuntimeEventKind::Progress | RuntimeEventKind::Warn => {
+                                let runtime_unit = current_runtime_unit_for_callback
+                                    .lock()
+                                    .map(|runtime_unit| runtime_unit.clone())
+                                    .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
+                                let formatted_log = format_runtime_event_log(&event);
+                                record_unit_progress(
+                                    &progress_state_for_runtime_events,
+                                    &runtime_unit,
+                                    StepPhase::Output,
+                                );
+                                Self::signal_progress(&progress_tx_for_runtime_events);
+                                if let Some(message) = formatted_log.as_ref() {
+                                    append_buffered_log(
+                                        &buffered_execution_output_for_runtime_events,
+                                        runtime_unit.clone(),
+                                        message.clone(),
+                                    );
+                                }
+                                if let (Some(task_id), Some(run_id), Some(message)) =
+                                    (runtime_event_task_id, runtime_event_run_id, formatted_log)
+                                {
+                                    publish_event(
+                                        run_id,
+                                        WorkflowEvent::TaskLogAppended {
+                                            workflow_run_id: run_id,
+                                            task_id,
+                                            line: message,
+                                            at: Utc::now(),
+                                        },
+                                    );
+                                }
+                            }
+                        });
+                    let execution_result = block_on_runtime_handle(&runtime_handle, async {
+                        let local = tokio::task::LocalSet::new();
+                        let file_path_owned = file_path.to_path_buf();
+                        let content_owned = content.clone();
+                        let js_file_path_owned = js_file_path_clone.clone();
+                        let resolver_owned = resolver_clone.clone();
+                        let selector_config_owned = selector_config.clone();
+                        let params_owned = params.clone();
+                        let matrix_input_owned = matrix_input.clone();
+                        let capabilities_owned = config.capabilities.clone();
+                        let semantic_provider_owned = semantic_provider.clone();
+                        let metrics_context_owned = metrics_context_clone.clone();
+                        let shared_state_context_owned = shared_state_context_clone.clone();
+                        let target_path_owned = target_path.clone();
+                        let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
+                        let idle_notify = Arc::clone(&idle_notify_for_closure);
+                        let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
 
-                                        slog!(
-                                            logger,
-                                            debug,
-                                            "Would modify file (dry run): {}",
-                                            change_path.display()
-                                        );
-                                    } else {
-                                        if let Some(callback) =
-                                            &engine.workflow_run_config().output.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
+                        local
+                            .run_until(async move {
+                                let execution_task = tokio::task::spawn_local(async move {
+                                    execute_codemod_with_quickjs(JssgExecutionOptions {
+                                        script_path: &js_file_path_owned,
+                                        resolver: resolver_owned,
+                                        language,
+                                        file_path: &file_path_owned,
+                                        content: &content_owned,
+                                        selector_config: selector_config_owned,
+                                        params: params_owned,
+                                        matrix_values: matrix_input_owned,
+                                        capabilities: capabilities_owned,
+                                        semantic_provider: semantic_provider_owned,
+                                        metrics_context: Some(metrics_context_owned),
+                                        shared_state_context: Some(shared_state_context_owned),
+                                        runtime_event_callback: Some(runtime_event_callback),
+                                        cancellation_flag: Some(cancellation_flag_for_execution),
+                                        test_mode: false,
+                                        dry_run,
+                                        target_directory: &target_path_owned,
+                                    })
+                                    .await
+                                });
 
-                                        let write_result =
-                                            block_on_runtime_handle(&runtime_handle, async {
-                                                file_writer
-                                                    .write_file(
-                                                        write_path.to_path_buf(),
-                                                        modified.content.clone(),
-                                                    )
-                                                    .await
-                                            });
+                                await_js_ast_grep_execution_task(
+                                    execution_task,
+                                    idle_timed_out,
+                                    idle_notify,
+                                    idle_failure_message,
+                                    progress_state_for_execution,
+                                    idle_timeout,
+                                    &relative_path_for_execution,
+                                )
+                                .await
+                            })
+                            .await
+                    });
 
-                                        if let Err(e) = write_result {
-                                            slog!(
-                                                logger,
-                                                error,
-                                                "Failed to write modified file {}: {}",
-                                                write_path.display(),
-                                                e
-                                            );
+                    if canceled_flag_for_closure.load(Ordering::Acquire) {
+                        finish_unit_progress(
+                            &progress_state_for_closure,
+                            &relative_path,
+                            StepPhase::ExecutionErrored,
+                        );
+                        return;
+                    }
+
+                    match execution_result {
+                        Ok(Ok(CodemodOutput { primary, secondary })) => {
+                            succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            let apply_change =
+                                |change_path: &Path, result: &ExecutionResult| match result {
+                                    ExecutionResult::Modified(ref modified) => {
+                                        let write_path =
+                                            modified.rename_to.as_deref().unwrap_or(change_path);
+                                        if config.dry_run {
                                             engine
                                                 .execution_stats
-                                                .files_with_errors
+                                                .files_modified
                                                 .fetch_add(1, Ordering::Relaxed);
-                                        } else {
-                                            if modified.rename_to.is_some()
-                                                && write_path != change_path
+
+                                            if let Some(callback) = &engine
+                                                .workflow_run_config()
+                                                .output
+                                                .dry_run_callback
                                             {
-                                                if let Ok(mut deletions) =
-                                                    deferred_deletions_clone.lock()
-                                                {
-                                                    deletions.push(change_path.to_path_buf());
-                                                }
+                                                let original = if change_path == file_path {
+                                                    content.clone()
+                                                } else {
+                                                    std::fs::read_to_string(change_path)
+                                                        .unwrap_or_default()
+                                                };
+                                                callback(DryRunChange {
+                                                    file_path: change_path.to_path_buf(),
+                                                    original_content: original,
+                                                    new_content: modified.content.clone(),
+                                                });
+                                            }
+
+                                            slog!(
+                                                logger,
+                                                debug,
+                                                "Would modify file (dry run): {}",
+                                                change_path.display()
+                                            );
+                                        } else {
+                                            if let Some(callback) = &engine
+                                                .workflow_run_config()
+                                                .output
+                                                .dry_run_callback
+                                            {
+                                                let original = if change_path == file_path {
+                                                    content.clone()
+                                                } else {
+                                                    std::fs::read_to_string(change_path)
+                                                        .unwrap_or_default()
+                                                };
+                                                callback(DryRunChange {
+                                                    file_path: change_path.to_path_buf(),
+                                                    original_content: original,
+                                                    new_content: modified.content.clone(),
+                                                });
+                                            }
+
+                                            let write_result =
+                                                block_on_runtime_handle(&runtime_handle, async {
+                                                    file_writer
+                                                        .write_file(
+                                                            write_path.to_path_buf(),
+                                                            modified.content.clone(),
+                                                        )
+                                                        .await
+                                                });
+
+                                            if let Err(e) = write_result {
                                                 slog!(
+                                                    logger,
+                                                    error,
+                                                    "Failed to write modified file {}: {}",
+                                                    write_path.display(),
+                                                    e
+                                                );
+                                                engine
+                                                    .execution_stats
+                                                    .files_with_errors
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                            } else {
+                                                if modified.rename_to.is_some()
+                                                    && write_path != change_path
+                                                {
+                                                    if let Ok(mut deletions) =
+                                                        deferred_deletions_clone.lock()
+                                                    {
+                                                        deletions.push(change_path.to_path_buf());
+                                                    }
+                                                    slog!(
                                                     logger,
                                                     debug,
                                                     "Renamed file: {} -> {} (deferred deletion)",
                                                     change_path.display(),
                                                     write_path.display()
                                                 );
-                                            } else {
-                                                slog!(
-                                                    logger,
-                                                    debug,
-                                                    "Modified file: {}",
-                                                    change_path.display()
-                                                );
+                                                } else {
+                                                    slog!(
+                                                        logger,
+                                                        debug,
+                                                        "Modified file: {}",
+                                                        change_path.display()
+                                                    );
+                                                }
+                                                if let Some(ref provider) = semantic_provider {
+                                                    let _ = provider.notify_file_processed(
+                                                        write_path,
+                                                        &modified.content,
+                                                    );
+                                                }
+                                                engine
+                                                    .execution_stats
+                                                    .files_modified
+                                                    .fetch_add(1, Ordering::Relaxed);
                                             }
-                                            if let Some(ref provider) = semantic_provider {
-                                                let _ = provider.notify_file_processed(
-                                                    write_path,
-                                                    &modified.content,
-                                                );
-                                            }
-                                            engine
-                                                .execution_stats
-                                                .files_modified
-                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
-                                }
-                                ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
-                            };
+                                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
+                                };
 
-                        match &primary {
-                            ExecutionResult::Modified(_) => {
-                                apply_change(file_path, &primary);
-                                if let Some(ref collector) = modified_files_collector_clone {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                                if let Some(ref collector) = selector_matched_files_collector_clone
-                                {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                            }
-                            ExecutionResult::Unmodified => {
-                                if has_selector {
+                            match &primary {
+                                ExecutionResult::Modified(_) => {
+                                    apply_change(file_path, &primary);
+                                    if let Some(ref collector) = modified_files_collector_clone {
+                                        collector
+                                            .lock()
+                                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                            .push(file_path.to_path_buf());
+                                    }
                                     if let Some(ref collector) =
                                         selector_matched_files_collector_clone
                                     {
@@ -848,45 +916,107 @@ impl<'a> JssgExecutionService<'a> {
                                             .push(file_path.to_path_buf());
                                     }
                                 }
-                                engine
-                                    .execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
+                                ExecutionResult::Unmodified => {
+                                    if has_selector {
+                                        if let Some(ref collector) =
+                                            selector_matched_files_collector_clone
+                                        {
+                                            collector
+                                                .lock()
+                                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                                .push(file_path.to_path_buf());
+                                        }
+                                    }
+                                    engine
+                                        .execution_stats
+                                        .files_unmodified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                                ExecutionResult::Skipped => {
+                                    engine
+                                        .execution_stats
+                                        .files_unmodified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
                             }
-                            ExecutionResult::Skipped => {
-                                engine
-                                    .execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
+
+                            for change in &secondary {
+                                apply_change(&change.path, &change.result);
                             }
-                        }
 
-                        for change in &secondary {
-                            apply_change(&change.path, &change.result);
+                            finish_unit_progress(
+                                &progress_state_for_closure,
+                                &current_runtime_unit
+                                    .lock()
+                                    .map(|runtime_unit| runtime_unit.clone())
+                                    .unwrap_or_else(|_| relative_path.clone()),
+                                StepPhase::ExecutionFinished,
+                            );
+                            Self::signal_progress(&progress_tx_for_closure);
                         }
-
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &current_runtime_unit
+                        Ok(Err(e)) => {
+                            let runtime_unit = current_runtime_unit
                                 .lock()
                                 .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path.clone()),
-                            StepPhase::ExecutionFinished,
-                        );
-                        Self::signal_progress(&progress_tx_for_closure);
-                    }
-                    Ok(Err(e)) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        if let SandboxExecutionError::RuntimeHook { source } = &e {
-                            let message = format_runtime_failure_message(source);
+                                .unwrap_or_else(|_| relative_path.clone());
+                            finish_unit_progress(
+                                &progress_state_for_closure,
+                                &runtime_unit,
+                                StepPhase::ExecutionErrored,
+                            );
+                            if let SandboxExecutionError::RuntimeHook { source } = &e {
+                                let message = format_runtime_failure_message(source);
+                                if let (Some(task_id), Some(run_id)) =
+                                    (task_log_task_id, workflow_run_id)
+                                {
+                                    publish_event(
+                                        run_id,
+                                        WorkflowEvent::TaskLogAppended {
+                                            workflow_run_id: run_id,
+                                            task_id,
+                                            line: message.clone(),
+                                            at: Utc::now(),
+                                        },
+                                    );
+                                }
+                                canceled_flag_for_closure.store(true, Ordering::Release);
+                                if let Ok(mut runtime_failure_message) =
+                                    runtime_failure_message_for_closure.lock()
+                                {
+                                    if runtime_failure_message.is_none() {
+                                        *runtime_failure_message = Some(message);
+                                    }
+                                }
+                            } else if Self::is_runtime_initialization_failure(&e)
+                                || Self::is_codemod_source_reference_failure(
+                                    &e,
+                                    &js_file_path_clone,
+                                )
+                            {
+                                canceled_flag_for_closure.store(true, Ordering::Release);
+                            }
+                            slog!(
+                                logger,
+                                error,
+                                "Failed to execute codemod on {}: {}",
+                                relative_path,
+                                e
+                            );
+                            let execution_message =
+                                format!("Failed to process {relative_path}: {e}");
+                            failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            append_buffered_diagnostic(
+                                &buffered_execution_output_for_closure,
+                                runtime_unit.clone(),
+                                e.to_string(),
+                            );
+                            if let Ok(mut execution_failure_message) =
+                                execution_failure_message_for_closure.lock()
+                            {
+                                if execution_failure_message.is_none() {
+                                    *execution_failure_message = Some(execution_message.clone());
+                                }
+                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -895,126 +1025,96 @@ impl<'a> JssgExecutionService<'a> {
                                     WorkflowEvent::TaskLogAppended {
                                         workflow_run_id: run_id,
                                         task_id,
-                                        line: message.clone(),
+                                        line: execution_message,
                                         at: Utc::now(),
                                     },
                                 );
                             }
-                            canceled_flag_for_closure.store(true, Ordering::Release);
-                            if let Ok(mut runtime_failure_message) =
-                                runtime_failure_message_for_closure.lock()
+                            engine
+                                .execution_stats
+                                .files_with_errors
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            let runtime_unit = current_runtime_unit
+                                .lock()
+                                .map(|runtime_unit| runtime_unit.clone())
+                                .unwrap_or_else(|_| relative_path.clone());
+                            finish_unit_progress(
+                                &progress_state_for_closure,
+                                &runtime_unit,
+                                StepPhase::ExecutionErrored,
+                            );
+                            slog!(
+                                logger,
+                                error,
+                                "Failed to execute codemod on {}: {}",
+                                relative_path,
+                                e
+                            );
+                            let execution_message =
+                                format!("Failed to process {relative_path}: {e}");
+                            failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            append_buffered_diagnostic(
+                                &buffered_execution_output_for_closure,
+                                runtime_unit.clone(),
+                                e.to_string(),
+                            );
+                            if let Ok(mut execution_failure_message) =
+                                execution_failure_message_for_closure.lock()
                             {
-                                if runtime_failure_message.is_none() {
-                                    *runtime_failure_message = Some(message);
+                                if execution_failure_message.is_none() {
+                                    *execution_failure_message = Some(execution_message.clone());
                                 }
                             }
-                        }
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {}",
-                            relative_path,
-                            e
-                        );
-                        let execution_message = format!("Failed to process {relative_path}: {e}");
-                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
-                        append_buffered_diagnostic(
-                            &buffered_execution_output_for_closure,
-                            runtime_unit.clone(),
-                            e.to_string(),
-                        );
-                        if let Ok(mut execution_failure_message) =
-                            execution_failure_message_for_closure.lock()
-                        {
-                            if execution_failure_message.is_none() {
-                                *execution_failure_message = Some(execution_message.clone());
+                            if let (Some(task_id), Some(run_id)) =
+                                (task_log_task_id, workflow_run_id)
+                            {
+                                publish_event(
+                                    run_id,
+                                    WorkflowEvent::TaskLogAppended {
+                                        workflow_run_id: run_id,
+                                        task_id,
+                                        line: execution_message,
+                                        at: Utc::now(),
+                                    },
+                                );
                             }
+                            engine
+                                .execution_stats
+                                .files_with_errors
+                                .fetch_add(1, Ordering::Relaxed);
                         }
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: execution_message,
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        engine
-                            .execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(e) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {}",
-                            relative_path,
-                            e
-                        );
-                        let execution_message = format!("Failed to process {relative_path}: {e}");
-                        failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
-                        append_buffered_diagnostic(
-                            &buffered_execution_output_for_closure,
-                            runtime_unit.clone(),
-                            e.to_string(),
-                        );
-                        if let Ok(mut execution_failure_message) =
-                            execution_failure_message_for_closure.lock()
-                        {
-                            if execution_failure_message.is_none() {
-                                *execution_failure_message = Some(execution_message.clone());
-                            }
-                        }
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: execution_message,
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        engine
-                            .execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
 
-                if let Some(callback) = progress_callback_for_closure.as_ref() {
-                    let callback = callback.callback.clone();
-                    callback(
-                        &id_clone,
-                        &file_path.to_string_lossy(),
-                        "next",
-                        Some(&1),
-                        &0,
+                    if let Some(callback) = progress_callback_for_closure.as_ref() {
+                        let callback = callback.callback.clone();
+                        callback(
+                            &id_clone,
+                            &file_path.to_string_lossy(),
+                            "next",
+                            Some(&1),
+                            &0,
+                        );
+                    }
+                },
+                || {
+                    flush_buffered_execution_output(
+                        &buffered_execution_output,
+                        &progress_callback,
+                        &request_id,
                     );
-                }
-            })
+                },
+            )
             .map_err(|e| Error::StepExecution(e.to_string()));
 
-        drop(progress_tx);
-        watchdog_task.abort();
-        let _ = watchdog_task.await;
         if let Some(task_id) = task_log_task_id {
             self.engine.unregister_output_heartbeat(task_id);
             self.engine.unregister_step_cancel_signal(task_id);
         }
+        drop(progress_tx);
+        watchdog_task.abort();
+        let _ = watchdog_task.await;
 
         if idle_timed_out.load(Ordering::Acquire) {
             let message = idle_failure_message
@@ -1045,12 +1145,6 @@ impl<'a> JssgExecutionService<'a> {
             return Err(error);
         }
 
-        flush_buffered_execution_output(
-            &buffered_execution_output,
-            &progress_callback,
-            &request_id,
-        );
-
         if let Some(message) = runtime_failure_message
             .lock()
             .ok()
@@ -1073,6 +1167,13 @@ impl<'a> JssgExecutionService<'a> {
         }
 
         if canceled_during_execution.load(Ordering::Acquire) {
+            if let Some(message) = execution_failure_message
+                .lock()
+                .ok()
+                .and_then(|message| message.clone())
+            {
+                return Err(Error::StepExecution(message));
+            }
             return Err(Error::Runtime("Canceled by user".to_string()));
         }
 

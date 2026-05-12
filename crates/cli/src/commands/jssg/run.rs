@@ -92,6 +92,10 @@ pub struct Command {
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path

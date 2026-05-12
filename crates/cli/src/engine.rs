@@ -97,7 +97,11 @@ pub fn create_progress_callback() -> ProgressCallback {
                     }
                     "finish" => {
                         let message = if let Some(total) = count {
-                            format!("Processed {total} files")
+                            if *total == 1 {
+                                "Processed 1 file".to_string()
+                            } else {
+                                "Processed files".to_string()
+                            }
                         } else {
                             format!("Processed {index} files")
                         };

@@ -105,6 +105,10 @@ fn apply_workflow_run_mode_to_config(
 
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Resolve workflow file and bundle path
     let (workflow_file_path, _) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;

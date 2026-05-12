@@ -37,11 +37,24 @@ fn format_file_count(count: usize) -> String {
 }
 
 fn print_dry_run_summary(files_modified: usize, files_unmodified: usize, files_with_errors: usize) {
-    println!("\n🔎 Dry run complete");
-    println!("📝 Would modify: {}", format_file_count(files_modified));
-    println!("✅ Unchanged: {}", format_file_count(files_unmodified));
+    println!();
+    println!("{}", style("Dry run summary").bold());
+    println!(
+        "  {:<12} {}",
+        style("Would modify").yellow(),
+        format_file_count(files_modified)
+    );
+    println!(
+        "  {:<12} {}",
+        style("Unchanged").green(),
+        format_file_count(files_unmodified)
+    );
     if files_with_errors > 0 {
-        println!("❌ Errors: {}", format_file_count(files_with_errors));
+        println!(
+            "  {:<12} {}",
+            style("Errors").red(),
+            format_file_count(files_with_errors)
+        );
     }
 }
 
@@ -164,6 +177,10 @@ pub async fn handler(
     telemetry: TelemetrySenderMutex,
     disable_analytics: bool,
 ) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Resolve the package (local path or registry package)
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
@@ -359,10 +376,12 @@ pub async fn handler(
     if dry_run {
         print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
     } else {
-        println!("\n📝 Modified files: {files_modified}");
-        println!("✅ Unmodified files: {files_unmodified}");
+        println!();
+        println!("{}", style("Run summary").bold());
+        println!("  {:<12} {files_modified}", style("Modified").green());
+        println!("  {:<12} {files_unmodified}", style("Unmodified").dim());
         if files_with_errors > 0 {
-            println!("❌ Files with errors: {files_with_errors}");
+            println!("  {:<12} {files_with_errors}", style("Errors").red());
         }
     }
 
@@ -748,9 +767,19 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
                     }
                 }
 
-                println!("\n🔎 Dry run complete");
-                println!("📝 Would modify: {}", format_file_count(files_modified));
-                println!("Δ Changes: +{} -{}", total_additions, total_deletions);
+                println!();
+                println!("{}", style("Dry run summary").bold());
+                println!(
+                    "  {:<12} {}",
+                    style("Would modify").yellow(),
+                    format_file_count(files_modified)
+                );
+                println!(
+                    "  {:<12} +{} -{}",
+                    style("Changes").cyan(),
+                    total_additions,
+                    total_deletions
+                );
             }
             Err(e) => {
                 // JSON parsing failed, print raw output

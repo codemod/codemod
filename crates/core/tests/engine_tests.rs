@@ -4917,6 +4917,212 @@ function main() {
 }
 
 #[tokio::test]
+async fn test_execute_js_ast_grep_step_fails_fast_when_codemod_module_does_not_load() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "broken-codemod.js",
+        r#"
+export default function (
+"#,
+    );
+
+    create_test_file(temp_path, "src/one.ts", "let first = 1;\n");
+    create_test_file(temp_path, "src/two.ts", "let second = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "broken-codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.ts".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("typescript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("broken codemod module should fail before file processing");
+    let message = error.to_string();
+    assert!(
+        message.contains("Failed to declare module") || message.contains("Error loading module"),
+        "expected module loading details, got: {message}"
+    );
+    assert!(
+        message.contains("Failed to process one.ts")
+            || message.contains("Failed to process two.ts"),
+        "expected first file failure to be reported, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_allows_partial_file_failures() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  if (ast.filename().endsWith("bad.js")) {
+    throw new Error("target file failed");
+  }
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/good.js", "var good = 1;\n");
+    create_test_file(temp_path, "src/bad.js", "var bad = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "one target-file failure should be reported without failing the whole step: {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp_path.join("src/good.js")).unwrap(),
+        "var good = 1;\n"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_fails_when_all_files_fail() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform() {
+  missingReference;
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/one.js", "var one = 1;\n");
+    create_test_file(temp_path, "src/two.js", "var two = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("all target-file failures should fail the step");
+    let message = error.to_string();
+    assert!(
+        message.contains("missingReference") || message.contains("not defined"),
+        "expected thrown JavaScript error, got: {message}"
+    );
+    assert_eq!(
+        engine
+            .execution_stats
+            .files_with_errors
+            .load(Ordering::Relaxed),
+        1,
+        "codemod source reference failures should fail fast instead of retrying every file"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_js_ast_grep_step_dry_run() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();

@@ -28,6 +28,19 @@ struct JavaScriptRuntimeDiagnostic {
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("{message}")]
+#[diagnostic(code(codemod::runtime::javascript))]
+struct JavaScriptModuleDiagnostic {
+    message: String,
+    #[source_code]
+    source_code: NamedSource<String>,
+    #[label("codemod script failed to load")]
+    span: SourceSpan,
+    #[help]
+    help: Option<String>,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("{message}")]
 #[diagnostic(code(codemod::runtime::ast_grep))]
 struct AstGrepDiagnostic {
     message: String,
@@ -139,6 +152,10 @@ fn render_error_text(error: &anyhow::Error) -> String {
 
 fn render_javascript_runtime_error(error: &anyhow::Error) -> Option<String> {
     let error_text = format!("{error:#}");
+    if let Some(rendered) = render_javascript_module_load_error(&error_text) {
+        return Some(rendered);
+    }
+
     let location = parse_js_stack_location(&error_text)?;
     let source = std::fs::read_to_string(&location.path).ok()?;
     let offset = line_column_to_byte_offset(&source, location.line, location.column)?;
@@ -148,6 +165,44 @@ fn render_javascript_runtime_error(error: &anyhow::Error) -> Option<String> {
         source_code: NamedSource::new(location.path, source),
         span: (offset, 1usize).into(),
         help: Some("Fix the thrown JavaScript/TypeScript error and rerun the codemod.".to_string()),
+    };
+    Some(render_report(&diagnostic))
+}
+
+fn render_javascript_module_load_error(error_text: &str) -> Option<String> {
+    let path = javascript_module_load_path(error_text)?;
+    let detail = javascript_module_load_detail(error_text);
+    let help = detail
+        .as_deref()
+        .map(truncate_help_output)
+        .map(|detail| {
+            format!(
+                "{detail}\n\nFix the TypeScript/JavaScript syntax in the codemod script and rerun the workflow."
+            )
+        })
+        .or_else(|| {
+            Some(
+                "Fix the TypeScript/JavaScript syntax in the codemod script and rerun the workflow."
+                    .to_string(),
+            )
+        });
+
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) if !source.is_empty() => source,
+        _ => {
+            let diagnostic = CliErrorDiagnostic {
+                message: format!("Failed to load codemod script: {path}"),
+                help,
+            };
+            return Some(render_report(&diagnostic));
+        }
+    };
+    let span_len = token_span_len_at(&source, 0).unwrap_or(1);
+    let diagnostic = JavaScriptModuleDiagnostic {
+        message: format!("Failed to load codemod script: {path}"),
+        source_code: NamedSource::new(path, source),
+        span: (0usize, span_len).into(),
+        help,
     };
     Some(render_report(&diagnostic))
 }
@@ -508,21 +563,50 @@ fn first_error_line(error_text: &str) -> Option<String> {
     })
 }
 
+fn javascript_module_load_path(error_text: &str) -> Option<String> {
+    let marker = "Error loading module '";
+    let start = error_text.find(marker)? + marker.len();
+    let rest = &error_text[start..];
+    let end = rest.find('\'')?;
+    let path = rest[..end].trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
+}
+
+fn javascript_module_load_detail(error_text: &str) -> Option<String> {
+    let marker = "Transpilation failed:";
+    let start = error_text.find(marker)?;
+    let detail = error_text[start..].trim();
+    if detail.is_empty() {
+        None
+    } else {
+        Some(detail.to_string())
+    }
+}
+
 fn parse_js_stack_location(error_text: &str) -> Option<JsStackLocation> {
     for line in error_text.lines() {
         let line = line.trim();
-        let Some(start) = line.rfind('(') else {
-            continue;
-        };
-        let Some(end) = line.rfind(')') else {
-            continue;
-        };
-        if end <= start {
-            continue;
+        if let Some(start) = line.rfind('(') {
+            let Some(end) = line.rfind(')') else {
+                continue;
+            };
+            if end <= start {
+                continue;
+            }
+            let location = &line[start + 1..end];
+            if let Some(parsed) = parse_js_location(location) {
+                return Some(parsed);
+            }
         }
-        let location = &line[start + 1..end];
-        if let Some(parsed) = parse_js_location(location) {
-            return Some(parsed);
+
+        if let Some(location) = line.strip_prefix("at ") {
+            if let Some(parsed) = parse_js_location(location.trim()) {
+                return Some(parsed);
+            }
         }
     }
     None
@@ -577,6 +661,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_js_stack_location_without_parentheses() {
+        let location = parse_js_stack_location(
+            "Failed to declare module: Error: invalid first character of private name\n    at /tmp/scripts/codemod.ts:19:40\n",
+        )
+        .expect("location");
+
+        assert_eq!(location.path, "/tmp/scripts/codemod.ts");
+        assert_eq!(location.line, 19);
+        assert_eq!(location.column, 40);
+    }
+
+    #[test]
+    fn renders_javascript_module_error_with_bare_stack_location() {
+        let file = tempfile::NamedTempFile::new().expect("temp codemod");
+        std::fs::write(
+            file.path(),
+            "export default function codemod() {\n  return #bad;\n}\n",
+        )
+        .expect("write codemod");
+        let rendered = render_error_message(&format!(
+            "Failed to declare module: Error: invalid first character of private name\n    at {}:2:10",
+            file.path().display()
+        ));
+
+        assert!(rendered.contains("codemod::runtime::javascript"));
+        assert!(rendered.contains("Error: invalid first character of private name"));
+        assert!(rendered.contains("error originated here"));
+        assert!(!rendered.contains("codemod::cli::error"));
+    }
+
+    #[test]
     fn maps_line_column_to_byte_offset() {
         let source = "one\nthrow new Error('x')\n";
         let offset = line_column_to_byte_offset(source, 2, 7).expect("offset");
@@ -591,6 +706,24 @@ mod tests {
         .expect("error line");
 
         assert_eq!(message, "Error: Test error");
+    }
+
+    #[test]
+    fn renders_javascript_transpilation_error_with_script_source() {
+        let file = tempfile::NamedTempFile::new().expect("temp codemod");
+        std::fs::write(file.path(), "export default function (\n").expect("write codemod");
+        let rendered = render_error_message(&format!(
+            "Failed to process src/app.ts: Runtime error Runtime initialization failed: Failed to declare module: Error: Error loading module '{}': Transpilation failed:\n[InvalidSyntax] Syntax error",
+            file.path().display()
+        ));
+
+        assert!(rendered.contains("codemod::runtime::javascript"));
+        assert!(rendered.contains("Failed to load codemod script"));
+        assert!(rendered.contains(&file.path().display().to_string()));
+        assert!(rendered.contains("codemod script failed to load"));
+        assert!(rendered.contains("Transpilation failed:"));
+        assert!(rendered.contains("[InvalidSyntax] Syntax error"));
+        assert!(!rendered.contains("codemod::cli::error"));
     }
 
     #[test]

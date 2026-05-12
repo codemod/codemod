@@ -229,7 +229,7 @@ where
             // Call it and return value.
             let result_obj_promise = func.call(()).catch(&ctx).map_err(|e| {
                 ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
                         message: e.to_string(),
                     },
                 }
@@ -238,7 +238,7 @@ where
                 .await
                 .catch(&ctx)
                 .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
                         message: e.to_string(),
                     },
                 })?;
