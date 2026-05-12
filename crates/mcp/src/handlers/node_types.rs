@@ -66,6 +66,7 @@ In tree-sitter grammar:
             "c" => Some(include_str!("../data/node_types/c.txt")),
             "csharp" | "c#" | "c_sharp" => Some(include_str!("../data/node_types/c_sharp.txt")),
             "html" => Some(include_str!("../data/node_types/html.txt")),
+            "xml" => Some(include_str!("../data/node_types/xml.txt")),
             "css" => Some(include_str!("../data/node_types/css.txt")),
             "json" => Some(include_str!("../data/node_types/json.txt")),
             "yaml" | "yml" => Some(include_str!("../data/node_types/yaml.txt")),

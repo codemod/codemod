@@ -1,5 +1,5 @@
 use ast_grep_core::matcher::{Pattern, PatternBuilder, PatternError};
-use ast_grep_core::tree_sitter::{LanguageExt, TSLanguage};
+use ast_grep_core::tree_sitter::{LanguageExt, StrDoc, TSLanguage};
 use ast_grep_core::Language;
 use ast_grep_dynamic::DynamicLang;
 use ast_grep_language::SupportLang;
@@ -18,6 +18,7 @@ use std::str::FromStr;
 pub enum CodemodLang {
     Static(SupportLang),
     Dynamic(DynamicLang),
+    Xml,
 }
 
 impl PartialEq for CodemodLang {
@@ -25,6 +26,7 @@ impl PartialEq for CodemodLang {
         match (self, other) {
             (CodemodLang::Static(a), CodemodLang::Static(b)) => a == b,
             (CodemodLang::Dynamic(a), CodemodLang::Dynamic(b)) => a == b,
+            (CodemodLang::Xml, CodemodLang::Xml) => true,
             _ => false,
         }
     }
@@ -43,6 +45,10 @@ impl Hash for CodemodLang {
                 1u8.hash(state);
                 lang.hash(state);
             }
+            CodemodLang::Xml => {
+                2u8.hash(state);
+                "xml".hash(state);
+            }
         }
     }
 }
@@ -52,6 +58,7 @@ impl fmt::Display for CodemodLang {
         match self {
             CodemodLang::Static(lang) => write!(f, "{}", lang),
             CodemodLang::Dynamic(lang) => write!(f, "{}", lang.name()),
+            CodemodLang::Xml => write!(f, "xml"),
         }
     }
 }
@@ -61,6 +68,7 @@ impl fmt::Debug for CodemodLang {
         match self {
             CodemodLang::Static(lang) => write!(f, "CodemodLang::Static({:?})", lang),
             CodemodLang::Dynamic(lang) => write!(f, "CodemodLang::Dynamic({})", lang.name()),
+            CodemodLang::Xml => write!(f, "CodemodLang::Xml"),
         }
     }
 }
@@ -72,6 +80,10 @@ impl FromStr for CodemodLang {
         // Try static languages first
         if let Ok(lang) = SupportLang::from_str(s) {
             return Ok(CodemodLang::Static(lang));
+        }
+
+        if s.eq_ignore_ascii_case("xml") {
+            return Ok(CodemodLang::Xml);
         }
 
         // Initialize dynamic parsers and try dynamic languages
@@ -123,6 +135,10 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.pre_process_pattern(query),
             CodemodLang::Dynamic(lang) => lang.pre_process_pattern(query),
+            CodemodLang::Xml => {
+                let expando = self.expando_char().to_string();
+                Cow::Owned(query.replace(self.meta_var_char(), &expando))
+            }
         }
     }
 
@@ -130,6 +146,7 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.meta_var_char(),
             CodemodLang::Dynamic(lang) => lang.meta_var_char(),
+            CodemodLang::Xml => '$',
         }
     }
 
@@ -137,6 +154,7 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.expando_char(),
             CodemodLang::Dynamic(lang) => lang.expando_char(),
+            CodemodLang::Xml => '_',
         }
     }
 
@@ -144,6 +162,7 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.kind_to_id(kind),
             CodemodLang::Dynamic(lang) => lang.kind_to_id(kind),
+            CodemodLang::Xml => self.get_ts_language().id_for_node_kind(kind, true),
         }
     }
 
@@ -151,12 +170,24 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.field_to_id(field),
             CodemodLang::Dynamic(lang) => lang.field_to_id(field),
+            CodemodLang::Xml => self
+                .get_ts_language()
+                .field_id_for_name(field)
+                .map(|f| f.get()),
         }
     }
 
     fn from_path<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
         if let Some(lang) = SupportLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
+        }
+        if let Some(ext) = path.as_ref().extension().and_then(|ext| ext.to_str()) {
+            if matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml"
+            ) {
+                return Some(CodemodLang::Xml);
+            }
         }
         if let Some(lang) = DynamicLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Dynamic(lang));
@@ -168,6 +199,7 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.build_pattern(builder),
             CodemodLang::Dynamic(lang) => lang.build_pattern(builder),
+            CodemodLang::Xml => builder.build(|src| StrDoc::try_new(src, *self)),
         }
     }
 }
@@ -177,6 +209,39 @@ impl LanguageExt for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.get_ts_language(),
             CodemodLang::Dynamic(lang) => lang.get_ts_language(),
+            CodemodLang::Xml => tree_sitter_xml::LANGUAGE_XML.into(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::CodemodLang;
+    use ast_grep_core::{AstGrep, Language};
+
+    #[test]
+    fn parses_xml_language_name() {
+        let lang: CodemodLang = "xml".parse().expect("xml language should parse");
+        assert_eq!(lang.to_string(), "xml");
+    }
+
+    #[test]
+    fn detects_xml_family_paths() {
+        assert!(matches!(
+            CodemodLang::from_path("test.csproj"),
+            Some(CodemodLang::Xml)
+        ));
+        assert!(matches!(
+            CodemodLang::from_path("App.config"),
+            Some(CodemodLang::Xml)
+        ));
+    }
+
+    #[test]
+    fn parses_xml_documents() {
+        let grep = AstGrep::new("<Project Sdk=\"Microsoft.NET.Sdk\" />", CodemodLang::Xml);
+        let root = grep.root();
+        assert_eq!(root.kind(), "document");
+        assert_eq!(CodemodLang::Xml.expando_char(), '_');
     }
 }

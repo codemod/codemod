@@ -54,6 +54,12 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
         map.insert(CodemodLang::Static(Scala), vec![".scala", ".sc"]);
         map.insert(CodemodLang::Static(Swift), vec![".swift"]);
         map.insert(CodemodLang::Static(Yaml), vec![".yaml", ".yml"]);
+        map.insert(
+            CodemodLang::Xml,
+            vec![
+                ".xml", ".csproj", ".props", ".targets", ".config", ".resx", ".xaml",
+            ],
+        );
 
         // Dynamic languages (registered via tree-sitter-loader)
         if let Ok(lang) = std::str::FromStr::from_str("less") {
@@ -115,6 +121,7 @@ mod tests {
             .get(&CodemodLang::Static(SupportLang::Rust))
             .unwrap()
             .contains(&".rs"));
+        assert!(map.get(&CodemodLang::Xml).unwrap().contains(&".csproj"));
     }
 
     #[test]
@@ -131,6 +138,9 @@ mod tests {
         let lang = get_language_from_extension(".rs");
         assert!(lang.is_some());
 
+        let lang = get_language_from_extension(".csproj");
+        assert!(matches!(lang, Some(CodemodLang::Xml)));
+
         let lang = get_language_from_extension(".unknown");
         assert!(lang.is_none());
     }
@@ -142,5 +152,6 @@ mod tests {
         assert!(extensions.contains(&".js"));
         assert!(extensions.contains(&".rs"));
         assert!(extensions.contains(&".py"));
+        assert!(extensions.contains(&".xml"));
     }
 }

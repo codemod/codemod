@@ -1,0 +1,6 @@
+# Modernize legacy .NET framework XML project metadata
+id: legacy-target-framework-version
+language: xml
+rule:
+  pattern: <TargetFrameworkVersion>$VALUE</TargetFrameworkVersion>
+fix: <TargetFramework>$VALUE</TargetFramework>
