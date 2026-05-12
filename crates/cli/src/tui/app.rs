@@ -2316,22 +2316,24 @@ mod tests {
     #[test]
     fn task_help_text_hides_trigger_for_completed_task() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Completed));
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "node".to_string(),
-            status: TaskStatus::Completed,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-            error_details: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::Completed)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "node".to_string(),
+                status: TaskStatus::Completed,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(state.task_help_text(), "Enter logs  esc back  q quit");
     }
@@ -2358,22 +2360,24 @@ mod tests {
     #[test]
     fn task_help_text_shows_trigger_for_awaiting_task() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "node".to_string(),
-            status: TaskStatus::AwaitingTrigger,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-            error_details: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "node".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(
             state.task_help_text(),
@@ -2384,22 +2388,24 @@ mod tests {
     #[test]
     fn task_help_text_shows_individual_trigger_only_for_install_skill() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "install-skill".to_string(),
-            status: TaskStatus::AwaitingTrigger,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-            error_details: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "install-skill".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(
             state.task_help_text(),

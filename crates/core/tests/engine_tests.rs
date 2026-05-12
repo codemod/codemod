@@ -1449,10 +1449,6 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
 
     let logs = task.logs.join("\n");
     assert!(
-        logs.contains("Step started: Shell Step"),
-        "task logs should include the active step marker, got: {logs}"
-    );
-    assert!(
         logs.contains("shell command executed"),
         "task logs should include the command output, got: {logs}"
     );
@@ -1463,6 +1459,10 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
     assert!(
         !logs.contains(&command),
         "task logs should not persist the raw shell command, got: {logs}"
+    );
+    assert!(
+        !logs.contains("⏺ Shell Step"),
+        "task logs should not persist the text-mode step heading, got: {logs}"
     );
 }
 
