@@ -96,7 +96,7 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         "less" => Ok("less"),
         "json" => Ok("json"),
         "yaml" | "yml" => Ok("yaml"),
-        "xml" => Ok("xml"),
+        "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml" => Ok("xml"),
         "sql" => Ok("sql"),
         "sh" | "bash" => Ok("bash"),
         "lua" => Ok("lua"),
@@ -108,5 +108,24 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         _ => Err(AstGrepError::Language(format!(
             "Unsupported file extension: {extension}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_language_from_extension;
+
+    #[test]
+    fn detects_xml_family_extensions() {
+        for extension in [
+            "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+        ] {
+            assert_eq!(detect_language_from_extension(extension).unwrap(), "xml");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_extensions() {
+        assert!(detect_language_from_extension("unknown").is_err());
     }
 }

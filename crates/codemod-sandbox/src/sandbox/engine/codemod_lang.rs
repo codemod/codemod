@@ -135,10 +135,7 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.pre_process_pattern(query),
             CodemodLang::Dynamic(lang) => lang.pre_process_pattern(query),
-            CodemodLang::Xml => {
-                let expando = self.expando_char().to_string();
-                Cow::Owned(query.replace(self.meta_var_char(), &expando))
-            }
+            CodemodLang::Xml => pre_process_pattern(self.expando_char(), query),
         }
     }
 
@@ -214,6 +211,25 @@ impl LanguageExt for CodemodLang {
     }
 }
 
+fn pre_process_pattern(expando: char, query: &str) -> Cow<'_, str> {
+    let mut ret = Vec::with_capacity(query.len());
+    let mut dollar_count = 0;
+    for c in query.chars() {
+        if c == '$' {
+            dollar_count += 1;
+            continue;
+        }
+        let need_replace = matches!(c, 'A'..='Z' | '_') || dollar_count == 3;
+        let sigil = if need_replace { expando } else { '$' };
+        ret.extend(std::iter::repeat_n(sigil, dollar_count));
+        dollar_count = 0;
+        ret.push(c);
+    }
+    let sigil = if dollar_count == 3 { expando } else { '$' };
+    ret.extend(std::iter::repeat_n(sigil, dollar_count));
+    Cow::Owned(ret.into_iter().collect())
+}
+
 #[cfg(all(test, feature = "native"))]
 mod tests {
     use super::CodemodLang;
@@ -243,5 +259,22 @@ mod tests {
         let root = grep.root();
         assert_eq!(root.kind(), "document");
         assert_eq!(CodemodLang::Xml.expando_char(), '_');
+    }
+
+    #[test]
+    fn xml_preprocessing_preserves_literal_dollar_content() {
+        let processed = CodemodLang::Xml.pre_process_pattern("<Price>$5</Price>");
+        assert_eq!(processed.as_ref(), "<Price>$5</Price>");
+    }
+
+    #[test]
+    fn xml_preprocessing_rewrites_only_metavariables() {
+        let processed = CodemodLang::Xml.pre_process_pattern(
+            "<Project><Property>$VALUE</Property><Literal>$5</Literal></Project>",
+        );
+        assert_eq!(
+            processed.as_ref(),
+            "<Project><Property>_VALUE</Property><Literal>$5</Literal></Project>"
+        );
     }
 }
