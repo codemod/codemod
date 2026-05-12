@@ -2,6 +2,12 @@
 
 Utilities used by the JSSG codemod engine.
 
+Public JavaScript helpers are currently grouped under:
+
+- `@jssg/utils/javascript/imports`
+- `@jssg/utils/javascript/bindings`
+- `@jssg/utils/javascript/context`
+
 ## JavaScript import helpers
 
 Import from:
@@ -11,6 +17,150 @@ import { getImport, addImport, removeImport } from "@jssg/utils/javascript/impor
 ```
 
 These helpers work on a `program` AST node (from `codemod:ast-grep` / `@codemod.com/jssg-types`) and return either **lookup info** (`getImport`) or a single **text edit** you can apply with `program.commitEdits([edit])`.
+
+## JavaScript binding helpers
+
+Import from:
+
+```ts
+import {
+  isRuntimeImportBinding,
+} from "@jssg/utils/javascript/bindings";
+import {
+  getNamedChildren,
+  isUsedAsConstructor,
+  isUsedInReflectiveAccess,
+  unwrapParenthesizedExpression,
+} from "@jssg/utils/javascript/context";
+```
+
+These helpers are intended for conservative transform gating:
+
+- detect whether a matched identifier really comes from a top-level import
+- skip rewrites when a local variable shadows an imported name
+- handle both plain identifier usages and JSX tag identifiers such as `<Grid />`
+
+Typical use case:
+
+```ts
+const rootNode = root.root();
+const gridUsage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
+
+if (
+  gridUsage &&
+  isRuntimeImportBinding(gridUsage)
+) {
+  // Safe to treat this usage as the runtime Grid import.
+}
+```
+
+JSX usage works too:
+
+```ts
+const jsxGrid = rootNode.find({
+  rule: {
+    kind: "identifier",
+    pattern: "Grid",
+    inside: { kind: "jsx_self_closing_element" },
+  },
+});
+
+if (
+  jsxGrid &&
+  isRuntimeImportBinding(jsxGrid)
+) {
+  // Safe to treat <Grid /> as the runtime imported component.
+}
+```
+
+### `isRuntimeImportBinding(node)`
+
+Returns `true` when the given usage node resolves to a non-type-only top-level runtime import.
+
+Use this as the main conservative gate before rewriting runtime symbol usages.
+
+Example:
+
+```ts
+const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
+
+if (usage && isRuntimeImportBinding(usage)) {
+  // Rewrite this usage as the imported runtime Grid symbol.
+}
+```
+
+## JavaScript context helpers
+
+Import from:
+
+```ts
+import {
+  isUsedAsConstructor,
+  isUsedInReflectiveAccess,
+  unwrapParenthesizedExpression,
+} from "@jssg/utils/javascript/context";
+```
+
+These helpers are intended for conservative usage-context checks:
+
+- fetch named AST children while skipping tokens and comment nodes
+- strip only extra parentheses when a codemod needs expression normalization
+- recognize constructor and reflective usage after wrapper expressions
+- keep wrapper/context logic out of codemod-local string heuristics
+
+Typical use case:
+
+```ts
+if (isUsedAsConstructor(bindCall)) {
+  return null;
+}
+
+if (isUsedInReflectiveAccess(bindCall, ["name", "length", "prototype", "toString"])) {
+  return null;
+}
+```
+
+### `getNamedChildren(node)`
+
+Returns the node's named children while skipping non-named tokens and comment nodes.
+
+Use this when a codemod wants AST children that correspond to semantic nodes rather
+than punctuation or comment trivia.
+
+### `unwrapParenthesizedExpression(node)`
+
+Returns the innermost expression after stripping only `parenthesized_expression` wrappers.
+
+Use this when a codemod only needs simple paren normalization.
+
+### `isUsedAsConstructor(node)`
+
+Returns `true` when the node is effectively used as the `constructor` of a `new_expression`, even through transparent wrappers.
+
+Example:
+
+```ts
+// true for `boundFn`
+new ((0, boundFn))();
+```
+
+### `isUsedInReflectiveAccess(node, keys)`
+
+Returns `true` when the node is used in reflective/member-introspection positions for one of the requested keys.
+
+Handled forms include:
+
+- member access: `node.name`
+- computed access: `node["name"]`
+- `in` checks: `"name" in node`
+
+Example:
+
+```ts
+if (isUsedInReflectiveAccess(boundFnUsage, ["name", "length", "prototype", "toString"])) {
+  return null;
+}
+```
 
 ### `getImport(program, options)`
 

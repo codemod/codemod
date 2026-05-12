@@ -58,6 +58,27 @@ impl OxcResolver {
 
 impl ModuleResolver for OxcResolver {
     fn resolve(&self, base: &str, name: &str) -> Result<String, ResolverError> {
+        let specifier_path = Path::new(name);
+        if specifier_path.is_absolute() {
+            if let Ok(canonical) = specifier_path.canonicalize() {
+                if canonical.is_file() {
+                    return Ok(canonical.to_string_lossy().to_string());
+                }
+            }
+
+            if specifier_path.extension().is_none() {
+                for extension in [".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts"] {
+                    let with_extension =
+                        specifier_path.with_extension(extension.trim_start_matches('.'));
+                    if let Ok(canonical) = with_extension.canonicalize() {
+                        if canonical.is_file() {
+                            return Ok(canonical.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         // Determine the resolution context directory
         let context_dir = if base.is_empty() {
             self.base_dir.clone()
@@ -82,6 +103,28 @@ impl ModuleResolver for OxcResolver {
                 })?
                 .join(context_dir)
         };
+
+        if name.starts_with("./") || name.starts_with("../") {
+            let candidate = absolute_context.join(name);
+
+            if let Ok(canonical) = candidate.canonicalize() {
+                if canonical.is_file() {
+                    return Ok(canonical.to_string_lossy().to_string());
+                }
+            }
+
+            if candidate.extension().is_none() {
+                for extension in [".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts"] {
+                    let with_extension =
+                        candidate.with_extension(extension.trim_start_matches('.'));
+                    if let Ok(canonical) = with_extension.canonicalize() {
+                        if canonical.is_file() {
+                            return Ok(canonical.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         // Use oxc_resolver to resolve the module
         match self.resolver.resolve(&absolute_context, name) {
@@ -127,5 +170,189 @@ mod tests {
                 println!("Resolution failed (expected in test): {e}");
             }
         }
+    }
+
+    #[test]
+    fn test_resolver_with_relative_parent_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().join("cases").join("example");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let shared_file = temp_dir.path().join("shared.ts");
+        fs::write(&shared_file, "export const shared = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir.clone(), None).unwrap();
+        let base_file = base_dir.join("codemod.ts");
+        fs::write(&base_file, "import { shared } from '../../shared.ts';").unwrap();
+
+        let result = resolver.resolve(&base_file.to_string_lossy(), "../../shared.ts");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            shared_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_with_absolute_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let absolute_file = base_dir.join("absolute.ts");
+        fs::write(&absolute_file, "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let result = resolver.resolve("", &absolute_file.to_string_lossy());
+
+        assert!(result.is_ok());
+        assert_eq!(
+            PathBuf::from(result.unwrap())
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy(),
+            absolute_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_with_absolute_extensionless_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let absolute_file = base_dir.join("absolute.ts");
+        fs::write(&absolute_file, "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let extensionless = absolute_file.with_extension("");
+        let result = resolver.resolve("", &extensionless.to_string_lossy());
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            absolute_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_with_absolute_directory_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let package_dir = base_dir.join("abs-package");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("index.js"), "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let result = resolver.resolve("", &package_dir.to_string_lossy());
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().ends_with("index.js"));
+    }
+
+    #[test]
+    fn test_resolver_with_extensionless_relative_import() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().join("cases").join("example");
+        fs::create_dir_all(base_dir.join("helpers")).unwrap();
+
+        let helper_file = base_dir.join("helpers").join("runtime-check.ts");
+        fs::write(&helper_file, "export const runtimeCheck = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir.clone(), None).unwrap();
+        let base_file = base_dir.join("codemod.ts");
+        fs::write(
+            &base_file,
+            "import { runtimeCheck } from './helpers/runtime-check';",
+        )
+        .unwrap();
+
+        let result = resolver.resolve(&base_file.to_string_lossy(), "./helpers/runtime-check");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            helper_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_preserves_node_modules_package_resolution() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let package_dir = base_dir.join("node_modules").join("demo-pkg");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(
+            package_dir.join("package.json"),
+            r#"{ "name": "demo-pkg", "main": "./index.js" }"#,
+        )
+        .unwrap();
+        let entry_file = package_dir.join("index.js");
+        fs::write(&entry_file, "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let result = resolver.resolve("", "demo-pkg");
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            entry_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_preserves_package_exports_resolution() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let package_dir = base_dir.join("node_modules").join("exports-pkg");
+        let dist_dir = package_dir.join("dist");
+        fs::create_dir_all(&dist_dir).unwrap();
+        fs::write(
+            package_dir.join("package.json"),
+            r#"{ "name": "exports-pkg", "exports": { ".": "./dist/index.js" } }"#,
+        )
+        .unwrap();
+        let entry_file = dist_dir.join("index.js");
+        fs::write(&entry_file, "export const value = true;").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, None).unwrap();
+        let result = resolver.resolve("", "exports-pkg");
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            entry_file.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_resolver_preserves_tsconfig_path_alias_resolution() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let src_dir = base_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let tsconfig_path = base_dir.join("tsconfig.json");
+        fs::write(
+            &tsconfig_path,
+            r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": ["src/*"]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let aliased_file = src_dir.join("feature.ts");
+        fs::write(&aliased_file, "export const feature = true;").unwrap();
+        let base_file = base_dir.join("codemod.ts");
+        fs::write(&base_file, "import { feature } from '@lib/feature';").unwrap();
+
+        let resolver = OxcResolver::new(base_dir, Some(tsconfig_path)).unwrap();
+        let result = resolver.resolve(&base_file.to_string_lossy(), "@lib/feature");
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            aliased_file.canonicalize().unwrap().to_string_lossy()
+        );
     }
 }

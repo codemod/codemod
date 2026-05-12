@@ -35,7 +35,7 @@ When the user:
 - **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` from Codemod MCP.
 - **Runs or discovers codemods** — Read `codemod-cli-instructions` for command syntax.
 - **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` from Codemod MCP.
-- **Needs import manipulation helpers** — Read `jssg-utils-instructions` from Codemod MCP.
+- **Needs import manipulation or runtime-binding helpers** — Read `jssg-utils-instructions` from Codemod MCP.
 - **Needs to split a large migration into multiple PRs** — Read the `sharding-instructions` resource from Codemod MCP.
 
 ## Authoring defaults

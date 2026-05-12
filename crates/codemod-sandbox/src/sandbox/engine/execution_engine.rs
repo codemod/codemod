@@ -181,9 +181,15 @@ where
 {
     let script_name = options
         .script_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("main.js");
+        .canonicalize()
+        .unwrap_or_else(|_| options.script_path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    let script_name = serde_json::to_string(&script_name).map_err(|e| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+            message: format!("Failed to serialize script path: {e}"),
+        },
+    })?;
 
     let js_code = format!(
         include_str!("scripts/main_script.js.txt"),

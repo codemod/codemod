@@ -1,5 +1,5 @@
 ---
-title: "Import Utilities"
+title: "JSSG Utilities"
 ---
 
 `@jssg/utils` provides reusable utility functions for JSSG codemods. These helpers handle common import manipulation tasks that are tedious and error-prone when done manually with AST queries.
@@ -20,11 +20,120 @@ Add `@jssg/utils` to your codemod project:
 
 ```typescript
 import { getImport, addImport, removeImport } from "@jssg/utils/javascript/imports";
+import {
+  isRuntimeImportBinding,
+} from "@jssg/utils/javascript/bindings";
+import {
+  getNamedChildren,
+  isUsedAsConstructor,
+  isUsedInReflectiveAccess,
+  unwrapParenthesizedExpression,
+} from "@jssg/utils/javascript/context";
 ```
 
 <Info>
 These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically.
 </Info>
+
+---
+
+## Binding helpers
+
+Use these helpers when a codemod needs to answer questions like:
+
+- does this usage really refer to the imported runtime symbol?
+- is a local declaration shadowing the imported name?
+- is a JSX tag like `<Grid />` actually the imported component or a local shadow?
+
+These helpers are intended for conservative transform gating.
+
+This also works for JSX tag identifiers:
+
+```typescript
+const jsxGrid = rootNode.find({
+  rule: {
+    kind: "identifier",
+    pattern: "Grid",
+    inside: { kind: "jsx_self_closing_element" },
+  },
+});
+
+if (
+  jsxGrid &&
+  isRuntimeImportBinding(jsxGrid)
+) {
+  // Safe to treat <Grid /> as the imported runtime component.
+}
+```
+
+---
+
+## `isRuntimeImportBinding`
+
+Return `true` when the given usage node resolves to a non-type-only top-level runtime import.
+
+Use this as the main guard before rewriting runtime symbol usages.
+
+### Example
+
+```typescript
+const usage = rootNode.find({ rule: { kind: "identifier", pattern: "Grid" } });
+
+if (usage && isRuntimeImportBinding(usage)) {
+  // Safe to treat this usage as the runtime Grid import.
+}
+```
+
+---
+
+## Context helpers
+
+Use these helpers when a codemod needs to answer questions like:
+
+- what are the semantic child nodes here, without punctuation or comment trivia?
+- is this node effectively inside a `new (...)` constructor position?
+- is this usage hidden behind extra parentheses?
+- is this value being used in reflective/introspection access such as `["name"]` or `"prototype" in value`?
+
+These helpers are intended for conservative usage-context gating.
+
+## `getNamedChildren`
+
+Return the node's named children while skipping non-named tokens and comment nodes.
+
+Use this when a codemod needs semantic child nodes instead of punctuation, delimiters, or trivia.
+
+## `unwrapParenthesizedExpression`
+
+Return the innermost expression after stripping `parenthesized_expression` wrappers.
+
+## `isUsedAsConstructor`
+
+Return `true` when a node is effectively used as the `constructor` of a `new_expression`, even through transparent wrappers.
+
+### Example
+
+```typescript
+if (isUsedAsConstructor(bindCall)) {
+  return null;
+}
+```
+
+## `isUsedInReflectiveAccess`
+
+Return `true` when a node is used in one of these reflective forms for one of the requested keys:
+
+- `node.name`
+- `node["name"]`
+- `"name" in node`
+
+### Example
+
+```typescript
+if (isUsedInReflectiveAccess(bindCall, ["name", "length", "prototype", "toString"])) {
+  return null;
+}
+```
 
 ---
 
@@ -279,19 +388,6 @@ const codemod: Codemod<TSX> = async (root) => {
 };
 
 export default codemod;
-```
-
----
-
-## `stringToExactRegexString`
-
-Escape a string for use as an exact-match regex pattern. Wraps in `^...$` and escapes special characters.
-
-```typescript
-import { stringToExactRegexString } from "@jssg/utils/javascript/imports";
-
-// Returns "^my\\.module$"
-const regex = stringToExactRegexString("my.module");
 ```
 
 ---

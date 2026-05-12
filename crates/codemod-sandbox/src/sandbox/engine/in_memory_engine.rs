@@ -151,10 +151,18 @@ pub async fn execute_codemod_in_memory<R>(
 where
     R: ModuleResolver + 'static,
 {
-    let script_name = "__codemod_script.js";
+    let script_name = "./__codemod_script.js";
+    let script_name = serde_json::to_string(script_name).map_err(|e| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+            message: format!("Failed to serialize script path: {e}"),
+        },
+    })?;
 
     let mut resolver = InMemoryResolver::new();
-    resolver.set_source(script_name.to_string(), options.codemod_source.to_string());
+    resolver.set_source(
+        "__codemod_script.js".to_string(),
+        options.codemod_source.to_string(),
+    );
     let resolver_arc = Arc::new(resolver);
 
     let js_code = format!(
