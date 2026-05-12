@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.7
+
+### Patch Changes
+
+- d726755: Fix addImport formatting output by preserving comma placement and existing trailing comma style for both single-line and multiline imports.
+
 ## 0.0.6
 
 ### Patch Changes
