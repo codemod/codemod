@@ -20,7 +20,7 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 evalexpr = "11.3"
 schemars = "1.0.0-alpha.17"
-ts-rs = { version = "11.0", features = [
+ts-rs = { version = "12.0", features = [
     "chrono-impl",
     "uuid-impl",
     "serde-json-impl",

@@ -1,5 +1,238 @@
-export type ShardMethod = BuiltinShardMethod | CustomShardFunction;
-export type TriggerType = "automatic" | "manual";
+export type Runtime = {
+  /**
+   * Type of runtime
+   */
+  type: RuntimeType;
+  /**
+   * Container image (for Docker and Podman)
+   */
+  image?: string | null;
+  /**
+   * Working directory inside the container
+   */
+  working_dir?: string | null;
+  /**
+   * User to run as inside the container
+   */
+  user?: string | null;
+  /**
+   * Network mode for the container
+   */
+  network?: string | null;
+  /**
+   * Additional container options
+   */
+  options?: Array<string> | null;
+};
+export type StrategyType = "matrix";
+export type DiffOperation = "Add" | "Update" | "Remove" | "Append";
+export type InstallSkillHarness =
+  | "auto"
+  | "claude"
+  | "goose"
+  | "opencode"
+  | "cursor"
+  | "codex"
+  | "antigravity";
+export type SemanticAnalysisDetailed = {
+  /**
+   * Analysis mode
+   */
+  mode: SemanticAnalysisMode;
+  /**
+   * Custom workspace root path (only used when mode is "workspace")
+   */
+  root?: string;
+};
+export type UseAI = {
+  /**
+   * Prompt to send to the AI agent
+   */
+  prompt: string;
+  /**
+   * Working directory for AI agent execution (optional, defaults to current directory)
+   */
+  working_dir?: string;
+  /**
+   * Environment variables to set for the AI agent execution (optional)
+   */
+  env?: { [key in string]: string };
+  /**
+   * Perform a dry run without making changes (optional, defaults to false)
+   */
+  dry_run?: boolean;
+  /**
+   * AI model to use (optional, defaults to configured model)
+   */
+  model?: string;
+  /**
+   * System prompt for the AI agent (optional)
+   */
+  system_prompt?: string;
+  /**
+   * Maximum number of steps the AI agent can take (optional, defaults to 100)
+   */
+  max_steps?: number;
+  /**
+   * Timeout in milliseconds for AI agent execution (optional)
+   */
+  timeout_ms?: bigint;
+  /**
+   * Tools available to the AI agent (optional, defaults to common tools)
+   */
+  tools?: Array<string>;
+  /**
+   * LLM API endpoint (optional, defaults to configured endpoint)
+   */
+  endpoint?: string;
+  /**
+   * LLM API key (optional, defaults to configured key or env var)
+   */
+  api_key?: string;
+  /**
+   * Enable lakeview mode (optional, defaults to true)
+   */
+  enable_lakeview?: boolean;
+  /**
+   * LLM protocol to use (optional, defaults to openai)
+   */
+  llm_protocol?: string;
+};
+export type TemplateUse = {
+  /**
+   * Template ID to use
+   */
+  template: string;
+  /**
+   * Inputs to pass to the template
+   */
+  inputs?: { [key in string]: JsonValue };
+};
+export type BuiltinShardType = "directory" | "codeowner";
+export type UseJSAstGrep = {
+  /**
+   * Path to the JavaScript file to execute
+   */
+  js_file: string;
+  /**
+   * Include globs for files to search (optional, defaults to language-specific extensions)
+   */
+  include?: Array<string>;
+  /**
+   * Exclude globs for files to skip (optional)
+   */
+  exclude?: Array<string>;
+  /**
+   * Base path for resolving relative globs (optional, defaults to current working directory)
+   */
+  base_path?: string;
+  /**
+   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
+   */
+  max_threads?: number;
+  /**
+   * Perform a dry run without making changes (optional, defaults to false)
+   */
+  dry_run?: boolean;
+  /**
+   * Language to process (optional)
+   */
+  language?: string;
+  /**
+   * Capabilities to use (optional)
+   */
+  capabilities?: Array<string>;
+  /**
+   * Semantic analysis configuration for symbol indexing (definition, references, typeInfo).
+   * Can be:
+   * - `"file"` - single-file analysis (default if semantic is enabled)
+   * - `"workspace"` - workspace-wide analysis using base_path as root
+   * - `{"mode": "workspace", "root": "/path/to/workspace"}` - workspace-wide with custom root
+   */
+  semantic_analysis?: SemanticAnalysisConfig;
+};
+export type LlrtSupportedModules =
+  | "abort"
+  | "assert"
+  | "buffer"
+  | "console"
+  | "crypto"
+  | "events"
+  | "exceptions"
+  | "fetch"
+  | "fs"
+  | "os"
+  | "path"
+  | "perf_hooks"
+  | "process"
+  | "stream_web"
+  | "string_decoder"
+  | "timers"
+  | "tty"
+  | "url"
+  | "util"
+  | "zlib"
+  | "child_process";
+export type TaskStatus =
+  | "Pending"
+  | "Running"
+  | "Completed"
+  | "Failed"
+  | "AwaitingTrigger"
+  | "Blocked"
+  | "WontDo";
+export type Node = {
+  /**
+   * Unique identifier for the node
+   */
+  id: string;
+  /**
+   * Human-readable name
+   */
+  name: string;
+  /**
+   * Detailed description of what the node does
+   */
+  description?: string | null;
+  /**
+   * Type of node (automatic or manual)
+   */
+  type: NodeType;
+  /**
+   * IDs of nodes that must complete before this node can run
+   */
+  depends_on?: Array<string>;
+  /**
+   * Configuration for how the node is triggered
+   */
+  trigger?: Trigger | null;
+  /**
+   * Configuration for running multiple instances of this node
+   */
+  strategy?: Strategy | null;
+  /**
+   * Container runtime configuration
+   */
+  runtime?: Runtime | null;
+  /**
+   * Steps to execute within the node
+   */
+  steps: Array<Step>;
+  /**
+   * Environment variables to inject into the container
+   */
+  env?: { [key in string]: string };
+  /**
+   * Git branch name for cloud runs (supports `${{ }}` expressions).
+   * Default: `codemod-{task.signature}`
+   */
+  branch_name?: string;
+  /**
+   * Pull request configuration. When present, the engine creates a managed
+   * git branch and opens a PR at the end of the node execution.
+   */
+  pull_request?: PullRequestConfig;
+};
 export type Template = {
   /**
    * Unique identifier for the template
@@ -32,10 +265,147 @@ export type Template = {
   /**
    * Environment variables to inject into the container
    */
-  env?: { [key in string]?: string };
+  env?: { [key in string]: string };
 };
+export type TaskErrorDetails =
+  | { type: "shell_command"; command: string; exit_code: number; output: string }
+  | { type: "ast_grep"; message: string; help: string | null };
+export type BuiltinShardMethod = {
+  /**
+   * Built-in method type
+   */
+  type: BuiltinShardType;
+  /**
+   * Target number of files per shard.
+   * Accepts a literal number or a `${{ }}` expression (e.g. `${{ params.pr_size }}`).
+   */
+  max_files_per_shard: JsonValue;
+  /**
+   * Minimum shard size — trailing shards smaller than this are merged
+   * into the previous shard (optional)
+   */
+  min_shard_size?: JsonValue;
+};
+export type PullRequestConfig = {
+  /**
+   * PR title (supports `${{ }}` template expressions)
+   */
+  title: string;
+  /**
+   * PR body/description (supports `${{ }}` template expressions)
+   */
+  body?: string;
+  /**
+   * Create the pull request as a draft
+   */
+  draft?: boolean;
+  /**
+   * Base branch to merge into (auto-detected if omitted)
+   */
+  base?: string;
+};
+export type JsonValue =
+  | number
+  | string
+  | boolean
+  | Array<JsonValue>
+  | { [key in string]: JsonValue }
+  | null;
+export type TemplateInput = {
+  /**
+   * Name of the input
+   */
+  name: string;
+  /**
+   * Type of the input (string, number, boolean)
+   */
+  type: string;
+  /**
+   * Whether the input is required
+   */
+  required?: boolean;
+  /**
+   * Description of the input
+   */
+  description: string | null;
+  /**
+   * Default value for the input
+   */
+  default: string | null;
+};
+export type SimpleSchemaVariant = {
+  /**
+   * Type of this variant (always "string" for oneOf variants)
+   */
+  type: string;
+  /**
+   * For string types with enumeration, the allowed values
+   */
+  enum: Array<string> | null;
+};
+export type Step = {
+  /**
+   * Unique identifier for the step (optional, used for referencing step outputs)
+   */
+  id?: string;
+  /**
+   * Human-readable name
+   */
+  name: string;
+  /**
+   * Environment variables specific to this step
+   */
+  env?: { [key in string]: string };
+  /**
+   * Conditional expression to determine if this step should be executed.
+   * Accepts a string expression or a literal boolean (`if: true` / `if: false`).
+   */
+  if?: string;
+  /**
+   * Optional commit checkpoint — if present (and in cloud mode), a git commit
+   * is created after this step completes. The message supports `${{ }}` expressions.
+   */
+  commit?: CommitConfig;
+} & (
+  | { use: TemplateUse }
+  | { run: string }
+  | { "ast-grep": UseAstGrep }
+  | { "js-ast-grep": UseJSAstGrep }
+  | { codemod: UseCodemod }
+  | { ai: UseAI }
+  | { "install-skill": UseInstallSkill }
+  | { shard: UseShard }
+);
+export type SemanticAnalysisMode = "file" | "workspace";
+export type ShardMethod = BuiltinShardMethod | CustomShardFunction;
+export type UseShard = {
+  /**
+   * Sharding method configuration — either a built-in algorithm or a custom function
+   */
+  method: ShardMethod;
+  /**
+   * Root directory to scan for files
+   */
+  target?: string;
+  /**
+   * State key to write shard results to
+   */
+  output_state: string;
+  /**
+   * Glob pattern for eligible files (used when js-ast-grep is not set)
+   */
+  file_pattern?: string;
+  /**
+   * Optional js-ast-grep configuration for codemod-based pre-filtering.
+   * When set, the engine dry-runs the codemod against matched files and
+   * only includes files where the transform produces changes.
+   * The `include` field also serves as the file pattern for discovery.
+   */
+  "js-ast-grep"?: UseJSAstGrep;
+};
+export type InstallSkillScope = "project" | "user";
 export type SimpleSchema = {
-  [key in string]?: {
+  [key in string]: {
     /**
      * Human-readable name for this property
      */
@@ -87,7 +457,7 @@ export type SimpleSchema = {
         /**
          * Properties of the object
          */
-        properties: { [key in string]?: SimpleSchemaProperty } | null;
+        properties: { [key in string]: SimpleSchemaProperty } | null;
         /**
          * Default value for the property
          */
@@ -102,89 +472,37 @@ export type SimpleSchema = {
       }
   );
 };
-export type SemanticAnalysisMode = "file" | "workspace";
-export type PullRequestConfig = {
+export type FieldDiff = {
   /**
-   * PR title (supports `${{ }}` template expressions)
+   * The operation to perform
    */
-  title: string;
+  operation: DiffOperation;
   /**
-   * PR body/description (supports `${{ }}` template expressions)
+   * The new value (for Add and Update operations)
    */
-  body?: string;
-  /**
-   * Create the pull request as a draft
-   */
-  draft?: boolean;
-  /**
-   * Base branch to merge into (auto-detected if omitted)
-   */
-  base?: string;
+  value: JsonValue | null;
 };
-export type UseInstallSkill = {
+export type WorkflowState = {
   /**
-   * Package identifier to install (for example `@codemod/jest-to-vitest`)
+   * Object schema definition (root is always an object)
    */
-  package: string;
-  /**
-   * Authored skill source path inside the package (optional, defaults to conventional layout)
-   */
-  path?: string;
-  /**
-   * Target harness adapter (optional, defaults to auto)
-   */
-  harness?: InstallSkillHarness;
-  /**
-   * Install scope (optional, defaults to project)
-   */
-  scope?: InstallSkillScope;
-  /**
-   * Overwrite existing skill files (optional, defaults to false)
-   */
-  force?: boolean;
+  schema: SimpleSchema;
 };
-export type UseJSAstGrep = {
+export type CommitConfig = {
   /**
-   * Path to the JavaScript file to execute
+   * Commit message (supports `${{ }}` template expressions)
    */
-  js_file: string;
+  message: string;
   /**
-   * Include globs for files to search (optional, defaults to language-specific extensions)
+   * Paths to stage before committing (default: `["."]` — stage everything)
    */
-  include?: Array<string>;
+  add?: Array<string>;
   /**
-   * Exclude globs for files to skip (optional)
+   * If true, skip silently when there are no changes to commit (default: true)
    */
-  exclude?: Array<string>;
-  /**
-   * Base path for resolving relative globs (optional, defaults to current working directory)
-   */
-  base_path?: string;
-  /**
-   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
-   */
-  max_threads?: number;
-  /**
-   * Perform a dry run without making changes (optional, defaults to false)
-   */
-  dry_run?: boolean;
-  /**
-   * Language to process (optional)
-   */
-  language?: string;
-  /**
-   * Capabilities to use (optional)
-   */
-  capabilities?: Array<string>;
-  /**
-   * Semantic analysis configuration for symbol indexing (definition, references, typeInfo).
-   * Can be:
-   * - `"file"` - single-file analysis (default if semantic is enabled)
-   * - `"workspace"` - workspace-wide analysis using base_path as root
-   * - `{"mode": "workspace", "root": "/path/to/workspace"}` - workspace-wide with custom root
-   */
-  semantic_analysis?: SemanticAnalysisConfig;
+  allow_empty: boolean;
 };
+export type RuntimeType = "direct" | "docker" | "podman";
 export type SimpleSchemaProperty = {
   /**
    * Human-readable name for this property
@@ -237,7 +555,7 @@ export type SimpleSchemaProperty = {
       /**
        * Properties of the object
        */
-      properties: { [key in string]?: SimpleSchemaProperty } | null;
+      properties: { [key in string]: SimpleSchemaProperty } | null;
       /**
        * Default value for the property
        */
@@ -251,73 +569,56 @@ export type SimpleSchemaProperty = {
       default: boolean | null;
     }
 );
-export type TemplateInput = {
+export type TemplateOutput = {
   /**
-   * Name of the input
+   * Name of the output
    */
   name: string;
   /**
-   * Type of the input (string, number, boolean)
+   * Value of the output
    */
-  type: string;
+  value: string;
   /**
-   * Whether the input is required
-   */
-  required?: boolean;
-  /**
-   * Description of the input
+   * Description of the output
    */
   description: string | null;
-  /**
-   * Default value for the input
-   */
-  default: string | null;
 };
-export type Task = {
+export type TaskDiff = {
   /**
-   * Unique identifier for the task
+   * The ID of the task
    */
-  id: string;
+  task_id: string;
   /**
-   * ID of the workflow run this task belongs to
+   * The fields to update
    */
-  workflow_run_id: string;
+  fields: { [key in string]: FieldDiff };
+};
+export type TriggerType = "automatic" | "manual";
+export type UseAstGrep = {
   /**
-   * ID of the node this task is an instance of
+   * Include globs for files to search (optional, defaults to language-specific extensions)
    */
-  node_id: string;
+  include?: Array<string>;
   /**
-   * Current status of the task
+   * Exclude globs for files to skip (optional)
    */
-  status: TaskStatus;
+  exclude?: Array<string>;
   /**
-   * Whether or not this task is a master task for other matrix tasks.
+   * Base path for resolving relative globs (optional, defaults to current working directory)
    */
-  is_master: boolean;
+  base_path?: string;
   /**
-   * For matrix tasks, the master task ID
+   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
    */
-  master_task_id?: string | null;
+  max_threads?: number;
   /**
-   * For matrix tasks, the matrix values
+   * Path to the ast-grep config file (.yaml)
    */
-  matrix_values?: { [key in string]?: JsonValue } | null;
+  config_file: string;
   /**
-   * Start time of the task
+   * Allow dirty files (optional, defaults to false)
    */
-  started_at?: string | null;
-  /**
-   * End time of the task (if completed or failed)
-   */
-  ended_at?: string | null;
-  /**
-   * Error message (if failed)
-   */
-  error?: string | null;
-  /**
-   * Logs from the task
-   */
-  logs: Array<string>;
+  allow_dirty?: boolean;
 };
 export type WorkflowParams = {
   /**
@@ -325,28 +626,35 @@ export type WorkflowParams = {
    */
   schema: SimpleSchema;
 };
-export type CommitConfig = {
-  /**
-   * Commit message (supports `${{ }}` template expressions)
-   */
-  message: string;
-  /**
-   * Paths to stage before committing (default: `["."]` — stage everything)
-   */
-  add?: Array<string>;
-  /**
-   * If true, skip silently when there are no changes to commit (default: true)
-   */
-  allow_empty: boolean;
-};
-export type SemanticAnalysisConfig = SemanticAnalysisMode | SemanticAnalysisDetailed;
 export type Trigger = {
   /**
    * Type of trigger
    */
   type: TriggerType;
 };
-export type StrategyType = "matrix";
+export type UseInstallSkill = {
+  /**
+   * Package identifier to install (for example `@codemod/jest-to-vitest`)
+   */
+  package: string;
+  /**
+   * Authored skill source path inside the package (optional, defaults to conventional layout)
+   */
+  path?: string;
+  /**
+   * Target harness adapter (optional, defaults to auto)
+   */
+  harness?: InstallSkillHarness;
+  /**
+   * Install scope (optional, defaults to project)
+   */
+  scope?: InstallSkillScope;
+  /**
+   * Overwrite existing skill files (optional, defaults to false)
+   */
+  force?: boolean;
+};
+export type NodeType = "automatic" | "manual";
 export type WorkflowRun = {
   /**
    * Unique identifier for the workflow run
@@ -363,7 +671,7 @@ export type WorkflowRun = {
   /**
    * Parameters passed to the workflow
    */
-  params: { [key in string]?: JsonValue };
+  params: { [key in string]: JsonValue };
   /**
    * Tasks created for this workflow run
    */
@@ -393,123 +701,6 @@ export type WorkflowRun = {
    */
   target_path?: string | null;
 };
-export type UseCodemod = {
-  /**
-   * Codemod source identifier (registry package or local path)
-   */
-  source: string;
-  /**
-   * Command line arguments to pass to the codemod (optional)
-   */
-  args?: Array<string>;
-  /**
-   * Environment variables to set for the codemod execution (optional)
-   */
-  env?: { [key in string]?: string };
-  /**
-   * Working directory for codemod execution (optional, defaults to current directory)
-   */
-  working_dir?: string;
-};
-export type UseShard = {
-  /**
-   * Sharding method configuration — either a built-in algorithm or a custom function
-   */
-  method: ShardMethod;
-  /**
-   * Root directory to scan for files
-   */
-  target?: string;
-  /**
-   * State key to write shard results to
-   */
-  output_state: string;
-  /**
-   * Glob pattern for eligible files (used when js-ast-grep is not set)
-   */
-  file_pattern?: string;
-  /**
-   * Optional js-ast-grep configuration for codemod-based pre-filtering.
-   * When set, the engine dry-runs the codemod against matched files and
-   * only includes files where the transform produces changes.
-   * The `include` field also serves as the file pattern for discovery.
-   */
-  "js-ast-grep"?: UseJSAstGrep;
-};
-export type TemplateOutput = {
-  /**
-   * Name of the output
-   */
-  name: string;
-  /**
-   * Value of the output
-   */
-  value: string;
-  /**
-   * Description of the output
-   */
-  description: string | null;
-};
-export type BuiltinShardType = "directory" | "codeowner";
-export type DiffOperation = "Add" | "Update" | "Remove" | "Append";
-export type Step = {
-  /**
-   * Unique identifier for the step (optional, used for referencing step outputs)
-   */
-  id?: string;
-  /**
-   * Human-readable name
-   */
-  name: string;
-  /**
-   * Environment variables specific to this step
-   */
-  env?: { [key in string]?: string };
-  /**
-   * Conditional expression to determine if this step should be executed
-   */
-  if?: string;
-  /**
-   * Optional commit checkpoint — if present (and in cloud mode), a git commit
-   * is created after this step completes. The message supports `${{ }}` expressions.
-   */
-  commit?: CommitConfig;
-} & (
-  | { use: TemplateUse }
-  | { run: string }
-  | { "ast-grep": UseAstGrep }
-  | { "js-ast-grep": UseJSAstGrep }
-  | { codemod: UseCodemod }
-  | { ai: UseAI }
-  | { "install-skill": UseInstallSkill }
-  | { shard: UseShard }
-);
-export type RuntimeType = "direct" | "docker" | "podman";
-export type TemplateUse = {
-  /**
-   * Template ID to use
-   */
-  template: string;
-  /**
-   * Inputs to pass to the template
-   */
-  inputs?: { [key in string]?: JsonValue };
-};
-export type BuiltinShardMethod = {
-  /**
-   * Built-in method type
-   */
-  type: BuiltinShardType;
-  /**
-   * Target number of files per shard
-   */
-  max_files_per_shard: number;
-  /**
-   * Minimum shard size — trailing shards smaller than this are merged
-   * into the previous shard (optional)
-   */
-  min_shard_size?: number;
-};
 export type Workflow = {
   /**
    * Version of the workflow format
@@ -532,272 +723,6 @@ export type Workflow = {
    */
   nodes: Array<Node>;
 };
-export type UseAI = {
-  /**
-   * Prompt to send to the AI agent
-   */
-  prompt: string;
-  /**
-   * Working directory for AI agent execution (optional, defaults to current directory)
-   */
-  working_dir?: string;
-  /**
-   * Timeout in milliseconds for AI agent execution (optional)
-   */
-  timeout_ms?: bigint;
-  /**
-   * Environment variables to set for the AI agent execution (optional)
-   */
-  env?: { [key in string]?: string };
-  /**
-   * Perform a dry run without making changes (optional, defaults to false)
-   */
-  dry_run?: boolean;
-  /**
-   * AI model to use (optional, defaults to configured model)
-   */
-  model?: string;
-  /**
-   * System prompt for the AI agent (optional)
-   */
-  system_prompt?: string;
-  /**
-   * Maximum number of steps the AI agent can take (optional, defaults to 100)
-   */
-  max_steps?: number;
-  /**
-   * Tools available to the AI agent (optional, defaults to common tools)
-   */
-  tools?: Array<string>;
-  /**
-   * LLM API endpoint (optional, defaults to configured endpoint)
-   */
-  endpoint?: string;
-  /**
-   * LLM API key (optional, defaults to configured key or env var)
-   */
-  api_key?: string;
-  /**
-   * Enable lakeview mode (optional, defaults to true)
-   */
-  enable_lakeview?: boolean;
-  /**
-   * LLM protocol to use (optional, defaults to openai)
-   */
-  llm_protocol?: string;
-};
-export type JsonValue =
-  | number
-  | string
-  | boolean
-  | Array<JsonValue>
-  | { [key in string]?: JsonValue }
-  | null;
-export type StateDiff = {
-  /**
-   * The ID of the workflow run
-   */
-  workflow_run_id: string;
-  /**
-   * The fields to update
-   */
-  fields: { [key in string]?: FieldDiff };
-};
-export type SemanticAnalysisDetailed = {
-  /**
-   * Analysis mode
-   */
-  mode: SemanticAnalysisMode;
-  /**
-   * Custom workspace root path (only used when mode is "workspace")
-   */
-  root?: string;
-};
-export type WorkflowStatus =
-  | "Pending"
-  | "Running"
-  | "Completed"
-  | "Failed"
-  | "AwaitingTrigger"
-  | "Canceled";
-export type Runtime = {
-  /**
-   * Type of runtime
-   */
-  type: RuntimeType;
-  /**
-   * Container image (for Docker and Podman)
-   */
-  image?: string | null;
-  /**
-   * Working directory inside the container
-   */
-  working_dir?: string | null;
-  /**
-   * User to run as inside the container
-   */
-  user?: string | null;
-  /**
-   * Network mode for the container
-   */
-  network?: string | null;
-  /**
-   * Additional container options
-   */
-  options?: Array<string> | null;
-};
-export type TaskDiff = {
-  /**
-   * The ID of the task
-   */
-  task_id: string;
-  /**
-   * The fields to update
-   */
-  fields: { [key in string]?: FieldDiff };
-};
-export type SimpleSchemaVariant = {
-  /**
-   * Type of this variant (always "string" for oneOf variants)
-   */
-  type: string;
-  /**
-   * For string types with enumeration, the allowed values
-   */
-  enum: Array<string> | null;
-};
-export type InstallSkillHarness =
-  | "auto"
-  | "claude"
-  | "goose"
-  | "opencode"
-  | "cursor"
-  | "codex"
-  | "antigravity";
-export type FieldDiff = {
-  /**
-   * The operation to perform
-   */
-  operation: DiffOperation;
-  /**
-   * The new value (for Add and Update operations)
-   */
-  value: JsonValue | null;
-};
-export type CustomShardFunction = {
-  /**
-   * Path to JS/TS shard function file
-   */
-  function: string;
-};
-export type NodeType = "automatic" | "manual";
-export type TaskStatus =
-  | "Pending"
-  | "Running"
-  | "Completed"
-  | "Failed"
-  | "AwaitingTrigger"
-  | "Blocked"
-  | "WontDo";
-export type InstallSkillScope = "project" | "user";
-export type WorkflowState = {
-  /**
-   * Object schema definition (root is always an object)
-   */
-  schema: SimpleSchema;
-};
-export type UseAstGrep = {
-  /**
-   * Include globs for files to search (optional, defaults to language-specific extensions)
-   */
-  include?: Array<string>;
-  /**
-   * Exclude globs for files to skip (optional)
-   */
-  exclude?: Array<string>;
-  /**
-   * Base path for resolving relative globs (optional, defaults to current working directory)
-   */
-  base_path?: string;
-  /**
-   * Set maximum number of concurrent threads (optional, defaults to CPU cores)
-   */
-  max_threads?: number;
-  /**
-   * Path to the ast-grep config file (.yaml)
-   */
-  config_file: string;
-  /**
-   * Allow dirty files (optional, defaults to false)
-   */
-  allow_dirty?: boolean;
-};
-export type Strategy = {
-  /**
-   * Type of strategy
-   */
-  type: StrategyType;
-  /**
-   * Matrix values (for matrix strategy)
-   */
-  values?: Array<{ [key in string]?: JsonValue }>;
-  /**
-   * State key to get matrix values from (for matrix strategy)
-   */
-  from_state?: string | null;
-};
-export type Node = {
-  /**
-   * Unique identifier for the node
-   */
-  id: string;
-  /**
-   * Human-readable name
-   */
-  name: string;
-  /**
-   * Detailed description of what the node does
-   */
-  description?: string | null;
-  /**
-   * Type of node (automatic or manual)
-   */
-  type: NodeType;
-  /**
-   * IDs of nodes that must complete before this node can run
-   */
-  depends_on?: Array<string>;
-  /**
-   * Configuration for how the node is triggered
-   */
-  trigger?: Trigger | null;
-  /**
-   * Configuration for running multiple instances of this node
-   */
-  strategy?: Strategy | null;
-  /**
-   * Container runtime configuration
-   */
-  runtime?: Runtime | null;
-  /**
-   * Steps to execute within the node
-   */
-  steps: Array<Step>;
-  /**
-   * Environment variables to inject into the container
-   */
-  env?: { [key in string]?: string };
-  /**
-   * Git branch name for cloud runs (supports `${{ }}` expressions).
-   * Default: `codemod-{task.signature}`
-   */
-  branch_name?: string;
-  /**
-   * Pull request configuration. When present (and in cloud mode), a PR is
-   * automatically created at the end of the node execution.
-   */
-  pull_request?: PullRequestConfig;
-};
 export type WorkflowRunDiff = {
   /**
    * The ID of the workflow run
@@ -806,27 +731,111 @@ export type WorkflowRunDiff = {
   /**
    * The fields to update
    */
-  fields: { [key in string]?: FieldDiff };
+  fields: { [key in string]: FieldDiff };
 };
-export type LlrtSupportedModules =
-  | "abort"
-  | "assert"
-  | "buffer"
-  | "console"
-  | "crypto"
-  | "events"
-  | "exceptions"
-  | "fetch"
-  | "fs"
-  | "os"
-  | "path"
-  | "perf_hooks"
-  | "process"
-  | "stream_web"
-  | "string_decoder"
-  | "timers"
-  | "tty"
-  | "url"
-  | "util"
-  | "zlib"
-  | "child_process";
+export type Task = {
+  /**
+   * Unique identifier for the task
+   */
+  id: string;
+  /**
+   * ID of the workflow run this task belongs to
+   */
+  workflow_run_id: string;
+  /**
+   * ID of the node this task is an instance of
+   */
+  node_id: string;
+  /**
+   * Current status of the task
+   */
+  status: TaskStatus;
+  /**
+   * Whether or not this task is a master task for other matrix tasks.
+   */
+  is_master: boolean;
+  /**
+   * For matrix tasks, the master task ID
+   */
+  master_task_id?: string | null;
+  /**
+   * For matrix tasks, the matrix values
+   */
+  matrix_values?: { [key in string]: JsonValue } | null;
+  /**
+   * Start time of the task
+   */
+  started_at?: string | null;
+  /**
+   * End time of the task (if completed or failed)
+   */
+  ended_at?: string | null;
+  /**
+   * Error message (if failed)
+   */
+  error?: string | null;
+  /**
+   * Structured error details (if failed)
+   */
+  error_details?: TaskErrorDetails | null;
+  /**
+   * Logs from the task
+   */
+  logs: Array<string>;
+};
+export type StateDiff = {
+  /**
+   * The ID of the workflow run
+   */
+  workflow_run_id: string;
+  /**
+   * The fields to update
+   */
+  fields: { [key in string]: FieldDiff };
+};
+export type CustomShardFunction = {
+  /**
+   * Path to JS/TS shard function file
+   */
+  function: string;
+};
+export type SemanticAnalysisConfig = SemanticAnalysisMode | SemanticAnalysisDetailed;
+export type UseCodemod = {
+  /**
+   * Codemod source identifier (registry package or local path)
+   */
+  source: string;
+  /**
+   * Command line arguments to pass to the codemod (optional)
+   */
+  args?: Array<string>;
+  /**
+   * Environment variables to set for the codemod execution (optional)
+   */
+  env?: { [key in string]: string };
+  /**
+   * Working directory for codemod execution (optional, defaults to current directory)
+   */
+  working_dir?: string;
+};
+export type WorkflowStatus =
+  | "Pending"
+  | "Running"
+  | "Completed"
+  | "Failed"
+  | "AwaitingTrigger"
+  | "Canceled";
+export type Strategy = {
+  /**
+   * Type of strategy
+   */
+  type: StrategyType;
+  /**
+   * Matrix values (for matrix strategy)
+   */
+  values?: Array<{ [key in string]: JsonValue }>;
+  /**
+   * State key to get matrix values from (for matrix strategy)
+   */
+  from_state?: string | null;
+};

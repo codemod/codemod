@@ -9,6 +9,7 @@ use butterflow_models::{StateDiff, Task, TaskDiff, Workflow, WorkflowRun, Workfl
 use clap::{Parser, Subcommand};
 use serde_json::to_writer_pretty;
 use ts_export::export_recursive;
+use ts_rs::Config;
 
 mod tree_sitter_compress;
 mod ts_export;
@@ -62,12 +63,13 @@ async fn main() {
             let mut ts_file = File::create(&ts_schema_path).unwrap();
             let mut type_hash_map = HashMap::new();
             let mut type_names = HashSet::new();
-            export_recursive::<Workflow>(&mut type_hash_map, &mut type_names);
-            export_recursive::<Task>(&mut type_hash_map, &mut type_names);
-            export_recursive::<WorkflowRun>(&mut type_hash_map, &mut type_names);
-            export_recursive::<TaskDiff>(&mut type_hash_map, &mut type_names);
-            export_recursive::<StateDiff>(&mut type_hash_map, &mut type_names);
-            export_recursive::<WorkflowRunDiff>(&mut type_hash_map, &mut type_names);
+            let config = Config::default();
+            export_recursive::<Workflow>(&mut type_hash_map, &mut type_names, &config);
+            export_recursive::<Task>(&mut type_hash_map, &mut type_names, &config);
+            export_recursive::<WorkflowRun>(&mut type_hash_map, &mut type_names, &config);
+            export_recursive::<TaskDiff>(&mut type_hash_map, &mut type_names, &config);
+            export_recursive::<StateDiff>(&mut type_hash_map, &mut type_names, &config);
+            export_recursive::<WorkflowRunDiff>(&mut type_hash_map, &mut type_names, &config);
             let mut type_hash_map = type_hash_map.into_iter().collect::<Vec<_>>();
             type_hash_map.sort_by_key(|(k, _)| *k);
             for (_, ts_def) in type_hash_map {

@@ -750,7 +750,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.16",
- "ts-rs",
+ "ts-rs 12.0.1",
  "uuid",
 ]
 
@@ -1148,7 +1148,7 @@ version = "1.9.3"
 dependencies = [
  "llrt_modules",
  "serde",
- "ts-rs",
+ "ts-rs 12.0.1",
 ]
 
 [[package]]
@@ -6819,7 +6819,7 @@ version = "0.1.0"
 source = "git+https://github.com/rolldown/rolldown.git?rev=3d1985ab40923590b3ae9f626b2438d9543dc588#3d1985ab40923590b3ae9f626b2438d9543dc588"
 dependencies = [
  "serde",
- "ts-rs",
+ "ts-rs 11.0.1",
 ]
 
 [[package]]
@@ -9388,7 +9388,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -10199,10 +10199,20 @@ version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
 dependencies = [
+ "thiserror 2.0.16",
+ "ts-rs-macros 11.0.1",
+]
+
+[[package]]
+name = "ts-rs"
+version = "12.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "756050066659291d47a554a9f558125db17428b073c5ffce1daf5dcb0f7231d8"
+dependencies = [
  "chrono",
  "serde_json",
  "thiserror 2.0.16",
- "ts-rs-macros",
+ "ts-rs-macros 12.0.1",
  "uuid",
 ]
 
@@ -10211,6 +10221,18 @@ name = "ts-rs-macros"
 version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9d4ed7b4c18cc150a6a0a1e9ea1ecfa688791220781af6e119f9599a8502a0a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "termcolor",
+]
+
+[[package]]
+name = "ts-rs-macros"
+version = "12.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38d90eea51bc7988ef9e674bf80a85ba6804739e535e9cab48e4bb34a8b652aa"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11705,7 +11727,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "ts-rs",
+ "ts-rs 12.0.1",
 ]
 
 [[package]]
