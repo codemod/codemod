@@ -192,7 +192,7 @@ jobs:
 
           extract_run_id() {
             local output_file="$1"
-            grep -oE 'Workflow started with ID: [0-9a-f-]+' "${output_file}" | tail -n 1 | awk '{print $5}'
+            grep -oE 'Workflow started( with ID:)? [0-9a-f-]+' "${output_file}" | tail -n 1 | grep -oE '[0-9a-f-]+$'
           }
 
           wait_for_run_id() {
