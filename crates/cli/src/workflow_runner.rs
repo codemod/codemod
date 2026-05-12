@@ -52,6 +52,7 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         && workflow_has_manual_steps(&workflow);
 
     let started = std::time::Instant::now();
+    let progress_reports_errors = config.execution.progress_callback.as_ref().is_some();
 
     // Run workflow
     let workflow_run_id = if auto_launch_tui {
@@ -99,6 +100,7 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
             engine,
             workflow_run_id.to_string(),
             config.interaction.no_interactive,
+            progress_reports_errors,
         )
         .await?;
     }
@@ -111,6 +113,7 @@ pub async fn wait_for_workflow_completion(
     engine: &Engine,
     workflow_run_id: String,
     emit_heartbeat: bool,
+    progress_reports_errors: bool,
 ) -> Result<()> {
     let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
     let wait_started = Instant::now();
@@ -139,7 +142,8 @@ pub async fn wait_for_workflow_completion(
                     .await
                     .context("Failed to get tasks")?;
                 let summary = summarize_tasks(&tasks);
-                if failed_workflow_error_was_reported_in_progress(&tasks) {
+                if progress_reports_errors && failed_workflow_error_was_reported_in_progress(&tasks)
+                {
                     println!(
                         "{} {}{}",
                         style("Workflow failed").red(),

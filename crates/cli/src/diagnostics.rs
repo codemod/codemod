@@ -1,7 +1,7 @@
 use butterflow_models::Error as ModelError;
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, NamedSource, SourceSpan};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -157,12 +157,12 @@ fn render_javascript_runtime_error(error: &anyhow::Error) -> Option<String> {
     }
 
     let location = parse_js_stack_location(&error_text)?;
-    let source = std::fs::read_to_string(&location.path).ok()?;
+    let (source_name, source) = read_diagnostic_source(&location.path)?;
     let offset = line_column_to_byte_offset(&source, location.line, location.column)?;
     let message = first_error_line(&error_text).unwrap_or_else(|| error.to_string());
     let diagnostic = JavaScriptRuntimeDiagnostic {
         message,
-        source_code: NamedSource::new(location.path, source),
+        source_code: NamedSource::new(source_name, source),
         span: (offset, 1usize).into(),
         help: Some("Fix the thrown JavaScript/TypeScript error and rerun the codemod.".to_string()),
     };
@@ -187,8 +187,8 @@ fn render_javascript_module_load_error(error_text: &str) -> Option<String> {
             )
         });
 
-    let source = match std::fs::read_to_string(&path) {
-        Ok(source) if !source.is_empty() => source,
+    let (source_name, source) = match read_diagnostic_source(&path) {
+        Some((source_name, source)) if !source.is_empty() => (source_name, source),
         _ => {
             let diagnostic = CliErrorDiagnostic {
                 message: format!("Failed to load codemod script: {path}"),
@@ -200,7 +200,7 @@ fn render_javascript_module_load_error(error_text: &str) -> Option<String> {
     let span_len = token_span_len_at(&source, 0).unwrap_or(1);
     let diagnostic = JavaScriptModuleDiagnostic {
         message: format!("Failed to load codemod script: {path}"),
-        source_code: NamedSource::new(path, source),
+        source_code: NamedSource::new(source_name, source),
         span: (0usize, span_len).into(),
         help,
     };
@@ -418,6 +418,33 @@ fn render_report(diagnostic: &(dyn Diagnostic + Send + Sync + 'static)) -> Strin
     } else {
         diagnostic.to_string()
     }
+}
+
+fn read_diagnostic_source(path: impl AsRef<Path>) -> Option<(String, String)> {
+    let path = path.as_ref();
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+
+    let canonical_path = path.canonicalize().ok()?;
+    if !is_javascript_source_path(&canonical_path) {
+        return None;
+    }
+
+    let current_dir = std::env::current_dir().ok()?.canonicalize().ok()?;
+    if !canonical_path.starts_with(&current_dir) {
+        return None;
+    }
+
+    let source = std::fs::read_to_string(&canonical_path).ok()?;
+    Some((canonical_path.display().to_string(), source))
+}
+
+fn is_javascript_source_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
 }
 
 fn error_chain_help(error: &anyhow::Error) -> Option<String> {
@@ -648,6 +675,14 @@ fn line_column_to_byte_offset(source: &str, line: usize, column: usize) -> Optio
 mod tests {
     use super::*;
 
+    fn temp_source_in_current_dir() -> tempfile::NamedTempFile {
+        tempfile::Builder::new()
+            .prefix("codemod-diagnostic-test-")
+            .suffix(".ts")
+            .tempfile_in(std::env::current_dir().expect("current dir"))
+            .expect("temp source")
+    }
+
     #[test]
     fn parses_js_stack_location() {
         let location = parse_js_stack_location(
@@ -674,7 +709,7 @@ mod tests {
 
     #[test]
     fn renders_javascript_module_error_with_bare_stack_location() {
-        let file = tempfile::NamedTempFile::new().expect("temp codemod");
+        let file = temp_source_in_current_dir();
         std::fs::write(
             file.path(),
             "export default function codemod() {\n  return #bad;\n}\n",
@@ -710,7 +745,7 @@ mod tests {
 
     #[test]
     fn renders_javascript_transpilation_error_with_script_source() {
-        let file = tempfile::NamedTempFile::new().expect("temp codemod");
+        let file = temp_source_in_current_dir();
         std::fs::write(file.path(), "export default function (\n").expect("write codemod");
         let rendered = render_error_message(&format!(
             "Failed to process src/app.ts: Runtime error Runtime initialization failed: Failed to declare module: Error: Error loading module '{}': Transpilation failed:\n[InvalidSyntax] Syntax error",
@@ -724,6 +759,44 @@ mod tests {
         assert!(rendered.contains("Transpilation failed:"));
         assert!(rendered.contains("[InvalidSyntax] Syntax error"));
         assert!(!rendered.contains("codemod::cli::error"));
+    }
+
+    #[test]
+    fn javascript_diagnostics_do_not_read_sources_outside_current_dir() {
+        let file = tempfile::NamedTempFile::new().expect("temp codemod");
+        std::fs::write(
+            file.path(),
+            "export default function codemod() {\n  return secret;\n}\n",
+        )
+        .expect("write codemod");
+
+        let rendered = render_error_message(&format!(
+            "Error: leaked\n    at codemod ({}:2:10)",
+            file.path().display()
+        ));
+
+        assert!(rendered.contains("codemod::cli::error"));
+        assert!(!rendered.contains("return secret"));
+        assert!(!rendered.contains("error originated here"));
+    }
+
+    #[test]
+    fn javascript_diagnostics_do_not_read_non_source_files_in_current_dir() {
+        let file = tempfile::Builder::new()
+            .prefix("codemod-diagnostic-secret-")
+            .suffix(".env")
+            .tempfile_in(std::env::current_dir().expect("current dir"))
+            .expect("temp secret");
+        std::fs::write(file.path(), "SECRET_TOKEN=hidden\n").expect("write secret");
+
+        let rendered = render_error_message(&format!(
+            "Error: leaked\n    at codemod ({}:1:1)",
+            file.path().display()
+        ));
+
+        assert!(rendered.contains("codemod::cli::error"));
+        assert!(!rendered.contains("SECRET_TOKEN"));
+        assert!(!rendered.contains("error originated here"));
     }
 
     #[test]

@@ -104,6 +104,12 @@ pub(crate) fn validate_package_behavior_structure(
         find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
     };
 
+    if !merged.has_executable_steps && !merged.has_install_skill_steps && !has_skill_layout {
+        return Err(anyhow!(
+            "Package does not define runnable behavior. Add some workflow steps."
+        ));
+    }
+
     if merged.has_install_skill_steps && !has_skill_layout {
         return Err(anyhow!(
             "Workflow contains `install-skill` step(s), but authored skill files are missing at {}.",
@@ -1054,5 +1060,27 @@ nodes:
         assert!(error
             .to_string()
             .contains("Workflow contains `install-skill` step(s)"));
+    }
+
+    #[test]
+    fn validate_package_behavior_structure_rejects_package_without_runnable_behavior() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("example");
+        write_workflow(
+            temp_dir.path(),
+            r#"
+version: "1"
+nodes:
+  - id: empty
+    name: Empty
+    type: automatic
+    steps: []
+"#,
+        );
+
+        let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not define runnable behavior"));
     }
 }

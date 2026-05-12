@@ -177,9 +177,9 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
             }
 
             ProgressAction::Finish { message } => {
-                let bars_lock = bars.lock().unwrap();
+                let mut bars_lock = bars.lock().unwrap();
                 *active_log_title.lock().unwrap() = None;
-                if let Some(pb) = bars_lock.get(&task_id) {
+                if let Some(pb) = bars_lock.remove(&task_id) {
                     let finish_message = message.unwrap_or_else(|| "Completed".to_string());
                     pb.finish_with_message(style(finish_message).green().to_string());
                 }

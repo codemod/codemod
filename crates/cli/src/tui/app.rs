@@ -1,6 +1,6 @@
 use butterflow_core::config::DirtyGitApprovalKind;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
-use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
+use butterflow_models::{Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -138,40 +138,12 @@ impl TuiState {
         }
     }
 
-    fn is_terminal_task_status(status: TaskStatus) -> bool {
-        matches!(
-            status,
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
-        )
-    }
-
-    fn is_install_skill_task(&self, task: &Task) -> bool {
-        self.current_run
-            .as_ref()
-            .and_then(|run| {
-                run.workflow
-                    .nodes
-                    .iter()
-                    .find(|node| node.id == task.node_id)
-            })
-            .map(|node| {
-                node.steps
-                    .iter()
-                    .any(|step| matches!(step.action, StepAction::InstallSkill(_)))
-            })
-            .unwrap_or_else(|| task.node_id == "install-skill")
-    }
-
-    fn is_ignorable_pending_install_skill(&self, task: &Task) -> bool {
-        self.is_install_skill_task(task) && task.status == TaskStatus::AwaitingTrigger
-    }
-
     fn is_individually_triggerable_task(&self, task: &Task) -> bool {
         task.status == TaskStatus::AwaitingTrigger && self.task_dependencies_satisfied(task)
     }
 
     fn is_bulk_triggerable_task(&self, task: &Task) -> bool {
-        self.is_individually_triggerable_task(task) && !self.is_install_skill_task(task)
+        self.is_individually_triggerable_task(task)
     }
 
     fn task_uses_managed_git(&self, task: &Task) -> bool {
@@ -232,28 +204,8 @@ impl TuiState {
         self.visible_task_iter().collect()
     }
 
-    fn run_is_effectively_complete(&self, run: &WorkflowRun, tasks: &[Task]) -> bool {
-        if tasks.is_empty() {
-            return matches!(run.status, butterflow_models::WorkflowStatus::Completed);
-        }
-
-        tasks.iter().all(|task| {
-            Self::is_terminal_task_status(task.status)
-                || self.is_ignorable_pending_install_skill(task)
-        })
-    }
-
-    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, tasks: &[Task]) -> String {
-        if self.run_is_effectively_complete(run, tasks)
-            && matches!(
-                run.status,
-                butterflow_models::WorkflowStatus::AwaitingTrigger
-            )
-        {
-            "Completed (install-skill pending)".to_string()
-        } else {
-            Self::workflow_status_text(run.status)
-        }
+    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, _tasks: &[Task]) -> String {
+        Self::workflow_status_text(run.status)
     }
 
     pub fn display_run_status(&self) -> String {
@@ -1623,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn display_run_status_treats_install_skill_as_effectively_complete() {
+    fn display_run_status_treats_pending_install_skill_like_other_pending_tasks() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
         state.current_run = Some(WorkflowRun {
@@ -1676,16 +1628,10 @@ mod tests {
             },
         ];
 
-        assert_eq!(
-            state.display_run_status(),
-            "Completed (install-skill pending)"
-        );
+        assert_eq!(state.display_run_status(), "Awaiting trigger");
         let run = state.current_run.as_ref().unwrap().clone();
         state.run_tasks.insert(run_id, state.tasks.clone());
-        assert_eq!(
-            state.display_status_for_list_run(&run),
-            "Completed (install-skill pending)"
-        );
+        assert_eq!(state.display_status_for_list_run(&run), "Awaiting trigger");
     }
 
     #[test]
@@ -2386,7 +2332,7 @@ mod tests {
     }
 
     #[test]
-    fn task_help_text_shows_individual_trigger_only_for_install_skill() {
+    fn task_help_text_shows_trigger_all_for_install_skill_like_other_tasks() {
         let run_id = Uuid::new_v4();
         let state = TuiState {
             current_run: Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger)),
@@ -2409,7 +2355,7 @@ mod tests {
 
         assert_eq!(
             state.task_help_text(),
-            "Enter logs  t trigger  c cancel  esc back  q quit"
+            "Enter logs  t trigger  T trigger-all  c cancel  esc back  q quit"
         );
     }
 
@@ -2517,11 +2463,11 @@ mod tests {
             Some(blocked_task_id)
         );
         assert!(state.selected_task_trigger_command().is_none());
-        assert!(state.visible_awaiting_task_ids().is_empty());
+        assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
     }
 
     #[test]
-    fn install_skill_is_individually_triggerable_but_excluded_from_trigger_all() {
+    fn install_skill_is_triggerable_like_other_tasks() {
         let run_id = Uuid::new_v4();
         let install_skill_task_id = Uuid::new_v4();
         let normal_task_id = Uuid::new_v4();
@@ -2626,7 +2572,10 @@ mod tests {
             }
             other => panic!("expected install-skill trigger command, got {other:?}"),
         }
-        assert_eq!(state.visible_awaiting_task_ids(), vec![normal_task_id]);
+        assert_eq!(
+            state.visible_awaiting_task_ids(),
+            vec![install_skill_task_id, normal_task_id]
+        );
     }
 
     #[test]

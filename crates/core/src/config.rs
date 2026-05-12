@@ -231,7 +231,7 @@ impl Default for WorkflowOutputSettings {
 
 #[derive(Clone, Default)]
 pub struct SkillInstallSettings {
-    /// Skip executing install-skill steps at runtime (used by package run UX)
+    /// Skip executing install-skill steps at runtime (used by non-interactive safety gates)
     pub skip_install_skill_steps: bool,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
