@@ -880,6 +880,22 @@ function getSpecifierRangeWithSeparator<T extends Language>(
   return { start, end };
 }
 
+function hasTrailingComma<T extends Language>(nodes: SgNode<T>[]) {
+  const closeBraceIdx = nodes.findLastIndex((n) => n.is("}"));
+  // check if the node before the closing brace `}` is a comma, ignoring comments.
+  for (let i = closeBraceIdx - 1; i > 0; i--) {
+    const node = nodes[i];
+
+    if (node?.is("comment")) {
+      continue;
+    }
+
+    return node?.is(",");
+  }
+
+  return false;
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -1005,22 +1021,45 @@ export function addImport<T extends Language>(
         const namedImports = findNamedImports(existingImport);
         if (namedImports) {
           // Add to existing named_imports: insert before the closing brace
-          const namedImportsText = namedImports.text();
-          const closingBraceIdx = namedImportsText.lastIndexOf("}");
-          if (closingBraceIdx > 0) {
-            const insertPos = namedImports.range().start.index + closingBraceIdx;
-            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
-            // Check if there are existing specifiers (need comma)
-            const hasExistingSpecifiers =
-              namedImportsText.slice(1, closingBraceIdx).trim().length > 0;
-            const insertText = hasExistingSpecifiers ? `, ${specifierStr}` : ` ${specifierStr} `;
 
-            return {
-              startPos: insertPos,
-              endPos: insertPos,
-              insertedText: insertText,
-            };
+          const isMultiline = namedImports.range().start.line !== namedImports.range().end.line;
+          const separator = isMultiline ? `,\n  ` : ", ";
+
+          const trailingComma = hasTrailingComma(namedImports.children()) ? "," : "";
+
+          const namedImportNodes = namedImports
+            .children()
+            .filter((n) => n.isNamed() || n.is("comment"));
+
+          const namedImportsText: string[] = [];
+
+          for (let i = 0; i < namedImportNodes.length; i++) {
+            if (isMultiline) {
+              if (namedImportNodes[i + 1]?.is("comment")) {
+                namedImportsText[i] = namedImportNodes[i]?.text() + ",";
+                continue;
+              }
+
+              if (namedImportNodes[i]?.is("comment")) {
+                namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
+                continue;
+              }
+
+              namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
+              continue;
+            }
+
+            namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
           }
+
+          const specifierStr = newSpecifiers.map(formatSpecifier);
+
+          const importsUpdatedStr =
+            namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
+
+          return isMultiline
+            ? namedImports.replace(`{\n  ${importsUpdatedStr}\n}`)
+            : namedImports.replace(`{ ${importsUpdatedStr} }`);
         } else {
           // Import exists but has no named_imports (e.g., default import only)
           // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
