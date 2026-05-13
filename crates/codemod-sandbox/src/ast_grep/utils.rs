@@ -16,6 +16,7 @@ use ast_grep_core::{
 use ast_grep_language::SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
+use std::str::FromStr;
 
 use super::serde::JsValue;
 
@@ -72,6 +73,15 @@ pub fn convert_matcher<'js>(
 }
 
 pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, AstGrepError> {
+    detect_language_from_extension_with_xml_availability(extension, || {
+        SupportLang::from_str("xml").is_ok()
+    })
+}
+
+fn detect_language_from_extension_with_xml_availability(
+    extension: &str,
+    xml_parser_available: impl FnOnce() -> bool,
+) -> Result<&'static str, AstGrepError> {
     match extension.to_lowercase().as_str() {
         "js" | "mjs" | "cjs" => Ok("javascript"),
         "ts" | "mts" | "cts" => Ok("typescript"),
@@ -96,7 +106,15 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         "less" => Ok("less"),
         "json" => Ok("json"),
         "yaml" | "yml" => Ok("yaml"),
-        "xml" => Ok("xml"),
+        "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml" => {
+            if xml_parser_available() {
+                Ok("xml")
+            } else {
+                Err(AstGrepError::Language(
+                    "Unsupported file extension: XML parser is not available".to_string(),
+                ))
+            }
+        }
         "sql" => Ok("sql"),
         "sh" | "bash" => Ok("bash"),
         "lua" => Ok("lua"),
@@ -108,5 +126,51 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         _ => Err(AstGrepError::Language(format!(
             "Unsupported file extension: {extension}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        detect_language_from_extension, detect_language_from_extension_with_xml_availability,
+    };
+
+    #[test]
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+    fn detects_xml_family_extensions_when_parser_is_available() {
+        for extension in [
+            "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+        ] {
+            assert_eq!(detect_language_from_extension(extension).unwrap(), "xml");
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    fn detects_native_xml_family_extensions_when_parser_is_available() {
+        for extension in [
+            "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+        ] {
+            assert_eq!(
+                detect_language_from_extension_with_xml_availability(extension, || true).unwrap(),
+                "xml"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    fn rejects_native_xml_family_extensions_when_parser_is_unavailable() {
+        let error = detect_language_from_extension_with_xml_availability("csproj", || false)
+            .expect_err("csproj should require the XML parser");
+
+        assert!(error
+            .to_string()
+            .contains("Unsupported file extension: XML parser is not available"));
+    }
+
+    #[test]
+    fn rejects_unknown_extensions() {
+        assert!(detect_language_from_extension("unknown").is_err());
     }
 }

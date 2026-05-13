@@ -181,6 +181,8 @@ const JS_APPLY_SCRIPT_FOR_JAVA: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.java.ts");
 const JS_APPLY_SCRIPT_FOR_HTML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.html.ts");
+const JS_APPLY_SCRIPT_FOR_XML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.xml.ts");
 const JS_APPLY_SCRIPT_FOR_CSS: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.css.ts");
 const JS_APPLY_SCRIPT_FOR_KOTLIN: &str =
@@ -220,6 +222,8 @@ const JAVA_TEST_EXPECTED: &str =
 const HTML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.html");
 const HTML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.html");
+const XML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.xml");
+const XML_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.xml");
 const CSS_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.css");
 const CSS_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.css");
 const KOTLIN_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.kt");
@@ -262,6 +266,8 @@ const ASTGREP_PATTERNS_FOR_JAVA: &str =
     include_str!("../templates/astgrep-yaml/rules/config.java.yml");
 const ASTGREP_PATTERNS_FOR_HTML: &str =
     include_str!("../templates/astgrep-yaml/rules/config.html.yml");
+const ASTGREP_PATTERNS_FOR_XML: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.xml.yml");
 const ASTGREP_PATTERNS_FOR_CSS: &str =
     include_str!("../templates/astgrep-yaml/rules/config.css.yml");
 const ASTGREP_PATTERNS_FOR_KOTLIN: &str =
@@ -760,6 +766,7 @@ fn select_language() -> Result<String> {
         "Go",
         "Java",
         "HTML",
+        "XML",
         "CSS",
         "Kotlin",
         "Angular",
@@ -783,6 +790,7 @@ fn select_language() -> Result<String> {
         "Go" => "go",
         "Java" => "java",
         "HTML" => "html",
+        "XML" => "xml",
         "CSS" => "css",
         "Kotlin" => "kotlin",
         "Angular" => "angular",
@@ -916,6 +924,7 @@ fn default_include_patterns(language: &str) -> String {
         "go" => &["**/*.go"],
         "java" => &["**/*.java"],
         "html" => &["**/*.html"],
+        "xml" => &["**/*.{xml,csproj,props,targets,config,resx,xaml}"],
         "css" => &["**/*.css"],
         "kotlin" => &["**/*.kt"],
         "angular" => &["**/*.html"],
@@ -977,6 +986,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "go" => JS_APPLY_SCRIPT_FOR_GO.to_string(),
         "java" => JS_APPLY_SCRIPT_FOR_JAVA.to_string(),
         "html" => JS_APPLY_SCRIPT_FOR_HTML.to_string(),
+        "xml" => JS_APPLY_SCRIPT_FOR_XML.to_string(),
         "css" => JS_APPLY_SCRIPT_FOR_CSS.to_string(),
         "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN.to_string(),
         "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR.to_string(),
@@ -1013,6 +1023,7 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
         "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "xml" => ASTGREP_PATTERNS_FOR_XML,
         "css" => ASTGREP_PATTERNS_FOR_CSS,
         "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
         "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
@@ -1054,6 +1065,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "go" => JS_APPLY_SCRIPT_FOR_GO,
         "java" => JS_APPLY_SCRIPT_FOR_JAVA,
         "html" => JS_APPLY_SCRIPT_FOR_HTML,
+        "xml" => JS_APPLY_SCRIPT_FOR_XML,
         "css" => JS_APPLY_SCRIPT_FOR_CSS,
         "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN,
         "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR,
@@ -1080,6 +1092,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
         "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "xml" => ASTGREP_PATTERNS_FOR_XML,
         "css" => ASTGREP_PATTERNS_FOR_CSS,
         "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
         "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
@@ -1219,6 +1232,12 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.java"),
             JAVA_TEST_EXPECTED,
+        )?;
+    } else if config.language == "xml" {
+        fs::write(tests_dir.join("fixtures").join("input.xml"), XML_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.xml"),
+            XML_TEST_EXPECTED,
         )?;
     } else if config.language == "csharp" {
         fs::write(
@@ -2136,6 +2155,39 @@ mod tests {
             default_include_patterns("yaml"),
             "            - \"**/*.{yaml,yml}\""
         );
+        assert_eq!(
+            default_include_patterns("xml"),
+            "            - \"**/*.{xml,csproj,props,targets,config,resx,xaml}\""
+        );
+    }
+
+    #[test]
+    fn create_project_for_xml_generates_xml_fixtures_and_globs() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("xml-project");
+
+        let config = ProjectConfig {
+            name: "xml-project".to_string(),
+            description: "XML workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "xml".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        assert!(project_path.join("scripts/codemod.ts").is_file());
+        assert!(project_path.join("tests/fixtures/input.xml").is_file());
+        assert!(project_path.join("tests/fixtures/expected.xml").is_file());
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
     }
 
     #[test]

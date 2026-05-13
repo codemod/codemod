@@ -1,4 +1,5 @@
 use ast_grep_dynamic::{DynamicLang, Registration};
+use object::{Object, ObjectSymbol};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use thiserror::Error;
@@ -25,55 +26,76 @@ struct DynamicLanguageDefinition {
     urls: &'static [(&'static str, &'static str, &'static str)], // (os, arch, url)
 }
 
-fn get_definitions() -> &'static [DynamicLanguageDefinition] {
-    &[DynamicLanguageDefinition {
-        name: "less",
-        symbol: "tree_sitter_less",
-        extensions: &["less"],
-        expando_char: '_',
-        urls: &[
+macro_rules! parser_url {
+    ($parser:literal, $revision:literal, $artifact:literal) => {
+        concat!(
+            "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/",
+            $parser,
+            "/",
+            $revision,
+            "/",
+            $artifact
+        )
+    };
+}
+
+macro_rules! parser_urls {
+    ($parser:literal, $revision:literal) => {
+        &[
             (
                 "macos",
                 "aarch64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-arm64.dylib"
-                ),
+                parser_url!($parser, $revision, "darwin-arm64.dylib"),
             ),
             (
                 "macos",
                 "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-x64.dylib"
-                ),
+                parser_url!($parser, $revision, "darwin-x64.dylib"),
             ),
             (
                 "linux",
                 "aarch64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-arm64.so"
-                ),
+                parser_url!($parser, $revision, "linux-arm64.so"),
             ),
             (
                 "linux",
                 "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-x64.so"
-                ),
+                parser_url!($parser, $revision, "linux-x64.so"),
             ),
             (
                 "windows",
                 "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/win32-x64.dll"
-                ),
+                parser_url!($parser, $revision, "win32-x64.dll"),
             ),
-        ],
-    }]
+        ]
+    };
+}
+
+fn get_definitions() -> &'static [DynamicLanguageDefinition] {
+    &[
+        DynamicLanguageDefinition {
+            name: "less",
+            symbol: "tree_sitter_less",
+            extensions: &["less"],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-less",
+                "945f52c94250309073a96bbfbc5bcd57ff2bde49"
+            ),
+        },
+        DynamicLanguageDefinition {
+            name: "xml",
+            symbol: "tree_sitter_xml",
+            extensions: &[
+                "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+            ],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-xml",
+                "4b64dd3a03ec002258d6268d712fd93716d6ab57"
+            ),
+        },
+    ]
 }
 
 fn current_platform() -> Result<(&'static str, &'static str), LoaderError> {
@@ -113,6 +135,23 @@ fn get_cache_dir() -> Result<PathBuf, LoaderError> {
         .ok_or(LoaderError::NoCacheDir)
 }
 
+fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(file) = object::File::parse(bytes.as_slice()) else {
+        return false;
+    };
+
+    let underscored = format!("_{symbol}");
+
+    file.symbols().any(|candidate| {
+        candidate
+            .name()
+            .is_ok_and(|name| name == symbol || name == underscored)
+    })
+}
+
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
     cache_dir: &Path,
@@ -142,8 +181,18 @@ fn ensure_parser_cached(
     let cached_path = parser_dir.join(&filename);
 
     if cached_path.exists() {
-        log::debug!("Parser {} already cached at {:?}", def.name, cached_path);
-        return Ok(cached_path);
+        if !cached_parser_has_symbol(&cached_path, def.symbol) {
+            log::warn!(
+                "Cached parser {} at {:?} does not export {}; redownloading",
+                def.name,
+                cached_path,
+                def.symbol
+            );
+            std::fs::remove_file(&cached_path)?;
+        } else {
+            log::debug!("Parser {} already cached at {:?}", def.name, cached_path);
+            return Ok(cached_path);
+        }
     }
 
     log::info!("Downloading tree-sitter parser for {} ...", def.name);

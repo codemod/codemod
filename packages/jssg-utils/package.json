@@ -10,10 +10,14 @@
     "./javascript/*": {
       "types": "./src/javascript/exports/*.ts",
       "default": "./src/javascript/exports/*.ts"
+    },
+    "./xml/*": {
+      "types": "./src/xml/exports/*.ts",
+      "default": "./src/xml/exports/*.ts"
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },

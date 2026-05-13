@@ -66,6 +66,7 @@ In tree-sitter grammar:
             "c" => Some(include_str!("../data/node_types/c.txt")),
             "csharp" | "c#" | "c_sharp" => Some(include_str!("../data/node_types/c_sharp.txt")),
             "html" => Some(include_str!("../data/node_types/html.txt")),
+            "xml" => Some(include_str!("../data/node_types/xml.txt")),
             "css" => Some(include_str!("../data/node_types/css.txt")),
             "json" => Some(include_str!("../data/node_types/json.txt")),
             "yaml" | "yml" => Some(include_str!("../data/node_types/yaml.txt")),
@@ -83,5 +84,27 @@ In tree-sitter grammar:
 impl Default for NodeTypesHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NodeTypesHandler;
+
+    #[test]
+    fn xml_language_dispatch_returns_node_types() {
+        let handler = NodeTypesHandler::new();
+        let xml = handler
+            .get_node_types_for_language("xml")
+            .expect("xml node types should exist");
+        assert!(xml.contains("document:"));
+    }
+
+    #[test]
+    fn unsupported_language_returns_none() {
+        let handler = NodeTypesHandler::new();
+        assert!(handler
+            .get_node_types_for_language("not-a-language")
+            .is_none());
     }
 }

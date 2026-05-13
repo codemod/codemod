@@ -9,5 +9,6 @@ description = "Dynamic tree-sitter parser downloader and loader for codemod"
 ast-grep-dynamic = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 dirs = { workspace = true }
+object = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
