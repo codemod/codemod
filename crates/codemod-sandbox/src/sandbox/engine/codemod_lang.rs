@@ -190,16 +190,13 @@ mod tests {
     use ast_grep_core::{AstGrep, Language};
 
     #[test]
-    fn parses_dynamic_xml_language() {
+    fn xml_dynamic_language_is_executable() {
         let lang: CodemodLang = "xml".parse().expect("xml parser should be registered");
         let grep = AstGrep::new("<Project Sdk=\"Microsoft.NET.Sdk\" />", lang);
         let root = grep.root();
 
         assert_eq!(root.kind(), "document");
-    }
 
-    #[test]
-    fn detects_dynamic_xml_from_dotnet_project_path() {
         let lang =
             CodemodLang::from_path("fixture.csproj").expect("csproj should resolve to XML parser");
 
