@@ -52,6 +52,8 @@ npx codemod init
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
 </Info>
 
+The scaffolded script and fixture extensions depend on the selected target language. For example, `codemod init --target-language xml` generates XML-oriented starter files such as `scripts/codemod.xml.ts`, `rules/config.xml.yml`, and `tests/.../input.xml`.
+
 ## Package Behavior
 
 Codemod packages use a workflow-first model and can be:

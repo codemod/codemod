@@ -10,6 +10,17 @@ title: "API Reference"
 - `Edit` - Single text replacement
 - `RuleConfig` - Pattern matching configuration
 
+### Supported language imports
+- `codemod:ast-grep/langs/javascript`
+- `codemod:ast-grep/langs/typescript`
+- `codemod:ast-grep/langs/tsx`
+- `codemod:ast-grep/langs/python`
+- `codemod:ast-grep/langs/rust`
+- `codemod:ast-grep/langs/go`
+- `codemod:ast-grep/langs/java`
+- `codemod:ast-grep/langs/xml`
+- And other generated language modules shipped in `@codemod.com/jssg-types`
+
 ### Essential Methods
 - `root.root()` - Get root AST node
 - `root.filename()` - Get file path
@@ -30,6 +41,8 @@ Built-in codemod modules:
 - `codemod:workflow` — shared state and workflow integration
 - `codemod:metrics` — metrics collection across files
 - `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
+
+You can import language-specific AST typings from `codemod:ast-grep/langs/*`. For example, XML transforms now use `import type XML from "codemod:ast-grep/langs/xml"`.
 
 ## Transform Function
 

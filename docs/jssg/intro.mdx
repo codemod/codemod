@@ -158,7 +158,7 @@ export default codemod;
 *What JSSG is fundamentally better at: a different class of tool than per-file, JavaScript-only runners.*
 
 - **Workspace-level semantic analysis** — With per-file runners, following a symbol through re-exports (for example a barrel file) into another module means building resolution yourself. JSSG supports project-wide analysis out of the box: definition lookup, cross-file reference tracking, and module resolution for JS/TS (including **oxc_resolver**). That is what makes import-aware refactors practical without a custom linker. See [Semantic analysis](/jssg/semantic-analysis).
-- **Not only JavaScript** — jscodeshift targets JS/TS. JSSG is built on ast-grep and Tree-sitter, so the same tool and workflow can cover Python, Rust, Go, Java, and other languages Tree-sitter supports—one system for humans and agents to learn.
+- **Not only JavaScript** — jscodeshift targets JS/TS. JSSG is built on ast-grep and Tree-sitter, so the same tool and workflow can cover Python, Rust, Go, Java, XML, and other languages Tree-sitter supports—one system for humans and agents to learn.
 - **Performance at repo scale** — Parsing and transforming thousands of files with a JavaScript-heavy pipeline costs real time. JSSG uses Tree-sitter for parsing and Rust for pattern matching and the semantic analyzer—full workspace scans in seconds, not minutes, for many repositories.
 
 ### Developer & Agent Experience
