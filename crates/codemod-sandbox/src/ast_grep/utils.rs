@@ -73,6 +73,15 @@ pub fn convert_matcher<'js>(
 }
 
 pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, AstGrepError> {
+    detect_language_from_extension_with_xml_availability(extension, || {
+        SupportLang::from_str("xml").is_ok()
+    })
+}
+
+fn detect_language_from_extension_with_xml_availability(
+    extension: &str,
+    xml_parser_available: impl FnOnce() -> bool,
+) -> Result<&'static str, AstGrepError> {
     match extension.to_lowercase().as_str() {
         "js" | "mjs" | "cjs" => Ok("javascript"),
         "ts" | "mts" | "cts" => Ok("typescript"),
@@ -98,7 +107,7 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         "json" => Ok("json"),
         "yaml" | "yml" => Ok("yaml"),
         "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml" => {
-            if SupportLang::from_str("xml").is_ok() {
+            if xml_parser_available() {
                 Ok("xml")
             } else {
                 Err(AstGrepError::Language(
@@ -122,7 +131,9 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
 
 #[cfg(test)]
 mod tests {
-    use super::detect_language_from_extension;
+    use super::{
+        detect_language_from_extension, detect_language_from_extension_with_xml_availability,
+    };
 
     #[test]
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
@@ -132,6 +143,30 @@ mod tests {
         ] {
             assert_eq!(detect_language_from_extension(extension).unwrap(), "xml");
         }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    fn detects_native_xml_family_extensions_when_parser_is_available() {
+        for extension in [
+            "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+        ] {
+            assert_eq!(
+                detect_language_from_extension_with_xml_availability(extension, || true).unwrap(),
+                "xml"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    fn rejects_native_xml_family_extensions_when_parser_is_unavailable() {
+        let error = detect_language_from_extension_with_xml_availability("csproj", || false)
+            .expect_err("csproj should require the XML parser");
+
+        assert!(error
+            .to_string()
+            .contains("Unsupported file extension: XML parser is not available"));
     }
 
     #[test]

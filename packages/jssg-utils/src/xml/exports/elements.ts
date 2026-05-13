@@ -72,7 +72,9 @@ export function getLineIndent(src: string, node: XmlNode): string {
   while (lineStart > 0 && src[lineStart - 1] !== "\n") {
     lineStart--;
   }
-  return src.slice(lineStart, start);
+  const linePrefix = src.slice(lineStart, start);
+  const indent = linePrefix.match(/^[ \t]*/)?.[0];
+  return indent ?? "";
 }
 
 export function deleteNodeLine(src: string, node: XmlNode): Edit {
@@ -81,7 +83,7 @@ export function deleteNodeLine(src: string, node: XmlNode): Edit {
   while (startPos > 0 && src[startPos - 1] !== "\n") {
     startPos--;
   }
-  let endPos = range.end.index;
+  let endPos = range.start.index;
   while (endPos < src.length && src[endPos] !== "\n") {
     endPos++;
   }

@@ -87,6 +87,12 @@ function testGetLineIndent() {
   assert(ref !== null, "Should find PackageReference");
 
   assert(getLineIndent(source, ref!) === "    ", "Should return leading indentation");
+
+  const inlineSource = "<Project><PropertyGroup /></Project>";
+  const inlineRoot = parse<Xml>("xml", inlineSource).root();
+  const propertyGroup = findElementByTag(inlineRoot, "PropertyGroup");
+  assert(propertyGroup !== null, "Should find inline PropertyGroup");
+  assert(getLineIndent(inlineSource, propertyGroup!) === "", "Should ignore non-whitespace prefix");
 }
 
 function testDeleteNodeLine() {
@@ -98,6 +104,33 @@ function testDeleteNodeLine() {
 
   assert(!output.includes("PackageReference"), "Should remove the node line");
   assert(output.includes("  <ItemGroup>\n  </ItemGroup>"), "Should preserve surrounding lines");
+
+  const multiLineSource = [
+    "<Project>",
+    "  <ItemGroup>",
+    '    <PackageReference Include="A">',
+    "      <PrivateAssets>all</PrivateAssets>",
+    "    </PackageReference>",
+    "  </ItemGroup>",
+    "</Project>",
+    "",
+  ].join("\n");
+  const multiLineRoot = parse<Xml>("xml", multiLineSource).root();
+  const multiLineRef = findElementByTag(multiLineRoot, "PackageReference");
+  assert(multiLineRef !== null, "Should find multi-line PackageReference");
+
+  const multiLineEdit = deleteNodeLine(multiLineSource, multiLineRef!);
+  const multiLineOutput = multiLineRoot.commitEdits([multiLineEdit]);
+
+  assert(
+    !multiLineOutput.includes('    <PackageReference Include="A">'),
+    "Should remove start line",
+  );
+  assert(
+    multiLineOutput.includes("      <PrivateAssets>all</PrivateAssets>"),
+    "Should keep later lines",
+  );
+  assert(multiLineOutput.includes("    </PackageReference>"), "Should not delete the full node");
 }
 
 testFindElementsByTag();
