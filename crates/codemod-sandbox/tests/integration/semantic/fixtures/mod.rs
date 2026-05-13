@@ -198,12 +198,13 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         None
     } else {
         let provider = match config.language {
-            CodemodLang::Static(SupportLang::JavaScript)
-            | CodemodLang::Static(SupportLang::TypeScript)
-            | CodemodLang::Static(SupportLang::Tsx) => {
+            lang if lang == CodemodLang::from(SupportLang::JavaScript)
+                || lang == CodemodLang::from(SupportLang::TypeScript)
+                || lang == CodemodLang::from(SupportLang::Tsx) =>
+            {
                 create_js_provider(config.scope, Some(temp_dir.path()))
             }
-            CodemodLang::Static(SupportLang::Python) => {
+            lang if lang == CodemodLang::from(SupportLang::Python) => {
                 create_python_provider(config.scope, Some(temp_dir.path()))
             }
             _ => panic!("Unsupported language: {:?}", config.language),

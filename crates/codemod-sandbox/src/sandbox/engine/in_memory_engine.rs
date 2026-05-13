@@ -456,7 +456,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn js_lang() -> CodemodLang {
-        CodemodLang::Static(SupportLang::JavaScript)
+        CodemodLang::from(SupportLang::JavaScript)
     }
 
     fn compute_sha256(content: &str) -> Sha256Hash {

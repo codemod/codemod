@@ -1,5 +1,5 @@
 use ast_grep_core::matcher::{Pattern, PatternBuilder, PatternError};
-use ast_grep_core::tree_sitter::{LanguageExt, StrDoc, TSLanguage};
+use ast_grep_core::tree_sitter::{LanguageExt, TSLanguage};
 use ast_grep_core::Language;
 use ast_grep_dynamic::DynamicLang;
 use ast_grep_language::SupportLang;
@@ -9,16 +9,17 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-/// A language type that wraps both statically-linked `SupportLang` (from ast-grep)
-/// and dynamically-loaded `DynamicLang` (from tree-sitter-loader).
+use super::static_lang::StaticLang;
+
+/// A language type that wraps statically-linked languages and dynamically-loaded
+/// `DynamicLang` (from tree-sitter-loader).
 ///
 /// This allows the engine to support languages beyond the 26 built into ast-grep
 /// by downloading and loading tree-sitter parsers at runtime.
 #[derive(Clone, Copy)]
 pub enum CodemodLang {
-    Static(SupportLang),
+    Static(StaticLang),
     Dynamic(DynamicLang),
-    Xml,
 }
 
 impl PartialEq for CodemodLang {
@@ -26,7 +27,6 @@ impl PartialEq for CodemodLang {
         match (self, other) {
             (CodemodLang::Static(a), CodemodLang::Static(b)) => a == b,
             (CodemodLang::Dynamic(a), CodemodLang::Dynamic(b)) => a == b,
-            (CodemodLang::Xml, CodemodLang::Xml) => true,
             _ => false,
         }
     }
@@ -45,10 +45,6 @@ impl Hash for CodemodLang {
                 1u8.hash(state);
                 lang.hash(state);
             }
-            CodemodLang::Xml => {
-                2u8.hash(state);
-                "xml".hash(state);
-            }
         }
     }
 }
@@ -58,7 +54,6 @@ impl fmt::Display for CodemodLang {
         match self {
             CodemodLang::Static(lang) => write!(f, "{}", lang),
             CodemodLang::Dynamic(lang) => write!(f, "{}", lang.name()),
-            CodemodLang::Xml => write!(f, "xml"),
         }
     }
 }
@@ -68,7 +63,6 @@ impl fmt::Debug for CodemodLang {
         match self {
             CodemodLang::Static(lang) => write!(f, "CodemodLang::Static({:?})", lang),
             CodemodLang::Dynamic(lang) => write!(f, "CodemodLang::Dynamic({})", lang.name()),
-            CodemodLang::Xml => write!(f, "CodemodLang::Xml"),
         }
     }
 }
@@ -78,12 +72,8 @@ impl FromStr for CodemodLang {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Try static languages first
-        if let Ok(lang) = SupportLang::from_str(s) {
+        if let Ok(lang) = StaticLang::from_str(s) {
             return Ok(CodemodLang::Static(lang));
-        }
-
-        if s.eq_ignore_ascii_case("xml") {
-            return Ok(CodemodLang::Xml);
         }
 
         // Initialize dynamic parsers and try dynamic languages
@@ -101,6 +91,12 @@ impl FromStr for CodemodLang {
 
 impl From<SupportLang> for CodemodLang {
     fn from(lang: SupportLang) -> Self {
+        CodemodLang::Static(StaticLang::Builtin(lang))
+    }
+}
+
+impl From<StaticLang> for CodemodLang {
+    fn from(lang: StaticLang) -> Self {
         CodemodLang::Static(lang)
     }
 }
@@ -135,7 +131,6 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.pre_process_pattern(query),
             CodemodLang::Dynamic(lang) => lang.pre_process_pattern(query),
-            CodemodLang::Xml => pre_process_pattern(self.expando_char(), query),
         }
     }
 
@@ -143,7 +138,6 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.meta_var_char(),
             CodemodLang::Dynamic(lang) => lang.meta_var_char(),
-            CodemodLang::Xml => '$',
         }
     }
 
@@ -151,7 +145,6 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.expando_char(),
             CodemodLang::Dynamic(lang) => lang.expando_char(),
-            CodemodLang::Xml => '_',
         }
     }
 
@@ -159,7 +152,6 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.kind_to_id(kind),
             CodemodLang::Dynamic(lang) => lang.kind_to_id(kind),
-            CodemodLang::Xml => self.get_ts_language().id_for_node_kind(kind, true),
         }
     }
 
@@ -167,24 +159,12 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.field_to_id(field),
             CodemodLang::Dynamic(lang) => lang.field_to_id(field),
-            CodemodLang::Xml => self
-                .get_ts_language()
-                .field_id_for_name(field)
-                .map(|f| f.get()),
         }
     }
 
     fn from_path<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
-        if let Some(lang) = SupportLang::from_path(path.as_ref()) {
+        if let Some(lang) = StaticLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
-        }
-        if let Some(ext) = path.as_ref().extension().and_then(|ext| ext.to_str()) {
-            if matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml"
-            ) {
-                return Some(CodemodLang::Xml);
-            }
         }
         if let Some(lang) = DynamicLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Dynamic(lang));
@@ -196,7 +176,6 @@ impl Language for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.build_pattern(builder),
             CodemodLang::Dynamic(lang) => lang.build_pattern(builder),
-            CodemodLang::Xml => builder.build(|src| StrDoc::try_new(src, *self)),
         }
     }
 }
@@ -206,75 +185,6 @@ impl LanguageExt for CodemodLang {
         match self {
             CodemodLang::Static(lang) => lang.get_ts_language(),
             CodemodLang::Dynamic(lang) => lang.get_ts_language(),
-            CodemodLang::Xml => tree_sitter_xml::LANGUAGE_XML.into(),
         }
-    }
-}
-
-fn pre_process_pattern(expando: char, query: &str) -> Cow<'_, str> {
-    let mut ret = Vec::with_capacity(query.len());
-    let mut dollar_count = 0;
-    for c in query.chars() {
-        if c == '$' {
-            dollar_count += 1;
-            continue;
-        }
-        let need_replace = matches!(c, 'A'..='Z' | '_') || dollar_count == 3;
-        let sigil = if need_replace { expando } else { '$' };
-        ret.extend(std::iter::repeat_n(sigil, dollar_count));
-        dollar_count = 0;
-        ret.push(c);
-    }
-    let sigil = if dollar_count == 3 { expando } else { '$' };
-    ret.extend(std::iter::repeat_n(sigil, dollar_count));
-    Cow::Owned(ret.into_iter().collect())
-}
-
-#[cfg(all(test, feature = "native"))]
-mod tests {
-    use super::CodemodLang;
-    use ast_grep_core::{AstGrep, Language};
-
-    #[test]
-    fn parses_xml_language_name() {
-        let lang: CodemodLang = "xml".parse().expect("xml language should parse");
-        assert_eq!(lang.to_string(), "xml");
-    }
-
-    #[test]
-    fn detects_xml_family_paths() {
-        assert!(matches!(
-            CodemodLang::from_path("test.csproj"),
-            Some(CodemodLang::Xml)
-        ));
-        assert!(matches!(
-            CodemodLang::from_path("App.config"),
-            Some(CodemodLang::Xml)
-        ));
-    }
-
-    #[test]
-    fn parses_xml_documents() {
-        let grep = AstGrep::new("<Project Sdk=\"Microsoft.NET.Sdk\" />", CodemodLang::Xml);
-        let root = grep.root();
-        assert_eq!(root.kind(), "document");
-        assert_eq!(CodemodLang::Xml.expando_char(), '_');
-    }
-
-    #[test]
-    fn xml_preprocessing_preserves_literal_dollar_content() {
-        let processed = CodemodLang::Xml.pre_process_pattern("<Price>$5</Price>");
-        assert_eq!(processed.as_ref(), "<Price>$5</Price>");
-    }
-
-    #[test]
-    fn xml_preprocessing_rewrites_only_metavariables() {
-        let processed = CodemodLang::Xml.pre_process_pattern(
-            "<Project><Property>$VALUE</Property><Literal>$5</Literal></Project>",
-        );
-        assert_eq!(
-            processed.as_ref(),
-            "<Project><Property>_VALUE</Property><Literal>$5</Literal></Project>"
-        );
     }
 }

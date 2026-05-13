@@ -1,5 +1,5 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>v4.7.2</TargetFramework>
+    <TargetFramework>net472</TargetFramework>
   </PropertyGroup>
 </Project>

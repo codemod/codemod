@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 #[cfg(feature = "native")]
 use super::codemod_lang::CodemodLang;
+#[cfg(feature = "native")]
+use super::static_lang::StaticLang;
 
 /// Creates a map from CodemodLang to their associated file extensions
 pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>> {
@@ -12,50 +14,50 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
         use ast_grep_language::SupportLang::*;
 
         map.insert(
-            CodemodLang::Static(JavaScript),
+            CodemodLang::from(JavaScript),
             vec![".js", ".mjs", ".cjs", ".jsx"],
         );
         map.insert(
-            CodemodLang::Static(TypeScript),
+            CodemodLang::from(TypeScript),
             vec![".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"],
         );
         map.insert(
-            CodemodLang::Static(Tsx),
+            CodemodLang::from(Tsx),
             vec![".tsx", ".jsx", ".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"],
         );
         map.insert(
-            CodemodLang::Static(Bash),
+            CodemodLang::from(Bash),
             vec![".sh", ".bash", ".zsh", ".fish"],
         );
-        map.insert(CodemodLang::Static(C), vec![".c", ".h"]);
-        map.insert(CodemodLang::Static(CSharp), vec![".cs"]);
-        map.insert(CodemodLang::Static(Css), vec![".css"]);
+        map.insert(CodemodLang::from(C), vec![".c", ".h"]);
+        map.insert(CodemodLang::from(CSharp), vec![".cs"]);
+        map.insert(CodemodLang::from(Css), vec![".css"]);
         map.insert(
-            CodemodLang::Static(Cpp),
+            CodemodLang::from(Cpp),
             vec![".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++"],
         );
-        map.insert(CodemodLang::Static(Elixir), vec![".ex", ".exs"]);
-        map.insert(CodemodLang::Static(Go), vec![".go"]);
-        map.insert(CodemodLang::Static(Haskell), vec![".hs", ".lhs"]);
-        map.insert(CodemodLang::Static(Html), vec![".html", ".htm"]);
-        map.insert(CodemodLang::Static(Java), vec![".java"]);
-        map.insert(CodemodLang::Static(Json), vec![".json", ".jsonc"]);
-        map.insert(CodemodLang::Static(Kotlin), vec![".kt", ".kts"]);
-        map.insert(CodemodLang::Static(Lua), vec![".lua"]);
+        map.insert(CodemodLang::from(Elixir), vec![".ex", ".exs"]);
+        map.insert(CodemodLang::from(Go), vec![".go"]);
+        map.insert(CodemodLang::from(Haskell), vec![".hs", ".lhs"]);
+        map.insert(CodemodLang::from(Html), vec![".html", ".htm"]);
+        map.insert(CodemodLang::from(Java), vec![".java"]);
+        map.insert(CodemodLang::from(Json), vec![".json", ".jsonc"]);
+        map.insert(CodemodLang::from(Kotlin), vec![".kt", ".kts"]);
+        map.insert(CodemodLang::from(Lua), vec![".lua"]);
         map.insert(
-            CodemodLang::Static(Php),
+            CodemodLang::from(Php),
             vec![
                 ".php", ".phtml", ".php3", ".php4", ".php5", ".php7", ".phps", ".php-s",
             ],
         );
-        map.insert(CodemodLang::Static(Python), vec![".py", ".pyw", ".pyi"]);
-        map.insert(CodemodLang::Static(Ruby), vec![".rb", ".rbw"]);
-        map.insert(CodemodLang::Static(Rust), vec![".rs"]);
-        map.insert(CodemodLang::Static(Scala), vec![".scala", ".sc"]);
-        map.insert(CodemodLang::Static(Swift), vec![".swift"]);
-        map.insert(CodemodLang::Static(Yaml), vec![".yaml", ".yml"]);
+        map.insert(CodemodLang::from(Python), vec![".py", ".pyw", ".pyi"]);
+        map.insert(CodemodLang::from(Ruby), vec![".rb", ".rbw"]);
+        map.insert(CodemodLang::from(Rust), vec![".rs"]);
+        map.insert(CodemodLang::from(Scala), vec![".scala", ".sc"]);
+        map.insert(CodemodLang::from(Swift), vec![".swift"]);
+        map.insert(CodemodLang::from(Yaml), vec![".yaml", ".yml"]);
         map.insert(
-            CodemodLang::Xml,
+            CodemodLang::from(StaticLang::Xml),
             vec![
                 ".xml", ".csproj", ".props", ".targets", ".config", ".resx", ".xaml",
             ],
@@ -110,24 +112,26 @@ mod tests {
         assert!(!map.is_empty());
 
         assert!(map
-            .get(&CodemodLang::Static(SupportLang::JavaScript))
+            .get(&CodemodLang::from(SupportLang::JavaScript))
             .unwrap()
             .contains(&".js"));
         assert!(map
-            .get(&CodemodLang::Static(SupportLang::TypeScript))
+            .get(&CodemodLang::from(SupportLang::TypeScript))
             .unwrap()
             .contains(&".ts"));
         assert!(map
-            .get(&CodemodLang::Static(SupportLang::Rust))
+            .get(&CodemodLang::from(SupportLang::Rust))
             .unwrap()
             .contains(&".rs"));
-        assert!(map.get(&CodemodLang::Xml).unwrap().contains(&".csproj"));
+        assert!(map
+            .get(&CodemodLang::from(StaticLang::Xml))
+            .unwrap()
+            .contains(&".csproj"));
     }
 
     #[test]
     fn test_get_extensions_for_language() {
-        let js_extensions =
-            get_extensions_for_language(CodemodLang::Static(SupportLang::JavaScript));
+        let js_extensions = get_extensions_for_language(CodemodLang::from(SupportLang::JavaScript));
         assert!(js_extensions.contains(&".js"));
         assert!(js_extensions.contains(&".mjs"));
         assert!(js_extensions.contains(&".cjs"));
@@ -139,7 +143,7 @@ mod tests {
         assert!(lang.is_some());
 
         let lang = get_language_from_extension(".csproj");
-        assert!(matches!(lang, Some(CodemodLang::Xml)));
+        assert_eq!(lang, Some(CodemodLang::from(StaticLang::Xml)));
 
         let lang = get_language_from_extension(".unknown");
         assert!(lang.is_none());
