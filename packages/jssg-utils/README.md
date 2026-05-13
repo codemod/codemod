@@ -86,3 +86,29 @@ Behavior:
 - Named: removes a specifier; if you’re removing the last specifier(s), removes the entire statement
 
 Note: this function returns a **single edit**. For named removals, it removes the first matching specifier it finds unless it can remove the whole statement.
+
+## XML element helpers
+
+Import from:
+
+```ts
+import {
+  findElementsByTag,
+  findElementByTag,
+  findElementByKind,
+  getAttributeValue,
+  hasTag,
+  getLineIndent,
+  deleteNodeLine,
+} from "@jssg/utils/xml/elements";
+```
+
+These helpers work on XML `SgNode`s from `codemod:ast-grep/langs/xml`.
+
+- `findElementsByTag(root, tag)` returns all XML `element` nodes with a matching start or empty-element tag.
+- `findElementByTag(node, tag)` returns the first matching XML element below `node`.
+- `findElementByKind(node, kind)` returns the first descendant with the requested XML node kind.
+- `getAttributeValue(element, attrName)` returns an unquoted XML attribute value, or `null`.
+- `hasTag(root, tag)` checks whether a tag exists.
+- `getLineIndent(src, node)` returns the whitespace before `node` on its line.
+- `deleteNodeLine(src, node)` creates an edit that removes the full source line containing `node`.
