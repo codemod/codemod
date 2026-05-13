@@ -584,8 +584,6 @@ fn parse_json_or_raw(input: &str) -> serde_json::Value {
 
 fn sanitize_agent_text(text: &str) -> String {
     strip_ansi_escape_sequences(text)
-        .replace("[0m", "")
-        .replace("[1m", "")
 }
 
 #[cfg(test)]
@@ -688,5 +686,17 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn sanitize_agent_text_preserves_literal_bracket_sequences() {
+        assert_eq!(
+            super::sanitize_agent_text("literal [0m and [1m stay"),
+            "literal [0m and [1m stay"
+        );
+        assert_eq!(
+            super::sanitize_agent_text("\x1b[1mstyled\x1b[0m literal [0m"),
+            "styled literal [0m"
+        );
     }
 }

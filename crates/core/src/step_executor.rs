@@ -115,7 +115,7 @@ impl<'a> StepExecutor<'a> {
                             }
                         }
 
-                        Pin::from(Box::new(self.execute(StepExecutionRequest {
+                        self.execute(StepExecutionRequest {
                             runner: request.runner,
                             action: &template_step.action,
                             step_name: &template_step.name,
@@ -131,7 +131,7 @@ impl<'a> StepExecutor<'a> {
                             capabilities: request.capabilities,
                             task_expr_ctx: request.task_expr_ctx,
                             logger: request.logger,
-                        })))
+                        })
                         .await?;
                     }
                     Ok(())
