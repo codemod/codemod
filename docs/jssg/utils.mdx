@@ -70,6 +70,7 @@ Returns `null` if the import is not found.
 | CJS destructured | `const { bar } = require("module")` |
 | CJS aliased | `const { bar: baz } = require("module")` |
 | Dynamic import | `const foo = await import("module")` |
+| Dynamic import (destructured) | `const { bar } = await import("module")` |
 
 ### Example
 
@@ -247,7 +248,7 @@ Remove an import from the program. Smart behavior:
 
 <ParamField body="options" type="RemoveImportOptions" required>
   One of:
-  - `{ type: "default", from: string }` — Remove the default import from a module.
+  - `{ type: "default", from: string, removeSideEffectForms?: boolean }` — Remove the default import from a module. If no bound default import exists, `removeSideEffectForms: true` also removes bare `import "module"` and `require("module")` statements for the same source.
   - `{ type: "namespace", from: string }` — Remove the namespace import from a module.
   - `{ type: "named", specifiers: string[], from: string }` — Remove specific named imports.
 </ParamField>
