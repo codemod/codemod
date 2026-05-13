@@ -106,7 +106,7 @@ pub(crate) fn validate_package_behavior_structure(
 
     if !merged.has_executable_steps && !merged.has_install_skill_steps && !has_skill_layout {
         return Err(anyhow!(
-            "Package does not define runnable behavior. Add some workflow steps."
+            "Invalid package structure: package does not define runnable behavior. Add executable workflow steps and/or `install-skill` steps with authored skill files."
         ));
     }
 
