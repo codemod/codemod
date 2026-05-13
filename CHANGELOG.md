@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.9.5] - 2026-05-13
+
+### 🐛 Bug Fixes
+
+- Fix the scoped package resolution issue
+
 ## [codemod-cli@1.9.4] - 2026-05-13
 
 ### 🐛 Bug Fixes
