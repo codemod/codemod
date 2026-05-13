@@ -307,16 +307,19 @@ npx codemod workflow validate -w <workflow.yaml>
   Path to workflow file or codemod package directory.
 </ResponseField>
 
-| Check                       | Ensures                                |
-| --------------------------- | -------------------------------------- |
-| Schema validation           | YAML matches the workflow spec         |
-| Unique IDs                  | Node & template IDs are unique         |
-| Dependency validation       | Every `depends_on` exists              |
-| Cyclic dependency detection | DAG has no cycles                      |
-| Template references         | All `template:` IDs exist              |
-| Matrix validation           | `from_state` matches schema            |
-| State schema validation     | `state.schema` is valid                |
-| Variable syntax             | `${{…}}` uses `params`, `env`, `state` |
+| Check                            | Ensures                                                                |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| Schema validation                | YAML matches the workflow spec                                         |
+| Unique IDs                       | Node & template IDs are unique                                         |
+| Dependency validation            | Every `depends_on` exists                                              |
+| Cyclic dependency detection      | DAG has no cycles                                                      |
+| Template references              | All `template:` IDs exist                                              |
+| Matrix validation                | `from_state` matches schema                                            |
+| State schema validation          | `state.schema` is valid                                                |
+| Variable syntax                  | `${{…}}` uses `params`, `env`, `state`                                 |
+| Package structure validation     | Workflow/skill layout matches the selected package behavior             |
+| Skill frontmatter validation     | Authored package skills include required metadata and compatibility     |
+| Skill references/layout checks   | Referenced authored skill files exist and the install payload is usable |
 
 <Info>
   Why validate?
