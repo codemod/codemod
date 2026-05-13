@@ -1,5 +1,5 @@
 import type Xml from "@codemod.com/jssg-types/langs/xml";
-import type { Edit, Kinds, Rule, SgNode } from "@codemod.com/jssg-types/main";
+import type { Kinds, Rule, SgNode } from "@codemod.com/jssg-types/main";
 
 export type XmlNode = SgNode<Xml, Kinds<Xml>>;
 
@@ -75,18 +75,4 @@ export function getLineIndent(src: string, node: XmlNode): string {
   const linePrefix = src.slice(lineStart, start);
   const indent = linePrefix.match(/^[ \t]*/)?.[0];
   return indent ?? "";
-}
-
-export function deleteNodeLine(src: string, node: XmlNode): Edit {
-  const range = node.range();
-  let startPos = range.start.index;
-  while (startPos > 0 && src[startPos - 1] !== "\n") {
-    startPos--;
-  }
-  let endPos = range.start.index;
-  while (endPos < src.length && src[endPos] !== "\n") {
-    endPos++;
-  }
-  if (endPos < src.length) endPos++;
-  return { startPos, endPos, insertedText: "" };
 }

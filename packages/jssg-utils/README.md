@@ -99,7 +99,6 @@ import {
   getAttributeValue,
   hasTag,
   getLineIndent,
-  deleteNodeLine,
 } from "@jssg/utils/xml/elements";
 ```
 
@@ -111,4 +110,3 @@ These helpers work on XML `SgNode`s from `codemod:ast-grep/langs/xml`.
 - `getAttributeValue(element, attrName)` returns an unquoted XML attribute value, or `null`.
 - `hasTag(root, tag)` checks whether a tag exists.
 - `getLineIndent(src, node)` returns the whitespace before `node` on its line.
-- `deleteNodeLine(src, node)` creates an edit that removes the full source line containing `node`.
