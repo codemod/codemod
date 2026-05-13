@@ -16,6 +16,7 @@ use ast_grep_core::{
 use ast_grep_language::SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
+use std::str::FromStr;
 
 use super::serde::JsValue;
 
@@ -96,7 +97,15 @@ pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, A
         "less" => Ok("less"),
         "json" => Ok("json"),
         "yaml" | "yml" => Ok("yaml"),
-        "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml" => Ok("xml"),
+        "xml" | "csproj" | "props" | "targets" | "config" | "resx" | "xaml" => {
+            if SupportLang::from_str("xml").is_ok() {
+                Ok("xml")
+            } else {
+                Err(AstGrepError::Language(
+                    "Unsupported file extension: XML parser is not available".to_string(),
+                ))
+            }
+        }
         "sql" => Ok("sql"),
         "sh" | "bash" => Ok("bash"),
         "lua" => Ok("lua"),
@@ -116,11 +125,22 @@ mod tests {
     use super::detect_language_from_extension;
 
     #[test]
-    fn detects_xml_family_extensions() {
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+    fn detects_xml_family_extensions_when_parser_is_available() {
         for extension in [
             "xml", "csproj", "props", "targets", "config", "resx", "xaml",
         ] {
             assert_eq!(detect_language_from_extension(extension).unwrap(), "xml");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "native")]
+    fn rejects_xml_family_extensions_when_dynamic_parser_is_unavailable() {
+        for extension in [
+            "xml", "csproj", "props", "targets", "config", "resx", "xaml",
+        ] {
+            assert!(detect_language_from_extension(extension).is_err());
         }
     }
 
