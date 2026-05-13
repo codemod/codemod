@@ -10063,6 +10063,7 @@ dependencies = [
  "ast-grep-dynamic",
  "dirs",
  "log",
+ "object 0.32.2",
  "reqwest 0.12.23",
  "thiserror 2.0.16",
 ]

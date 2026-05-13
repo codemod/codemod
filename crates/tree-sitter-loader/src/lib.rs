@@ -1,4 +1,5 @@
 use ast_grep_dynamic::{DynamicLang, Registration};
+use object::{Object, ObjectSymbol};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use thiserror::Error;
@@ -163,6 +164,23 @@ fn get_cache_dir() -> Result<PathBuf, LoaderError> {
         .ok_or(LoaderError::NoCacheDir)
 }
 
+fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(file) = object::File::parse(bytes.as_slice()) else {
+        return false;
+    };
+
+    let underscored = format!("_{symbol}");
+
+    file.symbols().any(|candidate| {
+        candidate
+            .name()
+            .is_ok_and(|name| name == symbol || name == underscored)
+    })
+}
+
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
     cache_dir: &Path,
@@ -192,8 +210,18 @@ fn ensure_parser_cached(
     let cached_path = parser_dir.join(&filename);
 
     if cached_path.exists() {
-        log::debug!("Parser {} already cached at {:?}", def.name, cached_path);
-        return Ok(cached_path);
+        if !cached_parser_has_symbol(&cached_path, def.symbol) {
+            log::warn!(
+                "Cached parser {} at {:?} does not export {}; redownloading",
+                def.name,
+                cached_path,
+                def.symbol
+            );
+            std::fs::remove_file(&cached_path)?;
+        } else {
+            log::debug!("Parser {} already cached at {:?}", def.name, cached_path);
+            return Ok(cached_path);
+        }
     }
 
     log::info!("Downloading tree-sitter parser for {} ...", def.name);

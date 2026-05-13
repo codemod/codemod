@@ -79,6 +79,12 @@ futures = "0.3"
 ignore = { version = "0.4.23" }
 log = "0.4"
 miette = { version = "7.6.0", features = ["derive", "fancy"] }
+object = { version = "0.32", default-features = false, features = [
+  "elf",
+  "macho",
+  "pe",
+  "read_core",
+] }
 regex = "1.10"
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls-native-roots",
