@@ -211,7 +211,7 @@ impl RegistryClient {
 
         let resolved_package_spec = PackageSpec {
             name: package_info.name.clone(),
-            scope: package_info.scope.clone(),
+            scope: package_info.scope.as_deref().map(normalize_scope),
             version: None,
         };
 
@@ -652,6 +652,14 @@ pub fn parse_package_spec(package: &str) -> Result<PackageSpec> {
     })
 }
 
+fn normalize_scope(scope: &str) -> String {
+    if scope.starts_with('@') {
+        scope.to_string()
+    } else {
+        format!("@{scope}")
+    }
+}
+
 pub fn format_package_spec(spec: &PackageSpec) -> String {
     let name = if let Some(scope) = &spec.scope {
         format!("{}/{}", scope, spec.name)
@@ -772,13 +780,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_package_preserves_resolved_scope_format_without_at_prefix() {
+    async fn resolve_package_normalizes_resolved_scope_without_at_prefix() {
         assert_resolve_package_downloads_from_resolved_path(
             "@alias/alias-package@1.0.0",
             "/api/v1/registry/packages/@alias/alias-package",
             "canonical-package",
             Some("codemod"),
-            "/api/v1/registry/packages/codemod/canonical-package/download/1.0.0",
+            "/api/v1/registry/packages/@codemod/canonical-package/download/1.0.0",
         )
         .await;
     }
