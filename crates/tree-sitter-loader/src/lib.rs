@@ -19,7 +19,6 @@ pub enum LoaderError {
 
 struct DynamicLanguageDefinition {
     name: &'static str,
-    cache_key: &'static str,
     symbol: &'static str,
     extensions: &'static [&'static str],
     expando_char: char,
@@ -30,7 +29,6 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
     &[
         DynamicLanguageDefinition {
             name: "less",
-            cache_key: "945f52c94250309073a96bbfbc5bcd57ff2bde49",
             symbol: "tree_sitter_less",
             extensions: &["less"],
             expando_char: '_',
@@ -79,7 +77,6 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
         },
         DynamicLanguageDefinition {
             name: "xml",
-            cache_key: "4b64dd3a03ec002258d6268d712fd93716d6ab57-xml",
             symbol: "tree_sitter_xml",
             extensions: &["xml", "csproj", "props", "targets", "config", "resx", "xaml"],
             expando_char: '_',
@@ -190,7 +187,7 @@ fn ensure_parser_cached(
         "so"
     };
 
-    let filename = format!("{}-{}.{}", def.name, def.cache_key, ext);
+    let filename = format!("{}.{}", def.name, ext);
     let parser_dir = cache_dir.join(def.name);
     let cached_path = parser_dir.join(&filename);
 

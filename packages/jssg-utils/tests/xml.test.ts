@@ -57,6 +57,26 @@ function testGetAttributeValue() {
   assert(getAttributeValue(ref!, "Missing") === null, "Should return null for missing attributes");
 }
 
+function testGetAttributeValueIgnoresDescendantAttributes() {
+  const nested = parse<Xml>(
+    "xml",
+    [
+      '<Project Sdk="Microsoft.NET.Sdk">',
+      '  <ItemGroup Include="outer">',
+      '    <PackageReference Include="inner" />',
+      "  </ItemGroup>",
+      "</Project>",
+    ].join("\n"),
+  ).root();
+  const project = findElementByTag(nested, "Project");
+  const itemGroup = findElementByTag(nested, "ItemGroup");
+
+  assert(project !== null, "Should find Project");
+  assert(itemGroup !== null, "Should find ItemGroup");
+  assert(getAttributeValue(project!, "Include") === null, "Should not read descendant attributes");
+  assert(getAttributeValue(itemGroup!, "Include") === "outer", "Should read direct tag attributes");
+}
+
 function testHasTag() {
   assert(hasTag(root, "TargetFramework"), "Should detect present tags");
   assert(!hasTag(root, "TargetFrameworks"), "Should reject absent tags");
@@ -84,6 +104,7 @@ testFindElementsByTag();
 testFindElementByTag();
 testFindElementByKind();
 testGetAttributeValue();
+testGetAttributeValueIgnoresDescendantAttributes();
 testHasTag();
 testGetLineIndent();
 testDeleteNodeLine();

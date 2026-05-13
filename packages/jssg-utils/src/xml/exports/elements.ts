@@ -46,19 +46,17 @@ export function findElementByKind(node: XmlNode, kind: keyof Xml): XmlNode | nul
 }
 
 export function getAttributeValue(element: XmlNode, attrName: string): string | null {
-  const text = element
-    .find({
-      rule: {
-        kind: "AttValue",
-        inside: {
-          kind: "Attribute",
-          has: {
-            kind: "Name",
-            pattern: attrName,
-          },
-        },
-      },
-    })
+  const tag = element.children().find((child) => child.is("STag") || child.is("EmptyElemTag"));
+  const attr = tag
+    ?.children()
+    .find(
+      (child) =>
+        child.is("Attribute") &&
+        child.children().some((attrChild) => attrChild.is("Name") && attrChild.text() === attrName),
+    );
+  const text = attr
+    ?.children()
+    .find((child) => child.is("AttValue"))
     ?.text();
 
   return text ? text.slice(1, text.length - 1) : null;
