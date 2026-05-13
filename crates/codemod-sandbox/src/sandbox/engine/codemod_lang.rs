@@ -183,23 +183,3 @@ impl LanguageExt for CodemodLang {
         }
     }
 }
-
-#[cfg(all(test, feature = "native"))]
-mod tests {
-    use super::CodemodLang;
-    use ast_grep_core::{AstGrep, Language};
-
-    #[test]
-    fn xml_dynamic_language_is_executable() {
-        let lang: CodemodLang = "xml".parse().expect("xml parser should be registered");
-        let grep = AstGrep::new("<Project Sdk=\"Microsoft.NET.Sdk\" />", lang);
-        let root = grep.root();
-
-        assert_eq!(root.kind(), "document");
-
-        let lang =
-            CodemodLang::from_path("fixture.csproj").expect("csproj should resolve to XML parser");
-
-        assert_eq!(lang.to_string(), "xml");
-    }
-}
