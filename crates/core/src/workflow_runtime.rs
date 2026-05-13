@@ -554,12 +554,13 @@ impl WorkflowSession {
         let interactor = WorkflowSessionInteractor::new(event_tx.clone(), Arc::clone(&pending));
         engine.set_quiet(true);
         let config = engine.workflow_run_config_mut();
-        config.capabilities_security_callback = Some(interactor.capabilities_callback());
-        config.agent_selection_callback = Some(interactor.agent_callback());
-        config.selection_prompt_callback = Some(interactor.selection_callback());
-        config.shell_command_approval_callback = Some(interactor.shell_callback());
-        config.pull_request_approval_callback = Some(interactor.pull_request_callback());
-        config.dirty_git_approval_callback = Some(interactor.dirty_git_callback());
+        config.execution.capabilities_security_callback = Some(interactor.capabilities_callback());
+        config.interaction.agent_selection_callback = Some(interactor.agent_callback());
+        config.interaction.selection_prompt_callback = Some(interactor.selection_callback());
+        config.interaction.shell_command_approval_callback = Some(interactor.shell_callback());
+        config.interaction.pull_request_approval_callback =
+            Some(interactor.pull_request_callback());
+        config.interaction.dirty_git_approval_callback = Some(interactor.dirty_git_callback());
 
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<SessionCommandEnvelope>();
         let command_engine = engine.clone();

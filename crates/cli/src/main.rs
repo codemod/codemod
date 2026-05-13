@@ -5,12 +5,14 @@ use inquire::{Select, Text};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
+mod agent_log_renderer;
 mod agent_select;
 mod ascii_art;
 mod auth;
 mod auth_provider;
 mod capabilities_security_callback;
 mod commands;
+mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod progress_bar;
@@ -372,19 +374,26 @@ async fn handle_implicit_run_command(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Initialize logger
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("error"));
+async fn main() {
+    if let Err(error) = run_cli().await {
+        if error
+            .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
+            .is_none()
+        {
+            diagnostics::render_anyhow_error(&error);
+        }
+        exit_with_code(1);
+    }
+}
 
+async fn run_cli() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
 
-    // Set log level based on verbose flag
-    if cli.verbose {
-        std::env::set_var("RUST_LOG", "debug");
-    } else {
-        std::env::set_var("RUST_LOG", "info");
-    }
+    // Keep diagnostic logs quiet by default so workflow/TUI rendering owns the terminal.
+    // Users can still opt into diagnostics with --verbose or RUST_LOG.
+    let default_log_filter = if cli.verbose { "debug" } else { "error" };
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_log_filter));
 
     let implicit_cli_params = Cli::try_parse_from(cli.trailing_args.clone());
 

@@ -96,11 +96,10 @@ impl DirectRunner {
                 .map_err(|_| Error::Runtime("Failed to join output reader".to_string()))?;
 
             if !exit_status.success() {
-                return Err(Error::Runtime(format!(
-                    "Command failed with exit code {}: {}",
-                    exit_status.code().unwrap_or(-1),
-                    combined_output
-                )));
+                return Err(Error::ShellCommandFailed {
+                    exit_code: exit_status.code().unwrap_or(-1),
+                    output: combined_output,
+                });
             }
 
             Ok(combined_output)
@@ -203,11 +202,10 @@ impl DirectRunner {
                 .map_err(|_| Error::Runtime("Failed to join stderr reader".to_string()))?;
 
             if !exit_status.success() {
-                return Err(Error::Runtime(format!(
-                    "Command failed with exit code {}: {}",
-                    exit_status.code().unwrap_or(-1),
-                    stderr_output
-                )));
+                return Err(Error::ShellCommandFailed {
+                    exit_code: exit_status.code().unwrap_or(-1),
+                    output: stderr_output,
+                });
             }
 
             Ok(stdout_output)

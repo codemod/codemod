@@ -1,10 +1,24 @@
 use chrono::Utc;
 use serde::Serialize;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::ai_agent_stream::AgentLogEvent;
+
 pub type CapturedLineCallback = Arc<dyn Fn(String) + Send + Sync>;
+
+const CYAN_BOLD: &str = "\x1b[1;36m";
+const RESET: &str = "\x1b[0m";
+
+fn print_step_heading(label: &str) {
+    if std::io::stdout().is_terminal() {
+        println!("{CYAN_BOLD}⏺ {label}{RESET}");
+    } else {
+        println!("⏺ {label}");
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedLogLine {
@@ -14,7 +28,7 @@ struct ParsedLogLine {
     msg: String,
 }
 
-fn strip_ansi_escape_sequences(input: &str) -> String {
+pub(crate) fn strip_ansi_escape_sequences(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
@@ -143,6 +157,8 @@ struct JsonlRecord {
     outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<AgentLogEvent>,
 }
 
 /// Structured logger that emits JSONL lines to stdout when in Jsonl mode.
@@ -162,6 +178,8 @@ pub struct StructuredLogger {
     override_fd: Arc<Mutex<Option<i32>>>,
     /// Collects log messages for persistence to task.logs (shared across clones).
     collected_logs: Arc<Mutex<Vec<String>>>,
+    text_step_headings: bool,
+    text_log_fallthrough: bool,
 }
 
 impl Default for StructuredLogger {
@@ -179,24 +197,63 @@ impl StructuredLogger {
             context: None,
             override_fd: Arc::new(Mutex::new(None)),
             collected_logs: Arc::new(Mutex::new(Vec::new())),
+            text_step_headings: false,
+            text_log_fallthrough: true,
         }
+    }
+
+    /// Enable or disable text-mode step headings.
+    pub fn with_text_step_headings(mut self, enabled: bool) -> Self {
+        self.text_step_headings = enabled;
+        self
+    }
+
+    pub fn set_text_step_headings(&mut self, enabled: bool) {
+        self.text_step_headings = enabled;
+    }
+
+    /// Enable or disable forwarding text-mode `slog!` messages to the global logger.
+    ///
+    /// Quiet/TUI runs keep logs task-scoped, so they should collect messages
+    /// without writing through env_logger and corrupting the terminal UI.
+    pub fn with_text_log_fallthrough(mut self, enabled: bool) -> Self {
+        self.text_log_fallthrough = enabled;
+        self
+    }
+
+    pub fn set_text_log_fallthrough(&mut self, enabled: bool) {
+        self.text_log_fallthrough = enabled;
     }
 
     /// Return a clone with the given step context set.
     /// Shares the same `seq` counter and `override_fd` with the parent.
+    /// Log collection is isolated per context so task log persistence cannot
+    /// drain messages that belong to another concurrently running step.
     pub fn with_context(&self, ctx: StepContext) -> Self {
         Self {
             format: self.format,
             seq: Arc::clone(&self.seq),
             context: Some(ctx),
             override_fd: Arc::clone(&self.override_fd),
-            collected_logs: Arc::clone(&self.collected_logs),
+            collected_logs: Arc::new(Mutex::new(Vec::new())),
+            text_step_headings: self.text_step_headings,
+            text_log_fallthrough: self.text_log_fallthrough,
         }
     }
 
     /// Check if JSONL mode is active.
     pub fn is_jsonl(&self) -> bool {
         self.format == OutputFormat::Jsonl
+    }
+
+    pub fn should_fallthrough_to_log(&self) -> bool {
+        self.format != OutputFormat::Jsonl && self.text_log_fallthrough
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .map(|context| context.task_id.as_str())
     }
 
     /// Write a line to the output target. When `override_fd` is set (during
@@ -232,6 +289,24 @@ impl StructuredLogger {
         self.log_with_metadata(level, msg, None, None);
     }
 
+    /// Emit an intentional user-facing line through the structured output path.
+    ///
+    /// JSONL mode records the line as an info log. Text mode writes directly to
+    /// the logger output target instead of bypassing it with `println!`.
+    pub fn user_line(&self, line: &str) {
+        self.log("info", line);
+        if self.format != OutputFormat::Jsonl {
+            self.write_output(line);
+        }
+    }
+
+    /// Emit user-facing text without adding it to persisted task logs.
+    pub fn transient_user_line(&self, line: &str) {
+        if self.format != OutputFormat::Jsonl {
+            self.write_output(line);
+        }
+    }
+
     pub fn log_with_metadata(
         &self,
         level: &str,
@@ -264,6 +339,39 @@ impl StructuredLogger {
             task_id: self.context.as_ref().map(|c| c.task_id.clone()),
             outcome: None,
             duration_ms: None,
+            agent: None,
+        };
+        if let Ok(json) = serde_json::to_string(&record) {
+            self.write_output(&json);
+        }
+    }
+
+    pub(crate) fn agent_event(&self, event: AgentLogEvent) {
+        if let Ok(mut logs) = self.collected_logs.lock() {
+            let fallback = serde_json::to_string(&event).unwrap_or_else(|_| format!("{event:?}"));
+            logs.push(fallback);
+        }
+
+        if self.format != OutputFormat::Jsonl {
+            return;
+        }
+
+        let record = JsonlRecord {
+            seq: self.seq.fetch_add(1, Ordering::Relaxed),
+            ts: Utc::now().to_rfc3339(),
+            level: "info".to_string(),
+            event: "agent".to_string(),
+            msg: None,
+            target: None,
+            step_name: self.context.as_ref().map(|c| c.step_name.clone()),
+            step_id: self.context.as_ref().and_then(|c| c.step_id.clone()),
+            step_index: self.context.as_ref().map(|c| c.step_index),
+            node_id: self.context.as_ref().map(|c| c.node_id.clone()),
+            node_name: self.context.as_ref().map(|c| c.node_name.clone()),
+            task_id: self.context.as_ref().map(|c| c.task_id.clone()),
+            outcome: None,
+            duration_ms: None,
+            agent: Some(event),
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);
@@ -272,13 +380,16 @@ impl StructuredLogger {
 
     /// Emit a step_start event.
     pub fn step_start(&self) {
-        if self.format != OutputFormat::Jsonl {
-            return;
-        }
         let ctx = match &self.context {
             Some(c) => c,
             None => return,
         };
+        if self.format != OutputFormat::Jsonl {
+            if self.text_step_headings {
+                print_step_heading(&ctx.step_name);
+            }
+            return;
+        }
         let record = JsonlRecord {
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
             ts: Utc::now().to_rfc3339(),
@@ -294,6 +405,7 @@ impl StructuredLogger {
             task_id: Some(ctx.task_id.clone()),
             outcome: None,
             duration_ms: None,
+            agent: None,
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);
@@ -324,6 +436,7 @@ impl StructuredLogger {
             task_id: Some(ctx.task_id.clone()),
             outcome: Some(outcome.to_string()),
             duration_ms: Some(duration_ms),
+            agent: None,
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);
@@ -503,7 +616,7 @@ macro_rules! slog {
         {
             let msg = format!($($arg)*);
             $logger.log(stringify!($level), &msg);
-            if !$logger.is_jsonl() {
+            if $logger.should_fallthrough_to_log() {
                 log::$level!("{}", msg);
             }
         }
@@ -544,6 +657,34 @@ mod tests {
         assert_eq!(logger.seq.load(Ordering::Relaxed), 0);
         child.log("info", "hello");
         assert_eq!(logger.seq.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_context_log_collections_are_isolated() {
+        let logger = StructuredLogger::new(OutputFormat::Text);
+        let first = logger.with_context(StepContext {
+            step_name: "first".to_string(),
+            step_index: 0,
+            node_id: "n1".to_string(),
+            node_name: "Node 1".to_string(),
+            task_id: "t1".to_string(),
+            step_id: None,
+        });
+        let second = logger.with_context(StepContext {
+            step_name: "second".to_string(),
+            step_index: 1,
+            node_id: "n1".to_string(),
+            node_name: "Node 1".to_string(),
+            task_id: "t2".to_string(),
+            step_id: None,
+        });
+
+        first.log("info", "first message");
+        second.log("info", "second message");
+
+        assert_eq!(first.drain_logs(), vec!["first message".to_string()]);
+        assert_eq!(second.drain_logs(), vec!["second message".to_string()]);
+        assert!(logger.drain_logs().is_empty());
     }
 
     #[test]

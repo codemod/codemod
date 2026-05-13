@@ -79,10 +79,35 @@ impl CodemodExecutionConfig {
         self.execute_with_task_id("main", callback)
     }
 
+    pub fn execute_before_finish<F, G>(
+        &self,
+        callback: F,
+        before_finish: G,
+    ) -> Result<(), Box<dyn Error>>
+    where
+        F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
+        G: FnOnce(),
+    {
+        self.execute_with_task_id_before_finish("main", callback, before_finish)
+    }
+
     /// Execute the codemod with a specific task ID for progress tracking
     pub fn execute_with_task_id<F>(&self, task_id: &str, callback: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
+    {
+        self.execute_with_task_id_before_finish(task_id, callback, || {})
+    }
+
+    pub fn execute_with_task_id_before_finish<F, G>(
+        &self,
+        task_id: &str,
+        callback: F,
+        before_finish: G,
+    ) -> Result<(), Box<dyn Error>>
+    where
+        F: Fn(&Path, &CodemodExecutionConfig) + Send + Sync,
+        G: FnOnce(),
     {
         let search_base = self.get_search_base()?;
 
@@ -200,6 +225,8 @@ impl CodemodExecutionConfig {
                 })
             });
         }
+
+        before_finish();
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             let final_count = shared_context.processed_count.load(Ordering::Relaxed);

@@ -9,7 +9,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::io::{BufRead, BufReader};
-use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,34 +16,40 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+use crate::ai_agent_stream::{
+    agent_display_name, normalize_raw_agent_line, AgentLogEvent, AgentStreamNormalizer,
+    ClaudeStreamNormalizer, CodexStreamNormalizer, NormalizedAgentLine, OpenCodeStreamNormalizer,
+};
 use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
 use crate::config::{
-    CapabilitiesSecurityCallback, DeferredInteractionError, DryRunChange,
-    InstallSkillExecutionRequest, InstallSkillExecutor, ManagedGitWorktree,
+    CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
-use crate::execution::{CodemodExecutionConfig, PreRunCallback, ProgressCallback};
+use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
-use crate::periodic::spawn_periodic;
+use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
+use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
+use crate::nested_codemod_service::NestedCodemodService;
+use crate::progress_output::{
+    append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
+    BufferedExecutionOutput,
+};
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
+use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
-use codemod_sandbox::sandbox::engine::{
-    extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
-    SelectorEngineOptions,
-};
-use codemod_sandbox::sandbox::errors::ExecutionError as SandboxExecutionError;
+use codemod_sandbox::sandbox::engine::CodemodOutput;
 use codemod_sandbox::sandbox::runtime_module::{
-    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
+    RuntimeEvent, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
 };
 use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
-use log::{debug, error, info, warn};
+use log::debug;
 use std::path::Path;
 use tokio::fs::read_to_string;
 use tokio::sync::Mutex;
@@ -52,16 +57,14 @@ use tokio::time;
 use uuid::Uuid;
 
 use crate::registry::ResolvedPackage;
+use crate::step_executor::{StepExecutionRequest, StepExecutor};
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseCodemod,
-    UseJSAstGrep,
-};
+use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
-    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskDiff,
-    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowRunDiff, WorkflowStatus,
+    DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskErrorDetails,
+    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -73,13 +76,7 @@ use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::{
-    sandbox::{engine::execution_engine::execute_codemod_with_quickjs, resolvers::OxcResolver},
-    utils::project_discovery::find_tsconfig,
-    MetricsContext, SharedStateContext,
-};
-use language_core::SemanticProvider;
-use semantic_factory::LazySemanticProvider;
+use codemod_sandbox::MetricsContext;
 
 /// Guard that ensures task completion notification is sent even on panic/timeout
 struct TaskCleanupGuard {
@@ -113,23 +110,23 @@ impl TaskCleanupGuard {
 impl Drop for TaskCleanupGuard {
     fn drop(&mut self) {
         if !self.sent {
-            debug!("TaskCleanupGuard: Sending task completion notification on cleanup");
+            debug!("Sending task completion notification from cleanup guard");
             self.notify.notify_one();
         }
     }
 }
 
-struct ResolvedPullRequestConfig {
-    title: String,
-    body: Option<String>,
-    draft: bool,
-    base: Option<String>,
-    branch: String,
+pub(crate) struct ResolvedPullRequestConfig {
+    pub(crate) title: String,
+    pub(crate) body: Option<String>,
+    pub(crate) draft: bool,
+    pub(crate) base: Option<String>,
+    pub(crate) branch: String,
 }
 
-const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
+pub(crate) const PULL_REQUEST_METADATA_LOG_PREFIX: &str = "Pull request metadata: ";
 
-fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
+pub(crate) fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
     format!(
         "{PULL_REQUEST_METADATA_LOG_PREFIX}{}",
         serde_json::json!({
@@ -141,7 +138,9 @@ fn pull_request_metadata_log_line(pr: &ResolvedPullRequestConfig) -> String {
     )
 }
 
-fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, serde_json::Value> {
+pub(crate) fn resolve_workflow_run_params(
+    workflow_run: &WorkflowRun,
+) -> HashMap<String, serde_json::Value> {
     workflow_run
         .workflow
         .params
@@ -150,7 +149,7 @@ fn resolve_workflow_run_params(workflow_run: &WorkflowRun) -> HashMap<String, se
         .unwrap_or_else(|| workflow_run.params.clone())
 }
 
-fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
+pub(crate) fn block_on_runtime_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
 where
     F: Future,
 {
@@ -161,7 +160,7 @@ where
     }
 }
 
-async fn execute_install_skill_in_isolated_runtime(
+pub(crate) async fn execute_install_skill_in_isolated_runtime(
     executor: Arc<dyn InstallSkillExecutor>,
     request: InstallSkillExecutionRequest,
 ) -> std::result::Result<String, anyhow::Error> {
@@ -184,10 +183,33 @@ async fn execute_install_skill_in_isolated_runtime(
     })
 }
 
-struct PreparedStepExecution {
-    env: HashMap<String, String>,
-    state_outputs_path: PathBuf,
-    state_input_path: PathBuf,
+fn task_error_details(error: &Error) -> Option<TaskErrorDetails> {
+    match error {
+        Error::ShellCommandStepFailed {
+            command,
+            exit_code,
+            output,
+        } => Some(TaskErrorDetails::ShellCommand {
+            command: command.clone(),
+            exit_code: *exit_code,
+            output: output.clone(),
+        }),
+        Error::AstGrepStepFailed { message, help } => Some(TaskErrorDetails::AstGrep {
+            message: message.clone(),
+            help: help.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn ast_grep_step_help() -> Option<String> {
+    Some("Fix the ast-grep rule or target file issue and rerun the workflow.".to_string())
+}
+
+pub(crate) struct PreparedStepExecution {
+    pub(crate) env: HashMap<String, String>,
+    pub(crate) state_outputs_path: PathBuf,
+    pub(crate) state_input_path: PathBuf,
 }
 
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
@@ -280,7 +302,7 @@ pub fn select_shard_scan_eligible_files(
     }
 }
 
-fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
+pub(crate) fn should_manage_git_for_node(node: &Node, enable_managed_git: bool) -> bool {
     crate::git_ops::is_cloud_mode()
         || (enable_managed_git && (node.pull_request.is_some() || node.branch_name.is_some()))
 }
@@ -362,7 +384,11 @@ pub fn build_js_ast_grep_idle_timeout_message(
     }
 }
 
-fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
+pub(crate) fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
+    if event.meta.as_deref() == Some("console") {
+        return Some(event.message.clone());
+    }
+
     let prefix = match event.kind {
         RuntimeEventKind::Progress => "[progress]",
         RuntimeEventKind::Warn => "[warn]",
@@ -377,7 +403,7 @@ fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
     Some(message)
 }
 
-fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
+pub(crate) fn format_runtime_failure_message(failure: &RuntimeFailure) -> String {
     let prefix = match failure.kind {
         RuntimeFailureKind::File => "[error] file failed:",
         RuntimeFailureKind::Step => "[error] step failed:",
@@ -445,7 +471,7 @@ pub async fn await_js_ast_grep_execution_task(
     Err(Error::Runtime(message))
 }
 
-fn log_step_output(logger: &StructuredLogger, output: &str) {
+pub(crate) fn log_step_output(logger: &StructuredLogger, output: &str) {
     if !logger.is_jsonl() {
         return;
     }
@@ -453,46 +479,6 @@ fn log_step_output(logger: &StructuredLogger, output: &str) {
     for line in output.lines().filter(|line| !line.is_empty()) {
         logger.log("info", line);
     }
-}
-
-fn format_agent_stream_line(canonical: &str, stream: &str, line: String) -> String {
-    if canonical == "codex" || canonical == "claude-code" {
-        line
-    } else {
-        format!("[{stream}] {line}")
-    }
-}
-
-fn should_stream_agent_output_live(quiet: bool, logger: &StructuredLogger) -> bool {
-    !quiet && !logger.is_jsonl()
-}
-
-fn should_relog_captured_agent_output(logger: &StructuredLogger) -> bool {
-    logger.is_jsonl()
-}
-
-fn write_agent_stream_line_live(stream: &str, line: &str) {
-    use std::io::Write;
-
-    match stream {
-        "stderr" => {
-            let mut stderr = std::io::stderr().lock();
-            let _ = writeln!(stderr, "{line}");
-            let _ = stderr.flush();
-        }
-        _ => {
-            let mut stdout = std::io::stdout().lock();
-            let _ = writeln!(stdout, "{line}");
-            let _ = stdout.flush();
-        }
-    }
-}
-
-fn format_shell_command_log_notice(request: &ShellCommandExecutionRequest) -> String {
-    format!(
-        "About to execute shell command for step '{}' in node '{}'.",
-        request.step_name, request.node_name
-    )
 }
 
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
@@ -509,7 +495,7 @@ fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String
 
 /// Resolve an optional list of glob patterns, expanding `${{ }}` expressions.
 /// Returns `None` when the input is `None` or all items resolve to empty strings.
-fn resolve_optional_glob_list(
+pub(crate) fn resolve_optional_glob_list(
     items: &Option<Vec<String>>,
     params: &HashMap<String, serde_json::Value>,
     state: &HashMap<String, serde_json::Value>,
@@ -532,7 +518,7 @@ fn resolve_optional_glob_list(
 ///
 /// This enables automatic scoping of ast-grep / js-ast-grep steps to the files
 /// produced by a preceding shard step
-fn auto_meta_files_include(
+pub(crate) fn auto_meta_files_include(
     state: &HashMap<String, serde_json::Value>,
     matrix_values: Option<&HashMap<String, serde_json::Value>>,
 ) -> Option<Vec<String>> {
@@ -552,6 +538,8 @@ pub struct Engine {
     /// State adapter for persisting workflow state
     state_adapter: Arc<Mutex<Box<dyn StateAdapter>>>,
 
+    task_state_service: TaskStateService,
+
     scheduler: Scheduler,
 
     workflow_run_config: WorkflowRunConfig,
@@ -566,6 +554,9 @@ pub struct Engine {
 
     /// Notification for when running tasks complete
     task_completion_notify: Arc<Notify>,
+
+    /// Notification for changes that can make the scheduler's next decision different.
+    scheduler_wake_notify: Arc<Notify>,
 
     /// Structured logger for JSONL output
     pub structured_logger: StructuredLogger,
@@ -583,7 +574,7 @@ pub struct Engine {
 #[derive(Debug, Clone)]
 pub struct CodemodDependency {
     /// Source identifier (registry package or local path)
-    source: String,
+    pub(crate) source: String,
 }
 
 impl Default for Engine {
@@ -600,14 +591,13 @@ pub struct CapabilitiesData {
 impl Engine {
     async fn launch_agent(
         &self,
-        task_id: Uuid,
         canonical: &str,
         executable: &Path,
         system_prompt: Option<&str>,
         prompt: &str,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let working_dir = &self.workflow_run_config.target_path;
+        let working_dir = &self.workflow_run_config.execution.target_path;
         let full_prompt = if let Some(sys) = system_prompt {
             format!("{}\n\n{}", sys, prompt)
         } else {
@@ -624,16 +614,12 @@ impl Engine {
                     ))
                 })?;
 
-        slog!(
-            logger,
-            info,
+        debug!(
             "Launching agent '{}' at {}",
             canonical,
             executable.display()
         );
-        slog!(
-            logger,
-            info,
+        debug!(
             "Agent launch details: cwd={}, prompt_len={} chars",
             working_dir.display(),
             full_prompt_len
@@ -641,7 +627,7 @@ impl Engine {
 
         // Only agents whose `build_agent_command` pass the prompt via stdin
         if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
-            slog!(logger, info, "{} prompt delivery: stdin pipe", canonical);
+            debug!("{} prompt delivery: stdin pipe", canonical);
             cmd.stdin(Stdio::piped());
         } else {
             cmd.stdin(Stdio::inherit());
@@ -652,62 +638,116 @@ impl Engine {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        slog!(
-            logger,
-            info,
+        debug!(
             "Agent argv: program={}, args={:?}",
             cmd.get_program().to_string_lossy(),
             launch_args
         );
 
+        let agent_display_name = agent_display_name(canonical);
+        let progress_callback = Arc::clone(&self.workflow_run_config.execution.progress_callback);
+        let task_id = logger.task_id().unwrap_or_default().to_string();
+        let starting_event = AgentLogEvent::new(
+            canonical,
+            "status",
+            crate::ai_agent_stream::AgentLogEventKind::Status {
+                status: "starting".to_string(),
+                detail: Some("waiting for agent output".to_string()),
+            },
+        );
+        logger.agent_event(starting_event.clone());
+        if let Some(callback) = progress_callback.as_ref() {
+            if let Ok(payload) = serde_json::to_string(&starting_event) {
+                (callback.callback)(&task_id, &payload, "agent", None, &0);
+            }
+        }
+
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
-        let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
-        let stream_live = should_stream_agent_output_live(self.workflow_run_config.quiet, logger);
-        let capture_output_for_relog = should_relog_captured_agent_output(logger);
+        let stream_seen = Arc::new(AtomicBool::new(false));
         let stdout_reader = child.stdout.take().map(|stdout| {
-            let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
-            std::thread::spawn(move || -> Vec<String> {
-                let mut captured_output = Vec::new();
+            let logger = logger.clone();
+            let stream_seen = Arc::clone(&stream_seen);
+            let progress_callback = Arc::clone(&progress_callback);
+            let task_id = task_id.clone();
+            std::thread::spawn(move || {
+                let mut claude_normalizer =
+                    (canonical == "claude-code").then(ClaudeStreamNormalizer::default);
+                let mut opencode_normalizer =
+                    (canonical == "opencode").then(OpenCodeStreamNormalizer::default);
+                let mut codex_normalizer =
+                    (canonical == "codex").then(CodexStreamNormalizer::default);
                 for line in BufReader::new(stdout)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
-                    let formatted = format_agent_stream_line(&canonical, "stdout", line);
-                    let _ = log_tx.send(formatted.clone());
-                    if stream_live {
-                        write_agent_stream_line_live("stdout", &formatted);
-                    }
-                    if capture_output_for_relog {
-                        captured_output.push(formatted);
+                    let normalized = if let Some(normalizer) = claude_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
+                    } else if let Some(normalizer) = opencode_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
+                    } else if let Some(normalizer) = codex_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
+                    } else {
+                        None
+                    };
+                    let event = match normalized {
+                        Some(NormalizedAgentLine::Event(event)) => event,
+                        Some(NormalizedAgentLine::Suppress) => continue,
+                        None => normalize_raw_agent_line(&canonical, "stdout", line),
+                    };
+                    stream_seen.store(true, Ordering::Relaxed);
+                    logger.agent_event(event.clone());
+                    if let Some(callback) = progress_callback.as_ref() {
+                        if let Ok(payload) = serde_json::to_string(&event) {
+                            (callback.callback)(&task_id, &payload, "agent", None, &0);
+                        }
                     }
                 }
-                captured_output
             })
         });
         let stderr_reader = child.stderr.take().map(|stderr| {
-            let log_tx = log_tx.clone();
             let canonical = canonical.to_string();
-            std::thread::spawn(move || -> Vec<String> {
-                let mut captured_output = Vec::new();
+            let logger = logger.clone();
+            let stream_seen = Arc::clone(&stream_seen);
+            let progress_callback = Arc::clone(&progress_callback);
+            let task_id = task_id.clone();
+            std::thread::spawn(move || {
+                let mut claude_normalizer =
+                    (canonical == "claude-code").then(ClaudeStreamNormalizer::default);
+                let mut opencode_normalizer =
+                    (canonical == "opencode").then(OpenCodeStreamNormalizer::default);
+                let mut codex_normalizer =
+                    (canonical == "codex").then(CodexStreamNormalizer::default);
                 for line in BufReader::new(stderr)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
-                    let formatted = format_agent_stream_line(&canonical, "stderr", line);
-                    let _ = log_tx.send(formatted.clone());
-                    if stream_live {
-                        write_agent_stream_line_live("stderr", &formatted);
-                    }
-                    if capture_output_for_relog {
-                        captured_output.push(formatted);
+                    let normalized = if let Some(normalizer) = claude_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
+                    } else if let Some(normalizer) = opencode_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
+                    } else if let Some(normalizer) = codex_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
+                    } else {
+                        None
+                    };
+                    let event = match normalized {
+                        Some(NormalizedAgentLine::Event(event)) => event,
+                        Some(NormalizedAgentLine::Suppress) => continue,
+                        None => normalize_raw_agent_line(&canonical, "stderr", line),
+                    };
+                    stream_seen.store(true, Ordering::Relaxed);
+                    logger.agent_event(event.clone());
+                    if let Some(callback) = progress_callback.as_ref() {
+                        if let Ok(payload) = serde_json::to_string(&event) {
+                            (callback.callback)(&task_id, &payload, "agent", None, &0);
+                        }
                     }
                 }
-                captured_output
             })
         });
         if canonical == "claude-code" || canonical == "codex" || canonical == "opencode" {
@@ -745,18 +785,18 @@ impl Engine {
             })??;
         }
         let child_pid = child.id();
-        slog!(
-            logger,
-            info,
+        debug!(
             "Spawned agent '{}' with pid {:?}; waiting for it to exit",
-            canonical,
-            child_pid
+            canonical, child_pid
         );
 
         let started_waiting = std::time::Instant::now();
         let wait_task = tokio::task::spawn_blocking(move || child.wait());
         let mut wait_task = std::pin::pin!(wait_task);
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            Duration::from_secs(10),
+        );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let status = loop {
@@ -772,42 +812,27 @@ impl Engine {
                 }
                 _ = heartbeat.tick() => {
                     let waited = started_waiting.elapsed().as_secs();
-                    slog!(
-                        logger,
-                        info,
-                        "Still waiting on agent '{}' pid {:?} after {}s",
+                    debug!(
+                        "Still waiting on agent '{}' ({}) pid {:?} after {}s; output_seen={}",
                         canonical,
+                        agent_display_name,
                         child_pid,
-                        waited
+                        waited,
+                        stream_seen.load(Ordering::Relaxed)
                     );
                 }
             }
         };
 
-        drop(log_tx);
-        let _ = log_persist_task.await;
-        if capture_output_for_relog {
-            let mut captured_output = Vec::new();
-            if let Some(reader) = stdout_reader {
-                captured_output.extend(reader.join().unwrap_or_default());
-            }
-            if let Some(reader) = stderr_reader {
-                captured_output.extend(reader.join().unwrap_or_default());
-            }
-            for line in captured_output {
-                logger.log("info", &line);
-            }
-        } else {
-            if let Some(reader) = stdout_reader {
-                let _ = reader.join();
-            }
-            if let Some(reader) = stderr_reader {
-                let _ = reader.join();
-            }
+        if let Some(reader) = stdout_reader {
+            let _ = reader.join();
+        }
+        if let Some(reader) = stderr_reader {
+            let _ = reader.join();
         }
 
         if status.success() {
-            slog!(logger, info, "Agent '{}' completed successfully", canonical);
+            debug!("Agent '{}' completed successfully", canonical);
             Ok(())
         } else {
             let code = status.code().unwrap_or(-1);
@@ -825,157 +850,10 @@ impl Engine {
         }
     }
 
-    fn resolve_pull_request_config(
-        &self,
-        task: &Task,
-        node: &Node,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Option<ResolvedPullRequestConfig>> {
-        if !should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git) {
-            return Ok(None);
-        }
-
-        let task_expr_ctx = crate::git_ops::build_task_expression_context(&task.id.to_string());
-        let configured_branch = node.branch_name.as_ref().map(|tmpl| {
-            resolve_string_with_expression(
-                tmpl,
-                params,
-                &HashMap::new(),
-                task.matrix_values.as_ref(),
-                None,
-                Some(&task_expr_ctx),
-            )
-            .unwrap_or_else(|_| format!("codemod-{}", task_expr_ctx.signature))
-        });
-        let branch = crate::git_ops::resolve_branch_name(
-            configured_branch.as_deref(),
-            &task_expr_ctx.signature,
-        );
-
-        let (title, body, draft, base) = if let Some(pr_config) = &node.pull_request {
-            let title = resolve_string_with_expression(
-                &pr_config.title,
-                params,
-                &HashMap::new(),
-                task.matrix_values.as_ref(),
-                None,
-                Some(&task_expr_ctx),
-            )
-            .unwrap_or_else(|_| pr_config.title.clone());
-
-            let body = pr_config.body.as_ref().map(|b| {
-                resolve_string_with_expression(
-                    b,
-                    params,
-                    &HashMap::new(),
-                    task.matrix_values.as_ref(),
-                    None,
-                    Some(&task_expr_ctx),
-                )
-                .unwrap_or_else(|_| b.clone())
-            });
-
-            (
-                title,
-                body,
-                pr_config.draft.unwrap_or(false),
-                pr_config.base.clone(),
-            )
-        } else {
-            (node.name.clone(), None, false, None)
-        };
-
-        Ok(Some(ResolvedPullRequestConfig {
-            title,
-            body,
-            draft,
-            base,
-            branch,
-        }))
-    }
-
     pub async fn create_pull_request_for_task(&self, task_id: Uuid) -> Result<Option<String>> {
-        let task = self.state_adapter.lock().await.get_task(task_id).await?;
-        let workflow_run = self
-            .state_adapter
-            .lock()
+        ManagedGitService::new(self)
+            .create_pull_request_for_task(task_id)
             .await
-            .get_workflow_run(task.workflow_run_id)
-            .await?;
-        let node = workflow_run
-            .workflow
-            .nodes
-            .iter()
-            .find(|node| node.id == task.node_id)
-            .ok_or_else(|| Error::Runtime(format!("Node '{}' not found for task", task.node_id)))?;
-        let resolved_params = resolve_workflow_run_params(&workflow_run);
-
-        let pr = self
-            .resolve_pull_request_config(&task, node, &resolved_params)?
-            .ok_or_else(|| {
-                Error::Runtime("Task is not eligible for pull request creation".to_string())
-            })?;
-
-        let _ = self
-            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
-            .await;
-
-        let _ = self
-            .append_task_log(task_id, "Publishing branch and creating pull request")
-            .await;
-
-        let pr_url = match async {
-            crate::git_ops::push_branch(&pr.branch, &self.workflow_run_config.target_path).await?;
-
-            crate::git_ops::create_pull_request(
-                &pr.title,
-                pr.body.as_deref(),
-                pr.draft,
-                &pr.branch,
-                pr.base.as_deref(),
-                &task.id.to_string(),
-                &self.workflow_run_config.target_path,
-            )
-            .await
-        }
-        .await
-        {
-            Ok(pr_url) => pr_url,
-            Err(error) => {
-                let _ = self
-                    .append_task_log(
-                        task_id,
-                        format!("Branch publication and pull request creation failed: {error}"),
-                    )
-                    .await;
-                let _ = self
-                    .append_task_log(
-                        task_id,
-                        "Use create-pr to retry after fixing the remote or permissions",
-                    )
-                    .await;
-                self.emit_error(format!(
-                    "Task {} ({}) branch publication/PR creation failed: {}",
-                    task.id, node.id, error
-                ));
-                return Ok(None);
-            }
-        };
-
-        match &pr_url {
-            Some(pr_url) => {
-                let _ = self
-                    .append_task_log(task_id, format!("Pull request created: {}", pr_url))
-                    .await;
-            }
-            None => {
-                let _ = self
-                    .append_task_log(task_id, "Pull request created successfully")
-                    .await;
-            }
-        }
-
-        Ok(pr_url)
     }
 
     fn emit_ai_instructions(
@@ -985,24 +863,24 @@ impl Engine {
         resolved_prompt: &str,
     ) {
         if logger.is_jsonl() {
-            logger.log("info", "[AI INSTRUCTIONS]");
+            logger.user_line("[AI INSTRUCTIONS]");
             if let Some(system_prompt) = system_prompt {
-                logger.log("info", system_prompt);
+                logger.user_line(system_prompt);
             }
-            logger.log("info", resolved_prompt);
-            logger.log("info", "[/AI INSTRUCTIONS]");
-        } else if !self.workflow_run_config.quiet {
-            println!();
-            println!("[AI INSTRUCTIONS]");
-            println!();
+            logger.user_line(resolved_prompt);
+            logger.user_line("[/AI INSTRUCTIONS]");
+        } else if !self.workflow_run_config.output.quiet {
+            logger.user_line("");
+            logger.user_line("[AI INSTRUCTIONS]");
+            logger.user_line("");
             if let Some(system_prompt) = system_prompt {
-                println!("{system_prompt}");
-                println!();
+                logger.user_line(system_prompt);
+                logger.user_line("");
             }
-            println!("{resolved_prompt}");
-            println!();
-            println!("[/AI INSTRUCTIONS]");
-            println!();
+            logger.user_line(resolved_prompt);
+            logger.user_line("");
+            logger.user_line("[/AI INSTRUCTIONS]");
+            logger.user_line("");
         }
     }
 
@@ -1010,16 +888,22 @@ impl Engine {
     pub fn new() -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
+        let scheduler_wake_notify = Arc::new(Notify::new());
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
-            structured_logger: StructuredLogger::default(),
+            scheduler_wake_notify,
+            structured_logger: StructuredLogger::default()
+                .with_text_step_headings(true)
+                .with_text_log_fallthrough(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -1029,16 +913,22 @@ impl Engine {
     pub fn with_workflow_run_config(workflow_run_config: WorkflowRunConfig) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> =
             Arc::new(Mutex::new(Box::new(LocalStateAdapter::new())));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
+        let scheduler_wake_notify = Arc::new(Notify::new());
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
+            .with_text_step_headings(!workflow_run_config.output.quiet)
+            .with_text_log_fallthrough(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            scheduler_wake_notify,
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1050,22 +940,44 @@ impl Engine {
         &mut self.workflow_run_config
     }
 
+    pub(crate) fn workflow_run_config(&self) -> &WorkflowRunConfig {
+        &self.workflow_run_config
+    }
+
+    pub(crate) fn state_adapter(&self) -> Arc<Mutex<Box<dyn StateAdapter>>> {
+        Arc::clone(&self.state_adapter)
+    }
+
+    pub(crate) fn task_state_service(&self) -> TaskStateService {
+        self.task_state_service.clone()
+    }
+
+    pub(crate) fn file_writer(&self) -> Arc<AsyncFileWriter> {
+        Arc::clone(&self.file_writer)
+    }
+
     /// Create a new engine with a custom state adapter
     pub fn with_state_adapter(
         state_adapter: Box<dyn StateAdapter>,
         workflow_run_config: WorkflowRunConfig,
     ) -> Self {
         let state_adapter: Arc<Mutex<Box<dyn StateAdapter>>> = Arc::new(Mutex::new(state_adapter));
-        let structured_logger = StructuredLogger::new(workflow_run_config.output_format);
+        let scheduler_wake_notify = Arc::new(Notify::new());
+        let structured_logger = StructuredLogger::new(workflow_run_config.output.output_format)
+            .with_text_step_headings(!workflow_run_config.output.quiet)
+            .with_text_log_fallthrough(!workflow_run_config.output.quiet);
 
         Self {
             state_adapter: Arc::clone(&state_adapter),
+            task_state_service: TaskStateService::new(Arc::clone(&state_adapter))
+                .with_scheduler_wake_notify(Arc::clone(&scheduler_wake_notify)),
             scheduler: Scheduler::new(),
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
+            scheduler_wake_notify,
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1074,13 +986,17 @@ impl Engine {
 
     /// Enable or disable quiet mode (suppresses stdout/stderr when TUI is active)
     pub fn set_quiet(&mut self, quiet: bool) {
-        self.workflow_run_config.quiet = quiet;
+        self.workflow_run_config.output.quiet = quiet;
+        self.structured_logger.set_text_step_headings(!quiet);
+        self.structured_logger.set_text_log_fallthrough(!quiet);
     }
 
-    fn emit_error(&self, message: String) {
-        if !self.workflow_run_config.quiet {
-            error!("{message}");
-        }
+    pub fn set_text_log_fallthrough(&mut self, enabled: bool) {
+        self.structured_logger.set_text_log_fallthrough(enabled);
+    }
+
+    pub(crate) fn emit_error(&self, message: String) {
+        slog!(&self.structured_logger, error, "{message}");
     }
 
     fn emit_workflow_started(&self, workflow_run: &WorkflowRun) {
@@ -1088,36 +1004,6 @@ impl Engine {
             workflow_run.id,
             WorkflowEvent::WorkflowStarted {
                 workflow_run: workflow_run.clone(),
-                at: Utc::now(),
-            },
-        );
-    }
-
-    async fn emit_workflow_status_changed(&self, workflow_run_id: Uuid) {
-        if let Ok(workflow_run) = self
-            .state_adapter
-            .lock()
-            .await
-            .get_workflow_run(workflow_run_id)
-            .await
-        {
-            publish_event(
-                workflow_run_id,
-                WorkflowEvent::WorkflowStatusChanged {
-                    workflow_run_id,
-                    status: workflow_run.status,
-                    at: Utc::now(),
-                },
-            );
-        }
-    }
-
-    fn emit_workflow_status(&self, workflow_run_id: Uuid, status: WorkflowStatus) {
-        publish_event(
-            workflow_run_id,
-            WorkflowEvent::WorkflowStatusChanged {
-                workflow_run_id,
-                status,
                 at: Utc::now(),
             },
         );
@@ -1133,68 +1019,47 @@ impl Engine {
         );
     }
 
-    async fn emit_task_updated(&self, task_id: Uuid) {
-        if let Ok(task) = self.state_adapter.lock().await.get_task(task_id).await {
-            publish_event(
-                task.workflow_run_id,
-                WorkflowEvent::TaskUpdated {
-                    task,
-                    at: Utc::now(),
-                },
-            );
-        }
-    }
-
-    fn emit_task_log_appended(&self, workflow_run_id: Uuid, task_id: Uuid, line: String) {
-        publish_event(
-            workflow_run_id,
-            WorkflowEvent::TaskLogAppended {
-                workflow_run_id,
-                task_id,
-                line,
-                at: Utc::now(),
-            },
-        );
-    }
-
     /// Replace the progress callback used by workflow execution.
     pub fn set_progress_callback(&mut self, progress_callback: Arc<Option<ProgressCallback>>) {
-        self.workflow_run_config.progress_callback = progress_callback;
+        self.workflow_run_config.execution.progress_callback = progress_callback;
     }
 
     /// Set the human-readable name for this workflow run
     pub fn set_name(&mut self, name: Option<String>) {
-        self.workflow_run_config.name = name;
+        self.workflow_run_config.output.name = name;
     }
 
     /// Get the workflow file path
     pub fn get_workflow_file_path(&self) -> PathBuf {
-        self.workflow_run_config.workflow_file_path.clone()
+        self.workflow_run_config
+            .execution
+            .workflow_file_path
+            .clone()
     }
 
     /// Get the target path for this workflow run
     pub fn get_target_path(&self) -> PathBuf {
-        self.workflow_run_config.target_path.clone()
+        self.workflow_run_config.execution.target_path.clone()
     }
 
     /// Check if the engine is in dry-run mode
     pub fn is_dry_run(&self) -> bool {
-        self.workflow_run_config.dry_run
+        self.workflow_run_config.execution.dry_run
     }
 
     /// Enable or disable dry-run mode
     pub fn set_dry_run(&mut self, dry_run: bool) {
-        self.workflow_run_config.dry_run = dry_run;
+        self.workflow_run_config.execution.dry_run = dry_run;
     }
 
     /// Get the current capabilities
     pub fn get_capabilities(&self) -> &Option<HashSet<LlrtSupportedModules>> {
-        &self.workflow_run_config.capabilities
+        &self.workflow_run_config.execution.capabilities
     }
 
     /// Set the capabilities
     pub fn set_capabilities(&mut self, capabilities: Option<HashSet<LlrtSupportedModules>>) {
-        self.workflow_run_config.capabilities = capabilities;
+        self.workflow_run_config.execution.capabilities = capabilities;
     }
 
     /// Spawn a task asynchronously on a dedicated thread with its own runtime.
@@ -1208,7 +1073,8 @@ impl Engine {
         let task_completion_notify = Arc::clone(&self.task_completion_notify);
         let panic_task_completion_notify = Arc::clone(&self.task_completion_notify);
 
-        let shared_worktree_cleanup = Arc::new(std::sync::Mutex::new(None::<(PathBuf, PathBuf)>));
+        let shared_worktree_cleanup: WorktreeCleanup =
+            Arc::new(std::sync::Mutex::new(None::<(PathBuf, PathBuf)>));
         let shared_worktree_cleanup_for_task = Arc::clone(&shared_worktree_cleanup);
         let shared_worktree_cleanup_for_panic = Arc::clone(&shared_worktree_cleanup);
 
@@ -1222,224 +1088,75 @@ impl Engine {
             rt.block_on(async move {
                 let mut engine = engine;
                 let mut cleanup_guard = TaskCleanupGuard::new(task_completion_notify.clone());
-                    let _ = engine
-                        .append_task_log(task_id, "Task execution starting")
-                        .await;
-                    let task_after_log = {
+
+                debug!("Task {task_id} execution starting");
+
+                let task = {
+                    let adapter = engine.state_adapter.lock().await;
+                    adapter.get_task(task_id).await.ok()
+                };
+                if let Some(task) = task {
+                    let workflow_run = {
                         let adapter = engine.state_adapter.lock().await;
-                        adapter.get_task(task_id).await.ok()
+                        adapter.get_workflow_run(task.workflow_run_id).await.ok()
                     };
-                    if let Some(task_after_log) = task_after_log {
-                        debug!(
-                            "task {} startup log persisted; count={}, last={:?}",
-                            task_id,
-                            task_after_log.logs.len(),
-                            task_after_log.logs.last()
-                        );
-                    }
-                    let task = {
-                        let adapter = engine.state_adapter.lock().await;
-                        adapter.get_task(task_id).await.ok()
-                    };
-                    if let Some(task) = task {
-                        let workflow_run = {
-                            let adapter = engine.state_adapter.lock().await;
-                            adapter.get_workflow_run(task.workflow_run_id).await.ok()
-                        };
-                        if let Some(workflow_run) = workflow_run {
-                            if let Some(node) = workflow_run
-                                .workflow
-                                .nodes
-                                .iter()
-                                .find(|node| node.id == task.node_id)
+                    if let Some(workflow_run) = workflow_run {
+                        if let Some(node) = workflow_run
+                            .workflow
+                            .nodes
+                            .iter()
+                            .find(|node| node.id == task.node_id)
+                        {
+                            if let Err(error) = ManagedGitService::prepare_task_worktree(
+                                &mut engine,
+                                task_id,
+                                &task,
+                                &workflow_run,
+                                node,
+                                &shared_worktree_cleanup_for_task,
+                            )
+                            .await
                             {
-                                if engine.workflow_run_config.enable_worktrees
-                                    && should_manage_git_for_node(
-                                        node,
-                                        engine.workflow_run_config.enable_managed_git,
-                                    )
-                                {
-                                    let resolved_params =
-                                        resolve_workflow_run_params(&workflow_run);
-                                    let ctx =
-                                        crate::git_ops::build_task_expression_context(&task.id.to_string());
-                                    let configured_branch =
-                                        node.branch_name.as_ref().map(|tmpl| {
-                                            resolve_string_with_expression(
-                                                tmpl,
-                                                &resolved_params,
-                                                &HashMap::new(),
-                                                task.matrix_values.as_ref(),
-                                                None,
-                                                Some(&ctx),
-                                            )
-                                            .unwrap_or_else(|_| {
-                                                format!("codemod-{}", ctx.signature)
-                                            })
-                                        });
-                                    let branch = crate::git_ops::resolve_branch_name(
-                                        configured_branch.as_deref(),
-                                        &ctx.signature,
-                                    );
-                                    let base_target_path =
-                                        engine.workflow_run_config.target_path.clone();
-                                    let _ = engine
-                                        .append_task_log(
-                                            task_id,
-                                            format!("Resolving git repo root for branch {branch}"),
-                                        )
-                                        .await;
-                                    match tokio::time::timeout(
-                                        tokio::time::Duration::from_secs(15),
-                                        crate::git_ops::repo_root(&base_target_path),
-                                    )
-                                    .await
-                                    {
-                                        Err(_) => {
-                                            let message = format!(
-                                                "Timed out resolving repo root for git worktree on branch {branch}"
-                                            );
-                                            let _ = engine.append_task_log(task_id, &message).await;
-                                            engine.emit_error(format!(
-                                                "Failed to resolve repo root for task {}: {}",
-                                                task_id, message
-                                            ));
-                                            let _ =
-                                                engine.mark_task_as_failed(task_id, &message).await;
-                                            return;
-                                        }
-                                        Ok(Err(error)) => {
-                                            let message = format!(
-                                                "Failed to resolve repo root for git worktree: {}",
-                                                error
-                                            );
-                                            let _ = engine.append_task_log(task_id, &message).await;
-                                            engine.emit_error(format!(
-                                                "Failed to resolve repo root for task {}: {}",
-                                                task_id, error
-                                            ));
-                                            let _ =
-                                                engine.mark_task_as_failed(task_id, &message).await;
-                                            return;
-                                        }
-                                        Ok(Ok(repo_root)) => {
-                                            let _ = engine
-                                                .append_task_log(
-                                                    task_id,
-                                                    format!(
-                                                        "Creating git worktree for branch {} in {}",
-                                                        branch,
-                                                        repo_root.display()
-                                                    ),
-                                                )
-                                                .await;
-                                            match tokio::time::timeout(
-                                                tokio::time::Duration::from_secs(120),
-                                                crate::git_ops::create_worktree(
-                                                    &repo_root,
-                                                    &branch,
-                                                    &task.id.to_string(),
-                                                ),
-                                            )
-                                            .await
-                                            {
-                                                Err(_) => {
-                                                    let message = format!(
-                                                        "Timed out creating git worktree for branch {branch}"
-                                                    );
-                                                    let _ = engine
-                                                        .append_task_log(task_id, &message)
-                                                        .await;
-                                                    engine.emit_error(format!(
-                                                        "Failed to prepare git worktree for task {}: {}",
-                                                        task_id, message
-                                                    ));
-                                                    let _ = engine
-                                                        .mark_task_as_failed(task_id, &message)
-                                                        .await;
-                                                    return;
-                                                }
-                                                Ok(Err(error)) => {
-                                                    let message = format!(
-                                                        "Failed to prepare git worktree: {}",
-                                                        error
-                                                    );
-                                                    let _ = engine
-                                                        .append_task_log(task_id, &message)
-                                                        .await;
-                                                    engine.emit_error(format!(
-                                                        "Failed to prepare git worktree for task {}: {}",
-                                                        task_id, error
-                                                    ));
-                                                    let _ = engine
-                                                        .mark_task_as_failed(task_id, &message)
-                                                        .await;
-                                                    return;
-                                                }
-                                                Ok(Ok(worktree_path)) => {
-                                                    engine.workflow_run_config.target_path =
-                                                        worktree_path.clone();
-                                                    engine.workflow_run_config.managed_git_worktree =
-                                                        Some(ManagedGitWorktree {
-                                                            branch,
-                                                            path: worktree_path.clone(),
-                                                        });
-                                                    let _ = engine
-                                                        .append_task_log(
-                                                            task_id,
-                                                            format!(
-                                                                "Git worktree ready at {}",
-                                                                worktree_path.display()
-                                                            ),
-                                                        )
-                                                        .await;
-                                                    if let Ok(mut cleanup) =
-                                                        shared_worktree_cleanup_for_task.lock()
-                                                    {
-                                                        *cleanup = Some((repo_root, worktree_path));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                let message = error.to_string();
+                                let _ = engine.append_task_log(task_id, &message).await;
+                                engine.emit_error(format!(
+                                    "Failed to prepare git worktree for task {}: {}",
+                                    task_id, message
+                                ));
+                                let _ = engine.mark_task_as_failed(task_id, &message).await;
+                                return;
                             }
                         }
                     }
+                }
 
-                    let task_timeout = tokio::time::Duration::from_secs(45 * 60);
-                    let _ = engine
-                        .append_task_log(task_id, "Pre-execution setup complete")
-                        .await;
-                    let _ = engine
-                        .append_task_log(task_id, "Entering execute_task")
-                        .await;
+                let task_timeout = tokio::time::Duration::from_secs(45 * 60);
+                debug!("Task {task_id} pre-execution setup complete");
+                debug!("Task {task_id} entering execute_task");
 
-                    match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
-                        Ok(Ok(())) => {
-                            debug!("Task {} completed successfully", task_id);
-                            cleanup_guard.mark_sent();
-                        }
-                        Ok(Err(Error::Deferred(message))) => {
-                            let _ = engine
-                                .append_task_log(
-                                    task_id,
-                                    format!(
-                                        "Task returned to awaiting trigger: {message}"
-                                    ),
-                                )
-                                .await;
-                            let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
-                            cleanup_guard.mark_sent();
-                        }
-                        Ok(Err(e)) => {
-                            let needs_fallback_failure_mark = match engine
-                                .state_adapter
-                                .lock()
-                                .await
-                                .get_task(task_id)
-                                .await
-                            {
+                match tokio::time::timeout(task_timeout, engine.execute_task(task_id)).await {
+                    Ok(Ok(())) => {
+                        slog!(
+                            &engine.structured_logger,
+                            debug,
+                            "Task {} completed successfully",
+                            task_id
+                        );
+                        cleanup_guard.mark_sent();
+                    }
+                    Ok(Err(Error::Deferred(message))) => {
+                        let _ = engine
+                            .append_task_log(
+                                task_id,
+                                format!("Task returned to awaiting trigger: {message}"),
+                            )
+                            .await;
+                        let _ = engine.mark_task_as_awaiting_trigger(task_id).await;
+                        cleanup_guard.mark_sent();
+                    }
+                    Ok(Err(e)) => {
+                        let needs_fallback_failure_mark =
+                            match engine.state_adapter.lock().await.get_task(task_id).await {
                                 Ok(current_task) => !matches!(
                                     current_task.status,
                                     TaskStatus::Failed
@@ -1450,48 +1167,36 @@ impl Engine {
                                 Err(_) => true,
                             };
 
-                            if needs_fallback_failure_mark {
-                                let _ = engine
-                                    .append_task_log(
-                                        task_id,
-                                        format!("Task execution failed before completion: {}", e),
-                                    )
-                                    .await;
-                                let _ = engine.mark_task_as_failed(task_id, &e.to_string()).await;
-                            }
-                            engine.emit_error(format!("Task {} execution failed: {}", task_id, e));
+                        if needs_fallback_failure_mark {
+                            let _ = engine
+                                .append_task_log(
+                                    task_id,
+                                    format!("Task execution failed before completion: {}", e),
+                                )
+                                .await;
+                            let _ = engine.mark_task_as_failed(task_id, &e.to_string()).await;
                         }
-                        Err(_) => {
-                            engine.emit_error(format!(
-                                "Task {} timed out after {} seconds",
-                                task_id,
-                                task_timeout.as_secs()
-                            ));
-                            if let Err(e) =
-                                engine.mark_task_as_failed(task_id, "Task timed out").await
-                            {
-                                engine.emit_error(format!(
-                                    "Failed to mark task {} as failed: {}",
-                                    task_id, e
-                                ));
-                            }
-                        }
+                        engine.emit_error(format!("Task {} execution failed: {}", task_id, e));
                     }
-
-                    let worktree_cleanup = shared_worktree_cleanup
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .take();
-                    if let Some((repo_root, worktree_path)) = worktree_cleanup {
-                        if let Err(error) =
-                            crate::git_ops::remove_worktree(&repo_root, &worktree_path).await
+                    Err(_) => {
+                        engine.emit_error(format!(
+                            "Task {} timed out after {} seconds",
+                            task_id,
+                            task_timeout.as_secs()
+                        ));
+                        if let Err(e) = engine.mark_task_as_failed(task_id, "Task timed out").await
                         {
                             engine.emit_error(format!(
-                                "Failed to clean up git worktree for task {}: {}",
-                                task_id, error
+                                "Failed to mark task {} as failed: {}",
+                                task_id, e
                             ));
                         }
+                    }
                 }
+
+                ManagedGitService::new(&engine)
+                    .cleanup_worktree(task_id, &shared_worktree_cleanup, false)
+                    .await;
             });
         });
 
@@ -1505,20 +1210,9 @@ impl Engine {
                 cleanup_rt.block_on(async move {
                     let engine = panic_engine;
                     let message = format!("Task thread panicked: {panic_message}");
-                    let worktree_cleanup = shared_worktree_cleanup_for_panic
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .take();
-                    if let Some((repo_root, worktree_path)) = worktree_cleanup {
-                        if let Err(error) =
-                            crate::git_ops::remove_worktree(&repo_root, &worktree_path).await
-                        {
-                            engine.emit_error(format!(
-                                "Failed to clean up git worktree for panicked task {}: {}",
-                                task_id, error
-                            ));
-                        }
-                    }
+                    ManagedGitService::new(&engine)
+                        .cleanup_worktree(task_id, &shared_worktree_cleanup_for_panic, true)
+                        .await;
                     let _ = engine.append_task_log(task_id, &message).await;
                     let _ = engine.mark_task_as_failed(task_id, &message).await;
                     panic_task_completion_notify.notify_one();
@@ -1532,94 +1226,21 @@ impl Engine {
 
     /// Mark a task as failed due to timeout or other issues
     async fn mark_task_as_failed(&self, task_id: Uuid, error_message: &str) -> Result<()> {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Failed)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        fields.insert(
-            "error".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Add,
-                value: Some(serde_json::to_value(error_message.to_string())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
+        let task = self
+            .task_state_service()
+            .mark_failed(task_id, error_message)
             .await?;
-        self.emit_task_updated(task_id).await;
-
-        let task_result = {
-            let adapter = self.state_adapter.lock().await;
-            adapter.get_task(task_id).await
-        };
-        if let Ok(task) = task_result {
-            self.update_parent_matrix_master_for_task(&task).await?;
-        }
+        self.update_parent_matrix_master_for_task(&task).await?;
 
         Ok(())
     }
 
     async fn mark_task_as_awaiting_trigger(&self, task_id: Uuid) -> Result<()> {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        fields.insert(
-            "started_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        fields.insert(
-            "error".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::Value::Null),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
+        let task = self
+            .task_state_service()
+            .mark_awaiting_trigger(task_id)
             .await?;
-        self.emit_task_updated(task_id).await;
-
-        let task_result = {
-            let adapter = self.state_adapter.lock().await;
-            adapter.get_task(task_id).await
-        };
-        if let Ok(task) = task_result {
-            self.update_parent_matrix_master_for_task(&task).await?;
-        }
+        self.update_parent_matrix_master_for_task(&task).await?;
 
         Ok(())
     }
@@ -1641,14 +1262,14 @@ impl Engine {
         });
     }
 
-    async fn append_task_log(&self, task_id: Uuid, message: impl Into<String>) -> Result<()> {
-        let mut adapter = self.state_adapter.lock().await;
-        let mut task = adapter.get_task(task_id).await?;
-        let message = message.into();
-        task.logs.push(message.clone());
-        adapter.save_task(&task).await?;
-        self.emit_task_log_appended(task.workflow_run_id, task_id, message);
-        Ok(())
+    pub(crate) async fn append_task_log(
+        &self,
+        task_id: Uuid,
+        message: impl Into<String>,
+    ) -> Result<()> {
+        self.task_state_service()
+            .append_task_log(task_id, message)
+            .await
     }
 
     async fn is_task_canceled(&self, workflow_run_id: Uuid, task_id: Uuid) -> Result<bool> {
@@ -1662,62 +1283,29 @@ impl Engine {
         Ok(task.status == TaskStatus::Failed && task.error.as_deref() == Some("Canceled by user"))
     }
 
-    fn spawn_task_log_persistor(
+    pub(crate) fn register_output_heartbeat(
         &self,
         task_id: Uuid,
-    ) -> (
-        tokio::sync::mpsc::UnboundedSender<String>,
-        tokio::task::JoinHandle<()>,
+        callback: ProgressHeartbeatCallback,
     ) {
-        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let state_adapter = Arc::clone(&self.state_adapter);
-        let log_persist_task = tokio::spawn(async move {
-            while let Some(line) = log_rx.recv().await {
-                let line = line.trim_end_matches(['\r', '\n']).to_string();
-                if line.is_empty() {
-                    continue;
-                }
-
-                let mut adapter = state_adapter.lock().await;
-                let Ok(mut current_task) = adapter.get_task(task_id).await else {
-                    continue;
-                };
-                current_task.logs.push(line.clone());
-                let _ = adapter.save_task(&current_task).await;
-                publish_event(
-                    current_task.workflow_run_id,
-                    WorkflowEvent::TaskLogAppended {
-                        workflow_run_id: current_task.workflow_run_id,
-                        task_id,
-                        line,
-                        at: Utc::now(),
-                    },
-                );
-            }
-        });
-
-        (log_tx, log_persist_task)
-    }
-
-    fn register_output_heartbeat(&self, task_id: Uuid, callback: ProgressHeartbeatCallback) {
         if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
             callbacks.insert(task_id, callback);
         }
     }
 
-    fn unregister_output_heartbeat(&self, task_id: Uuid) {
+    pub(crate) fn unregister_output_heartbeat(&self, task_id: Uuid) {
         if let Ok(mut callbacks) = self.output_heartbeat_callbacks.lock() {
             callbacks.remove(&task_id);
         }
     }
 
-    fn register_step_cancel_signal(&self, task_id: Uuid, signal: Arc<AtomicBool>) {
+    pub(crate) fn register_step_cancel_signal(&self, task_id: Uuid, signal: Arc<AtomicBool>) {
         if let Ok(mut signals) = self.step_cancel_signals.lock() {
             signals.insert(task_id, signal);
         }
     }
 
-    fn unregister_step_cancel_signal(&self, task_id: Uuid) {
+    pub(crate) fn unregister_step_cancel_signal(&self, task_id: Uuid) {
         if let Ok(mut signals) = self.step_cancel_signals.lock() {
             signals.remove(&task_id);
         }
@@ -1734,20 +1322,26 @@ impl Engine {
         }
     }
 
+    fn wake_scheduler(&self) {
+        self.scheduler_wake_notify.notify_waiters();
+    }
+
     async fn update_parent_matrix_master_for_task(&self, task: &Task) -> Result<()> {
         if let Some(master_task_id) = task.master_task_id {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
         Ok(())
     }
 
-    /// Wait for all currently running tasks to complete using pure notification-based approach
+    /// Wait for all currently running tasks to complete.
     async fn wait_for_running_tasks_to_complete(&self, workflow_run_id: Uuid) -> Result<()> {
-        let mut consecutive_empty_checks = 0;
-        const MAX_EMPTY_CHECKS: u8 = 3;
-
         loop {
-            // Check the actual task status from the database (source of truth)
+            // Register before reading state so a completion signal cannot be
+            // missed between the database check and the await below.
+            let notified = self.task_completion_notify.notified();
+
             let current_tasks = self
                 .state_adapter
                 .lock()
@@ -1761,25 +1355,18 @@ impl Engine {
                 .collect();
 
             if running_tasks.is_empty() {
-                consecutive_empty_checks += 1;
-                if consecutive_empty_checks >= MAX_EMPTY_CHECKS {
-                    // Multiple checks confirm no running tasks
-                    break;
-                }
-                // Brief pause to ensure task status updates are fully propagated
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                continue;
+                break;
             }
 
-            // Reset counter if we found running tasks
-            consecutive_empty_checks = 0;
-
-            debug!(
-                "Waiting for {} running tasks to complete before matrix recompilation",
-                running_tasks.len()
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Waiting for {} running task(s) before scheduling workflow {}",
+                running_tasks.len(),
+                workflow_run_id
             );
 
-            self.task_completion_notify.notified().await;
+            notified.await;
         }
         Ok(())
     }
@@ -1790,7 +1377,7 @@ impl Engine {
 
         // Flatten matrix nodes: replace all master+children with a single
         // regular task per node so it runs exactly once.
-        if self.workflow_run_config.flatten_matrix_tasks {
+        if self.workflow_run_config.execution.flatten_matrix_tasks {
             let mut matrix_node_ids = std::collections::BTreeSet::new();
             // Collect all node IDs that have matrix tasks
             for task in &tasks {
@@ -1809,10 +1396,13 @@ impl Engine {
 
         for task in tasks {
             self.state_adapter.lock().await.save_task(&task).await?;
+            self.wake_scheduler();
             self.emit_task_created(&task).await;
 
             if task.is_master {
-                self.update_matrix_master_status(task.id).await?;
+                self.task_state_service()
+                    .update_matrix_master_status(task.id)
+                    .await?;
             }
         }
 
@@ -1852,8 +1442,8 @@ impl Engine {
             started_at: Utc::now(),
             ended_at: None,
             capabilities: capabilities.cloned(),
-            name: self.workflow_run_config.name.clone(),
-            target_path: Some(self.workflow_run_config.target_path.clone()),
+            name: self.workflow_run_config.output.name.clone(),
+            target_path: Some(self.workflow_run_config.execution.target_path.clone()),
         };
 
         self.state_adapter
@@ -1893,49 +1483,23 @@ impl Engine {
                 if let Some(master_task_id) = task.master_task_id {
                     parent_master_ids.insert(master_task_id);
                 }
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(TaskStatus::Running)?),
-                    },
-                );
-                fields.insert(
-                    "started_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-                fields.insert(
-                    "error".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-                let task_diff = TaskDiff { task_id, fields };
-
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_task_diff(&task_diff)
-                    .await?;
-                self.emit_task_updated(task_id).await;
+                self.task_state_service().mark_running(task_id).await?;
 
                 triggered = true;
                 triggered_task_ids.push(task_id);
-                info!("Triggered task {} ({})", task_id, task.node_id);
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Triggered task {} ({})",
+                    task_id,
+                    task.node_id
+                );
             } else {
-                warn!("Task {task_id} is not awaiting trigger");
+                slog!(
+                    &self.structured_logger,
+                    warn,
+                    "Task {task_id} is not awaiting trigger"
+                );
             }
         }
 
@@ -1944,28 +1508,14 @@ impl Engine {
         }
 
         for master_task_id in parent_master_ids {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
-        self.emit_workflow_status(workflow_run_id, WorkflowStatus::Running);
 
         for task_id in triggered_task_ids {
             if let Err(e) = self.spawn_task_with_handle(task_id).await {
@@ -2011,31 +1561,23 @@ impl Engine {
 
             // If no tasks are active, mark the workflow as completed
             if !active_tasks {
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(WorkflowStatus::Completed)?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
-
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
+                self.task_state_service()
+                    .mark_workflow_completed(workflow_run_id)
                     .await?;
-
-                info!("Workflow run {workflow_run_id} is now complete");
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Workflow run {workflow_run_id} is now complete"
+                );
                 return Ok(true);
             }
 
             // If we reached here, it means the workflow is still running but no tasks need triggers
-            info!("No tasks in workflow run {workflow_run_id} are awaiting triggers");
+            slog!(
+                &self.structured_logger,
+                info,
+                "No tasks in workflow run {workflow_run_id} are awaiting triggers"
+            );
             return Ok(false);
         }
 
@@ -2046,50 +1588,17 @@ impl Engine {
             if let Some(master_task_id) = task.master_task_id {
                 parent_master_ids.insert(master_task_id);
             }
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Running)?),
-                },
-            );
-            fields.insert(
-                "started_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: task.id,
-                fields,
-            };
-
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task.id).await;
+            self.task_state_service().mark_running(task.id).await?;
 
             triggered = true;
             triggered_task_ids.push(task.id);
-            info!("Triggered task {} ({})", task.id, task.node_id);
+            slog!(
+                &self.structured_logger,
+                info,
+                "Triggered task {} ({})",
+                task.id,
+                task.node_id
+            );
         }
 
         // If no tasks were triggered, it means they're all done or in progress
@@ -2099,28 +1608,14 @@ impl Engine {
         }
 
         for master_task_id in parent_master_ids {
-            self.update_matrix_master_status(master_task_id).await?;
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
-        self.emit_workflow_status(workflow_run_id, WorkflowStatus::Running);
 
         for task_id in triggered_task_ids {
             if let Err(e) = self.spawn_task_with_handle(task_id).await {
@@ -2166,74 +1661,27 @@ impl Engine {
 
         // Cancel all running tasks
         for task in tasks.iter().filter(|t| t.status == TaskStatus::Running) {
-            // Create a task diff to update the status
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                },
-            );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Add,
-                    value: Some(serde_json::to_value("Canceled by user")?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: task.id,
-                fields,
-            };
-
-            // Apply the diff
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
+            let updated_task = self
+                .task_state_service()
+                .mark_failed(task.id, "Canceled by user")
                 .await?;
-
-            info!("Canceled task {} ({})", task.id, task.node_id);
-            self.update_parent_matrix_master_for_task(task).await?;
+            slog!(
+                &self.structured_logger,
+                info,
+                "Canceled task {} ({})",
+                task.id,
+                task.node_id
+            );
+            self.update_parent_matrix_master_for_task(&updated_task)
+                .await?;
         }
 
-        // Create a workflow run diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Canceled)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_canceled(workflow_run_id)
             .await?;
 
         self.task_completion_notify.notify_waiters();
+        self.wake_scheduler();
 
         Ok(())
     }
@@ -2298,49 +1746,9 @@ impl Engine {
         workflow: &Workflow,
         dependency_chain: &[CodemodDependency],
     ) -> Result<()> {
-        for node in &workflow.nodes {
-            for step in &node.steps {
-                if let StepAction::Codemod(codemod) = &step.action {
-                    // Check if this codemod is already in the dependency chain
-                    if let Some(cycle_start) =
-                        self.find_cycle_in_chain(&codemod.source, dependency_chain)
-                    {
-                        let chain_str = dependency_chain
-                            .iter()
-                            .map(|d| d.source.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" → ");
-
-                        return Err(Error::Other(format!(
-                            "Codemod dependency cycle detected!\n\
-                            Cycle: {} → {} → {}\n\
-                            This would cause infinite recursion during execution.\n\
-                            Please review your codemod dependencies to remove the circular reference.",
-                            cycle_start,
-                            if chain_str.is_empty() { "(root)" } else { &chain_str },
-                            codemod.source
-                        )));
-                    }
-
-                    // Resolve the codemod package to validate its workflow
-                    match self
-                        .resolve_and_validate_codemod(&codemod.source, dependency_chain)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!(
-                                "Failed to validate codemod dependency {}: {}",
-                                codemod.source, e
-                            );
-                            // We'll continue validation but log the warning
-                            // The actual execution will handle the error appropriately
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
+        NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
+            .validate_workflow_dependencies(workflow, dependency_chain)
+            .await
     }
 
     /// Find if a codemod source creates a cycle in the dependency chain
@@ -2349,53 +1757,7 @@ impl Engine {
         source: &str,
         dependency_chain: &[CodemodDependency],
     ) -> Option<String> {
-        for dep in dependency_chain {
-            if dep.source == source {
-                return Some(dep.source.clone());
-            }
-        }
-        None
-    }
-
-    /// Resolve a codemod and recursively validate its dependencies
-    async fn resolve_and_validate_codemod(
-        &self,
-        source: &str,
-        dependency_chain: &[CodemodDependency],
-    ) -> Result<()> {
-        // Resolve the package
-        let resolved_package = self
-            .workflow_run_config
-            .registry_client
-            .resolve_package(source, None, false, None)
-            .await
-            .map_err(|e| Error::Other(format!("Failed to resolve codemod {source}: {e}")))?;
-
-        // Load the codemod's workflow
-        let workflow_path = resolved_package.package_dir.join("workflow.yaml");
-        if !workflow_path.exists() {
-            return Err(Error::Other(format!(
-                "Workflow file not found in codemod package: {}",
-                workflow_path.display()
-            )));
-        }
-
-        let workflow_content = std::fs::read_to_string(&workflow_path)
-            .map_err(|e| Error::Other(format!("Failed to read workflow file: {e}")))?;
-
-        let codemod_workflow: Workflow = serde_yaml::from_str(&workflow_content)
-            .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
-
-        // Create new dependency chain including this codemod
-        let mut new_chain = dependency_chain.to_vec();
-        new_chain.push(CodemodDependency {
-            source: source.to_string(),
-        });
-
-        // Recursively validate the codemod's workflow dependencies
-        Box::pin(self.validate_codemod_dependencies(&codemod_workflow, &new_chain)).await?;
-
-        Ok(())
+        NestedCodemodService::find_cycle_in_chain(source, dependency_chain)
     }
 
     /// Execute a workflow
@@ -2412,31 +1774,18 @@ impl Engine {
         // operates on the correct directory, even when launched from a
         // different cwd selected by the caller.
         if let Some(target_path) = &workflow_run.target_path {
-            self.workflow_run_config.target_path = target_path.clone();
+            self.workflow_run_config.execution.target_path = target_path.clone();
         }
 
-        // Create a workflow run diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(WorkflowStatus::Running)?),
-            },
-        );
-        let workflow_run_diff = WorkflowRunDiff {
-            workflow_run_id,
-            fields,
-        };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_workflow_run_diff(&workflow_run_diff)
+        self.task_state_service()
+            .mark_workflow_running(workflow_run_id)
             .await?;
 
-        info!("Starting workflow run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            info,
+            "Starting workflow run {workflow_run_id}"
+        );
 
         // Create tasks for all nodes if they don't exist yet
         let existing_tasks = self
@@ -2454,6 +1803,10 @@ impl Engine {
 
         // Main execution loop
         loop {
+            // Register before reading state so a scheduler wake cannot be
+            // missed between deciding there is no runnable work and awaiting.
+            let scheduler_wake = self.scheduler_wake_notify.notified();
+
             // Get the current workflow run state
             let current_workflow_run = self
                 .state_adapter
@@ -2489,7 +1842,7 @@ impl Engine {
             // Check if state has changed for matrix recompilation
             // Skip recompilation when matrix tasks are flattened (no dynamic expansion)
             let should_recompile = if has_matrix_strategies
-                && !self.workflow_run_config.flatten_matrix_tasks
+                && !self.workflow_run_config.execution.flatten_matrix_tasks
             {
                 let current_state = self
                     .state_adapter
@@ -2515,7 +1868,11 @@ impl Engine {
 
                 if state_changed {
                     last_state_hash = Some(current_hash);
-                    debug!("State changed, triggering matrix recompilation for workflow {workflow_run_id}");
+                    slog!(
+                        &self.structured_logger,
+                        debug,
+                        "State changed, triggering matrix recompilation for workflow {workflow_run_id}"
+                    );
                 }
 
                 state_changed
@@ -2524,7 +1881,11 @@ impl Engine {
             };
 
             if should_recompile {
-                debug!("Starting matrix task recompilation for workflow {workflow_run_id}");
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Starting matrix task recompilation for workflow {workflow_run_id}"
+                );
                 if let Err(e) = self
                     .recompile_matrix_tasks(workflow_run_id, &current_workflow_run, &current_tasks)
                     .await
@@ -2535,7 +1896,11 @@ impl Engine {
                     // Decide how to handle recompilation errors, e.g., fail the workflow?
                     // For now, we log and continue, but this might need refinement.
                 }
-                debug!("Completed matrix task recompilation for workflow {workflow_run_id}");
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Completed matrix task recompilation for workflow {workflow_run_id}"
+                );
             }
 
             // Get potentially updated tasks after recompilation (only if we ran recompilation)
@@ -2563,40 +1928,19 @@ impl Engine {
                     .iter()
                     .any(|t| t.status == TaskStatus::Failed);
 
-                // Create a workflow run diff to update the status
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(if any_failed {
-                            WorkflowStatus::Failed
-                        } else {
-                            WorkflowStatus::Completed
-                        })?),
-                    },
-                );
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
+                if any_failed {
+                    self.task_state_service()
+                        .mark_workflow_failed(workflow_run_id)
+                        .await?;
+                } else {
+                    self.task_state_service()
+                        .mark_workflow_completed(workflow_run_id)
+                        .await?;
+                }
 
-                // Apply the diff
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
-                    .await?;
-                self.emit_workflow_status_changed(workflow_run_id).await;
-
-                info!(
+                slog!(
+                    &self.structured_logger,
+                    info,
                     "Workflow run {} {}",
                     workflow_run_id,
                     if any_failed { "failed" } else { "completed" }
@@ -2614,7 +1958,7 @@ impl Engine {
             let tasks_to_await_trigger = runnable_tasks_result.tasks_to_await_trigger;
             let mut runnable_tasks = runnable_tasks_result.runnable_tasks;
 
-            if self.workflow_run_config.auto_trigger_manual_steps {
+            if self.workflow_run_config.execution.auto_trigger_manual_steps {
                 // In auto-trigger mode (e.g. pro codemod dry-run), treat manual
                 // steps as immediately runnable instead of blocking — but only
                 // if their dependencies are satisfied (the scheduler adds manual
@@ -2655,28 +1999,15 @@ impl Engine {
                         }
                     }
 
-                    // Create a task diff to update the status
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "status".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(TaskStatus::AwaitingTrigger)?),
-                        },
-                    );
-                    let task_diff = TaskDiff { task_id, fields };
-
-                    // Apply the diff
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_task_diff(&task_diff)
+                    self.task_state_service()
+                        .set_status(task_id, TaskStatus::AwaitingTrigger)
                         .await?;
-                    self.emit_task_updated(task_id).await;
                 }
 
                 for master_task_id in parent_master_ids {
-                    self.update_matrix_master_status(master_task_id).await?;
+                    self.task_state_service()
+                        .update_matrix_master_status(master_task_id)
+                        .await?;
                 }
             }
 
@@ -2701,29 +2032,15 @@ impl Engine {
             // If there are tasks awaiting trigger and no runnable tasks and no running tasks,
             // then we need to pause the workflow and wait for manual triggers
             if awaiting_trigger && runnable_tasks.is_empty() && !any_running && !any_pending {
-                // Create a workflow run diff to update the status
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "status".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(WorkflowStatus::AwaitingTrigger)?),
-                    },
-                );
-                let workflow_run_diff = WorkflowRunDiff {
-                    workflow_run_id,
-                    fields,
-                };
-
-                // Apply the diff
-                self.state_adapter
-                    .lock()
-                    .await
-                    .apply_workflow_run_diff(&workflow_run_diff)
+                self.task_state_service()
+                    .mark_workflow_awaiting_trigger(workflow_run_id)
                     .await?;
-                self.emit_workflow_status_changed(workflow_run_id).await;
 
-                info!("Workflow run {workflow_run_id} is awaiting triggers");
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Workflow run {workflow_run_id} is awaiting triggers"
+                );
 
                 // Exit the execution loop, will be resumed when triggers are received
                 break;
@@ -2756,7 +2073,13 @@ impl Engine {
                     });
                 if let Err(e) = execution_result {
                     let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
-                    if current_task.status == TaskStatus::AwaitingTrigger {
+                    if matches!(
+                        current_task.status,
+                        TaskStatus::Failed
+                            | TaskStatus::Completed
+                            | TaskStatus::WontDo
+                            | TaskStatus::AwaitingTrigger
+                    ) {
                         continue;
                     }
                     if let Error::Deferred(message) = &e {
@@ -2777,7 +2100,12 @@ impl Engine {
 
             // Only wait if no tasks were executed (to avoid busy waiting)
             if runnable_tasks_is_empty {
-                time::sleep(Duration::from_secs(1)).await;
+                slog!(
+                    &self.structured_logger,
+                    debug,
+                    "Waiting for scheduler wake for workflow {workflow_run_id}"
+                );
+                scheduler_wake.await;
             }
         }
 
@@ -2792,7 +2120,11 @@ impl Engine {
         workflow_run: &WorkflowRun,
         tasks: &[Task],
     ) -> Result<()> {
-        debug!("Starting matrix task recompilation for run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Starting matrix task recompilation for run {workflow_run_id}"
+        );
 
         let state = self
             .state_adapter
@@ -2809,71 +2141,53 @@ impl Engine {
 
         // Create new tasks
         for task in changes.new_tasks {
-            debug!("Creating new matrix task for node '{}'", task.node_id);
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Creating new matrix task for node '{}'",
+                task.node_id
+            );
             self.state_adapter.lock().await.save_task(&task).await?;
+            self.wake_scheduler();
             self.emit_task_created(&task).await;
         }
 
         // Mark tasks as WontDo
         for task_id in changes.tasks_to_mark_wont_do {
-            debug!("Marking task {task_id} as WontDo");
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::WontDo)?),
-                },
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Marking task {task_id} as WontDo"
             );
-            let task_diff = TaskDiff { task_id, fields };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task_id).await;
+            self.task_state_service().mark_wont_do(task_id).await?;
         }
 
         for task_id in changes.tasks_to_reset_to_pending {
-            debug!("Resetting task {task_id} from Failed to Pending");
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(TaskStatus::Pending)?),
-                },
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Resetting task {task_id} from Failed to Pending"
             );
-            fields.insert(
-                "error".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::Value::Null),
-                },
-            );
-            let task_diff = TaskDiff { task_id, fields };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(task_id).await;
+            self.task_state_service().reset_to_pending(task_id).await?;
         }
 
         // Update master task status
         for master_task_id in changes.master_tasks_to_update {
-            debug!("Updating master task {master_task_id} status");
-            self.update_matrix_master_status(master_task_id).await?;
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Updating master task {master_task_id} status"
+            );
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
-        debug!("Finished matrix task recompilation for run {workflow_run_id}");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Finished matrix task recompilation for run {workflow_run_id}"
+        );
         Ok(())
     }
 
@@ -2897,69 +2211,38 @@ impl Engine {
             .find(|n| n.id == task.node_id)
             .ok_or_else(|| Error::NodeNotFound(task.node_id.clone()))?;
 
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Running)?),
-            },
-        );
-        fields.insert(
-            "started_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
-
-        // Apply the diff
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
-            .await?;
-        self.emit_task_updated(task_id).await;
+        self.task_state_service().mark_running(task_id).await?;
 
         self.update_parent_matrix_master_for_task(&task).await?;
 
-        info!("Executing task {} ({})", task_id, node.id);
+        slog!(
+            &self.structured_logger,
+            info,
+            "Executing task {} ({})",
+            task_id,
+            node.id
+        );
 
         // Workflows that declare git outputs should use the managed branch/commit/PR path
         // in both cloud and local runs.
-        let manage_git =
-            should_manage_git_for_node(node, self.workflow_run_config.enable_managed_git);
+        let manage_git = should_manage_git_for_node(
+            node,
+            self.workflow_run_config.managed_git.enable_managed_git,
+        );
         // Always build task expression context so CODEMOD_TASK_* env vars are
         // available as `task.*` template variables regardless of mode.
         let task_expr_ctx = Some(crate::git_ops::build_task_expression_context(
             &task.id.to_string(),
         ));
         let managed_branch_name = if manage_git {
-            if let Some(worktree) = &self.workflow_run_config.managed_git_worktree {
-                Some(worktree.branch.clone())
-            } else {
-                let ctx = task_expr_ctx.as_ref().unwrap();
-                let configured_branch = node.branch_name.as_ref().map(|tmpl| {
-                    resolve_string_with_expression(
-                        tmpl,
-                        &resolved_params,
-                        &HashMap::new(),
-                        task.matrix_values.as_ref(),
-                        None,
-                        Some(ctx),
-                    )
-                    .unwrap_or_else(|_| format!("codemod-{}", ctx.signature))
-                });
-                let branch = crate::git_ops::resolve_branch_name(
-                    configured_branch.as_deref(),
-                    &ctx.signature,
-                );
-                crate::git_ops::checkout_branch(&branch, &self.workflow_run_config.target_path)
-                    .await?;
-                Some(branch)
-            }
+            ManagedGitService::new(self)
+                .begin_task_branch(
+                    &task,
+                    node,
+                    &resolved_params,
+                    task_expr_ctx.as_ref().unwrap(),
+                )
+                .await?
         } else {
             None
         };
@@ -3021,9 +2304,9 @@ impl Engine {
             let step_logger = self.structured_logger.with_context(step_context);
 
             let runner: Box<dyn Runner> = match runtime_type {
-                RuntimeType::Direct => {
-                    Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet))
-                }
+                RuntimeType::Direct => Box::new(DirectRunner::with_quiet(
+                    self.workflow_run_config.output.quiet,
+                )),
                 RuntimeType::Docker => {
                     #[cfg(feature = "docker")]
                     {
@@ -3046,24 +2329,13 @@ impl Engine {
                 }
             };
 
-            let _ = self
-                .append_task_log(task_id, format!("Step started: {}", step.name))
-                .await;
+            debug!("Task {task_id} step started: {}", step.name);
             step_logger.step_start();
-            if !step_logger.is_jsonl() && !self.workflow_run_config.quiet {
-                println!("\x1b[1;36m⏺ {}\x1b[0m", step.name);
-            }
             let step_start_time = std::time::Instant::now();
 
-            let quiet_capture = self.workflow_run_config.quiet
-                && self.workflow_run_config.capture_stdout_in_quiet_mode
+            let quiet_capture = self.workflow_run_config.output.quiet
+                && self.workflow_run_config.output.capture_stdout_in_quiet_mode
                 && !self.structured_logger.is_jsonl();
-            let (quiet_log_tx, quiet_log_persist_task) = if quiet_capture {
-                let (log_tx, log_persist_task) = self.spawn_task_log_persistor(task_id);
-                (Some(log_tx), Some(log_persist_task))
-            } else {
-                (None, None)
-            };
 
             // In JSONL mode, capture ALL stdout (fd 1) during step execution.
             // Any println!, console.log, etc. from child processes, AI agents,
@@ -3072,13 +2344,12 @@ impl Engine {
             // by writing directly to the saved real stdout fd.
             let _stdout_capture = if self.structured_logger.is_jsonl() {
                 StdoutCaptureGuard::start(Some(&step_logger), None)
-            } else if self.workflow_run_config.quiet
-                && self.workflow_run_config.capture_stdout_in_quiet_mode
+            } else if self.workflow_run_config.output.quiet
+                && self.workflow_run_config.output.capture_stdout_in_quiet_mode
             {
                 let output_heartbeat_callbacks = Arc::clone(&self.output_heartbeat_callbacks);
-                let line_callback = quiet_log_tx.as_ref().map(|log_tx| {
-                    let log_tx = log_tx.clone();
-                    Arc::new(move |line: String| {
+                let line_callback = quiet_capture.then(|| {
+                    Arc::new(move |_line: String| {
                         let heartbeat = output_heartbeat_callbacks
                             .lock()
                             .ok()
@@ -3086,30 +2357,31 @@ impl Engine {
                         if let Some(heartbeat) = heartbeat {
                             heartbeat();
                         }
-                        let _ = log_tx.send(line);
                     }) as crate::structured_log::CapturedLineCallback
                 });
-                StdoutCaptureGuard::start(None, line_callback)
+                StdoutCaptureGuard::start(Some(&step_logger), line_callback)
             } else {
                 None
             };
 
-            let result = std::panic::AssertUnwindSafe(self.execute_step_action(
-                runner.as_ref(),
-                &step.action,
-                &step.name,
-                &step.env,
-                &step.id,
-                node,
-                &task,
-                &resolved_params,
-                &state,
-                &workflow_run.workflow,
-                &workflow_run.bundle_path,
-                &[],
-                &self.workflow_run_config.capabilities,
-                task_expr_ctx.as_ref(),
-                &step_logger,
+            let result = std::panic::AssertUnwindSafe(StepExecutor::new(self).execute(
+                StepExecutionRequest {
+                    runner: runner.as_ref(),
+                    action: &step.action,
+                    step_name: &step.name,
+                    step_env: &step.env,
+                    step_id: &step.id,
+                    node,
+                    task: &task,
+                    params: &resolved_params,
+                    state: &state,
+                    workflow: &workflow_run.workflow,
+                    bundle_path: &workflow_run.bundle_path,
+                    dependency_chain: &[],
+                    capabilities: &self.workflow_run_config.execution.capabilities,
+                    task_expr_ctx: task_expr_ctx.as_ref(),
+                    logger: &step_logger,
+                },
             ))
             .catch_unwind()
             .await
@@ -3123,9 +2395,8 @@ impl Engine {
             // Drop the capture guard to restore stdout before emitting step_end.
             // This ensures all captured output is flushed and attributed to this step.
             drop(_stdout_capture);
-            drop(quiet_log_tx);
-            if let Some(log_persist_task) = quiet_log_persist_task {
-                let _ = log_persist_task.await;
+            for line in step_logger.drain_logs() {
+                let _ = self.append_task_log(task_id, line).await;
             }
 
             if self.is_task_canceled(workflow_run.id, task_id).await? {
@@ -3160,7 +2431,7 @@ impl Engine {
                                 &resolved_message,
                                 &paths,
                                 commit_config.allow_empty,
-                                &self.workflow_run_config.target_path,
+                                &self.workflow_run_config.execution.target_path,
                             )
                             .await
                             {
@@ -3198,47 +2469,16 @@ impl Engine {
                 }
                 Err(e) => {
                     step_logger.step_end("failure", step_start_time.elapsed().as_millis() as u64);
-                    let _ = self
-                        .append_task_log(task_id, format!("Step {} failed: {}", step.name, e))
-                        .await;
+                    let failure_message = format!("Step {} failed: {}", step.name, e);
+                    let error_details = task_error_details(&e);
+                    let _ = self.append_task_log(task_id, failure_message.clone()).await;
 
-                    // Create a task diff to update the status
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "status".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(TaskStatus::Failed)?),
-                        },
-                    );
-                    fields.insert(
-                        "ended_at".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Update,
-                            value: Some(serde_json::to_value(Utc::now())?),
-                        },
-                    );
-                    fields.insert(
-                        "error".to_string(),
-                        FieldDiff {
-                            operation: DiffOperation::Add,
-                            value: Some(serde_json::to_value(format!(
-                                "Step {} failed: {}",
-                                step.name, e
-                            ))?),
-                        },
-                    );
-                    let task_diff = TaskDiff { task_id, fields };
-
-                    // Apply the diff
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_task_diff(&task_diff)
+                    let failed_task = self
+                        .task_state_service()
+                        .mark_failed_with_details(task_id, failure_message, error_details)
                         .await?;
-                    self.emit_task_updated(task_id).await;
-
-                    self.update_parent_matrix_master_for_task(&task).await?;
+                    self.update_parent_matrix_master_for_task(&failed_task)
+                        .await?;
 
                     self.emit_error(format!(
                         "Task {} ({}) step {} failed: {}",
@@ -3252,181 +2492,25 @@ impl Engine {
 
         // Managed git mode: finalize — fallback commit if needed, then push + create PR
         if manage_git {
-            let _ = self
-                .append_task_log(task_id, "Step execution finished; finalizing git state")
-                .await;
-            if let Some(ref branch) = managed_branch_name {
-                let target_path = &self.workflow_run_config.target_path;
-
-                let git_step_logger = self.structured_logger.with_context(StepContext {
-                    step_name: "Push & create pull request".to_string(),
-                    step_index: node.steps.len(),
-                    node_id: node.id.clone(),
-                    node_name: node.name.clone(),
-                    task_id: task_id.to_string(),
-                    step_id: Some("_codemod_auto_push".to_string()),
-                });
-
-                git_step_logger.step_start();
-                if !git_step_logger.is_jsonl() && !self.workflow_run_config.quiet {
-                    println!("\x1b[1;36m⏺ Push & create pull request\x1b[0m");
-                }
-                let git_step_start = std::time::Instant::now();
-
-                // If no explicit commit checkpoints were created but there are
-                // uncommitted changes, create a fallback commit using the node name.
-                if !had_commit_checkpoint {
-                    let _ = self
-                        .append_task_log(task_id, "Checking worktree for remaining changes")
-                        .await;
-                    if let Ok(true) = crate::git_ops::has_changes(target_path).await {
-                        slog!(
-                            git_step_logger,
-                            info,
-                            "No commit checkpoints in node '{}' but changes detected — creating fallback commit",
-                            node.name
-                        );
-                        match crate::git_ops::commit(&node.name, &[], true, target_path).await {
-                            Ok(true) => {
-                                had_commit_checkpoint = true;
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                self.emit_error(format!("Fallback commit failed: {}", e));
-                                // Non-fatal: continue to PR creation attempt
-                            }
-                        }
-                    }
-                }
-
-                // Push and create PR if any commits were made
-                if had_commit_checkpoint {
-                    enum PullRequestOutcome {
-                        Deferred,
-                        Created(Option<String>),
-                    }
-
-                    let _ = self
-                        .append_task_log(task_id, "Publishing branch and creating pull request")
-                        .await;
-                    let push_and_pr_result: Result<PullRequestOutcome> = async {
-                        let pr = self
-                            .resolve_pull_request_config(&task, node, &resolved_params)?
-                            .ok_or_else(|| {
-                                Error::Runtime(
-                                    "Task is not eligible for pull request creation".to_string(),
-                                )
-                            })?;
-                        let _ = self
-                            .append_task_log(task_id, pull_request_metadata_log_line(&pr))
-                            .await;
-
-                        if let Some(approval_callback) =
-                            &self.workflow_run_config.pull_request_approval_callback
-                        {
-                            let approved = approval_callback(&crate::config::PullRequestCreationRequest {
-                                title: pr.title.clone(),
-                                body: pr.body.clone(),
-                                draft: pr.draft,
-                                head: pr.branch.clone(),
-                                base: pr.base.clone(),
-                                node_id: node.id.clone(),
-                                node_name: node.name.clone(),
-                                task_id: task.id.to_string(),
-                            })
-                            .map_err(|error| Error::Runtime(error.to_string()))?;
-                            if !approved {
-                                let _ = self
-                                    .append_task_log(
-                                    task_id,
-                                        "Branch publication and pull request creation deferred; use create-pr to continue later",
-                                    )
-                                    .await;
-                                return Ok(PullRequestOutcome::Deferred);
-                            }
-                        }
-
-                        crate::git_ops::push_branch(branch, target_path).await?;
-
-                        crate::git_ops::create_pull_request(
-                            &pr.title,
-                            pr.body.as_deref(),
-                            pr.draft,
-                            &pr.branch,
-                            pr.base.as_deref(),
-                            &task.id.to_string(),
-                            target_path,
-                        )
-                        .await
-                        .map(PullRequestOutcome::Created)
-                    }
-                    .await;
-
-                    match &push_and_pr_result {
-                        Ok(PullRequestOutcome::Created(Some(pr_url))) => {
-                            slog!(git_step_logger, info, "Pull request created: {}", pr_url);
-                            let _ = self
-                                .append_task_log(
-                                    task_id,
-                                    format!("Pull request created: {}", pr_url),
-                                )
-                                .await;
-                        }
-                        Ok(PullRequestOutcome::Created(None)) => {
-                            slog!(git_step_logger, info, "Pull request created successfully");
-                            let _ = self
-                                .append_task_log(task_id, "Pull request created successfully")
-                                .await;
-                        }
-                        Ok(PullRequestOutcome::Deferred) => {
-                            slog!(git_step_logger, info, "Pull request creation deferred");
-                        }
-                        _ => {}
-                    }
-
-                    if let Err(e) = push_and_pr_result {
-                        git_step_logger
-                            .step_end("failure", git_step_start.elapsed().as_millis() as u64);
-                        let _ = self
-                            .append_task_log(
-                                task_id,
-                                format!("Branch publication and pull request creation failed: {e}"),
-                            )
-                            .await;
-                        let _ = self
-                            .append_task_log(
-                                task_id,
-                                "Use create-pr to retry after fixing the remote or permissions",
-                            )
-                            .await;
-                        self.emit_error(format!(
-                            "Task {} ({}) branch publication/PR creation failed: {}",
-                            task_id, node.id, e
-                        ));
-                        return Err(e);
-                    } else {
-                        git_step_logger
-                            .step_end("success", git_step_start.elapsed().as_millis() as u64);
-                    }
-                } else {
-                    let _ = self
-                        .append_task_log(task_id, "No changes detected; no PR created")
-                        .await;
-                    slog!(
-                        git_step_logger,
-                        info,
-                        "No changes detected in node '{}' — skipping push and PR creation",
-                        node.name
-                    );
-                    git_step_logger
-                        .step_end("success", git_step_start.elapsed().as_millis() as u64);
-                }
-            }
+            ManagedGitService::new(self)
+                .finalize_task(
+                    task_id,
+                    &task,
+                    node,
+                    &resolved_params,
+                    managed_branch_name.as_ref(),
+                    &mut had_commit_checkpoint,
+                )
+                .await?;
         }
 
         // Prepare environment variables
-        let _ = self.append_task_log(task_id, "Marking task complete").await;
-        info!("Task {} all steps finished; preparing completion", task_id);
+        debug!("Marking task {task_id} as completed");
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Task {task_id} finished all steps; preparing completion state"
+        );
         let mut env = HashMap::new();
 
         // Add workflow parameters
@@ -3446,312 +2530,37 @@ impl Engine {
             }
         }
 
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(TaskStatus::Completed)?),
-            },
-        );
-        fields.insert(
-            "ended_at".to_string(),
-            FieldDiff {
-                operation: DiffOperation::Update,
-                value: Some(serde_json::to_value(Utc::now())?),
-            },
-        );
-        let task_diff = TaskDiff { task_id, fields };
+        let completed_task = self.task_state_service().mark_completed(task_id).await?;
 
-        // Apply the diff
-        info!("Task {} applying completed status diff", task_id);
-        self.state_adapter
-            .lock()
-            .await
-            .apply_task_diff(&task_diff)
-            .await?;
-        self.emit_task_updated(task_id).await;
-        info!("Task {} completed status diff applied", task_id);
-
-        info!("Task {} ({}) completed", task_id, node.id);
+        slog!(
+            &self.structured_logger,
+            info,
+            "Task {task_id} ({}) completed",
+            node.id
+        );
 
         // If this is a matrix task, update the master task status
-        if let Some(master_task_id) = task.master_task_id {
-            info!(
-                "Task {} updating matrix master task status for {}",
-                task_id, master_task_id
+        if let Some(master_task_id) = completed_task.master_task_id {
+            slog!(
+                &self.structured_logger,
+                debug,
+                "Updating matrix master task {master_task_id} after task {task_id} completed"
             );
-            self.update_matrix_master_status(master_task_id).await?;
-            info!(
-                "Task {} finished updating matrix master task status for {}",
-                task_id, master_task_id
-            );
+            self.task_state_service()
+                .update_matrix_master_status(master_task_id)
+                .await?;
         }
 
         // Notify that a task has completed (for event-driven waiting)
-        info!("Task {} notifying task completion listeners", task_id);
+        slog!(
+            &self.structured_logger,
+            debug,
+            "Notifying task completion listeners for task {task_id}"
+        );
         self.task_completion_notify.notify_one();
-        info!("Task {} completion notification sent", task_id);
+        self.wake_scheduler();
 
         Ok(())
-    }
-
-    /// Execute a specific step action with dependency chain tracking for cycle detection
-    #[allow(clippy::too_many_arguments)]
-    async fn execute_step_action(
-        &self,
-        runner: &dyn Runner,
-        action: &StepAction,
-        step_name: &str,
-        step_env: &Option<HashMap<String, String>>,
-        step_id: &Option<String>,
-        node: &Node,
-        task: &Task,
-        params: &HashMap<String, serde_json::Value>,
-        state: &HashMap<String, serde_json::Value>,
-        workflow: &Workflow,
-        bundle_path: &Option<PathBuf>,
-        dependency_chain: &[CodemodDependency],
-        capabilities: &Option<HashSet<LlrtSupportedModules>>,
-        task_expr_ctx: Option<&TaskExpressionContext>,
-        logger: &StructuredLogger,
-    ) -> Result<()> {
-        match action {
-            StepAction::RunScript(run) => {
-                // Skip run script steps in dry-run mode
-                if self.workflow_run_config.dry_run {
-                    return Ok(());
-                }
-                self.execute_run_script_step(
-                    runner,
-                    run,
-                    step_name,
-                    step_env,
-                    step_id,
-                    node,
-                    task,
-                    params,
-                    state,
-                    bundle_path,
-                    logger,
-                )
-                .await
-            }
-            StepAction::UseTemplate(template_use) => {
-                // Find the template using the passed workflow reference
-                let template = workflow
-                    .templates
-                    .iter()
-                    .find(|t| t.id == template_use.template)
-                    .ok_or_else(|| {
-                        Error::Template(format!("Template not found: {}", template_use.template))
-                    })?;
-
-                // Combine workflow params with template-specific inputs
-                let mut combined_params = params.clone();
-                combined_params.extend(template_use.inputs.clone());
-
-                for template_step in &template.steps {
-                    if let Some(condition) = &template_step.condition {
-                        // TODO: Load step outputs from STEP_OUTPUTS file and pass here
-                        let should_execute = evaluate_condition(
-                            condition,
-                            &combined_params,
-                            state,
-                            task.matrix_values.as_ref(),
-                            None, // step outputs
-                            task_expr_ctx,
-                        )?;
-
-                        if !should_execute {
-                            info!(
-                                "Skipping template step '{}' - condition not met: {}",
-                                template_step.name, condition
-                            );
-                            continue;
-                        }
-                    }
-
-                    Box::pin(self.execute_step_action(
-                        runner,
-                        &template_step.action,
-                        &template_step.name,
-                        &template_step.env,
-                        &template_step.id,
-                        node,
-                        task,
-                        &combined_params,
-                        state,
-                        workflow,
-                        bundle_path,
-                        dependency_chain,
-                        capabilities,
-                        task_expr_ctx,
-                        logger,
-                    ))
-                    .await?;
-                }
-                Ok(())
-            }
-            StepAction::AstGrep(ast_grep) => {
-                // Resolve ${{ }} expressions in include/exclude globs
-                let mut resolved_ast_grep = ast_grep.clone();
-                resolved_ast_grep.include = resolve_optional_glob_list(
-                    &ast_grep.include,
-                    params,
-                    state,
-                    task.matrix_values.as_ref(),
-                    task_expr_ctx,
-                )?
-                .or_else(|| auto_meta_files_include(state, task.matrix_values.as_ref()));
-                resolved_ast_grep.exclude = resolve_optional_glob_list(
-                    &ast_grep.exclude,
-                    params,
-                    state,
-                    task.matrix_values.as_ref(),
-                    task_expr_ctx,
-                )?;
-                self.execute_ast_grep_step(node.id.clone(), &resolved_ast_grep, logger)
-                    .await
-            }
-            StepAction::JSAstGrep(js_ast_grep) => {
-                self.execute_js_ast_grep_step(
-                    task.id.to_string(),
-                    step_id.clone().unwrap_or_default(),
-                    js_ast_grep,
-                    Some(params.clone()),
-                    task.matrix_values.clone(),
-                    &CapabilitiesData {
-                        capabilities: capabilities
-                            .as_ref()
-                            .map(|v| v.clone().into_iter().collect()),
-                        capabilities_security_callback: self
-                            .workflow_run_config
-                            .capabilities_security_callback
-                            .clone(),
-                    },
-                    bundle_path,
-                    Some(task.workflow_run_id),
-                    Some(state),
-                    logger,
-                    None,
-                    None,
-                    task_expr_ctx,
-                )
-                .await
-            }
-            StepAction::Codemod(codemod) => {
-                Box::pin(self.execute_codemod_step(
-                    codemod,
-                    step_env,
-                    node,
-                    task,
-                    params,
-                    state,
-                    bundle_path,
-                    dependency_chain,
-                    capabilities,
-                    logger,
-                ))
-                .await
-            }
-            StepAction::AI(ai_config) => {
-                if self.workflow_run_config.dry_run {
-                    info!("Skipping AI step in dry-run mode");
-                    return Ok(());
-                }
-                self.execute_ai_step(ai_config, step_env, node, task, params, state, logger)
-                    .await
-            }
-            StepAction::Shard(shard_config) => {
-                if self.workflow_run_config.skip_shard_steps {
-                    info!("Skipping shard step in dry-run preview mode");
-                    return Ok(());
-                }
-                self.execute_shard_step(shard_config, task, params, state, task_expr_ctx, logger)
-                    .await
-            }
-            StepAction::InstallSkill(install_skill) => {
-                if self.workflow_run_config.skip_install_skill_steps {
-                    if self.workflow_run_config.no_interactive {
-                        eprintln!(
-                            "\n[INFO] install-skill step skipped in non-interactive mode by default. Re-run with --install-skill to execute this step:\n  package={}",
-                            install_skill.package
-                        );
-                    } else {
-                        eprintln!(
-                            "\n[INFO] Skipping install-skill step in this run mode:\n  package={}",
-                            install_skill.package
-                        );
-                    }
-                    return Ok(());
-                }
-
-                if self.workflow_run_config.dry_run {
-                    eprintln!(
-                        "\n[WARN] Skipping install-skill step in dry-run mode:\n  package={}",
-                        install_skill.package
-                    );
-                    return Ok(());
-                }
-
-                let Some(install_skill_executor) =
-                    self.workflow_run_config.install_skill_executor.as_ref()
-                else {
-                    return Err(Error::Runtime(
-                        "install-skill step requested but no install-skill executor is configured"
-                            .to_string(),
-                    ));
-                };
-                let install_skill_executor = Arc::clone(install_skill_executor);
-
-                let prepared =
-                    self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
-                let request = InstallSkillExecutionRequest {
-                    install_skill: install_skill.clone(),
-                    no_interactive: self.workflow_run_config.no_interactive,
-                    quiet: self.workflow_run_config.quiet,
-                    bundle_path: bundle_path.clone(),
-                    target_path: self.workflow_run_config.target_path.clone(),
-                    env: prepared.env.clone(),
-                    output_format: self.workflow_run_config.output_format,
-                    selection_prompt_callback: self
-                        .workflow_run_config
-                        .selection_prompt_callback
-                        .clone(),
-                };
-                let output =
-                    execute_install_skill_in_isolated_runtime(install_skill_executor, request)
-                        .await
-                        .map_err(|error| {
-                            if let Some(deferred) = error.downcast_ref::<DeferredInteractionError>()
-                            {
-                                Error::Deferred(deferred.message().to_string())
-                            } else {
-                                Error::Runtime(format!(
-                                    "Failed to execute install-skill step: {error}"
-                                ))
-                            }
-                        });
-
-                let output = match output {
-                    Ok(output) => output,
-                    Err(Error::Deferred(message)) => return Err(Error::Deferred(message)),
-                    Err(error) => return Err(error),
-                };
-
-                for line in output
-                    .lines()
-                    .map(str::trim_end)
-                    .filter(|line| !line.is_empty())
-                {
-                    let _ = self.append_task_log(task.id, line.to_string()).await;
-                }
-                log_step_output(logger, &output);
-                self.finalize_step_execution(task, output, prepared).await
-            }
-        }
     }
 
     pub async fn execute_ast_grep_step(
@@ -3760,21 +2569,35 @@ impl Engine {
         ast_grep: &UseAstGrep,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let bundle_path = self.workflow_run_config.bundle_path.clone();
+        let bundle_path = self.workflow_run_config.execution.bundle_path.clone();
+        let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
 
         let config_path = bundle_path.join(&ast_grep.config_file);
 
         if !config_path.exists() {
-            return Err(Error::StepExecution(format!(
-                "AST grep config file not found: {}",
-                config_path.display()
-            )));
+            let message = format!("AST grep config file not found: {}", config_path.display());
+            let buffered_output =
+                Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+            append_buffered_diagnostic(
+                &buffered_output,
+                "ast-grep config".to_string(),
+                message.clone(),
+            );
+            flush_buffered_execution_output(&buffered_output, &progress_callback, &id);
+            if let Ok(task_id) = Uuid::parse_str(&id) {
+                let _ = self.append_task_log(task_id, &message).await;
+            }
+            return Err(Error::AstGrepStepFailed {
+                message,
+                help: ast_grep_step_help(),
+            });
         }
 
-        if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_ref() {
+        if let Some(pre_run_callback) = self.workflow_run_config.execution.pre_run_callback.as_ref()
+        {
             pre_run_callback(
-                &self.workflow_run_config.target_path,
-                self.workflow_run_config.dry_run,
+                &self.workflow_run_config.execution.target_path,
+                self.workflow_run_config.execution.dry_run,
                 &self.workflow_run_config,
             )
             .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
@@ -3782,7 +2605,7 @@ impl Engine {
 
         let config_path_clone = config_path.clone();
 
-        with_combined_scan(
+        let scan_result = with_combined_scan(
             &config_path_clone.to_string_lossy(),
             |combined_scan_with_rule| {
                 let rule_refs = combined_scan_with_rule.rule_refs.clone();
@@ -3790,97 +2613,222 @@ impl Engine {
 
                 let execution_config = CodemodExecutionConfig {
                     pre_run_callback: None,
-                    progress_callback: self.workflow_run_config.progress_callback.clone(),
-                    target_path: Some(self.workflow_run_config.target_path.clone()),
+                    progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
+                    target_path: Some(self.workflow_run_config.execution.target_path.clone()),
                     base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
                     explicit_files: None,
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
-                    dry_run: self.workflow_run_config.dry_run,
+                    dry_run: self.workflow_run_config.execution.dry_run,
                     languages: Some(languages.iter().map(|l| l.to_string()).collect()),
                     threads: ast_grep.max_threads,
                     capabilities: None,
                 };
 
                 // Clone variables needed in the closure
-                let id_clone = id.clone();
+                let progress_task_id = id.clone();
+                let callback_task_id = id.clone();
                 let file_writer = Arc::clone(&self.file_writer);
                 let runtime_handle = tokio::runtime::Handle::current();
                 let logger = logger.clone();
+                let progress_callback =
+                    self.workflow_run_config.execution.progress_callback.clone();
+                let target_path_for_logs = self.workflow_run_config.execution.target_path.clone();
+                let buffered_execution_output =
+                    Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+                let buffered_execution_output_for_closure = Arc::clone(&buffered_execution_output);
+                let attempted_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let succeeded_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let failed_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let first_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
+                let attempted_file_count_for_closure = Arc::clone(&attempted_file_count);
+                let succeeded_file_count_for_closure = Arc::clone(&succeeded_file_count);
+                let failed_file_count_for_closure = Arc::clone(&failed_file_count);
+                let first_failure_message_for_closure = Arc::clone(&first_failure_message);
 
-                let _ = execution_config.execute(move |path, config| {
-                    // Only process files, not directories
-                    if !path.is_file() {
-                        return;
-                    }
+                let execute_result = execution_config.execute_with_task_id_before_finish(
+                    &progress_task_id,
+                    move |path, config| {
+                        // Only process files, not directories
+                        if !path.is_file() {
+                            return;
+                        }
+                        attempted_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
 
-                    // Execute ast-grep on this file
-                    match scan_file_with_combined_scan(
-                        path,
-                        &combined_scan_with_rule.combined_scan,
-                        !config.dry_run, // apply_fixes = !dry_run
-                    ) {
-                        Ok((matches, file_modified, new_content)) => {
-                            if !matches.is_empty() {
-                                slog!(
-                                    logger,
-                                    info,
-                                    "Found {} matches in {}",
-                                    matches.len(),
-                                    path.display()
-                                );
-                            }
-                            if file_modified {
-                                if let Some(new_content) = new_content {
-                                    // Use async file writing to avoid blocking the thread
-                                    let write_result =
-                                        block_on_runtime_handle(&runtime_handle, async {
-                                            file_writer
-                                                .write_file(path.to_path_buf(), new_content)
-                                                .await
-                                        });
+                        let execution_title = path
+                            .strip_prefix(&target_path_for_logs)
+                            .unwrap_or(path)
+                            .display()
+                            .to_string();
 
-                                    if let Err(e) = write_result {
-                                        slog!(
-                                            logger,
-                                            error,
-                                            "Failed to write modified file {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                        self.execution_stats
-                                            .files_with_errors
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        return;
-                                    }
+                        let record_failure = |message: String| {
+                            failed_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            append_buffered_diagnostic(
+                                &buffered_execution_output_for_closure,
+                                execution_title.clone(),
+                                message.clone(),
+                            );
+                            if let Ok(mut first_failure_message) =
+                                first_failure_message_for_closure.lock()
+                            {
+                                if first_failure_message.is_none() {
+                                    *first_failure_message = Some(format!(
+                                        "Failed to process {execution_title}: {message}"
+                                    ));
                                 }
-                                self.execution_stats
-                                    .files_modified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
                             }
-                        }
-                        Err(e) => {
-                            slog!(logger, error, "{e}");
-                            self.execution_stats
-                                .files_with_errors
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                    };
+                        };
 
-                    if let Some(callback) = self.workflow_run_config.progress_callback.as_ref() {
-                        let callback = callback.callback.clone();
-                        callback(&id_clone, &path.to_string_lossy(), "next", Some(&1), &0);
+                        // Execute ast-grep on this file
+                        match scan_file_with_combined_scan(
+                            path,
+                            &combined_scan_with_rule.combined_scan,
+                            !config.dry_run, // apply_fixes = !dry_run
+                        ) {
+                            Ok((matches, file_modified, new_content)) => {
+                                if !matches.is_empty() {
+                                    slog!(
+                                        logger,
+                                        info,
+                                        "Found {} matches in {}",
+                                        matches.len(),
+                                        path.display()
+                                    );
+                                    append_buffered_log(
+                                        &buffered_execution_output_for_closure,
+                                        execution_title.clone(),
+                                        format!("Found {} matches", matches.len()),
+                                    );
+                                }
+                                if file_modified {
+                                    if let Some(new_content) = new_content {
+                                        // Use async file writing to avoid blocking the thread
+                                        let write_result =
+                                            block_on_runtime_handle(&runtime_handle, async {
+                                                file_writer
+                                                    .write_file(path.to_path_buf(), new_content)
+                                                    .await
+                                            });
+
+                                        if let Err(e) = write_result {
+                                            slog!(
+                                                logger,
+                                                error,
+                                                "Failed to write modified file {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                            self.execution_stats
+                                                .files_with_errors
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            record_failure(format!(
+                                                "Failed to write modified file {}: {e}",
+                                                path.display()
+                                            ));
+                                            return;
+                                        }
+                                    }
+                                    self.execution_stats
+                                        .files_modified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    append_buffered_log(
+                                        &buffered_execution_output_for_closure,
+                                        execution_title.clone(),
+                                        if config.dry_run {
+                                            "Would modify file".to_string()
+                                        } else {
+                                            "Modified file".to_string()
+                                        },
+                                    );
+                                } else {
+                                    self.execution_stats
+                                        .files_unmodified
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                                succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                slog!(logger, error, "{e}");
+                                self.execution_stats
+                                    .files_with_errors
+                                    .fetch_add(1, Ordering::Relaxed);
+                                record_failure(e.to_string());
+                            }
+                        };
+
+                        if let Some(callback) = self
+                            .workflow_run_config
+                            .execution
+                            .progress_callback
+                            .as_ref()
+                        {
+                            let callback = callback.callback.clone();
+                            callback(
+                                &callback_task_id,
+                                &path.to_string_lossy(),
+                                "next",
+                                Some(&1),
+                                &0,
+                            );
+                        }
+                    },
+                    || {
+                        flush_buffered_execution_output(
+                            &buffered_execution_output,
+                            &progress_callback,
+                            &id,
+                        );
+                    },
+                );
+
+                if let Err(error) = execute_result {
+                    flush_buffered_execution_output(
+                        &buffered_execution_output,
+                        &progress_callback,
+                        &id,
+                    );
+                    return Err(error);
+                }
+
+                let attempted_files = attempted_file_count.load(Ordering::Relaxed);
+                let failed_files = failed_file_count.load(Ordering::Relaxed);
+                let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
+                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
+                    if let Some(message) = first_failure_message
+                        .lock()
+                        .ok()
+                        .and_then(|message| message.clone())
+                    {
+                        return Err(Box::new(std::io::Error::other(message)));
                     }
-                });
+                }
 
                 Ok(())
             },
-        )
-        .map_err(|e| Error::StepExecution(e.to_string()))?;
+        );
+
+        if let Err(error) = scan_result {
+            let message = error.to_string();
+            let buffered_output =
+                Arc::new(std::sync::Mutex::new(BufferedExecutionOutput::default()));
+            append_buffered_diagnostic(
+                &buffered_output,
+                config_path
+                    .strip_prefix(&bundle_path)
+                    .unwrap_or(&config_path)
+                    .display()
+                    .to_string(),
+                message.clone(),
+            );
+            flush_buffered_execution_output(&buffered_output, &progress_callback, &id);
+            if let Ok(task_id) = Uuid::parse_str(&id) {
+                let _ = self.append_task_log(task_id, &message).await;
+            }
+            return Err(Error::AstGrepStepFailed {
+                message,
+                help: ast_grep_step_help(),
+            });
+        }
 
         Ok(())
     }
@@ -3902,902 +2850,28 @@ impl Engine {
         selector_matched_files_collector: Option<Arc<std::sync::Mutex<Vec<PathBuf>>>>,
         task_expr_ctx: Option<&TaskExpressionContext>,
     ) -> Result<()> {
-        let metrics_context = self.metrics_context.clone();
-        let task_log_task_id = Uuid::parse_str(&id).ok();
-
-        // Use the passed bundle_path if provided, otherwise fall back to workflow_run_config.bundle_path
-        let effective_bundle_path = bundle_path
-            .as_ref()
-            .unwrap_or(&self.workflow_run_config.bundle_path);
-        let js_file_path = effective_bundle_path.join(&js_ast_grep.js_file);
-
-        // Combine target_path with base_path if base_path is specified
-        let target_path = if let Some(base_path) = &js_ast_grep.base_path {
-            self.workflow_run_config.target_path.join(base_path)
-        } else {
-            self.workflow_run_config.target_path.clone()
-        };
-
-        if let Some(pre_run_callback) = self.workflow_run_config.pre_run_callback.as_deref() {
-            pre_run_callback(
-                target_path.as_path(),
-                js_ast_grep.dry_run.unwrap_or(false),
-                &self.workflow_run_config,
-            )
-            .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
-        }
-
-        if !js_file_path.exists() {
-            return Err(Error::StepExecution(format!(
-                "JavaScript file '{}' does not exist",
-                js_file_path.display()
-            )));
-        }
-
-        let script_base_dir = js_file_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
-
-        let tsconfig_path = find_tsconfig(&script_base_dir);
-
-        let resolver = Arc::new(
-            OxcResolver::new(script_base_dir.clone(), tsconfig_path)
-                .map_err(|e| Error::Other(format!("Failed to create resolver: {e}")))?,
-        );
-
-        let capabilities_security_callback_clone =
-            capabilities_data.capabilities_security_callback.clone();
-        let quiet = self.workflow_run_config.quiet;
-        let pre_run_callback = PreRunCallback {
-            callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
-                if let Some(callback) = &capabilities_security_callback_clone {
-                    callback(config).map_err(|e| {
-                        if !quiet {
-                            error!("Failed to check capabilities: {e}");
-                        }
-                        Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                            "Failed to check capabilities: {e}"
-                        ))
-                    })?;
-                }
-                Ok(())
-            })),
-        };
-        // Resolve ${{ }} expressions in include/exclude globs.
-        let empty_params = HashMap::new();
-        let empty_state = HashMap::new();
-        let resolved_params_ref = params.as_ref().unwrap_or(&empty_params);
-        let resolved_state_ref = initial_state.unwrap_or(&empty_state);
-
-        let resolved_include = resolve_optional_glob_list(
-            &js_ast_grep.include,
-            resolved_params_ref,
-            resolved_state_ref,
-            matrix_input.as_ref(),
-            task_expr_ctx,
-        )?
-        .or_else(|| auto_meta_files_include(resolved_state_ref, matrix_input.as_ref()));
-
-        let resolved_exclude = resolve_optional_glob_list(
-            &js_ast_grep.exclude,
-            resolved_params_ref,
-            resolved_state_ref,
-            matrix_input.as_ref(),
-            task_expr_ctx,
-        )?;
-        let explicit_files = matrix_input
-            .as_ref()
-            .and_then(|m| m.get("_meta_files"))
-            .and_then(butterflow_models::variable::value_to_string_vec)
-            .map(|files| {
-                files
-                    .into_iter()
-                    .map(|file| target_path.join(file))
-                    .collect()
-            });
-
-        let config = CodemodExecutionConfig {
-            pre_run_callback: Some(pre_run_callback),
-            progress_callback: self.workflow_run_config.progress_callback.clone(),
-            target_path: Some(target_path.clone()),
-            base_path: None,
-            include_globs: resolved_include,
-            explicit_files,
-            exclude_globs: resolved_exclude,
-            dry_run: js_ast_grep.dry_run.unwrap_or(false) || self.workflow_run_config.dry_run,
-            languages: Some(vec![js_ast_grep
-                .language
-                .clone()
-                .unwrap_or("typescript".to_string())]),
-            threads: js_ast_grep.max_threads,
-            capabilities: capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
-        };
-
-        // Set language first to get default extensions
-        let language = if let Some(lang_str) = &js_ast_grep.language {
-            lang_str
-                .parse()
-                .map_err(|e| Error::StepExecution(format!("Invalid language '{lang_str}': {e}")))?
-        } else {
-            // Parse TypeScript as default
-            "typescript".parse().map_err(|e| {
-                Error::StepExecution(format!("Failed to parse default language: {e}"))
-            })?
-        };
-
-        let selector_config = match extract_selector_with_quickjs(SelectorEngineOptions {
-            script_path: &js_file_path,
-            language,
-            resolver: Arc::clone(&resolver),
-            capabilities: capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
-            target_directory: Some(&target_path),
-        })
-        .await
-        {
-            Ok(selector_config) => selector_config,
-            Err(e) => {
-                let message = format!("Failed to extract js-ast-grep selector: {e}");
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self.append_task_log(task_id, &message).await;
-                }
-                slog!(logger, warn, "{}", message);
-                None
-            }
-        };
-
-        let semantic_provider: Option<Arc<dyn SemanticProvider>> =
-            match &js_ast_grep.semantic_analysis {
-                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)) => {
-                    Some(Arc::new(LazySemanticProvider::file_scope()))
-                }
-                Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::Workspace)) => {
-                    // use target_path as workspace root by default
-                    Some(Arc::new(LazySemanticProvider::workspace_scope(
-                        target_path.clone(),
-                    )))
-                }
-                Some(SemanticAnalysisConfig::Detailed(detailed)) => {
-                    match detailed.mode {
-                        SemanticAnalysisMode::File => {
-                            Some(Arc::new(LazySemanticProvider::file_scope()))
-                        }
-                        SemanticAnalysisMode::Workspace => {
-                            // use custom root if provided, otherwise use target_path
-                            let root = detailed
-                                .root
-                                .as_ref()
-                                .map(PathBuf::from)
-                                .unwrap_or_else(|| target_path.clone());
-                            Some(Arc::new(LazySemanticProvider::workspace_scope(root)))
-                        }
-                    }
-                }
-                None => None,
-            };
-
-        // For workspace scope semantic analysis, pre-index all target files
-        // This ensures cross-file references work correctly
-        if let Some(ref provider) = semantic_provider {
-            if provider.mode() == language_core::ProviderMode::WorkspaceScope {
-                let target_files: Vec<PathBuf> = config.collect_files();
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self
-                        .append_task_log(
-                            task_id,
-                            format!(
-                                "Preparing workspace semantic index for {} file(s)",
-                                target_files.len()
-                            ),
-                        )
-                        .await;
-                }
-
-                for file_path in &target_files {
-                    if file_path.is_file() {
-                        if let Ok(content) = std::fs::read_to_string(file_path) {
-                            if let Err(e) = provider.notify_file_processed(file_path, &content) {
-                                slog!(
-                                    logger,
-                                    debug,
-                                    "Failed to pre-index file {} for semantic analysis: {}",
-                                    file_path.display(),
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                if let Some(task_id) = task_log_task_id {
-                    let _ = self
-                        .append_task_log(task_id, "Workspace semantic index ready")
-                        .await;
-                }
-            }
-        }
-
-        // Capture variables for use in parallel threads
-        let runtime_handle = tokio::runtime::Handle::current();
-        let js_file_path_clone = js_file_path.clone();
-        let resolver_clone = resolver.clone();
-        let id_clone = Arc::new(id);
-        let progress_callback = self.workflow_run_config.progress_callback.clone();
-        let file_writer = Arc::clone(&self.file_writer);
-        let selector_config = selector_config.map(Arc::new);
-        let shared_state_context = if let Some(state) = initial_state {
-            SharedStateContext::with_initial_state(state.clone())
-        } else {
-            SharedStateContext::new()
-        };
-        let metrics_context_clone = metrics_context.clone();
-        let shared_state_context_clone = shared_state_context.clone();
-        let logger = logger.clone();
-        let modified_files_collector_clone = modified_files_collector.clone();
-        let selector_matched_files_collector_clone = selector_matched_files_collector.clone();
-        let target_path_for_logs = target_path.clone();
-        let canceled_during_execution = Arc::new(AtomicBool::new(false));
-        let idle_timeout = js_ast_grep_idle_timeout();
-        let progress_state = Arc::new(std::sync::Mutex::new(StepProgressState::new()));
-        let idle_timed_out = Arc::new(AtomicBool::new(false));
-        let idle_notify = Arc::new(Notify::new());
-        let watchdog_done = Arc::new(AtomicBool::new(false));
-        let idle_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
-        let has_selector = selector_config.is_some();
-
-        // Collect deferred file deletions from renames — applied after all transforms complete
-        let deferred_deletions: Arc<std::sync::Mutex<Vec<PathBuf>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
-        let logger_for_deferred = logger.clone();
-        let deferred_deletions_clone = Arc::clone(&deferred_deletions);
-        let canceled_flag_for_closure = Arc::clone(&canceled_during_execution);
-        let progress_state_for_closure = Arc::clone(&progress_state);
-        let progress_state_for_watchdog = Arc::clone(&progress_state);
-        let idle_timed_out_for_watchdog = Arc::clone(&idle_timed_out);
-        let idle_notify_for_watchdog = Arc::clone(&idle_notify);
-        let watchdog_done_for_watchdog = Arc::clone(&watchdog_done);
-        let idle_failure_message_for_watchdog = Arc::clone(&idle_failure_message);
-        let state_adapter_for_watchdog = Arc::clone(&self.state_adapter);
-
-        if let Some(task_id) = task_log_task_id {
-            let progress_state_for_output = Arc::clone(&progress_state);
-            self.register_output_heartbeat(
-                task_id,
-                Arc::new(move || {
-                    record_output_progress(&progress_state_for_output);
-                }),
-            );
-        }
-
-        let watchdog_task = spawn_periodic(
-            Duration::from_secs(1),
-            Arc::clone(&watchdog_done_for_watchdog),
-            move || {
-                let progress_state = Arc::clone(&progress_state_for_watchdog);
-                let idle_timed_out = Arc::clone(&idle_timed_out_for_watchdog);
-                let idle_failure_message = Arc::clone(&idle_failure_message_for_watchdog);
-                let idle_notify = Arc::clone(&idle_notify_for_watchdog);
-                let state_adapter = Arc::clone(&state_adapter_for_watchdog);
-                async move {
-                    let timed_out_message = {
-                        let state = progress_state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if state.global_last_progress_at.elapsed() > idle_timeout {
-                            Some(build_js_ast_grep_idle_timeout_message(&state, idle_timeout))
-                        } else {
-                            None
-                        }
-                    };
-
-                    let Some(message) = timed_out_message else {
-                        return ControlFlow::Continue(());
-                    };
-
-                    idle_timed_out.store(true, Ordering::Release);
-                    if let Ok(mut slot) = idle_failure_message.lock() {
-                        *slot = Some(message.clone());
-                    }
-                    idle_notify.notify_waiters();
-
-                    if let Some(task_id) = task_log_task_id {
-                        let mut adapter = state_adapter.lock().await;
-                        if let Ok(mut task) = adapter.get_task(task_id).await {
-                            task.logs.push(message.clone());
-                            let _ = adapter.save_task(&task).await;
-                            publish_event(
-                                task.workflow_run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: task.workflow_run_id,
-                                    task_id,
-                                    line: message,
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                    }
-                    ControlFlow::Break(())
-                }
-            },
-        );
-
-        // Register an in-process cancel signal for this step so cancel_workflow
-        // can flip `canceled_during_execution` directly (TUI path). CLI/cloud
-        // cancellation goes through SIGTERM and doesn't need this hook.
-        if let Some(task_id) = task_log_task_id {
-            self.register_step_cancel_signal(task_id, Arc::clone(&canceled_during_execution));
-        }
-
-        // Execute the codemod on each file using the config's multi-threading
-        let idle_timed_out_for_closure = Arc::clone(&idle_timed_out);
-        let idle_notify_for_closure = Arc::clone(&idle_notify);
-        let idle_failure_message_for_closure = Arc::clone(&idle_failure_message);
-        let runtime_failure_message = Arc::new(std::sync::Mutex::new(None::<String>));
-        let runtime_failure_message_for_closure = Arc::clone(&runtime_failure_message);
-
-        let execute_result = config
-            .execute(move |file_path, config| {
-                if canceled_flag_for_closure.load(Ordering::Acquire)
-                    || idle_timed_out_for_closure.load(Ordering::Acquire)
-                {
-                    return;
-                }
-
-                // Only process files
-                if !file_path.is_file() {
-                    return;
-                }
-
-                let relative_path = file_path
-                    .strip_prefix(&target_path_for_logs)
-                    .unwrap_or(file_path)
-                    .display()
-                    .to_string();
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileQueued,
-                );
-
-                // Read file content synchronously
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(content) => content,
-                    Err(e) => {
-                        slog!(
-                            logger,
-                            warn,
-                            "Failed to read file {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &relative_path,
-                            StepPhase::ExecutionErrored,
-                        );
-                        return;
-                    }
-                };
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::FileLoaded,
-                );
-
-                // Execute the async codemod using the captured runtime handle
-                std::env::set_var("CODEMOD_STEP_ID", &step_id);
-                record_unit_progress(
-                    &progress_state_for_closure,
-                    &relative_path,
-                    StepPhase::ExecutionStarted,
-                );
-                let dry_run = config.dry_run;
-                let relative_path_for_execution = relative_path.clone();
-                let progress_state_for_execution = Arc::clone(&progress_state_for_closure);
-                let cancellation_flag_for_execution = Arc::clone(&canceled_flag_for_closure);
-                let current_runtime_unit = Arc::new(std::sync::Mutex::new(relative_path.clone()));
-                let current_runtime_unit_for_callback = Arc::clone(&current_runtime_unit);
-                let progress_state_for_runtime_events = Arc::clone(&progress_state_for_closure);
-                let relative_path_for_runtime_events = relative_path.clone();
-                let runtime_event_task_id = task_log_task_id;
-                let runtime_event_run_id = workflow_run_id;
-                let runtime_event_callback: RuntimeEventCallback =
-                    Arc::new(move |event| match event.kind {
-                        RuntimeEventKind::SetCurrentUnit => {
-                            let new_runtime_unit =
-                                format!("{relative_path_for_runtime_events} :: {}", event.message);
-                            let previous_runtime_unit = {
-                                let mut current_runtime_unit = current_runtime_unit_for_callback
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                let previous_runtime_unit = current_runtime_unit.clone();
-                                *current_runtime_unit = new_runtime_unit.clone();
-                                previous_runtime_unit
-                            };
-
-                            finish_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &previous_runtime_unit,
-                                StepPhase::ExecutionFinished,
-                            );
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &new_runtime_unit,
-                                StepPhase::ExecutionStarted,
-                            );
-                        }
-                        RuntimeEventKind::Progress | RuntimeEventKind::Warn => {
-                            let runtime_unit = current_runtime_unit_for_callback
-                                .lock()
-                                .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path_for_runtime_events.clone());
-                            record_unit_progress(
-                                &progress_state_for_runtime_events,
-                                &runtime_unit,
-                                StepPhase::Output,
-                            );
-                            if let (Some(task_id), Some(run_id), Some(message)) = (
-                                runtime_event_task_id,
-                                runtime_event_run_id,
-                                format_runtime_event_log(&event),
-                            ) {
-                                publish_event(
-                                    run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: run_id,
-                                        task_id,
-                                        line: message,
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                        }
-                    });
-                let execution_result = block_on_runtime_handle(&runtime_handle, async {
-                    let local = tokio::task::LocalSet::new();
-                    let file_path_owned = file_path.to_path_buf();
-                    let content_owned = content.clone();
-                    let js_file_path_owned = js_file_path_clone.clone();
-                    let resolver_owned = resolver_clone.clone();
-                    let selector_config_owned = selector_config.clone();
-                    let params_owned = params.clone();
-                    let matrix_input_owned = matrix_input.clone();
-                    let capabilities_owned = config.capabilities.clone();
-                    let semantic_provider_owned = semantic_provider.clone();
-                    let metrics_context_owned = metrics_context_clone.clone();
-                    let shared_state_context_owned = shared_state_context_clone.clone();
-                    let target_path_owned = target_path.clone();
-                    let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
-                    let idle_notify = Arc::clone(&idle_notify_for_closure);
-                    let idle_failure_message = Arc::clone(&idle_failure_message_for_closure);
-
-                    local
-                        .run_until(async move {
-                            let execution_task = tokio::task::spawn_local(async move {
-                                execute_codemod_with_quickjs(JssgExecutionOptions {
-                                    script_path: &js_file_path_owned,
-                                    resolver: resolver_owned,
-                                    language,
-                                    file_path: &file_path_owned,
-                                    content: &content_owned,
-                                    selector_config: selector_config_owned,
-                                    params: params_owned,
-                                    matrix_values: matrix_input_owned,
-                                    capabilities: capabilities_owned,
-                                    semantic_provider: semantic_provider_owned,
-                                    metrics_context: Some(metrics_context_owned),
-                                    shared_state_context: Some(shared_state_context_owned),
-                                    runtime_event_callback: Some(runtime_event_callback),
-                                    cancellation_flag: Some(cancellation_flag_for_execution),
-                                    test_mode: false,
-                                    dry_run,
-                                    target_directory: &target_path_owned,
-                                })
-                                .await
-                            });
-
-                            await_js_ast_grep_execution_task(
-                                execution_task,
-                                idle_timed_out,
-                                idle_notify,
-                                idle_failure_message,
-                                progress_state_for_execution,
-                                idle_timeout,
-                                &relative_path_for_execution,
-                            )
-                            .await
-                        })
-                        .await
-                });
-
-                if canceled_flag_for_closure.load(Ordering::Acquire) {
-                    finish_unit_progress(
-                        &progress_state_for_closure,
-                        &relative_path,
-                        StepPhase::ExecutionErrored,
-                    );
-                    return;
-                }
-
-                match execution_result {
-                    Ok(Ok(CodemodOutput { primary, secondary })) => {
-                        let apply_change = |change_path: &Path, result: &ExecutionResult| {
-                            match result {
-                                ExecutionResult::Modified(ref modified) => {
-                                    let write_path =
-                                        modified.rename_to.as_deref().unwrap_or(change_path);
-                                    if config.dry_run {
-                                        self.execution_stats
-                                            .files_modified
-                                            .fetch_add(1, Ordering::Relaxed);
-
-                                        // Report the change via callback if provided
-                                        if let Some(callback) =
-                                            &self.workflow_run_config.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
-
-                                        slog!(
-                                            logger,
-                                            debug,
-                                            "Would modify file (dry run): {}",
-                                            change_path.display()
-                                        );
-                                    } else {
-                                        // Capture diff for report before writing (original content is still on disk)
-                                        if let Some(callback) =
-                                            &self.workflow_run_config.dry_run_callback
-                                        {
-                                            let original = if change_path == file_path {
-                                                content.clone()
-                                            } else {
-                                                std::fs::read_to_string(change_path)
-                                                    .unwrap_or_default()
-                                            };
-                                            callback(DryRunChange {
-                                                file_path: change_path.to_path_buf(),
-                                                original_content: original,
-                                                new_content: modified.content.clone(),
-                                            });
-                                        }
-
-                                        // Use async file writing to avoid blocking the thread
-                                        let write_result =
-                                            block_on_runtime_handle(&runtime_handle, async {
-                                                file_writer
-                                                    .write_file(
-                                                        write_path.to_path_buf(),
-                                                        modified.content.clone(),
-                                                    )
-                                                    .await
-                                            });
-
-                                        if let Err(e) = write_result {
-                                            slog!(
-                                                logger,
-                                                error,
-                                                "Failed to write modified file {}: {}",
-                                                write_path.display(),
-                                                e
-                                            );
-                                            self.execution_stats
-                                                .files_with_errors
-                                                .fetch_add(1, Ordering::Relaxed);
-                                        } else {
-                                            // If renamed, defer deletion of the original file
-                                            if modified.rename_to.is_some()
-                                                && write_path != change_path
-                                            {
-                                                if let Ok(mut deletions) =
-                                                    deferred_deletions_clone.lock()
-                                                {
-                                                    deletions.push(change_path.to_path_buf());
-                                                }
-                                                slog!(
-                                                    logger,
-                                                    debug,
-                                                    "Renamed file: {} -> {} (deferred deletion)",
-                                                    change_path.display(),
-                                                    write_path.display()
-                                                );
-                                            } else {
-                                                slog!(
-                                                    logger,
-                                                    debug,
-                                                    "Modified file: {}",
-                                                    change_path.display()
-                                                );
-                                            }
-                                            if let Some(ref provider) = semantic_provider {
-                                                let _ = provider.notify_file_processed(
-                                                    write_path,
-                                                    &modified.content,
-                                                );
-                                            }
-                                            self.execution_stats
-                                                .files_modified
-                                                .fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                }
-                                ExecutionResult::Unmodified | ExecutionResult::Skipped => {}
-                            }
-                        };
-
-                        match &primary {
-                            ExecutionResult::Modified(_) => {
-                                apply_change(file_path, &primary);
-                                if let Some(ref collector) = modified_files_collector_clone {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                                if let Some(ref collector) = selector_matched_files_collector_clone
-                                {
-                                    collector
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(file_path.to_path_buf());
-                                }
-                            }
-                            ExecutionResult::Unmodified => {
-                                if has_selector {
-                                    if let Some(ref collector) =
-                                        selector_matched_files_collector_clone
-                                    {
-                                        collector
-                                            .lock()
-                                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                            .push(file_path.to_path_buf());
-                                    }
-                                }
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            }
-                            ExecutionResult::Skipped => {
-                                self.execution_stats
-                                    .files_unmodified
-                                    .fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-
-                        for change in &secondary {
-                            apply_change(&change.path, &change.result);
-                        }
-
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &current_runtime_unit
-                                .lock()
-                                .map(|runtime_unit| runtime_unit.clone())
-                                .unwrap_or_else(|_| relative_path.clone()),
-                            StepPhase::ExecutionFinished,
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        if let SandboxExecutionError::RuntimeHook { source } = &e {
-                            let message = format_runtime_failure_message(source);
-                            if let (Some(task_id), Some(run_id)) =
-                                (task_log_task_id, workflow_run_id)
-                            {
-                                publish_event(
-                                    run_id,
-                                    WorkflowEvent::TaskLogAppended {
-                                        workflow_run_id: run_id,
-                                        task_id,
-                                        line: message.clone(),
-                                        at: Utc::now(),
-                                    },
-                                );
-                            }
-                            canceled_flag_for_closure.store(true, Ordering::Release);
-                            if let Ok(mut runtime_failure_message) =
-                                runtime_failure_message_for_closure.lock()
-                            {
-                                if runtime_failure_message.is_none() {
-                                    *runtime_failure_message = Some(message);
-                                }
-                            }
-                        }
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {:?}",
-                            relative_path,
-                            e
-                        );
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        self.execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        let runtime_unit = current_runtime_unit
-                            .lock()
-                            .map(|runtime_unit| runtime_unit.clone())
-                            .unwrap_or_else(|_| relative_path.clone());
-                        finish_unit_progress(
-                            &progress_state_for_closure,
-                            &runtime_unit,
-                            StepPhase::ExecutionErrored,
-                        );
-                        slog!(
-                            logger,
-                            error,
-                            "Failed to execute codemod on {}: {:?}",
-                            relative_path,
-                            e
-                        );
-                        if let (Some(task_id), Some(run_id)) = (task_log_task_id, workflow_run_id) {
-                            publish_event(
-                                run_id,
-                                WorkflowEvent::TaskLogAppended {
-                                    workflow_run_id: run_id,
-                                    task_id,
-                                    line: format!("Failed to process {relative_path}: {e}"),
-                                    at: Utc::now(),
-                                },
-                            );
-                        }
-                        self.execution_stats
-                            .files_with_errors
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-
-                if let Some(callback) = progress_callback.as_ref() {
-                    let callback = callback.callback.clone();
-                    callback(
-                        &id_clone,
-                        &file_path.to_string_lossy(),
-                        "next",
-                        Some(&1),
-                        &0,
-                    );
-                }
+        JssgExecutionService::new(self)
+            .execute(JssgExecutionRequest {
+                id,
+                step_id,
+                js_ast_grep,
+                params,
+                matrix_input,
+                capabilities_data,
+                bundle_path,
+                workflow_run_id,
+                initial_state,
+                logger,
+                modified_files_collector,
+                selector_matched_files_collector,
+                task_expr_ctx,
             })
-            .map_err(|e| Error::StepExecution(e.to_string()));
-
-        watchdog_done.store(true, Ordering::Release);
-        let _ = watchdog_task.await;
-        if let Some(task_id) = task_log_task_id {
-            self.unregister_output_heartbeat(task_id);
-            self.unregister_step_cancel_signal(task_id);
-        }
-
-        if idle_timed_out.load(Ordering::Acquire) {
-            let message = idle_failure_message
-                .lock()
-                .ok()
-                .and_then(|message| message.clone())
-                .unwrap_or_else(|| {
-                    let snapshot = progress_state.lock().ok();
-                    snapshot
-                        .as_deref()
-                        .map(|state| build_js_ast_grep_idle_timeout_message(state, idle_timeout))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "No progress observed for {}s during js-ast-grep execution",
-                                idle_timeout.as_secs()
-                            )
-                        })
-                });
-            return Err(Error::Runtime(message));
-        }
-
-        execute_result?;
-
-        if let Some(message) = runtime_failure_message
-            .lock()
-            .ok()
-            .and_then(|message| message.clone())
-        {
-            return Err(Error::StepExecution(message));
-        }
-
-        if canceled_during_execution.load(Ordering::Acquire) {
-            return Err(Error::Runtime("Canceled by user".to_string()));
-        }
-
-        // Apply deferred file deletions from renames now that all transforms are complete
-        if let Ok(deletions) = deferred_deletions.lock() {
-            for path in deletions.iter() {
-                if let Err(e) = std::fs::remove_file(path) {
-                    slog!(
-                        logger_for_deferred,
-                        error,
-                        "Failed to remove original file {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
-            }
-        }
-
-        // Persist shared state to the workflow state adapter. Dry-run executions
-        // use the shared state context in-memory only, including shard pre-scans.
-        if let Some(wf_run_id) = workflow_run_id {
-            if !self.workflow_run_config.skip_state_writes && !config.dry_run {
-                let persistable = shared_state_context.get_persistable();
-                let removals = shared_state_context.get_removals();
-
-                if !persistable.is_empty() || !removals.is_empty() {
-                    let mut fields = HashMap::new();
-                    for (key, value) in persistable {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(value),
-                            },
-                        );
-                    }
-                    for key in removals {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Remove,
-                                value: None,
-                            },
-                        );
-                    }
-
-                    self.state_adapter
-                        .lock()
-                        .await
-                        .apply_state_diff(&StateDiff {
-                            workflow_run_id: wf_run_id,
-                            fields,
-                        })
-                        .await?;
-                }
-            }
-        }
-
-        Ok(())
+            .await
     }
 
     /// Execute an AI agent step
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_ai_step(
+    pub(crate) async fn execute_ai_step(
         &self,
         ai_config: &UseAI,
         _step_env: &Option<HashMap<String, String>>,
@@ -4818,19 +2892,12 @@ impl Engine {
             None, // task context
         )?;
 
-        slog!(
-            logger,
-            info,
-            "Executing AI agent step with prompt: {}",
-            resolved_prompt
-        );
+        debug!("Executing AI agent step with prompt: {}", resolved_prompt);
 
         // 1. Check if running inside a parent coding agent
         let handoff_detection = detect_parent_coding_agent();
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
-        slog!(
-            logger,
-            debug,
+        debug!(
             "AI handoff detection confidence={} agent={} reasons={}",
             handoff_detection.confidence.as_str(),
             detected_agent,
@@ -4839,9 +2906,7 @@ impl Engine {
 
         if handoff_detection.confidence == DetectionConfidence::Detected {
             self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
-            slog!(
-                logger,
-                info,
+            debug!(
                 "AI handoff mode=handoff confidence={} agent={}",
                 handoff_detection.confidence.as_str(),
                 detected_agent
@@ -4850,13 +2915,12 @@ impl Engine {
         }
 
         // 2. Check if agent was explicitly specified via --agent
-        if let Some(ref agent_name) = self.workflow_run_config.agent {
+        if let Some(ref agent_name) = self.workflow_run_config.interaction.agent {
             if let Some(canonical) = resolve_agent_name(agent_name) {
-                slog!(logger, info, "Agent specified via --agent: {}", canonical);
+                debug!("Agent specified via --agent: {}", canonical);
                 if let Some(executable) = find_agent_executable(canonical) {
                     return self
                         .launch_agent(
-                            task.id,
                             canonical,
                             &executable,
                             ai_config.system_prompt.as_deref(),
@@ -4895,7 +2959,6 @@ impl Engine {
                     if let Some(executable) = find_agent_executable(canonical) {
                         return self
                             .launch_agent(
-                                task.id,
                                 canonical,
                                 &executable,
                                 ai_config.system_prompt.as_deref(),
@@ -4923,8 +2986,12 @@ impl Engine {
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
-        if !self.workflow_run_config.no_interactive {
-            if let Some(ref callback) = self.workflow_run_config.agent_selection_callback {
+        if !self.workflow_run_config.interaction.no_interactive {
+            if let Some(ref callback) = self
+                .workflow_run_config
+                .interaction
+                .agent_selection_callback
+            {
                 let agents = discover_installed_agents();
                 // Loop to allow preview → re-select flow
                 let mut selection_result = callback(&agents);
@@ -4937,14 +3004,14 @@ impl Engine {
                                 ai_config.system_prompt.as_deref(),
                                 &resolved_prompt,
                             );
-                            if !self.workflow_run_config.quiet {
-                                eprintln!();
+                            if !self.workflow_run_config.output.quiet {
+                                logger.user_line("");
                             }
                             selection_result = callback(&agents);
                             continue;
                         }
                         Some("__print_prompt__") => {
-                            slog!(logger, info, "User chose to print prompt and skip");
+                            debug!("User chose to print prompt and skip");
                             self.emit_ai_instructions(
                                 logger,
                                 ai_config.system_prompt.as_deref(),
@@ -4953,11 +3020,10 @@ impl Engine {
                             return Ok(());
                         }
                         Some(selected) => {
-                            slog!(logger, info, "User selected agent: {}", selected);
+                            debug!("User selected agent: {}", selected);
                             if let Some(executable) = find_agent_executable(selected) {
                                 return self
                                     .launch_agent(
-                                        task.id,
                                         selected,
                                         &executable,
                                         ai_config.system_prompt.as_deref(),
@@ -4983,9 +3049,7 @@ impl Engine {
             }
         }
 
-        slog!(
-            logger,
-            info,
+        debug!(
             "AI handoff mode=rig confidence={} agent={}",
             handoff_detection.confidence.as_str(),
             detected_agent
@@ -5047,7 +3111,7 @@ impl Engine {
             max_steps: ai_config.max_steps,
             tools: ai_config.tools.clone(),
             prompt: resolved_prompt,
-            working_dir: self.workflow_run_config.target_path.clone(),
+            working_dir: self.workflow_run_config.execution.target_path.clone(),
             llm_protocol: llm_provider,
         };
 
@@ -5119,12 +3183,12 @@ impl Engine {
 
         let ai_output = output.data.unwrap_or_default();
         slog!(logger, info, "AI agent output:\n{ai_output}");
-        slog!(logger, info, "AI agent step completed successfully");
+        debug!("AI agent step completed successfully");
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_codemod_step(
+    pub(crate) async fn execute_codemod_step(
         &self,
         codemod: &UseCodemod,
         step_env: &Option<HashMap<String, String>>,
@@ -5139,54 +3203,22 @@ impl Engine {
     ) -> Result<()> {
         slog!(logger, info, "Executing codemod step: {}", codemod.source);
 
-        // Check for runtime cycles before execution
-        if let Some(cycle_start) = self.find_cycle_in_chain(&codemod.source, dependency_chain) {
-            let chain_str = dependency_chain
-                .iter()
-                .map(|d| d.source.as_str())
-                .collect::<Vec<_>>()
-                .join(" → ");
-
-            return Err(Error::Other(format!(
-                "Runtime codemod dependency cycle detected!\n\
-                Cycle: {} → {} → {}\n\
-                This cycle was not caught during validation, indicating a dynamic dependency.\n\
-                Please review your codemod dependencies to remove the circular reference.",
-                cycle_start,
-                if chain_str.is_empty() {
-                    "(root)"
-                } else {
-                    &chain_str
-                },
-                codemod.source
-            )));
-        }
-
-        // Resolve the package (local path or registry package)
-        let resolved_package = self
-            .workflow_run_config
-            .registry_client
-            .resolve_package(&codemod.source, None, false, None)
-            .await
-            .map_err(|e| Error::Other(format!("Failed to resolve package: {e}")))?;
+        let resolved =
+            NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
+                .resolve(&codemod.source, dependency_chain)
+                .await?;
 
         slog!(
             logger,
             info,
             "Resolved codemod package: {} -> {}",
             codemod.source,
-            resolved_package.package_dir.display()
+            resolved.package.package_dir.display()
         );
 
-        // Create new dependency chain including this codemod
-        let mut new_chain = dependency_chain.to_vec();
-        new_chain.push(CodemodDependency {
-            source: codemod.source.clone(),
-        });
-
-        // Execute the resolved codemod workflow
         self.run_codemod_workflow_with_chain(
-            &resolved_package,
+            &resolved.package,
+            &resolved.workflow,
             codemod,
             step_env,
             node,
@@ -5194,7 +3226,7 @@ impl Engine {
             params,
             state,
             bundle_path,
-            &new_chain,
+            &resolved.dependency_chain,
             capabilities,
             logger,
         )
@@ -5205,6 +3237,7 @@ impl Engine {
     async fn run_codemod_workflow_with_chain(
         &self,
         resolved_package: &ResolvedPackage,
+        codemod_workflow: &Workflow,
         codemod: &UseCodemod,
         step_env: &Option<HashMap<String, String>>,
         _node: &Node,
@@ -5216,22 +3249,6 @@ impl Engine {
         capabilities: &Option<HashSet<LlrtSupportedModules>>,
         logger: &StructuredLogger,
     ) -> Result<()> {
-        let workflow_path = resolved_package.package_dir.join("workflow.yaml");
-
-        if !workflow_path.exists() {
-            return Err(Error::Other(format!(
-                "Workflow file not found in codemod package: {}",
-                workflow_path.display()
-            )));
-        }
-
-        // Load the codemod workflow
-        let workflow_content = std::fs::read_to_string(&workflow_path)
-            .map_err(|e| Error::Other(format!("Failed to read workflow file: {e}")))?;
-
-        let codemod_workflow: Workflow = serde_yaml::from_str(&workflow_content)
-            .map_err(|e| Error::Other(format!("Failed to parse workflow YAML: {e}")))?;
-
         // Prepare parameters for the codemod workflow
         let mut codemod_params = HashMap::new();
 
@@ -5295,12 +3312,14 @@ impl Engine {
         slog!(logger, info, "Executing codemod workflow steps directly");
 
         // Create a direct runner for executing the codemod steps
-        let runner: Box<dyn Runner> =
-            Box::new(DirectRunner::with_quiet(self.workflow_run_config.quiet));
+        let runner: Box<dyn Runner> = Box::new(DirectRunner::with_quiet(
+            self.workflow_run_config.output.quiet,
+        ));
 
         // Build task expression context for variable resolution in codemod steps
         let codemod_task_expr_ctx =
             crate::git_ops::build_task_expression_context(&task.id.to_string());
+        let codemod_bundle_path = Some(resolved_package.package_dir.clone());
 
         // Execute each node in the codemod workflow
         for node in &codemod_workflow.nodes {
@@ -5326,24 +3345,25 @@ impl Engine {
                     }
                 }
 
-                Box::pin(self.execute_step_action(
-                    runner.as_ref(),
-                    &step.action,
-                    &step.name,
-                    &step.env,
-                    &step.id,
-                    node,
-                    task, // Use the current task context
-                    params,
-                    state,
-                    &codemod_workflow,
-                    &Some(resolved_package.package_dir.clone()),
-                    dependency_chain,
-                    capabilities,
-                    Some(&codemod_task_expr_ctx),
-                    logger,
-                ))
-                .await?;
+                StepExecutor::new(self)
+                    .execute(StepExecutionRequest {
+                        runner: runner.as_ref(),
+                        action: &step.action,
+                        step_name: &step.name,
+                        step_env: &step.env,
+                        step_id: &step.id,
+                        node,
+                        task,
+                        params,
+                        state,
+                        workflow: codemod_workflow,
+                        bundle_path: &codemod_bundle_path,
+                        dependency_chain,
+                        capabilities,
+                        task_expr_ctx: Some(&codemod_task_expr_ctx),
+                        logger,
+                    })
+                    .await?;
             }
         }
 
@@ -5353,7 +3373,7 @@ impl Engine {
 
     /// Execute a shard step — evaluate file shards and write results to workflow state.
     #[allow(clippy::too_many_arguments)]
-    async fn execute_shard_step(
+    pub(crate) async fn execute_shard_step(
         &self,
         shard_config: &butterflow_models::step::UseShard,
         task: &Task,
@@ -5365,7 +3385,7 @@ impl Engine {
         use crate::shard::evaluate_builtin_shards;
         use butterflow_models::step::ShardMethod;
 
-        let target_path = self.workflow_run_config.target_path.clone();
+        let target_path = self.workflow_run_config.execution.target_path.clone();
 
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
@@ -5477,6 +3497,7 @@ impl Engine {
                 fields,
             })
             .await?;
+        self.wake_scheduler();
 
         Ok(())
     }
@@ -5508,6 +3529,7 @@ impl Engine {
 
         let capabilities = self
             .workflow_run_config
+            .execution
             .capabilities
             .as_ref()
             .map(|v| v.clone().into_iter().collect());
@@ -5522,6 +3544,7 @@ impl Engine {
                 capabilities,
                 capabilities_security_callback: self
                     .workflow_run_config
+                    .execution
                     .capabilities_security_callback
                     .as_ref()
                     .map(|callback| callback.clone()),
@@ -5601,7 +3624,7 @@ impl Engine {
         use codemod_sandbox::sandbox::resolvers::OxcResolver;
         use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
-        let effective_bundle_path = &self.workflow_run_config.bundle_path;
+        let effective_bundle_path = &self.workflow_run_config.execution.bundle_path;
         let func_path = effective_bundle_path.join(&func.function);
 
         if !func_path.exists() {
@@ -5663,7 +3686,7 @@ impl Engine {
             script_path: &func_path,
             resolver,
             input,
-            capabilities: self.workflow_run_config.capabilities.clone(),
+            capabilities: self.workflow_run_config.execution.capabilities.clone(),
             target_directory: Some(target_path),
         };
 
@@ -5679,7 +3702,7 @@ impl Engine {
 
     /// Execute a single RunScript step
     #[allow(clippy::too_many_arguments)]
-    async fn execute_run_script_step(
+    pub(crate) async fn execute_run_script_step(
         &self,
         runner: &dyn Runner,
         run: &str,
@@ -5712,21 +3735,25 @@ impl Engine {
             task_id: task.id.to_string(),
         };
         let notice = format_shell_command_notice(&request);
-        logger.log("info", &format_shell_command_log_notice(&request));
 
         if self
             .workflow_run_config
+            .interaction
             .shell_command_approval_callback
             .is_none()
             && !logger.is_jsonl()
-            && !self.workflow_run_config.quiet
+            && !self.workflow_run_config.output.quiet
         {
-            eprintln!();
-            eprintln!("{notice}");
-            eprintln!();
+            logger.transient_user_line("");
+            logger.transient_user_line(&notice);
+            logger.transient_user_line("");
         }
 
-        if let Some(approval_callback) = &self.workflow_run_config.shell_command_approval_callback {
+        if let Some(approval_callback) = &self
+            .workflow_run_config
+            .interaction
+            .shell_command_approval_callback
+        {
             let approved = approval_callback(&request).map_err(|error| {
                 Error::StepExecution(format!(
                     "Failed to confirm shell command execution for step '{}': {error}",
@@ -5785,14 +3812,25 @@ impl Engine {
                 &prepared.env,
                 Some(Arc::clone(&output_callback)),
             )
-            .await;
+            .await
+            .map_err(|error| {
+                if let Error::ShellCommandFailed { exit_code, output } = error {
+                    Error::ShellCommandStepFailed {
+                        command: resolved_command.clone(),
+                        exit_code,
+                        output,
+                    }
+                } else {
+                    Error::StepExecution(format!("Shell command failed: {error}"))
+                }
+            });
         drop(output_callback);
         let _ = log_persist_task.await;
 
         self.finalize_step_execution(task, output?, prepared).await
     }
 
-    fn prepare_step_execution(
+    pub(crate) fn prepare_step_execution(
         &self,
         step_env: &Option<HashMap<String, String>>,
         node: &Node,
@@ -5804,7 +3842,7 @@ impl Engine {
         let mut env: HashMap<String, String> = std::env::vars().collect();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
-        if self.workflow_run_config.no_interactive {
+        if self.workflow_run_config.interaction.no_interactive {
             env.insert("npm_config_yes".to_string(), "true".to_string());
         }
 
@@ -5889,7 +3927,7 @@ impl Engine {
         })
     }
 
-    async fn finalize_step_execution(
+    pub(crate) async fn finalize_step_execution(
         &self,
         task: &Task,
         _output: String,
@@ -5920,7 +3958,11 @@ impl Engine {
                 (k, DiffOperation::Update, v)
             } else {
                 // Malformed line, log and skip
-                warn!("Malformed state output line: {line}");
+                slog!(
+                    &self.structured_logger,
+                    warn,
+                    "Malformed state output line: {line}"
+                );
                 continue;
             };
 
@@ -5943,7 +3985,7 @@ impl Engine {
             );
         }
 
-        if !self.workflow_run_config.skip_state_writes {
+        if !self.workflow_run_config.execution.skip_state_writes {
             self.state_adapter
                 .lock()
                 .await
@@ -5952,202 +3994,8 @@ impl Engine {
                     fields: state_diff,
                 })
                 .await?;
+            self.wake_scheduler();
         }
-        Ok(())
-    }
-
-    /// Update the status of a matrix master task
-    async fn update_matrix_master_status(&self, master_task_id: Uuid) -> Result<()> {
-        // Get the master task
-        let master_task = self
-            .state_adapter
-            .lock()
-            .await
-            .get_task(master_task_id)
-            .await?;
-
-        // Get all child tasks
-        let tasks = self
-            .state_adapter
-            .lock()
-            .await
-            .get_tasks(master_task.workflow_run_id)
-            .await?;
-        let child_tasks: Vec<&Task> = tasks
-            .iter()
-            .filter(|t| t.master_task_id == Some(master_task_id))
-            .collect();
-
-        // If there are no child tasks (e.g., state was empty or cleared), the master should reflect that.
-        if child_tasks.is_empty() {
-            debug!("No child tasks found for master task {master_task_id}, setting status to Completed (or Pending if master just created).");
-            let final_status = if master_task.status == TaskStatus::Pending {
-                // If the master was just created and has no children yet (empty state)
-                // Keep it Pending until state potentially provides children.
-                // Or should it be Completed? Let's try Completed.
-                TaskStatus::Completed // Or Pending? Needs careful consideration. Let's assume Completed for empty state.
-            } else {
-                TaskStatus::Completed // If children existed and were removed, it's Completed.
-            };
-
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(final_status)?),
-                },
-            );
-            // Add ended_at if moving to Completed/Failed
-            if final_status == TaskStatus::Completed || final_status == TaskStatus::Failed {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-            }
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(master_task_id).await;
-            return Ok(());
-        }
-
-        // Check status based on existing children
-        let all_terminal = child_tasks.iter().all(|t| {
-            t.status == TaskStatus::Completed
-                || t.status == TaskStatus::Failed
-                || t.status == TaskStatus::WontDo
-        });
-
-        // If all children are in a terminal state, determine the final master status
-        if all_terminal {
-            let any_failed = child_tasks.iter().any(|t| t.status == TaskStatus::Failed);
-            // Consider WontDo: If some are WontDo and others Completed, is master Completed or Failed?
-            // Let's say Failed if any child failed, otherwise Completed (even if some are WontDo).
-            let final_status = if any_failed {
-                TaskStatus::Failed
-            } else {
-                TaskStatus::Completed
-            };
-
-            debug!(
-                "All child tasks for master {master_task_id} are terminal. Setting master status to: {final_status:?}"
-            );
-
-            let mut fields = HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(final_status)?),
-                },
-            );
-            fields.insert(
-                "ended_at".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(Utc::now())?),
-                },
-            );
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(master_task_id).await;
-            return Ok(());
-        }
-
-        // If not all children are terminal, determine intermediate status
-        let any_failed = child_tasks.iter().any(|t| t.status == TaskStatus::Failed);
-        let any_running = child_tasks.iter().any(|t| t.status == TaskStatus::Running);
-        let any_awaiting = child_tasks
-            .iter()
-            .any(|t| t.status == TaskStatus::AwaitingTrigger);
-        let any_pending = child_tasks.iter().any(|t| t.status == TaskStatus::Pending); // Added check for pending
-
-        // Create a task diff to update the status
-        let mut fields = HashMap::new();
-
-        // Determine the new status based on priority: Failed > Awaiting > Running > Pending
-        let new_status = if any_failed {
-            TaskStatus::Failed
-        } else if any_awaiting {
-            TaskStatus::AwaitingTrigger
-        } else if any_running {
-            TaskStatus::Running
-        } else if any_pending {
-            TaskStatus::Pending // If some are pending and others completed/wontdo, master is still pending/running implicitly
-        } else {
-            // This case should ideally be covered by the 'all_terminal' check above,
-            // but as a fallback, keep the current status.
-            master_task.status
-        };
-
-        // Only apply diff if the status is actually changing
-        if new_status != master_task.status {
-            debug!(
-                "Updating master task {} status from {:?} to {:?}",
-                master_task_id, master_task.status, new_status
-            );
-            fields.insert(
-                "status".to_string(),
-                FieldDiff {
-                    operation: DiffOperation::Update,
-                    value: Some(serde_json::to_value(new_status)?),
-                },
-            );
-
-            if matches!(
-                new_status,
-                TaskStatus::Pending | TaskStatus::Running | TaskStatus::AwaitingTrigger
-            ) {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::Value::Null),
-                    },
-                );
-            } else if matches!(new_status, TaskStatus::Completed | TaskStatus::Failed) {
-                fields.insert(
-                    "ended_at".to_string(),
-                    FieldDiff {
-                        operation: DiffOperation::Update,
-                        value: Some(serde_json::to_value(Utc::now())?),
-                    },
-                );
-            }
-
-            let task_diff = TaskDiff {
-                task_id: master_task_id,
-                fields,
-            };
-
-            // Apply the diff
-            self.state_adapter
-                .lock()
-                .await
-                .apply_task_diff(&task_diff)
-                .await?;
-            self.emit_task_updated(master_task_id).await;
-        } else {
-            debug!("Master task {master_task_id} status {new_status:?} remains unchanged.");
-        }
-
         Ok(())
     }
 }
@@ -6156,12 +4004,14 @@ impl Clone for Engine {
     fn clone(&self) -> Self {
         Self {
             state_adapter: Arc::clone(&self.state_adapter),
+            task_state_service: self.task_state_service.clone(),
             scheduler: Scheduler::new(),
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),
             metrics_context: self.metrics_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
+            scheduler_wake_notify: Arc::clone(&self.scheduler_wake_notify),
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
@@ -6175,6 +4025,7 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
+    use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode};
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -6247,7 +4098,7 @@ import { setState } from "codemod:workflow";
 
 export default function transform(ast) {
   setState("preScanMutation", "leaked");
-  return ast;
+  return null;
 }
 "#,
         )
@@ -6256,8 +4107,11 @@ export default function transform(ast) {
 
         let workflow_run_id = Uuid::new_v4();
         let config = WorkflowRunConfig {
-            bundle_path: temp_path.to_path_buf(),
-            target_path: temp_path.to_path_buf(),
+            execution: crate::config::WorkflowExecutionSettings {
+                bundle_path: temp_path.to_path_buf(),
+                target_path: temp_path.to_path_buf(),
+                ..WorkflowRunConfig::default().execution
+            },
             ..WorkflowRunConfig::default()
         };
         let engine = Engine::with_state_adapter(
@@ -6520,41 +4374,6 @@ export default function transform(ast) {
         assert!(!line.contains(r#""body""#));
     }
 
-    #[test]
-    fn codex_agent_output_is_not_tagged_as_stderr() {
-        assert_eq!(
-            format_agent_stream_line("codex", "stderr", "hello".to_string()),
-            "hello"
-        );
-        assert_eq!(
-            format_agent_stream_line("claude-code", "stdout", "hello".to_string()),
-            "hello"
-        );
-        assert_eq!(
-            format_agent_stream_line("aider", "stderr", "hello".to_string()),
-            "[stderr] hello"
-        );
-    }
-
-    #[test]
-    fn live_agent_streaming_is_enabled_only_for_non_quiet_text_runs() {
-        let text_logger = StructuredLogger::default();
-        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
-
-        assert!(should_stream_agent_output_live(false, &text_logger));
-        assert!(!should_stream_agent_output_live(true, &text_logger));
-        assert!(!should_stream_agent_output_live(false, &jsonl_logger));
-    }
-
-    #[test]
-    fn captured_agent_output_is_only_relogged_in_jsonl_mode() {
-        let text_logger = StructuredLogger::default();
-        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
-
-        assert!(!should_relog_captured_agent_output(&text_logger));
-        assert!(should_relog_captured_agent_output(&jsonl_logger));
-    }
-
     #[tokio::test]
     async fn pull_request_config_uses_defaulted_workflow_params() {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -6563,7 +4382,10 @@ export default function transform(ast) {
                 temp_dir.path().join("state"),
             )),
             WorkflowRunConfig {
-                enable_managed_git: true,
+                managed_git: crate::config::ManagedGitSettings {
+                    enable_managed_git: true,
+                    ..WorkflowRunConfig::default().managed_git
+                },
                 ..WorkflowRunConfig::default()
             },
         );
@@ -6626,7 +4448,7 @@ export default function transform(ast) {
         };
         let resolved_params = resolve_workflow_run_params(&workflow_run);
 
-        let pr = engine
+        let pr = ManagedGitService::new(&engine)
             .resolve_pull_request_config(&task, &node, &resolved_params)
             .unwrap()
             .expect("managed git node should resolve PR metadata");

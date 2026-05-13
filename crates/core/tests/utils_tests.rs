@@ -109,10 +109,10 @@ fn test_parse_workflow_file_invalid() {
     // Verify that parsing fails
     assert!(result.is_err());
     match result {
-        Err(Error::WorkflowValidation(_)) => {
-            // Expected error
+        Err(Error::WorkflowParse { path, .. }) => {
+            assert_eq!(path, file_path);
         }
-        _ => panic!("Expected WorkflowValidation error"),
+        _ => panic!("Expected WorkflowParse error"),
     }
 }
 

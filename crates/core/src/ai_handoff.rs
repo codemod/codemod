@@ -6,7 +6,7 @@ const MAX_PARENT_DEPTH: usize = 8;
 /// Agents that can be launched from the CLI with a command to execute the AI instructions.
 /// Each entry maps a canonical agent name to the executable names to search for on `$PATH`,
 /// plus the command template for invoking the agent with a prompt.
-const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
+pub(crate) const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
     LaunchableAgent {
         canonical: "claude-code",
         executables: &["claude"],
@@ -15,7 +15,7 @@ const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
     LaunchableAgent {
         canonical: "codex",
         executables: &["codex"],
-        label: "Codex CLI",
+        label: "Codex",
     },
     LaunchableAgent {
         canonical: "aider",
@@ -40,10 +40,10 @@ const LAUNCHABLE_AGENTS: &[LaunchableAgent] = &[
 ];
 
 #[derive(Clone, Debug)]
-struct LaunchableAgent {
-    canonical: &'static str,
-    executables: &'static [&'static str],
-    label: &'static str,
+pub(crate) struct LaunchableAgent {
+    pub(crate) canonical: &'static str,
+    pub(crate) executables: &'static [&'static str],
+    pub(crate) label: &'static str,
 }
 
 /// An agent that was found (or not) on the system.
@@ -135,9 +135,15 @@ pub fn build_agent_command(
         "claude-code" => {
             // Claude Code supports piping the prompt over stdin in print mode.
             // This avoids very long argv payloads and is more compatible with
-            // the Bun-based CLI entrypoint.
+            // the Bun-based CLI entrypoint. Use stream-json so the workflow UI
+            // can show progress instead of waiting for one final text blob.
             let _ = full_prompt;
-            cmd.arg("--dangerously-skip-permissions").arg("-p");
+            cmd.arg("--dangerously-skip-permissions")
+                .arg("-p")
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--include-partial-messages");
         }
         "codex" => {
             // Pipe the prompt via stdin using `codex e -`
@@ -147,6 +153,7 @@ pub fn build_agent_command(
             cmd.env("RUST_LOG", "error");
             cmd.arg("--dangerously-bypass-approvals-and-sandbox")
                 .arg("e")
+                .arg("--json")
                 .arg("-");
         }
         "aider" => {
@@ -158,7 +165,10 @@ pub fn build_agent_command(
         }
         "opencode" => {
             let _ = full_prompt;
-            cmd.arg("run").arg("--dangerously-skip-permissions");
+            cmd.arg("run")
+                .arg("--dangerously-skip-permissions")
+                .arg("--format")
+                .arg("json");
         }
         "openclaw" => {
             cmd.arg("--dangerously-skip-permissions")
@@ -358,14 +368,6 @@ fn classify_detection(
     reasons.extend(signals.iter().map(|s| s.reason.clone()));
     let best_agent = choose_best_agent(&signals).map(str::to_string);
 
-    if process_failed {
-        return DetectionResult {
-            confidence: DetectionConfidence::Uncertain,
-            agent_name: best_agent,
-            reasons,
-        };
-    }
-
     if signals
         .iter()
         .any(|signal| signal.strength == SignalStrength::Strong)
@@ -381,6 +383,14 @@ fn classify_detection(
         .iter()
         .filter(|signal| signal.strength != SignalStrength::Strong)
         .count();
+
+    if process_failed && non_strong < 2 {
+        return DetectionResult {
+            confidence: DetectionConfidence::Uncertain,
+            agent_name: best_agent,
+            reasons,
+        };
+    }
 
     let confidence = if non_strong >= 2 {
         DetectionConfidence::Detected
@@ -761,6 +771,57 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.get_current_dir(), Some(temp_dir.path()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_claude_code_output() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd = build_agent_command("claude-code", executable, "prompt", None, temp_dir.path())
+            .unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+        assert!(args.contains(&"--verbose".to_string()));
+        assert!(args.contains(&"--include-partial-messages".to_string()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_codex_json_events() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd =
+            build_agent_command("codex", executable, "prompt", None, temp_dir.path()).unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--json".to_string()));
+        assert!(args.contains(&"-".to_string()));
+    }
+
+    #[test]
+    fn build_agent_command_streams_opencode_json_events() {
+        let temp_dir = tempdir().unwrap();
+        let executable = Path::new("/bin/sh");
+
+        let cmd =
+            build_agent_command("opencode", executable, "prompt", None, temp_dir.path()).unwrap();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--format".to_string()));
+        assert!(args.contains(&"json".to_string()));
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
     }
 
     #[test]

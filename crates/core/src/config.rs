@@ -140,9 +140,8 @@ pub trait InstallSkillExecutor: Send + Sync {
     async fn execute(&self, request: InstallSkillExecutionRequest) -> Result<String>;
 }
 
-/// Configuration for running a workflow
 #[derive(Clone)]
-pub struct WorkflowRunConfig {
+pub struct WorkflowExecutionSettings {
     pub workflow_file_path: PathBuf,
     pub bundle_path: PathBuf,
     pub target_path: PathBuf,
@@ -150,21 +149,10 @@ pub struct WorkflowRunConfig {
     pub wait_for_completion: bool,
     pub progress_callback: Arc<Option<ProgressCallback>>,
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
-    pub registry_client: RegistryClient,
     pub dry_run: bool,
+    pub registry_client: RegistryClient,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
-    /// Non-interactive mode for CI/headless environments
-    pub no_interactive: bool,
-    /// Explicitly selected coding agent for AI steps (e.g. "claude-code", "codex")
-    pub agent: Option<String>,
-    /// Callback for presenting agent selection UI when no agent is specified
-    pub agent_selection_callback: Option<AgentSelectionCallback>,
-    pub selection_prompt_callback: Option<SelectionPromptCallback>,
-    /// Callback for reporting changes in dry-run mode
-    pub dry_run_callback: Option<DryRunCallback>,
-    /// Skip executing install-skill steps at runtime (used by package run UX)
-    pub skip_install_skill_steps: bool,
     /// Auto-trigger manual steps instead of waiting for user input (used by pro codemod dry-run)
     pub auto_trigger_manual_steps: bool,
     /// Skip shard steps entirely (used by pro codemod dry-run)
@@ -173,6 +161,49 @@ pub struct WorkflowRunConfig {
     pub skip_state_writes: bool,
     /// Flatten matrix tasks to a single task per node (used by pro codemod dry-run)
     pub flatten_matrix_tasks: bool,
+}
+
+impl Default for WorkflowExecutionSettings {
+    fn default() -> Self {
+        Self {
+            workflow_file_path: PathBuf::from("workflow.json"),
+            bundle_path: PathBuf::from("bundle.json"),
+            target_path: PathBuf::from("."),
+            params: HashMap::new(),
+            wait_for_completion: true,
+            progress_callback: Arc::new(None),
+            pre_run_callback: Arc::new(None),
+            dry_run: false,
+            registry_client: RegistryClient::default(),
+            capabilities: None,
+            capabilities_security_callback: None,
+            auto_trigger_manual_steps: false,
+            skip_shard_steps: false,
+            skip_state_writes: false,
+            flatten_matrix_tasks: false,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct WorkflowInteractionSettings {
+    /// Non-interactive mode for CI/headless environments
+    pub no_interactive: bool,
+    /// Explicitly selected coding agent for AI steps (e.g. "claude-code", "codex")
+    pub agent: Option<String>,
+    /// Callback for presenting agent selection UI when no agent is specified
+    pub agent_selection_callback: Option<AgentSelectionCallback>,
+    pub selection_prompt_callback: Option<SelectionPromptCallback>,
+    /// Optional interactive approval callback for shell-command workflow steps
+    pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
+    /// Optional interactive approval callback for managed-git pull request creation
+    pub pull_request_approval_callback: Option<PullRequestApprovalCallback>,
+    /// Optional interactive approval callback for proceeding on dirty/untracked git targets
+    pub dirty_git_approval_callback: Option<DirtyGitApprovalCallback>,
+}
+
+#[derive(Clone)]
+pub struct WorkflowOutputSettings {
     /// Output format for structured logging (Text or Jsonl)
     pub output_format: OutputFormat,
     /// Human-readable name for this workflow run
@@ -182,14 +213,32 @@ pub struct WorkflowRunConfig {
     /// When quiet is enabled, capture stdout into task logs instead of letting it hit the terminal.
     /// TUI mode disables this so terminal rendering keeps control of stdout.
     pub capture_stdout_in_quiet_mode: bool,
-    /// Optional interactive approval callback for shell-command workflow steps
-    pub shell_command_approval_callback: Option<ShellCommandApprovalCallback>,
-    /// Optional interactive approval callback for managed-git pull request creation
-    pub pull_request_approval_callback: Option<PullRequestApprovalCallback>,
-    /// Optional interactive approval callback for proceeding on dirty/untracked git targets
-    pub dirty_git_approval_callback: Option<DirtyGitApprovalCallback>,
+    /// Callback for reporting changes in dry-run mode
+    pub dry_run_callback: Option<DryRunCallback>,
+}
+
+impl Default for WorkflowOutputSettings {
+    fn default() -> Self {
+        Self {
+            output_format: OutputFormat::Text,
+            name: None,
+            quiet: false,
+            capture_stdout_in_quiet_mode: true,
+            dry_run_callback: None,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct SkillInstallSettings {
+    /// Skip executing install-skill steps at runtime (used by non-interactive safety gates)
+    pub skip_install_skill_steps: bool,
     /// Optional in-process executor for install-skill workflow steps
     pub install_skill_executor: Option<Arc<dyn InstallSkillExecutor>>,
+}
+
+#[derive(Clone)]
+pub struct ManagedGitSettings {
     /// Optional per-task git worktree used for managed git execution.
     pub managed_git_worktree: Option<ManagedGitWorktree>,
     /// When false, skip managed git operations (branch switching, commits,
@@ -206,41 +255,36 @@ pub struct WorkflowRunConfig {
     pub enable_worktrees: bool,
 }
 
-impl Default for WorkflowRunConfig {
+impl Default for ManagedGitSettings {
     fn default() -> Self {
         Self {
-            workflow_file_path: PathBuf::from("workflow.json"),
-            bundle_path: PathBuf::from("bundle.json"),
-            target_path: PathBuf::from("."),
-            params: HashMap::new(),
-            wait_for_completion: true,
-            progress_callback: Arc::new(None),
-            pre_run_callback: Arc::new(None),
-            registry_client: RegistryClient::default(),
-            dry_run: false,
-            capabilities: None,
-            capabilities_security_callback: None,
-            no_interactive: false,
-            agent: None,
-            agent_selection_callback: None,
-            selection_prompt_callback: None,
-            dry_run_callback: None,
-            skip_install_skill_steps: false,
-            auto_trigger_manual_steps: false,
-            skip_shard_steps: false,
-            skip_state_writes: false,
-            flatten_matrix_tasks: false,
-            output_format: OutputFormat::Text,
-            name: None,
-            quiet: false,
-            capture_stdout_in_quiet_mode: true,
-            shell_command_approval_callback: None,
-            pull_request_approval_callback: None,
-            dirty_git_approval_callback: None,
-            install_skill_executor: None,
             managed_git_worktree: None,
             enable_managed_git: true,
             enable_worktrees: false,
         }
+    }
+}
+
+/// Configuration for running a workflow
+#[derive(Clone, Default)]
+pub struct WorkflowRunConfig {
+    pub execution: WorkflowExecutionSettings,
+    pub interaction: WorkflowInteractionSettings,
+    pub output: WorkflowOutputSettings,
+    pub managed_git: ManagedGitSettings,
+    pub skill_install: SkillInstallSettings,
+}
+
+impl WorkflowRunConfig {
+    pub fn workflow_file_path(&self) -> &Path {
+        &self.execution.workflow_file_path
+    }
+
+    pub fn bundle_path(&self) -> &Path {
+        &self.execution.bundle_path
+    }
+
+    pub fn target_path(&self) -> &Path {
+        &self.execution.target_path
     }
 }

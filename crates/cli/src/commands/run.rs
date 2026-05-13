@@ -1,10 +1,7 @@
 use crate::engine::{create_engine, create_registry_client};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
-use crate::utils::package_validation::{
-    default_workflow_path, detect_package_behavior_shape_with_manifest_hint, select_workflow_path,
-    PackageBehaviorShape,
-};
+use crate::utils::package_validation::{default_workflow_path, select_workflow_path};
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
 use crate::TelemetrySenderMutex;
@@ -19,7 +16,6 @@ use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use console::{strip_ansi_codes, style};
-use inquire::Confirm;
 use log::{debug, info};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -32,12 +28,6 @@ use std::sync::{Arc, Mutex};
 
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SkillInstallOfferContext {
-    SkillOnly,
-    WorkflowAndSkillPostRun,
-}
-
 fn format_file_count(count: usize) -> String {
     if count == 1 {
         "1 file".to_string()
@@ -47,11 +37,24 @@ fn format_file_count(count: usize) -> String {
 }
 
 fn print_dry_run_summary(files_modified: usize, files_unmodified: usize, files_with_errors: usize) {
-    println!("\n🔎 Dry run complete");
-    println!("📝 Would modify: {}", format_file_count(files_modified));
-    println!("✅ Unchanged: {}", format_file_count(files_unmodified));
+    println!();
+    println!("{}", style("Dry run summary").bold());
+    println!(
+        "  {:<12} {}",
+        style("Would modify").yellow(),
+        format_file_count(files_modified)
+    );
+    println!(
+        "  {:<12} {}",
+        style("Unchanged").green(),
+        format_file_count(files_unmodified)
+    );
     if files_with_errors > 0 {
-        println!("❌ Errors: {}", format_file_count(files_with_errors));
+        println!(
+            "  {:<12} {}",
+            style("Errors").red(),
+            format_file_count(files_with_errors)
+        );
     }
 }
 
@@ -174,6 +177,10 @@ pub async fn handler(
     telemetry: TelemetrySenderMutex,
     disable_analytics: bool,
 ) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Resolve the package (local path or registry package)
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
@@ -264,38 +271,6 @@ pub async fn handler(
     let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
     let codemod_config = load_codemod_manifest(&codemod_config_path)?;
 
-    let package_behavior_shape = detect_package_behavior_shape_for_run(
-        &resolved_package.package_dir,
-        codemod_config.as_ref(),
-    );
-
-    if package_behavior_shape == PackageBehaviorShape::SkillOnly {
-        if args.install_skill {
-            crate::commands::package_skill::install_from_run_request(
-                &args.package,
-                args.no_interactive,
-                Some(target_path.clone()),
-                &telemetry,
-            )
-            .await?;
-            return Ok(());
-        }
-        if maybe_offer_skill_install(args, SkillInstallOfferContext::SkillOnly, &telemetry).await? {
-            return Ok(());
-        }
-        let error = skill_only_package_run_error(&args.package, &resolved_package.package_dir);
-        let error_msg = error.to_string();
-        send_failure_event(&telemetry, &args.package, &error_msg).await;
-        return Err(error);
-    }
-
-    if package_behavior_shape == PackageBehaviorShape::Missing {
-        let error = missing_behavior_run_error(&args.package, &resolved_package.package_dir);
-        let error_msg = error.to_string();
-        send_failure_event(&telemetry, &args.package, &error_msg).await;
-        return Err(error);
-    }
-
     let (workflow_path, selected_workflow_name) = match select_workflow_for_run(
         &resolved_package.package_dir,
         codemod_config.as_ref(),
@@ -351,11 +326,7 @@ pub async fn handler(
         Some(capabilities.clone()),
         args.no_interactive,
         diff_collector.clone(),
-        should_skip_install_skill_steps(
-            args.no_interactive,
-            args.install_skill,
-            package_behavior_shape,
-        ),
+        args.no_interactive && !args.install_skill,
         output_format,
         Some(capabilities),
         args.agent.clone(),
@@ -375,10 +346,10 @@ pub async fn handler(
     // Set on both engine (used at runtime) and config (passed to run_workflow).
     if resolved_package.dry_run_only {
         let engine_config = engine.workflow_run_config_mut();
-        engine_config.auto_trigger_manual_steps = true;
-        engine_config.skip_shard_steps = true;
-        engine_config.skip_state_writes = true;
-        engine_config.flatten_matrix_tasks = true;
+        engine_config.execution.auto_trigger_manual_steps = true;
+        engine_config.execution.skip_shard_steps = true;
+        engine_config.execution.skip_state_writes = true;
+        engine_config.execution.flatten_matrix_tasks = true;
     }
 
     let run_result = run_workflow(&mut engine, config).await;
@@ -405,10 +376,12 @@ pub async fn handler(
     if dry_run {
         print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
     } else {
-        println!("\n📝 Modified files: {files_modified}");
-        println!("✅ Unmodified files: {files_unmodified}");
+        println!();
+        println!("{}", style("Run summary").bold());
+        println!("  {:<12} {files_modified}", style("Modified").green());
+        println!("  {:<12} {files_unmodified}", style("Unmodified").dim());
         if files_with_errors > 0 {
-            println!("❌ Files with errors: {files_with_errors}");
+            println!("  {:<12} {files_with_errors}", style("Errors").red());
         }
     }
 
@@ -464,15 +437,6 @@ pub async fn handler(
         )
         .await;
 
-    if package_behavior_shape == PackageBehaviorShape::WorkflowAndSkill && !args.install_skill {
-        let _ = maybe_offer_skill_install(
-            args,
-            SkillInstallOfferContext::WorkflowAndSkillPostRun,
-            &telemetry,
-        )
-        .await?;
-    }
-
     if resolved_package.dry_run_only {
         if let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
             debug!("Failed to remove cached pro codemod: {}", e);
@@ -523,13 +487,6 @@ fn load_codemod_manifest(codemod_config_path: &Path) -> Result<Option<CodemodMan
     let codemod_config: CodemodManifest = serde_yaml::from_str(&codemod_config_content)
         .map_err(|e| anyhow!("Failed to parse codemod.yaml: {}", e))?;
     Ok(Some(codemod_config))
-}
-
-fn detect_package_behavior_shape_for_run(
-    package_dir: &Path,
-    manifest: Option<&CodemodManifest>,
-) -> PackageBehaviorShape {
-    detect_package_behavior_shape_with_manifest_hint(package_dir, manifest)
 }
 
 fn workflow_path_for_run(
@@ -614,39 +571,6 @@ fn prompt_workflow_selection(
     Ok(entries[index].clone())
 }
 
-fn should_skip_install_skill_steps(
-    no_interactive: bool,
-    install_skill: bool,
-    package_behavior_shape: PackageBehaviorShape,
-) -> bool {
-    if install_skill {
-        return false;
-    }
-
-    if package_behavior_shape.includes_skill() {
-        // Preserve package-run UX: offer post-run prompt instead of executing install-skill inline.
-        return true;
-    }
-
-    no_interactive
-}
-
-fn should_prompt_for_skill_install(no_interactive: bool) -> bool {
-    should_prompt_for_skill_install_with_tty(
-        no_interactive,
-        io::stdin().is_terminal(),
-        io::stdout().is_terminal(),
-    )
-}
-
-fn should_prompt_for_skill_install_with_tty(
-    no_interactive: bool,
-    stdin_is_tty: bool,
-    stdout_is_tty: bool,
-) -> bool {
-    !no_interactive && stdin_is_tty && stdout_is_tty
-}
-
 fn should_auto_launch_package_run_tui(
     no_interactive: bool,
     dry_run: bool,
@@ -659,98 +583,12 @@ fn apply_package_run_mode_to_config(
     cfg: &mut butterflow_core::config::WorkflowRunConfig,
     auto_launch_tui: bool,
 ) {
-    cfg.enable_managed_git = auto_launch_tui;
-    cfg.enable_worktrees = auto_launch_tui;
+    cfg.managed_git.enable_managed_git = auto_launch_tui;
+    cfg.managed_git.enable_worktrees = auto_launch_tui;
     if auto_launch_tui {
-        cfg.quiet = true;
-        cfg.capture_stdout_in_quiet_mode = false;
+        cfg.output.quiet = true;
+        cfg.output.capture_stdout_in_quiet_mode = false;
     }
-}
-
-fn skill_install_command(package_id: &str) -> String {
-    format!("npx codemod {package_id}")
-}
-
-fn skill_install_prompt_message(context: SkillInstallOfferContext) -> &'static str {
-    match context {
-        SkillInstallOfferContext::SkillOnly => {
-            "Install this package skill now so your harness can execute it?"
-        }
-        SkillInstallOfferContext::WorkflowAndSkillPostRun => {
-            "Install this package skill now for harness-assisted follow-up workflows?"
-        }
-    }
-}
-
-async fn maybe_offer_skill_install(
-    args: &Command,
-    context: SkillInstallOfferContext,
-    telemetry: &TelemetrySenderMutex,
-) -> Result<bool> {
-    let install_command = skill_install_command(&args.package);
-    match context {
-        SkillInstallOfferContext::SkillOnly => {
-            println!(
-                "\nℹ️ Package `{}` is skill-only (workflow contains `install-skill` steps but no executable steps).",
-                args.package
-            );
-        }
-        SkillInstallOfferContext::WorkflowAndSkillPostRun => {
-            println!(
-                "\nℹ️ Package `{}` also includes installable skill behavior.",
-                args.package
-            );
-        }
-    }
-
-    if !should_prompt_for_skill_install(args.no_interactive) {
-        println!("Install skill by re-running interactively: `{install_command}`");
-        return Ok(false);
-    }
-
-    let should_install = match Confirm::new(skill_install_prompt_message(context))
-        .with_default(true)
-        .prompt()
-    {
-        Ok(answer) => answer,
-        Err(error) => {
-            println!(
-                "Skipped skill install prompt ({error}). Re-run `{install_command}` and accept the install prompt."
-            );
-            return Ok(false);
-        }
-    };
-
-    if !should_install {
-        println!("Skipped skill install. You can install later by running: `{install_command}`");
-        return Ok(false);
-    }
-
-    crate::commands::package_skill::install_from_run_prompt(
-        &args.package,
-        args.target_path.clone(),
-        telemetry,
-    )
-    .await?;
-
-    Ok(true)
-}
-
-fn skill_only_package_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
-    anyhow!(
-        "Package `{}` at {} is a skill-only package (workflow contains `install-skill` steps but no executable steps). `codemod run` executes workflow behavior only. Install this package as a skill with `{}`.",
-        package_id,
-        package_dir.display(),
-        skill_install_command(package_id)
-    )
-}
-
-fn missing_behavior_run_error(package_id: &str, package_dir: &Path) -> anyhow::Error {
-    anyhow!(
-        "Package `{}` at {} has no executable workflow steps and no installable skill behavior. Add executable workflow steps, or add `install-skill` steps and authored skill files.",
-        package_id,
-        package_dir.display(),
-    )
 }
 
 fn missing_workflow_error(package_id: &str, workflow_path: &Path) -> anyhow::Error {
@@ -929,9 +767,19 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
                     }
                 }
 
-                println!("\n🔎 Dry run complete");
-                println!("📝 Would modify: {}", format_file_count(files_modified));
-                println!("Δ Changes: +{} -{}", total_additions, total_deletions);
+                println!();
+                println!("{}", style("Dry run summary").bold());
+                println!(
+                    "  {:<12} {}",
+                    style("Would modify").yellow(),
+                    format_file_count(files_modified)
+                );
+                println!(
+                    "  {:<12} +{} -{}",
+                    style("Changes").cyan(),
+                    total_additions,
+                    total_deletions
+                );
             }
             Err(e) => {
                 // JSON parsing failed, print raw output
@@ -960,8 +808,6 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
 
     fn manifest_with_workflow(workflow: &str) -> CodemodManifest {
         CodemodManifest {
@@ -1058,38 +904,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_package_behavior_shape_for_run() {
-        let temp_dir = tempdir().unwrap();
-        fs::write(
-            temp_dir.path().join(WORKFLOW_FILE_NAME),
-            r#"
-version: "1"
-nodes:
-  - id: install
-    name: Install
-    type: automatic
-    steps:
-      - id: install-skill
-        name: Install
-        install-skill:
-          package: "@codemod/sample"
-"#,
-        )
-        .unwrap();
-
-        let shape = detect_package_behavior_shape_for_run(temp_dir.path(), None);
-        assert_eq!(shape, PackageBehaviorShape::SkillOnly);
-    }
-
-    #[test]
-    fn test_detect_package_behavior_shape_for_run_missing_without_workflow() {
-        let temp_dir = tempdir().unwrap();
-
-        let shape = detect_package_behavior_shape_for_run(temp_dir.path(), None);
-        assert_eq!(shape, PackageBehaviorShape::Missing);
-    }
-
-    #[test]
     fn test_workflow_path_for_run_prefers_manifest_workflow_path() {
         let package_dir = Path::new("/tmp/sample");
         let manifest = manifest_with_workflow("custom/workflow.yaml");
@@ -1154,108 +968,12 @@ nodes:
     }
 
     #[test]
-    fn test_skill_only_package_run_error_has_guidance() {
-        let error = skill_only_package_run_error("@codemod/mcs", Path::new("/tmp/mcs"));
-        let message = error.to_string();
-
-        assert!(message.contains("skill-only package"));
-        assert!(message.contains("install-skill"));
-        assert!(message.contains("npx codemod @codemod/mcs"));
-        assert!(message.contains("@codemod/mcs"));
-    }
-
-    #[test]
     fn test_missing_workflow_error_mentions_expected_path() {
         let error = missing_workflow_error("@codemod/any", Path::new("/tmp/any/workflow.yaml"));
         let message = error.to_string();
 
         assert!(message.contains("missing required workflow file"));
         assert!(message.contains("/tmp/any/workflow.yaml"));
-    }
-
-    #[test]
-    fn test_missing_behavior_error_mentions_install_skill_and_authored_files() {
-        let error = missing_behavior_run_error("@codemod/any", Path::new("/tmp/any"));
-        let message = error.to_string();
-
-        assert!(message.contains("no executable workflow steps"));
-        assert!(message.contains("install-skill"));
-        assert!(message.contains("authored skill files"));
-    }
-
-    #[test]
-    fn test_skill_install_command_uses_package_run_entrypoint() {
-        let command = skill_install_command("@codemod/jest-to-vitest");
-        assert_eq!(command, "npx codemod @codemod/jest-to-vitest");
-    }
-
-    #[test]
-    fn test_should_prompt_for_skill_install_disables_when_no_interactive() {
-        assert!(!should_prompt_for_skill_install(true));
-    }
-
-    #[test]
-    fn test_should_prompt_for_skill_install_with_tty_truth_table() {
-        assert!(should_prompt_for_skill_install_with_tty(false, true, true));
-        assert!(!should_prompt_for_skill_install_with_tty(true, true, true));
-        assert!(!should_prompt_for_skill_install_with_tty(
-            false, false, true
-        ));
-        assert!(!should_prompt_for_skill_install_with_tty(
-            false, true, false
-        ));
-        assert!(!should_prompt_for_skill_install_with_tty(
-            false, false, false
-        ));
-    }
-
-    #[test]
-    fn test_should_skip_install_skill_steps_defaults_to_skip_for_skill_packages() {
-        assert!(should_skip_install_skill_steps(
-            false,
-            false,
-            PackageBehaviorShape::WorkflowAndSkill
-        ));
-        assert!(should_skip_install_skill_steps(
-            true,
-            false,
-            PackageBehaviorShape::SkillOnly
-        ));
-    }
-
-    #[test]
-    fn test_should_skip_install_skill_steps_skips_in_non_interactive_by_default() {
-        assert!(should_skip_install_skill_steps(
-            true,
-            false,
-            PackageBehaviorShape::WorkflowOnly
-        ));
-        assert!(!should_skip_install_skill_steps(
-            false,
-            false,
-            PackageBehaviorShape::WorkflowOnly
-        ));
-    }
-
-    #[test]
-    fn test_should_skip_install_skill_steps_honors_install_skill_override() {
-        assert!(!should_skip_install_skill_steps(
-            true,
-            true,
-            PackageBehaviorShape::WorkflowAndSkill
-        ));
-    }
-
-    #[test]
-    fn test_skill_install_prompt_message_by_context() {
-        assert!(
-            skill_install_prompt_message(SkillInstallOfferContext::SkillOnly)
-                .contains("harness can execute")
-        );
-        assert!(
-            skill_install_prompt_message(SkillInstallOfferContext::WorkflowAndSkillPostRun)
-                .contains("follow-up workflows")
-        );
     }
 
     fn workflow_with_manual_step() -> butterflow_core::Workflow {
@@ -1329,10 +1047,10 @@ nodes:
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -1343,10 +1061,10 @@ nodes:
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(cfg.enable_managed_git);
-        assert!(cfg.enable_worktrees);
-        assert!(cfg.quiet);
-        assert!(!cfg.capture_stdout_in_quiet_mode);
+        assert!(cfg.managed_git.enable_managed_git);
+        assert!(cfg.managed_git.enable_worktrees);
+        assert!(cfg.output.quiet);
+        assert!(!cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -1357,10 +1075,10 @@ nodes:
 
         let mut cfg = butterflow_core::config::WorkflowRunConfig::default();
         apply_package_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]

@@ -47,7 +47,7 @@ impl Loader for QuickJSLoader {
             if needs_transpilation {
                 let transpiled_bytes = transpiler::transpile(source, file_name.to_string())
                     .map_err(|err| {
-                        Error::new_loading(&format!("Transpilation failed for {name}: {err}"))
+                        Error::new_loading_message(name, format!("Transpilation failed: {err}"))
                     })?;
                 Module::declare(ctx.clone(), name, transpiled_bytes.as_slice())
             } else {

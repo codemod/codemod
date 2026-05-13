@@ -104,6 +104,12 @@ pub(crate) fn validate_package_behavior_structure(
         find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
     };
 
+    if !merged.has_executable_steps && !merged.has_install_skill_steps && !has_skill_layout {
+        return Err(anyhow!(
+            "Invalid package structure: package does not define runnable behavior. Add executable workflow steps and/or `install-skill` steps with authored skill files."
+        ));
+    }
+
     if merged.has_install_skill_steps && !has_skill_layout {
         return Err(anyhow!(
             "Workflow contains `install-skill` step(s), but authored skill files are missing at {}.",
@@ -119,6 +125,26 @@ pub(crate) fn validate_package_behavior_structure(
     }
 
     Ok(())
+}
+
+pub(crate) fn package_has_install_skill_steps(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<bool> {
+    Ok(workflow_behavior_summary(package_path, manifest)?.has_install_skill_steps)
+}
+
+pub(crate) fn package_has_authored_skill_layout(
+    package_path: &Path,
+    manifest: &CodemodManifest,
+) -> Result<bool> {
+    let authored_skill_candidate =
+        authored_skill_file_candidate(package_path, Some(manifest), &manifest.name)?;
+    Ok(if authored_skill_candidate.explicit {
+        authored_skill_candidate.path.is_file()
+    } else {
+        find_authored_skill_dir(package_path, Some(&manifest.name)).is_some()
+    })
 }
 
 pub(crate) fn detect_package_behavior_shape(
@@ -1034,5 +1060,27 @@ nodes:
         assert!(error
             .to_string()
             .contains("Workflow contains `install-skill` step(s)"));
+    }
+
+    #[test]
+    fn validate_package_behavior_structure_rejects_package_without_runnable_behavior() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("example");
+        write_workflow(
+            temp_dir.path(),
+            r#"
+version: "1"
+nodes:
+  - id: empty
+    name: Empty
+    type: automatic
+    steps: []
+"#,
+        );
+
+        let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not define runnable behavior"));
     }
 }

@@ -67,6 +67,36 @@ pub fn create_progress_callback() -> ProgressCallback {
                             });
                         }
                     }
+                    "log" => {
+                        if let Some((title, line)) = path.split_once('\n') {
+                            progress_reporter(progress_bar::ProgressUpdate {
+                                task_id: task_id.to_string(),
+                                action: progress_bar::ProgressAction::Log {
+                                    title: title.to_string(),
+                                    line: line.to_string(),
+                                },
+                            });
+                        }
+                    }
+                    "agent" => {
+                        progress_reporter(progress_bar::ProgressUpdate {
+                            task_id: task_id.to_string(),
+                            action: progress_bar::ProgressAction::Agent {
+                                payload: path.to_string(),
+                            },
+                        });
+                    }
+                    "diagnostic" => {
+                        if let Some((title, message)) = path.split_once('\n') {
+                            progress_reporter(progress_bar::ProgressUpdate {
+                                task_id: task_id.to_string(),
+                                action: progress_bar::ProgressAction::Diagnostic {
+                                    title: title.to_string(),
+                                    message: message.to_string(),
+                                },
+                            });
+                        }
+                    }
                     "increment" => {
                         progress_reporter(progress_bar::ProgressUpdate {
                             task_id: task_id.to_string(),
@@ -75,7 +105,11 @@ pub fn create_progress_callback() -> ProgressCallback {
                     }
                     "finish" => {
                         let message = if let Some(total) = count {
-                            format!("Processed {total} files")
+                            if *total == 1 {
+                                "Processed 1 file".to_string()
+                            } else {
+                                "Processed files".to_string()
+                            }
                         } else {
                             format!("Processed {index} files")
                         };
@@ -161,7 +195,11 @@ pub fn create_engine(
 
     let pre_run_callback: PreRunCallback = Box::new(move |path: &Path, dirty: bool, config| {
         if !allow_dirty {
-            dirty_check(path, dirty, config.dirty_git_approval_callback.as_ref())?;
+            dirty_check(
+                path,
+                dirty,
+                config.interaction.dirty_git_approval_callback.as_ref(),
+            )?;
         }
         Ok(())
     });
@@ -172,6 +210,7 @@ pub fn create_engine(
     } else {
         Some(create_progress_callback())
     };
+    let progress_owns_terminal = progress_callback.is_some();
 
     let registry_client = create_registry_client(registry)?;
 
@@ -187,24 +226,35 @@ pub fn create_engine(
     let shell_command_approval_callback = create_shell_command_approval_callback(no_interactive);
 
     let config = WorkflowRunConfig {
-        pre_run_callback: Arc::new(Some(pre_run_callback)),
-        progress_callback: Arc::new(progress_callback),
-        dry_run,
-        target_path,
-        workflow_file_path,
-        bundle_path,
-        params,
-        registry_client,
-        capabilities_security_callback: Some(capabilities_security_callback),
-        capabilities,
-        no_interactive,
-        agent,
-        agent_selection_callback,
-        dry_run_callback,
-        skip_install_skill_steps,
-        output_format,
-        shell_command_approval_callback,
-        install_skill_executor,
+        execution: butterflow_core::config::WorkflowExecutionSettings {
+            workflow_file_path,
+            bundle_path,
+            target_path,
+            params,
+            progress_callback: Arc::new(progress_callback),
+            pre_run_callback: Arc::new(Some(pre_run_callback)),
+            dry_run,
+            registry_client,
+            capabilities,
+            capabilities_security_callback: Some(capabilities_security_callback),
+            ..Default::default()
+        },
+        interaction: butterflow_core::config::WorkflowInteractionSettings {
+            no_interactive,
+            agent,
+            agent_selection_callback,
+            shell_command_approval_callback,
+            ..Default::default()
+        },
+        output: butterflow_core::config::WorkflowOutputSettings {
+            output_format,
+            dry_run_callback,
+            ..Default::default()
+        },
+        skill_install: butterflow_core::config::SkillInstallSettings {
+            skip_install_skill_steps,
+            install_skill_executor,
+        },
         ..WorkflowRunConfig::default()
     };
 
@@ -219,14 +269,19 @@ pub fn create_engine(
         if backend == "cloud" {
             // Create API state adapter
             let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
-            return Ok((
-                Engine::with_state_adapter(state_adapter, config.clone()),
-                config.clone(),
-            ));
+            let mut engine = Engine::with_state_adapter(state_adapter, config.clone());
+            if progress_owns_terminal {
+                engine.set_text_log_fallthrough(false);
+            }
+            return Ok((engine, config.clone()));
         }
     }
 
-    Ok((Engine::with_workflow_run_config(config.clone()), config))
+    let mut engine = Engine::with_workflow_run_config(config.clone());
+    if progress_owns_terminal {
+        engine.set_text_log_fallthrough(false);
+    }
+    Ok((engine, config))
 }
 
 pub fn create_registry_client(registry: Option<String>) -> Result<RegistryClient> {

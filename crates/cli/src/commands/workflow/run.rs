@@ -95,16 +95,20 @@ fn apply_workflow_run_mode_to_config(
     cfg: &mut butterflow_core::config::WorkflowRunConfig,
     auto_launch_tui: bool,
 ) {
-    cfg.enable_managed_git = auto_launch_tui;
-    cfg.enable_worktrees = auto_launch_tui;
+    cfg.managed_git.enable_managed_git = auto_launch_tui;
+    cfg.managed_git.enable_worktrees = auto_launch_tui;
     if auto_launch_tui {
-        cfg.quiet = true;
-        cfg.capture_stdout_in_quiet_mode = false;
+        cfg.output.quiet = true;
+        cfg.output.capture_stdout_in_quiet_mode = false;
     }
 }
 
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Resolve workflow file and bundle path
     let (workflow_file_path, _) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
@@ -147,8 +151,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| args.workflow.clone());
-    let workflow_definition = utils::parse_workflow_file(&workflow_file_path)
-        .context("Failed to parse workflow before run")?;
+    let workflow_definition = utils::parse_workflow_file(&workflow_file_path).context(format!(
+        "Failed to parse workflow file: {}",
+        workflow_file_path.display()
+    ))?;
     let auto_launch_tui =
         should_auto_launch_workflow_tui(args.no_interactive, args.dry_run, &workflow_definition);
 
@@ -327,10 +333,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -341,10 +347,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(cfg.enable_managed_git);
-        assert!(cfg.enable_worktrees);
-        assert!(cfg.quiet);
-        assert!(!cfg.capture_stdout_in_quiet_mode);
+        assert!(cfg.managed_git.enable_managed_git);
+        assert!(cfg.managed_git.enable_worktrees);
+        assert!(cfg.output.quiet);
+        assert!(!cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]
@@ -355,10 +361,10 @@ mod tests {
 
         let mut cfg = WorkflowRunConfig::default();
         apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
-        assert!(!cfg.enable_managed_git);
-        assert!(!cfg.enable_worktrees);
-        assert!(!cfg.quiet);
-        assert!(cfg.capture_stdout_in_quiet_mode);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
     }
 
     #[test]

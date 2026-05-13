@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 use crate::RuntimeType;
@@ -15,6 +17,19 @@ pub enum Error {
 
     #[error("Workflow validation error: {0}")]
     WorkflowValidation(String),
+
+    #[error(
+        "Failed to parse workflow file: {path}. YAML error: {yaml_error}, JSON error: {json_error}"
+    )]
+    WorkflowParse {
+        path: PathBuf,
+        yaml_error: Box<str>,
+        yaml_line: Option<usize>,
+        yaml_column: Option<usize>,
+        json_error: Box<str>,
+        json_line: Option<usize>,
+        json_column: Option<usize>,
+    },
 
     #[error("Node not found: {0}")]
     NodeNotFound(String),
@@ -36,6 +51,22 @@ pub enum Error {
 
     #[error("Runtime error: {0}")]
     Runtime(String),
+
+    #[error("Command failed with exit code {exit_code}: {output}")]
+    ShellCommandFailed { exit_code: i32, output: String },
+
+    #[error("Shell command failed with exit code {exit_code}")]
+    ShellCommandStepFailed {
+        command: String,
+        exit_code: i32,
+        output: String,
+    },
+
+    #[error("{message}")]
+    AstGrepStepFailed {
+        message: String,
+        help: Option<String>,
+    },
 
     #[error("State error: {0}")]
     State(String),

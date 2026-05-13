@@ -83,7 +83,7 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// Optional module resolver (if None, a no-op resolver is used)
     pub resolver: Option<Arc<R>>,
     /// Optional selector config for pre-filtering
-    pub selector_config: Option<Arc<Box<RuleConfig<CodemodLang>>>>,
+    pub selector_config: Option<Arc<RuleConfig<CodemodLang>>>,
     /// Optional parameters passed to the codemod
     pub params: Option<HashMap<String, String>>,
     /// Optional matrix values for parameterized codemods

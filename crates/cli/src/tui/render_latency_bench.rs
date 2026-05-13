@@ -83,32 +83,27 @@ mod tests {
                         total_files: Some(100),
                     },
                 );
-                Task {
-                    id: task_id,
-                    workflow_run_id: run_id,
-                    node_id: "apply-transforms".to_string(),
-                    status: if index % 5 == 0 {
-                        TaskStatus::Completed
-                    } else {
-                        TaskStatus::Running
-                    },
-                    started_at: Some(now - chrono::Duration::seconds((index % 120) as i64)),
-                    ended_at: if index % 5 == 0 { Some(now) } else { None },
-                    logs: vec![
-                        "Starting js-ast-grep file loop (explicit-files, target files: 100)"
-                            .to_string(),
-                        format!("Processing file: packages/app-{index}/src/index.ts"),
-                    ],
-                    master_task_id: None,
-                    matrix_values: Some(HashMap::from([(
-                        "name".to_string(),
-                        serde_json::Value::String(format!(
-                            "backstage-package-with-long-shard-name-{index:04}"
-                        )),
-                    )])),
-                    is_master: false,
-                    error: None,
-                }
+                let mut task = Task::new(run_id, "apply-transforms".to_string(), false);
+                task.id = task_id;
+                task.status = if index % 5 == 0 {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Running
+                };
+                task.started_at = Some(now - chrono::Duration::seconds((index % 120) as i64));
+                task.ended_at = if index % 5 == 0 { Some(now) } else { None };
+                task.logs = vec![
+                    "Starting js-ast-grep file loop (explicit-files, target files: 100)"
+                        .to_string(),
+                    format!("Processing file: packages/app-{index}/src/index.ts"),
+                ];
+                task.matrix_values = Some(HashMap::from([(
+                    "name".to_string(),
+                    serde_json::Value::String(format!(
+                        "backstage-package-with-long-shard-name-{index:04}"
+                    )),
+                )]));
+                task
             })
             .collect();
         state

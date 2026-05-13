@@ -187,6 +187,21 @@ pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCal
                 _ => None,
             };
 
+            if matches!(status, "agent" | "log" | "diagnostic") {
+                if !path.trim().is_empty() {
+                    publish_event(
+                        workflow_run_id,
+                        WorkflowEvent::TaskLogAppended {
+                            workflow_run_id,
+                            task_id,
+                            line: path.to_string(),
+                            at: chrono::Utc::now(),
+                        },
+                    );
+                }
+                return;
+            }
+
             let processed_files = match status {
                 "increment" | "finish" => *index,
                 "start" | "counting" => 0,
@@ -217,6 +232,7 @@ pub async fn run_workflow_tui(
     engine.set_quiet(true);
     engine
         .workflow_run_config_mut()
+        .output
         .capture_stdout_in_quiet_mode = false;
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -258,6 +274,7 @@ pub async fn run_workflow_tui_with_session(
     engine.set_quiet(true);
     engine
         .workflow_run_config_mut()
+        .output
         .capture_stdout_in_quiet_mode = false;
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -711,8 +728,13 @@ async fn run_tui_loop(
                             state.begin_create_pr_confirmation();
                         }
                         KeyCode::Char('c') => {
-                            if let Some(session) = runtime.session.as_ref() {
-                                spawn_command(session.handle(), WorkflowCommand::CancelWorkflow);
+                            if state.can_cancel_current_run() {
+                                if let Some(session) = runtime.session.as_ref() {
+                                    spawn_command(
+                                        session.handle(),
+                                        WorkflowCommand::CancelWorkflow,
+                                    );
+                                }
                             }
                         }
                         _ => {}

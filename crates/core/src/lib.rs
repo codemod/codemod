@@ -1,3 +1,4 @@
+pub(crate) mod ai_agent_stream;
 pub mod ai_handoff;
 pub mod config;
 pub mod diff;
@@ -6,11 +7,16 @@ pub mod execution;
 pub(crate) mod execution_stats;
 pub mod file_ops;
 pub mod git_ops;
-pub(crate) mod periodic;
+pub(crate) mod jssg_execution_service;
+pub(crate) mod managed_git_service;
+pub(crate) mod nested_codemod_service;
+pub(crate) mod progress_output;
 pub mod registry;
 pub mod report;
 pub mod shard;
+pub(crate) mod step_executor;
 pub mod structured_log;
+pub(crate) mod task_state_service;
 pub mod utils;
 pub mod workflow_runtime;
 

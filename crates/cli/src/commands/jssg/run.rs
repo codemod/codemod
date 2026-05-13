@@ -92,6 +92,10 @@ pub struct Command {
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path
@@ -207,6 +211,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Always collect diffs so we can offer report interactively
     let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
     let diff_collector_clone = diff_collector.clone();
+    let execution_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let execution_errors_for_closure = Arc::clone(&execution_errors);
 
     // Clone target_directory for use after the closure moves it
     let target_directory_for_report = target_directory.clone();
@@ -273,22 +279,28 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                 if let Err(e) =
                                     tokio::fs::write(write_path, &modified.content).await
                                 {
-                                    error!(
-                                        "Failed to write modified file {}: {}",
-                                        write_path.display(),
-                                        e
-                                    );
+                                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
+                                        errors.push(format!(
+                                            "Failed to write modified file {}: {}",
+                                            write_path.display(),
+                                            e
+                                        ));
+                                    }
                                 } else {
                                     // If renamed, delete the original file
                                     if modified.rename_to.is_some()
                                         && write_path != change_path.as_path()
                                     {
                                         if let Err(e) = tokio::fs::remove_file(change_path).await {
-                                            error!(
-                                                "Failed to remove original file {}: {}",
-                                                change_path.display(),
-                                                e
-                                            );
+                                            if let Ok(mut errors) =
+                                                execution_errors_for_closure.lock()
+                                            {
+                                                errors.push(format!(
+                                                    "Failed to remove original file {}: {}",
+                                                    change_path.display(),
+                                                    e
+                                                ));
+                                            }
                                         } else {
                                             debug!(
                                                 "Renamed file: {} -> {}",
@@ -353,11 +365,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     }
                 }
                 Err(e) => {
-                    error!(
-                        "Failed to execute codemod on {}:\n{}",
-                        file_path.display(),
-                        e
-                    );
+                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
+                        errors.push(format!(
+                            "Failed to execute codemod on {}:\n{}",
+                            file_path.display(),
+                            e
+                        ));
+                    }
                 }
             }
         });
@@ -368,6 +382,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let duration_ms = started.elapsed().as_millis() as f64;
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    let collected_errors = execution_errors
+        .lock()
+        .map(|errors| errors.clone())
+        .unwrap_or_default();
+    if !collected_errors.is_empty() {
+        return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
+    }
 
     if args.verbose {
         let state = shared_state_context.get_persistable();

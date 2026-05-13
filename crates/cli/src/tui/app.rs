@@ -1,11 +1,12 @@
 use butterflow_core::config::DirtyGitApprovalKind;
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
-use butterflow_models::{step::StepAction, Task, TaskStatus, WorkflowRun};
+use butterflow_models::{Task, TaskStatus, WorkflowRun};
 use chrono::Utc;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use crate::agent_log_renderer::render_task_log_lines;
 use crate::tui::event::AppEvent;
 
 #[derive(Clone, Debug)]
@@ -138,40 +139,12 @@ impl TuiState {
         }
     }
 
-    fn is_terminal_task_status(status: TaskStatus) -> bool {
-        matches!(
-            status,
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
-        )
-    }
-
-    fn is_install_skill_task(&self, task: &Task) -> bool {
-        self.current_run
-            .as_ref()
-            .and_then(|run| {
-                run.workflow
-                    .nodes
-                    .iter()
-                    .find(|node| node.id == task.node_id)
-            })
-            .map(|node| {
-                node.steps
-                    .iter()
-                    .any(|step| matches!(step.action, StepAction::InstallSkill(_)))
-            })
-            .unwrap_or_else(|| task.node_id == "install-skill")
-    }
-
-    fn is_ignorable_pending_install_skill(&self, task: &Task) -> bool {
-        self.is_install_skill_task(task) && task.status == TaskStatus::AwaitingTrigger
-    }
-
     fn is_individually_triggerable_task(&self, task: &Task) -> bool {
         task.status == TaskStatus::AwaitingTrigger && self.task_dependencies_satisfied(task)
     }
 
     fn is_bulk_triggerable_task(&self, task: &Task) -> bool {
-        self.is_individually_triggerable_task(task) && !self.is_install_skill_task(task)
+        self.is_individually_triggerable_task(task)
     }
 
     fn task_uses_managed_git(&self, task: &Task) -> bool {
@@ -232,28 +205,8 @@ impl TuiState {
         self.visible_task_iter().collect()
     }
 
-    fn run_is_effectively_complete(&self, run: &WorkflowRun, tasks: &[Task]) -> bool {
-        if tasks.is_empty() {
-            return matches!(run.status, butterflow_models::WorkflowStatus::Completed);
-        }
-
-        tasks.iter().all(|task| {
-            Self::is_terminal_task_status(task.status)
-                || self.is_ignorable_pending_install_skill(task)
-        })
-    }
-
-    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, tasks: &[Task]) -> String {
-        if self.run_is_effectively_complete(run, tasks)
-            && matches!(
-                run.status,
-                butterflow_models::WorkflowStatus::AwaitingTrigger
-            )
-        {
-            "Completed (install-skill pending)".to_string()
-        } else {
-            Self::workflow_status_text(run.status)
-        }
+    fn display_status_for_run_with_tasks(&self, run: &WorkflowRun, _tasks: &[Task]) -> String {
+        Self::workflow_status_text(run.status)
     }
 
     pub fn display_run_status(&self) -> String {
@@ -261,6 +214,16 @@ impl TuiState {
             return "Unknown".to_string();
         };
         self.display_status_for_run_with_tasks(run, &self.tasks)
+    }
+
+    pub fn can_cancel_current_run(&self) -> bool {
+        self.current_run.as_ref().is_some_and(|run| {
+            matches!(
+                run.status,
+                butterflow_models::WorkflowStatus::Running
+                    | butterflow_models::WorkflowStatus::AwaitingTrigger
+            )
+        })
     }
 
     pub fn display_status_for_list_run(&self, run: &WorkflowRun) -> String {
@@ -765,7 +728,7 @@ impl TuiState {
     pub fn selected_task_log_text(&self) -> String {
         self.selected_task()
             .map(|task| {
-                let mut lines = task.logs.clone();
+                let mut lines = render_task_log_lines(&task.logs);
 
                 if task.status == TaskStatus::Failed {
                     if let Some(error) = task.error.as_deref() {
@@ -997,6 +960,9 @@ impl TuiState {
             }
             WorkflowEvent::TaskLogAppended { task_id, line, .. } => {
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
+                    if is_agent_log_payload(&line) && task.logs.iter().any(|log| log == &line) {
+                        return;
+                    }
                     task.logs.push(line);
                     self.sync_current_run_task_cache();
                 }
@@ -1352,7 +1318,9 @@ impl TuiState {
         if self.selected_task_is_pr_eligible().is_some() {
             parts.push("p create-pr".to_string());
         }
-        parts.push("c cancel".to_string());
+        if self.can_cancel_current_run() {
+            parts.push("c cancel".to_string());
+        }
         parts.push("esc back".to_string());
         parts.push("q quit".to_string());
         parts.join("  ")
@@ -1410,6 +1378,12 @@ impl TuiState {
     }
 }
 
+fn is_agent_log_payload(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|value| value.get("agent").is_some() && value.get("event").is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
@@ -1425,6 +1399,28 @@ mod tests {
     use uuid::Uuid;
 
     use super::{AppEvent, Screen, TaskProgressView, TuiState};
+
+    fn test_workflow_run(id: Uuid, status: WorkflowStatus) -> WorkflowRun {
+        WorkflowRun {
+            id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            capabilities: None,
+            name: None,
+            target_path: None,
+        }
+    }
 
     #[test]
     fn reducer_updates_run_status_from_runtime_event() {
@@ -1495,6 +1491,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.reduce(AppEvent::Workflow(WorkflowEvent::TaskLogAppended {
             workflow_run_id: run_id,
@@ -1511,6 +1508,39 @@ mod tests {
                 .map(|task| task.logs.as_slice()),
             Some(&["hello".to_string()][..])
         );
+    }
+
+    #[test]
+    fn reducer_dedupes_live_agent_log_replay() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+
+        let line = r#"{"agent":"claude-code","event":"tool_call","tool_name":"Read"}"#.to_string();
+        for _ in 0..2 {
+            state.reduce(AppEvent::Workflow(WorkflowEvent::TaskLogAppended {
+                workflow_run_id: run_id,
+                task_id,
+                line: line.clone(),
+                at: Utc::now(),
+            }));
+        }
+
+        assert_eq!(state.tasks[0].logs, vec![line]);
     }
 
     #[test]
@@ -1532,6 +1562,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.reduce(AppEvent::Workflow(WorkflowEvent::TaskProgressUpdated {
@@ -1563,6 +1594,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: vec![],
         });
         state.tasks.push(Task {
@@ -1576,6 +1608,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: vec![],
         });
 
@@ -1585,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn display_run_status_treats_install_skill_as_effectively_complete() {
+    fn display_run_status_treats_pending_install_skill_like_other_pending_tasks() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState::default();
         state.current_run = Some(WorkflowRun {
@@ -1620,6 +1653,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
             Task {
                 id: Uuid::new_v4(),
@@ -1633,19 +1667,14 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
         ];
 
-        assert_eq!(
-            state.display_run_status(),
-            "Completed (install-skill pending)"
-        );
+        assert_eq!(state.display_run_status(), "Awaiting trigger");
         let run = state.current_run.as_ref().unwrap().clone();
         state.run_tasks.insert(run_id, state.tasks.clone());
-        assert_eq!(
-            state.display_status_for_list_run(&run),
-            "Completed (install-skill pending)"
-        );
+        assert_eq!(state.display_status_for_list_run(&run), "Awaiting trigger");
     }
 
     #[test]
@@ -1683,6 +1712,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         }];
 
         assert_eq!(state.display_run_status(), "Running");
@@ -1723,6 +1753,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("boom".to_string()),
+            error_details: None,
         }];
 
         assert_eq!(state.display_run_status(), "Failed");
@@ -1897,6 +1928,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -1922,6 +1954,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -1948,6 +1981,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -1978,6 +2012,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -2007,6 +2042,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
         let mut state = TuiState::default();
         state.task_progress.insert(
@@ -2147,6 +2183,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.open_log_modal(4);
@@ -2171,6 +2208,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         state.open_log_modal(3);
@@ -2216,6 +2254,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("Failed to execute install-skill step".to_string()),
+            error_details: None,
         });
 
         assert_eq!(
@@ -2241,6 +2280,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 })
                 .collect(),
             ..TuiState::default()
@@ -2265,44 +2305,68 @@ mod tests {
     #[test]
     fn task_help_text_hides_trigger_for_completed_task() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "node".to_string(),
-            status: TaskStatus::Completed,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::Completed)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "node".to_string(),
+                status: TaskStatus::Completed,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
-        assert_eq!(
-            state.task_help_text(),
-            "Enter logs  c cancel  esc back  q quit"
-        );
+        assert_eq!(state.task_help_text(), "Enter logs  esc back  q quit");
+    }
+
+    #[test]
+    fn cancel_is_available_only_for_active_runs() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::Running)),
+            ..Default::default()
+        };
+        assert!(state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger));
+        assert!(state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Completed));
+        assert!(!state.can_cancel_current_run());
+
+        state.current_run = Some(test_workflow_run(run_id, WorkflowStatus::Failed));
+        assert!(!state.can_cancel_current_run());
     }
 
     #[test]
     fn task_help_text_shows_trigger_for_awaiting_task() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "node".to_string(),
-            status: TaskStatus::AwaitingTrigger,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "node".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(
             state.task_help_text(),
@@ -2311,26 +2375,30 @@ mod tests {
     }
 
     #[test]
-    fn task_help_text_shows_individual_trigger_only_for_install_skill() {
+    fn task_help_text_shows_trigger_all_for_install_skill_like_other_tasks() {
         let run_id = Uuid::new_v4();
-        let mut state = TuiState::default();
-        state.tasks.push(Task {
-            id: Uuid::new_v4(),
-            workflow_run_id: run_id,
-            node_id: "install-skill".to_string(),
-            status: TaskStatus::AwaitingTrigger,
-            started_at: None,
-            ended_at: None,
-            logs: vec![],
-            master_task_id: None,
-            matrix_values: None,
-            is_master: false,
-            error: None,
-        });
+        let state = TuiState {
+            current_run: Some(test_workflow_run(run_id, WorkflowStatus::AwaitingTrigger)),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "install-skill".to_string(),
+                status: TaskStatus::AwaitingTrigger,
+                started_at: None,
+                ended_at: None,
+                logs: vec![],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(
             state.task_help_text(),
-            "Enter logs  t trigger  c cancel  esc back  q quit"
+            "Enter logs  t trigger  T trigger-all  c cancel  esc back  q quit"
         );
     }
 
@@ -2414,6 +2482,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
             Task {
                 id: blocked_task_id,
@@ -2427,6 +2496,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             },
         ];
         state.selected_task = 1;
@@ -2436,11 +2506,11 @@ mod tests {
             Some(blocked_task_id)
         );
         assert!(state.selected_task_trigger_command().is_none());
-        assert!(state.visible_awaiting_task_ids().is_empty());
+        assert_eq!(state.visible_awaiting_task_ids(), vec![dependency_task_id]);
     }
 
     #[test]
-    fn install_skill_is_individually_triggerable_but_excluded_from_trigger_all() {
+    fn install_skill_is_triggerable_like_other_tasks() {
         let run_id = Uuid::new_v4();
         let install_skill_task_id = Uuid::new_v4();
         let normal_task_id = Uuid::new_v4();
@@ -2519,6 +2589,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 },
                 Task {
                     id: normal_task_id,
@@ -2532,6 +2603,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 },
             ],
             ..TuiState::default()
@@ -2543,7 +2615,10 @@ mod tests {
             }
             other => panic!("expected install-skill trigger command, got {other:?}"),
         }
-        assert_eq!(state.visible_awaiting_task_ids(), vec![normal_task_id]);
+        assert_eq!(
+            state.visible_awaiting_task_ids(),
+            vec![install_skill_task_id, normal_task_id]
+        );
     }
 
     #[test]
@@ -2595,6 +2670,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -2662,6 +2738,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_display_name(&task), "Apply migration");
@@ -2718,6 +2795,7 @@ mod tests {
             )])),
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_display_name(&task), "Debarrel · unowned-10");
@@ -2775,6 +2853,7 @@ mod tests {
             ])),
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(
@@ -2797,6 +2876,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(TuiState::default().task_elapsed_text(&task), "-");
@@ -2821,6 +2901,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -2845,6 +2926,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(state.selected_task_completion_detail(), None);
@@ -2871,6 +2953,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2902,6 +2985,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2932,6 +3016,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         let task = state.selected_task().unwrap();
@@ -2960,6 +3045,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
 
         assert_eq!(
@@ -3197,6 +3283,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3276,6 +3363,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3383,7 +3471,7 @@ mod tests {
             request_id,
             options: vec![butterflow_core::workflow_runtime::AgentSelectionOption {
                 canonical: "codex".to_string(),
-                label: "Codex CLI".to_string(),
+                label: "Codex".to_string(),
                 is_available: true,
             }],
             at: Utc::now(),
@@ -3415,6 +3503,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.reduce(AppEvent::Workflow(WorkflowEvent::SelectionRequested {
             request_id,
@@ -3487,6 +3576,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -3514,6 +3604,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         };
 
         assert_eq!(state.task_elapsed_text(&task), "-");

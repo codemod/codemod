@@ -16,6 +16,7 @@ butterflow-state = { workspace = true }
 butterflow-scheduler = { workspace = true }
 codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
 codemod-ai = { path = "../ai" }
+ast-grep-config = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

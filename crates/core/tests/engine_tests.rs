@@ -53,6 +53,38 @@ type MatrixTaskSnapshot = Vec<(
     Vec<String>,
 )>;
 
+macro_rules! workflow_run_config {
+    ($($field:ident : $value:expr,)* ..WorkflowRunConfig::default() $(,)?) => {{
+        let mut config = WorkflowRunConfig::default();
+        $(workflow_run_config!(@set config, $field, $value);)*
+        config
+    }};
+    (@set $config:ident, shell_command_approval_callback, $value:expr) => {
+        $config.interaction.shell_command_approval_callback = $value;
+    };
+    (@set $config:ident, install_skill_executor, $value:expr) => {
+        $config.skill_install.install_skill_executor = $value;
+    };
+    (@set $config:ident, target_path, $value:expr) => {
+        $config.execution.target_path = $value;
+    };
+    (@set $config:ident, bundle_path, $value:expr) => {
+        $config.execution.bundle_path = $value;
+    };
+    (@set $config:ident, quiet, $value:expr) => {
+        $config.output.quiet = $value;
+    };
+    (@set $config:ident, enable_managed_git, $value:expr) => {
+        $config.managed_git.enable_managed_git = $value;
+    };
+    (@set $config:ident, enable_worktrees, $value:expr) => {
+        $config.managed_git.enable_worktrees = $value;
+    };
+    (@set $config:ident, capabilities, $value:expr) => {
+        $config.execution.capabilities = $value;
+    };
+}
+
 fn debarrel_bundle_path() -> Option<PathBuf> {
     let configured = std::env::var("CODEMOD_TEST_DEBARREL_BUNDLE")
         .ok()
@@ -1417,10 +1449,6 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
 
     let logs = task.logs.join("\n");
     assert!(
-        logs.contains("Step started: Shell Step"),
-        "task logs should include the active step marker, got: {logs}"
-    );
-    assert!(
         logs.contains("shell command executed"),
         "task logs should include the command output, got: {logs}"
     );
@@ -1431,6 +1459,10 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
     assert!(
         !logs.contains(&command),
         "task logs should not persist the raw shell command, got: {logs}"
+    );
+    assert!(
+        !logs.contains("⏺ Shell Step"),
+        "task logs should not persist the text-mode step heading, got: {logs}"
     );
 }
 
@@ -1448,7 +1480,7 @@ async fn test_run_script_approval_callback_receives_command_to_be_executed() {
         })
     };
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         shell_command_approval_callback: Some(approval_callback),
         ..WorkflowRunConfig::default()
     };
@@ -1488,7 +1520,7 @@ async fn test_run_script_approval_callback_can_reject_execution() {
     let approval_callback: ShellCommandApprovalCallback =
         Arc::new(|_request: &ShellCommandExecutionRequest| Ok(false));
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         shell_command_approval_callback: Some(approval_callback),
         ..WorkflowRunConfig::default()
     };
@@ -1890,7 +1922,7 @@ async fn test_trigger_all_clears_matrix_master_terminal_metadata() {
 #[tokio::test]
 async fn test_panicking_task_thread_fails_child_and_reconciles_matrix_master() {
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
     };
@@ -1973,7 +2005,7 @@ async fn test_panicking_task_thread_cleans_up_git_worktree() {
     init_test_git_repo(repo_dir.path());
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(PanicInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
@@ -2047,7 +2079,7 @@ async fn test_panicking_task_thread_cleans_up_git_worktree() {
 #[tokio::test]
 async fn test_failing_install_skill_child_reconciles_matrix_master() {
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(FailingInstallSkillExecutor)),
         ..WorkflowRunConfig::default()
     };
@@ -2133,7 +2165,7 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
     let bundle_dir = TempDir::new().unwrap();
     let config_bundle_dir = TempDir::new().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: config_bundle_dir.path().to_path_buf(),
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
@@ -2196,7 +2228,7 @@ async fn test_install_skill_executor_receives_workflow_bundle_path() {
 async fn test_quiet_install_skill_request_stays_interactive() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "installed".to_string(),
@@ -2255,7 +2287,7 @@ async fn test_quiet_install_skill_request_stays_interactive() {
 async fn test_deferred_single_install_skill_can_be_retriggered() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let attempts = Arc::new(Mutex::new(0usize));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
             attempts: Arc::clone(&attempts),
         })),
@@ -2354,7 +2386,7 @@ async fn test_deferred_single_install_skill_can_be_retriggered() {
 async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let attempts = Arc::new(Mutex::new(0usize));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(DeferredThenSuccessInstallSkillExecutor {
             attempts: Arc::clone(&attempts),
         })),
@@ -2436,7 +2468,7 @@ async fn test_deferred_matrix_install_skill_returns_triggered_child_to_awaiting(
 async fn test_install_skill_success_output_is_appended_to_task_logs() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         install_skill_executor: Some(Arc::new(RecordingInstallSkillExecutor {
             requests: Arc::clone(&requests),
             output: "Installed package skill `debarrel` for `claude` (project)".to_string(),
@@ -2715,7 +2747,7 @@ async fn test_resume_workflow_git_managed_manual_matrix_children_produce_logs_an
     init_test_git_repo(repo_dir.path());
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         enable_managed_git: true,
         enable_worktrees: true,
@@ -2818,7 +2850,7 @@ async fn non_tui_workflow_run_skips_worktree_and_pull_request_flow() {
         .unwrap();
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         enable_managed_git: false,
         enable_worktrees: false,
@@ -2933,7 +2965,7 @@ export default function transform(ast) {
         .unwrap();
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: repo_dir.path().to_path_buf(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -3083,7 +3115,7 @@ async fn test_workflow_session_real_debarrel_workspace_children_process_files() 
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -3217,7 +3249,7 @@ async fn test_workflow_session_many_real_debarrel_workspace_children_process_fil
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: repo_dir.path().to_path_buf(),
         bundle_path: bundle_path.clone(),
         capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
@@ -3540,6 +3572,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3558,6 +3591,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3602,6 +3636,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3620,6 +3655,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -3679,6 +3715,7 @@ async fn test_matrix_recompilation_with_direct_adapter() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -4430,10 +4467,11 @@ message: "Found var declaration"
         ended_at: None,
         logs: vec![],
         error: None,
+        error_details: None,
     };
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4504,7 +4542,7 @@ message: "Found interface declaration"
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4540,7 +4578,7 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
     create_test_file(temp_path, "test.js", "console.log('test');");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4599,7 +4637,7 @@ message: "Found console.log statement"
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4668,7 +4706,7 @@ function helper() {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4762,7 +4800,7 @@ interface ApiResponse {
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4836,7 +4874,7 @@ function main() {
 "#,
     );
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4879,6 +4917,212 @@ function main() {
 }
 
 #[tokio::test]
+async fn test_execute_js_ast_grep_step_fails_fast_when_codemod_module_does_not_load() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "broken-codemod.js",
+        r#"
+export default function (
+"#,
+    );
+
+    create_test_file(temp_path, "src/one.ts", "let first = 1;\n");
+    create_test_file(temp_path, "src/two.ts", "let second = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "broken-codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.ts".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("typescript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("broken codemod module should fail before file processing");
+    let message = error.to_string();
+    assert!(
+        message.contains("Failed to declare module") || message.contains("Error loading module"),
+        "expected module loading details, got: {message}"
+    );
+    assert!(
+        message.contains("Failed to process one.ts")
+            || message.contains("Failed to process two.ts"),
+        "expected first file failure to be reported, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_allows_partial_file_failures() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  if (ast.filename().endsWith("bad.js")) {
+    throw new Error("target file failed");
+  }
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/good.js", "var good = 1;\n");
+    create_test_file(temp_path, "src/bad.js", "var bad = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "one target-file failure should be reported without failing the whole step: {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp_path.join("src/good.js")).unwrap(),
+        "var good = 1;\n"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_fails_when_all_files_fail() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform() {
+  missingReference;
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/one.js", "var one = 1;\n");
+    create_test_file(temp_path, "src/two.js", "var two = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            "test-step".to_string(),
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("all target-file failures should fail the step");
+    let message = error.to_string();
+    assert!(
+        message.contains("missingReference") || message.contains("not defined"),
+        "expected thrown JavaScript error, got: {message}"
+    );
+    assert_eq!(
+        engine
+            .execution_stats
+            .files_with_errors
+            .load(Ordering::Relaxed),
+        1,
+        "codemod source reference failures should fail fast instead of retrying every file"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_js_ast_grep_step_dry_run() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -4907,7 +5151,7 @@ var count = 0;
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -4959,7 +5203,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     create_test_file(temp_path, "test.js", "console.log('test');");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5032,7 +5276,7 @@ export default function transform(root) {
     create_test_file(temp_path, "skipped_a.js", "var a = 2;\n");
     create_test_file(temp_path, "skipped_b.js", "var b = 3;\n");
 
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         target_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5201,7 +5445,7 @@ export default function transform(root) {
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: temp_path.to_path_buf(),
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5347,7 +5591,7 @@ export default function transform(root) {
     };
 
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         target_path: temp_path.to_path_buf(),
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
@@ -5429,7 +5673,7 @@ build/
     );
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5535,7 +5779,7 @@ export default function transform(ast) {
     create_test_file(temp_path, "regular.js", "const normal = 'visible';");
 
     // Create engine with correct bundle path
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5652,7 +5896,7 @@ export default function transform(ast) {
 
     // Create engine with workflow
     let state_adapter = Box::new(MockStateAdapter::new());
-    let config = WorkflowRunConfig {
+    let config = workflow_run_config! {
         bundle_path: temp_path.to_path_buf(),
         ..WorkflowRunConfig::default()
     };
@@ -5990,6 +6234,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6008,6 +6253,7 @@ async fn test_workflow_with_state_write_and_matrix() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6062,6 +6308,7 @@ async fn test_workflow_with_state_write_and_matrix() {
             started_at: None,
             ended_at: None,
             error: None,
+            error_details: None,
             logs: Vec::new(),
         };
 
@@ -6155,6 +6402,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6173,6 +6421,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6212,6 +6461,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6232,6 +6482,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6292,6 +6543,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6312,6 +6564,7 @@ async fn test_dynamic_state_update_with_matrix_recompilation() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6400,6 +6653,7 @@ async fn test_empty_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6418,6 +6672,7 @@ async fn test_empty_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6505,6 +6760,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6523,6 +6779,7 @@ async fn test_malformed_state_matrix_workflow() {
         started_at: Some(chrono::Utc::now()),
         ended_at: Some(chrono::Utc::now()),
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 
@@ -6623,6 +6880,7 @@ async fn test_matrix_hash_based_deduplication() {
         started_at: None,
         ended_at: None,
         error: None,
+        error_details: None,
         logs: Vec::new(),
     };
 

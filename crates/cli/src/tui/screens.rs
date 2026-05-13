@@ -344,7 +344,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let tasks_header = Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            format!("{:<step_width$}", "Step", step_width = step_width),
+            format!("{:<step_width$}", "Task", step_width = step_width),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
@@ -466,10 +466,10 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
 fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
     let size = frame.area();
     let area = ratatui::layout::Rect {
-        x: size.width / 10,
-        y: size.height / 5,
-        width: size.width * 4 / 5,
-        height: size.height * 3 / 5,
+        x: size.x.saturating_add(1),
+        y: size.y.saturating_add(1),
+        width: size.width.saturating_sub(2),
+        height: size.height.saturating_sub(2),
     };
     frame.render_widget(Clear, area);
 
@@ -493,7 +493,7 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
         })
         .unwrap_or_else(|| Line::from("Logs"));
 
-    let logs = Paragraph::new(state.selected_task_log_text())
+    let logs = Paragraph::new(ansi_log_lines(&state.selected_task_log_text()))
         .scroll((state.log_modal_scroll, 0))
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
@@ -511,6 +511,80 @@ fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
             Paragraph::new(notice).style(Style::default().fg(Color::DarkGray)),
             chunks[2],
         );
+    }
+}
+
+fn ansi_log_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut buffer = String::new();
+    let mut style = Style::default();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut sequence = String::new();
+            for sequence_char in chars.by_ref() {
+                if sequence_char == 'm' {
+                    flush_ansi_span(&mut spans, &mut buffer, style);
+                    apply_sgr_sequence(&sequence, &mut style);
+                    break;
+                }
+                sequence.push(sequence_char);
+            }
+            continue;
+        }
+
+        if ch == '\n' {
+            flush_ansi_span(&mut spans, &mut buffer, style);
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            continue;
+        }
+
+        buffer.push(ch);
+    }
+
+    flush_ansi_span(&mut spans, &mut buffer, style);
+    lines.push(Line::from(spans));
+    lines
+}
+
+fn flush_ansi_span(spans: &mut Vec<Span<'static>>, buffer: &mut String, style: Style) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    spans.push(Span::styled(std::mem::take(buffer), style));
+}
+
+fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
+    if sequence.is_empty() {
+        *style = Style::default();
+        return;
+    }
+
+    for code in sequence
+        .split(';')
+        .filter_map(|part| part.parse::<u16>().ok())
+    {
+        match code {
+            0 => *style = Style::default(),
+            1 => *style = style.add_modifier(Modifier::BOLD),
+            2 => *style = style.fg(Color::DarkGray),
+            22 => *style = style.remove_modifier(Modifier::BOLD),
+            30 => *style = style.fg(Color::Black),
+            31 => *style = style.fg(Color::Red),
+            32 => *style = style.fg(Color::Green),
+            33 => *style = style.fg(Color::Yellow),
+            34 => *style = style.fg(Color::Blue),
+            35 => *style = style.fg(Color::Magenta),
+            36 => *style = style.fg(Color::Cyan),
+            37 => *style = style.fg(Color::White),
+            39 => *style = style.fg(Color::Reset),
+            90 => *style = style.fg(Color::DarkGray),
+            _ => {}
+        }
     }
 }
 
@@ -616,6 +690,53 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         height: size.height / 3,
     };
     frame.render_widget(Clear, area);
+    match approval {
+        ApprovalPrompt::AgentSelection {
+            options, selected, ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                "Select Coding Agent",
+                "↑/↓ move  Enter choose  esc skip",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_canonical, label, available))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: *available,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        ApprovalPrompt::Selection {
+            title,
+            options,
+            selected,
+            ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                title,
+                "↑/↓ move  Enter choose  esc cancel",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, label))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: true,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        _ => {}
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -672,51 +793,7 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
                 "y/Enter approve  n/esc cancel".to_string(),
             )
         }
-        ApprovalPrompt::AgentSelection {
-            options, selected, ..
-        } => {
-            let options_text = options
-                .iter()
-                .enumerate()
-                .map(|(index, (_canonical, label, _available))| {
-                    if index == *selected {
-                        format!("▶ {label}")
-                    } else {
-                        format!("  {label}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (
-                "Select Coding Agent".to_string(),
-                options_text,
-                "↑/↓ move  Enter choose  esc skip".to_string(),
-            )
-        }
-        ApprovalPrompt::Selection {
-            title,
-            options,
-            selected,
-            ..
-        } => {
-            let options_text = options
-                .iter()
-                .enumerate()
-                .map(|(index, (_, label))| {
-                    if index == *selected {
-                        format!("▶ {label}")
-                    } else {
-                        format!("  {label}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (
-                title.clone(),
-                options_text,
-                "↑/↓ move  Enter choose  esc cancel".to_string(),
-            )
-        }
+        ApprovalPrompt::AgentSelection { .. } | ApprovalPrompt::Selection { .. } => unreachable!(),
     };
     let modal = Paragraph::new(body).wrap(Wrap { trim: false }).block(
         Block::default().borders(Borders::ALL).title(Span::styled(
@@ -730,14 +807,69 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
     render_help_bar(frame, chunks[1], &help_text);
 }
 
+struct OptionModalRow {
+    label: String,
+    selected: bool,
+    enabled: bool,
+}
+
+fn render_option_modal(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    help_text: &str,
+    rows: &[OptionModalRow],
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let list_items = rows
+        .iter()
+        .map(|row| {
+            let marker = if row.selected { "▶" } else { " " };
+            let style = if row.selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.enabled {
+                Style::default()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            ListItem::new(Line::from(vec![
+                Span::raw(format!("{marker} ")),
+                Span::styled(
+                    truncate_text(&row.label, area.width.saturating_sub(6) as usize),
+                    style,
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let list = List::new(list_items).block(
+        Block::default().borders(Borders::ALL).title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    );
+
+    frame.render_widget(list, chunks[0]);
+    render_help_bar(frame, chunks[1], help_text);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{log_modal_copy_hint, render};
-    use crate::tui::app::{Screen, TaskProgressView, TuiState};
+    use super::{ansi_log_lines, log_modal_copy_hint, render};
+    use crate::tui::app::{ApprovalPrompt, Screen, TaskProgressView, TuiState};
     use butterflow_core::config::DirtyGitApprovalKind;
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
     use ratatui::Terminal;
     use serde_json::json;
     use uuid::Uuid;
@@ -856,6 +988,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.task_progress.insert(
             task_id,
@@ -904,6 +1037,36 @@ mod tests {
     }
 
     #[test]
+    fn render_agent_selection_modal_keeps_options_on_single_rows() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(ApprovalPrompt::AgentSelection {
+                request_id: Uuid::new_v4(),
+                options: vec![
+                    ("claude-code".to_string(), "Claude Code".to_string(), true),
+                    ("opencode".to_string(), "OpenCode".to_string(), false),
+                ],
+                selected: 0,
+            }),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 24);
+        let claude_line = lines
+            .iter()
+            .find(|line| line.contains("▶ Claude Code"))
+            .expect("selected agent should render as one row");
+        let opencode_line = lines
+            .iter()
+            .find(|line| line.contains("OpenCode"))
+            .expect("unavailable agent should render as one row");
+
+        assert!(claude_line.contains("▶ Claude Code"));
+        assert!(opencode_line.contains("OpenCode"));
+        assert!(!lines.iter().any(|line| line.trim() == "C"));
+    }
+
+    #[test]
     fn render_run_detail_truncates_long_completion_detail() {
         let run_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
@@ -943,6 +1106,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -997,6 +1161,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -1055,6 +1220,7 @@ mod tests {
                 matrix_values: None,
                 is_master: false,
                 error: None,
+                error_details: None,
             }],
             ..TuiState::default()
         };
@@ -1108,6 +1274,7 @@ mod tests {
                     matrix_values: None,
                     is_master: false,
                     error: None,
+                    error_details: None,
                 })
                 .collect(),
             selected_task: 5,
@@ -1138,6 +1305,49 @@ mod tests {
     }
 
     #[test]
+    fn ansi_log_lines_converts_sgr_to_styles() {
+        let lines = ansi_log_lines("plain \x1b[32mgreen\x1b[0m \x1b[1;36mbold cyan\x1b[0m");
+        let spans = &lines[0].spans;
+
+        assert_eq!(spans[0].content, "plain ");
+        assert_eq!(spans[1].content, "green");
+        assert_eq!(spans[1].style.fg, Some(Color::Green));
+        assert_eq!(spans[2].content, " ");
+        assert_eq!(spans[3].content, "bold cyan");
+        assert_eq!(spans[3].style.fg, Some(Color::Cyan));
+        assert!(spans[3].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn render_log_modal_does_not_print_raw_ansi_codes() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: vec!["\x1b[32mRead\x1b[0m clients/cal.diy/package.json".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+        state.open_log_modal(20);
+
+        let lines = render_state(&state, 100, 20);
+
+        assert!(lines.iter().any(|line| line.contains("Read clients")));
+        assert!(!lines.iter().any(|line| line.contains("[32m")));
+    }
+
+    #[test]
     fn render_log_modal_places_notice_below_help_bar() {
         let run_id = Uuid::new_v4();
         let mut state = TuiState {
@@ -1156,6 +1366,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: None,
+            error_details: None,
         });
         state.open_log_modal(6);
         state.set_log_modal_notice("Copied full log to clipboard");
@@ -1192,6 +1403,7 @@ mod tests {
             matrix_values: None,
             is_master: false,
             error: Some("boom".to_string()),
+            error_details: None,
         });
         state.open_log_modal(6);
 
