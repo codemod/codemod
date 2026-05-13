@@ -136,11 +136,11 @@ mod tests {
 
     #[test]
     #[cfg(feature = "native")]
-    fn rejects_xml_family_extensions_when_dynamic_parser_is_unavailable() {
+    fn detects_xml_family_extensions_when_dynamic_parser_is_available() {
         for extension in [
             "xml", "csproj", "props", "targets", "config", "resx", "xaml",
         ] {
-            assert!(detect_language_from_extension(extension).is_err());
+            assert_eq!(detect_language_from_extension(extension).unwrap(), "xml");
         }
     }
 

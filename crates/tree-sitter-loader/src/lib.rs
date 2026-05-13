@@ -19,6 +19,7 @@ pub enum LoaderError {
 
 struct DynamicLanguageDefinition {
     name: &'static str,
+    cache_key: &'static str,
     symbol: &'static str,
     extensions: &'static [&'static str],
     expando_char: char,
@@ -26,54 +27,106 @@ struct DynamicLanguageDefinition {
 }
 
 fn get_definitions() -> &'static [DynamicLanguageDefinition] {
-    &[DynamicLanguageDefinition {
-        name: "less",
-        symbol: "tree_sitter_less",
-        extensions: &["less"],
-        expando_char: '_',
-        urls: &[
-            (
-                "macos",
-                "aarch64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-arm64.dylib"
+    &[
+        DynamicLanguageDefinition {
+            name: "less",
+            cache_key: "945f52c94250309073a96bbfbc5bcd57ff2bde49",
+            symbol: "tree_sitter_less",
+            extensions: &["less"],
+            expando_char: '_',
+            urls: &[
+                (
+                    "macos",
+                    "aarch64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
+                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-arm64.dylib"
+                    ),
                 ),
-            ),
-            (
-                "macos",
-                "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-x64.dylib"
+                (
+                    "macos",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
+                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-x64.dylib"
+                    ),
                 ),
-            ),
-            (
-                "linux",
-                "aarch64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-arm64.so"
+                (
+                    "linux",
+                    "aarch64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
+                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-arm64.so"
+                    ),
                 ),
-            ),
-            (
-                "linux",
-                "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-x64.so"
+                (
+                    "linux",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
+                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-x64.so"
+                    ),
                 ),
-            ),
-            (
-                "windows",
-                "x86_64",
-                concat!(
-                    "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                    "945f52c94250309073a96bbfbc5bcd57ff2bde49/win32-x64.dll"
+                (
+                    "windows",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
+                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/win32-x64.dll"
+                    ),
                 ),
-            ),
-        ],
-    }]
+            ],
+        },
+        DynamicLanguageDefinition {
+            name: "xml",
+            cache_key: "4b64dd3a03ec002258d6268d712fd93716d6ab57-xml",
+            symbol: "tree_sitter_xml",
+            extensions: &["xml", "csproj", "props", "targets", "config", "resx", "xaml"],
+            expando_char: '_',
+            urls: &[
+                (
+                    "macos",
+                    "aarch64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
+                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/darwin-arm64.dylib"
+                    ),
+                ),
+                (
+                    "macos",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
+                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/darwin-x64.dylib"
+                    ),
+                ),
+                (
+                    "linux",
+                    "aarch64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
+                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/linux-arm64.so"
+                    ),
+                ),
+                (
+                    "linux",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
+                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/linux-x64.so"
+                    ),
+                ),
+                (
+                    "windows",
+                    "x86_64",
+                    concat!(
+                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
+                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/win32-x64.dll"
+                    ),
+                ),
+            ],
+        },
+    ]
 }
 
 fn current_platform() -> Result<(&'static str, &'static str), LoaderError> {
@@ -137,7 +190,7 @@ fn ensure_parser_cached(
         "so"
     };
 
-    let filename = format!("{}.{}", def.name, ext);
+    let filename = format!("{}-{}.{}", def.name, def.cache_key, ext);
     let parser_dir = cache_dir.join(def.name);
     let cached_path = parser_dir.join(&filename);
 

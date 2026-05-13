@@ -158,6 +158,9 @@ impl Language for CodemodLang {
         if let Some(lang) = SupportLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
         }
+        if let Err(e) = tree_sitter_loader::init() {
+            eprintln!("Warning: failed to initialize dynamic tree-sitter parsers: {e}");
+        }
         if let Some(lang) = DynamicLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Dynamic(lang));
         }
@@ -178,5 +181,28 @@ impl LanguageExt for CodemodLang {
             CodemodLang::Static(lang) => lang.get_ts_language(),
             CodemodLang::Dynamic(lang) => lang.get_ts_language(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::CodemodLang;
+    use ast_grep_core::{AstGrep, Language};
+
+    #[test]
+    fn parses_dynamic_xml_language() {
+        let lang: CodemodLang = "xml".parse().expect("xml parser should be registered");
+        let grep = AstGrep::new("<Project Sdk=\"Microsoft.NET.Sdk\" />", lang);
+        let root = grep.root();
+
+        assert_eq!(root.kind(), "document");
+    }
+
+    #[test]
+    fn detects_dynamic_xml_from_dotnet_project_path() {
+        let lang =
+            CodemodLang::from_path("fixture.csproj").expect("csproj should resolve to XML parser");
+
+        assert_eq!(lang.to_string(), "xml");
     }
 }
