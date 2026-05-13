@@ -153,25 +153,28 @@ fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
 }
 
 fn download_parser(url: &'static str) -> Result<Vec<u8>, LoaderError> {
-    std::thread::spawn(move || {
-        let response = reqwest::blocking::get(url)
-            .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+    std::thread::Builder::new()
+        .name("tree-sitter-parser-download".to_string())
+        .spawn(move || {
+            let response = reqwest::blocking::get(url)
+                .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
 
-        if !response.status().is_success() {
-            return Err(LoaderError::Download(format!(
-                "HTTP {} for {}",
-                response.status(),
-                url
-            )));
-        }
+            if !response.status().is_success() {
+                return Err(LoaderError::Download(format!(
+                    "HTTP {} for {}",
+                    response.status(),
+                    url
+                )));
+            }
 
-        response
-            .bytes()
-            .map(|bytes| bytes.to_vec())
-            .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))
-    })
-    .join()
-    .map_err(|_| LoaderError::Download("download thread panicked".to_string()))?
+            response
+                .bytes()
+                .map(|bytes| bytes.to_vec())
+                .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))
+        })
+        .map_err(|e| LoaderError::Download(format!("Failed to spawn download thread: {e}")))?
+        .join()
+        .map_err(|_| LoaderError::Download("download thread panicked".to_string()))?
 }
 
 fn ensure_parser_cached(
