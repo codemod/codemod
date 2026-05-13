@@ -26,6 +26,51 @@ struct DynamicLanguageDefinition {
     urls: &'static [(&'static str, &'static str, &'static str)], // (os, arch, url)
 }
 
+macro_rules! parser_url {
+    ($parser:literal, $revision:literal, $artifact:literal) => {
+        concat!(
+            "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/",
+            $parser,
+            "/",
+            $revision,
+            "/",
+            $artifact
+        )
+    };
+}
+
+macro_rules! parser_urls {
+    ($parser:literal, $revision:literal) => {
+        &[
+            (
+                "macos",
+                "aarch64",
+                parser_url!($parser, $revision, "darwin-arm64.dylib"),
+            ),
+            (
+                "macos",
+                "x86_64",
+                parser_url!($parser, $revision, "darwin-x64.dylib"),
+            ),
+            (
+                "linux",
+                "aarch64",
+                parser_url!($parser, $revision, "linux-arm64.so"),
+            ),
+            (
+                "linux",
+                "x86_64",
+                parser_url!($parser, $revision, "linux-x64.so"),
+            ),
+            (
+                "windows",
+                "x86_64",
+                parser_url!($parser, $revision, "win32-x64.dll"),
+            ),
+        ]
+    };
+}
+
 fn get_definitions() -> &'static [DynamicLanguageDefinition] {
     &[
         DynamicLanguageDefinition {
@@ -33,96 +78,22 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
             symbol: "tree_sitter_less",
             extensions: &["less"],
             expando_char: '_',
-            urls: &[
-                (
-                    "macos",
-                    "aarch64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-arm64.dylib"
-                    ),
-                ),
-                (
-                    "macos",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/darwin-x64.dylib"
-                    ),
-                ),
-                (
-                    "linux",
-                    "aarch64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-arm64.so"
-                    ),
-                ),
-                (
-                    "linux",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/linux-x64.so"
-                    ),
-                ),
-                (
-                    "windows",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-less/",
-                        "945f52c94250309073a96bbfbc5bcd57ff2bde49/win32-x64.dll"
-                    ),
-                ),
-            ],
+            urls: parser_urls!(
+                "tree-sitter-less",
+                "945f52c94250309073a96bbfbc5bcd57ff2bde49"
+            ),
         },
         DynamicLanguageDefinition {
             name: "xml",
             symbol: "tree_sitter_xml",
-            extensions: &["xml", "csproj", "props", "targets", "config", "resx", "xaml"],
-            expando_char: '_',
-            urls: &[
-                (
-                    "macos",
-                    "aarch64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
-                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/darwin-arm64.dylib"
-                    ),
-                ),
-                (
-                    "macos",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
-                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/darwin-x64.dylib"
-                    ),
-                ),
-                (
-                    "linux",
-                    "aarch64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
-                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/linux-arm64.so"
-                    ),
-                ),
-                (
-                    "linux",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
-                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/linux-x64.so"
-                    ),
-                ),
-                (
-                    "windows",
-                    "x86_64",
-                    concat!(
-                        "https://tree-sitter-parsers.s3.us-east-1.amazonaws.com/tree-sitter/parsers/tree-sitter-xml/",
-                        "4b64dd3a03ec002258d6268d712fd93716d6ab57/win32-x64.dll"
-                    ),
-                ),
+            extensions: &[
+                "xml", "csproj", "props", "targets", "config", "resx", "xaml",
             ],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-xml",
+                "4b64dd3a03ec002258d6268d712fd93716d6ab57"
+            ),
         },
     ]
 }
