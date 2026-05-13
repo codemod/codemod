@@ -78,6 +78,14 @@ pub fn create_progress_callback() -> ProgressCallback {
                             });
                         }
                     }
+                    "agent" => {
+                        progress_reporter(progress_bar::ProgressUpdate {
+                            task_id: task_id.to_string(),
+                            action: progress_bar::ProgressAction::Agent {
+                                payload: path.to_string(),
+                            },
+                        });
+                    }
                     "diagnostic" => {
                         if let Some((title, message)) = path.split_once('\n') {
                             progress_reporter(progress_bar::ProgressUpdate {

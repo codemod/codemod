@@ -17,11 +17,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 use crate::ai_agent_stream::{
-    agent_display_name, agent_header, agent_status_line, clear_agent_spinner_live,
-    render_agent_stream_line, should_emit_agent_wait_notice, should_stream_agent_output_live,
-    write_agent_spinner_live, write_agent_stream_fragment_live, write_agent_stream_render_live,
-    write_agent_wait_notice_live, AgentStreamRender, ClaudeStreamRenderer, CodexStreamRenderer,
-    OpenCodeStreamRenderer,
+    agent_display_name, normalize_raw_agent_line, AgentLogEvent, AgentStreamNormalizer,
+    ClaudeStreamNormalizer, CodexStreamNormalizer, NormalizedAgentLine, OpenCodeStreamNormalizer,
 };
 use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
@@ -648,68 +645,65 @@ impl Engine {
         );
 
         let agent_display_name = agent_display_name(canonical);
-        if should_stream_agent_output_live(self.workflow_run_config.output.quiet, logger) {
-            logger.user_line(&agent_header(agent_display_name));
-            logger.user_line(&agent_status_line("starting", "waiting for agent output"));
+        let progress_callback = Arc::clone(&self.workflow_run_config.execution.progress_callback);
+        let task_id = logger.task_id().unwrap_or_default().to_string();
+        let starting_event = AgentLogEvent::new(
+            canonical,
+            "status",
+            crate::ai_agent_stream::AgentLogEventKind::Status {
+                status: "starting".to_string(),
+                detail: Some("waiting for agent output".to_string()),
+            },
+        );
+        logger.agent_event(starting_event.clone());
+        if let Some(callback) = progress_callback.as_ref() {
+            if let Ok(payload) = serde_json::to_string(&starting_event) {
+                (callback.callback)(&task_id, &payload, "agent", None, &0);
+            }
         }
 
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
         })?;
-        let stream_live =
-            should_stream_agent_output_live(self.workflow_run_config.output.quiet, logger);
         let stream_seen = Arc::new(AtomicBool::new(false));
-        let open_stream_fragment = Arc::new(AtomicBool::new(false));
-        let spinner_active = Arc::new(AtomicBool::new(false));
         let stdout_reader = child.stdout.take().map(|stdout| {
             let canonical = canonical.to_string();
             let logger = logger.clone();
             let stream_seen = Arc::clone(&stream_seen);
-            let open_stream_fragment = Arc::clone(&open_stream_fragment);
-            let spinner_active = Arc::clone(&spinner_active);
+            let progress_callback = Arc::clone(&progress_callback);
+            let task_id = task_id.clone();
             std::thread::spawn(move || {
-                let mut claude_renderer =
-                    (canonical == "claude-code").then(ClaudeStreamRenderer::default);
-                let mut opencode_renderer =
-                    (canonical == "opencode").then(OpenCodeStreamRenderer::default);
-                let mut codex_renderer = (canonical == "codex").then(CodexStreamRenderer::default);
+                let mut claude_normalizer =
+                    (canonical == "claude-code").then(ClaudeStreamNormalizer::default);
+                let mut opencode_normalizer =
+                    (canonical == "opencode").then(OpenCodeStreamNormalizer::default);
+                let mut codex_normalizer =
+                    (canonical == "codex").then(CodexStreamNormalizer::default);
                 for line in BufReader::new(stdout)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
-                    let render = if let Some(renderer) = claude_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
-                    } else if let Some(renderer) = opencode_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
-                    } else if let Some(renderer) = codex_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
+                    let normalized = if let Some(normalizer) = claude_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
+                    } else if let Some(normalizer) = opencode_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
+                    } else if let Some(normalizer) = codex_normalizer.as_mut() {
+                        normalizer.normalize_line("stdout", &line)
                     } else {
-                        render_agent_stream_line(&canonical, "stdout", line)
+                        None
                     };
-                    if render != AgentStreamRender::Suppress {
-                        stream_seen.store(true, Ordering::Relaxed);
-                    }
-                    match &render {
-                        AgentStreamRender::Line(formatted) => logger.log("info", formatted),
-                        AgentStreamRender::Fragment(fragment) if !stream_live => {
-                            logger.log("info", fragment)
+                    let event = match normalized {
+                        Some(NormalizedAgentLine::Event(event)) => event,
+                        Some(NormalizedAgentLine::Suppress) => continue,
+                        None => normalize_raw_agent_line(&canonical, "stdout", line),
+                    };
+                    stream_seen.store(true, Ordering::Relaxed);
+                    logger.agent_event(event.clone());
+                    if let Some(callback) = progress_callback.as_ref() {
+                        if let Ok(payload) = serde_json::to_string(&event) {
+                            (callback.callback)(&task_id, &payload, "agent", None, &0);
                         }
-                        _ => {}
-                    }
-                    if stream_live {
-                        write_agent_stream_render_live(
-                            "stdout",
-                            &render,
-                            &open_stream_fragment,
-                            &spinner_active,
-                        );
                     }
                 }
             })
@@ -718,51 +712,40 @@ impl Engine {
             let canonical = canonical.to_string();
             let logger = logger.clone();
             let stream_seen = Arc::clone(&stream_seen);
-            let open_stream_fragment = Arc::clone(&open_stream_fragment);
-            let spinner_active = Arc::clone(&spinner_active);
+            let progress_callback = Arc::clone(&progress_callback);
+            let task_id = task_id.clone();
             std::thread::spawn(move || {
-                let mut claude_renderer =
-                    (canonical == "claude-code").then(ClaudeStreamRenderer::default);
-                let mut opencode_renderer =
-                    (canonical == "opencode").then(OpenCodeStreamRenderer::default);
-                let mut codex_renderer = (canonical == "codex").then(CodexStreamRenderer::default);
+                let mut claude_normalizer =
+                    (canonical == "claude-code").then(ClaudeStreamNormalizer::default);
+                let mut opencode_normalizer =
+                    (canonical == "opencode").then(OpenCodeStreamNormalizer::default);
+                let mut codex_normalizer =
+                    (canonical == "codex").then(CodexStreamNormalizer::default);
                 for line in BufReader::new(stderr)
                     .lines()
                     .map_while(|line: std::io::Result<String>| line.ok())
                     .filter(|line| !line.trim().is_empty())
                 {
-                    let render = if let Some(renderer) = claude_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
-                    } else if let Some(renderer) = opencode_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
-                    } else if let Some(renderer) = codex_renderer.as_mut() {
-                        renderer
-                            .render_line(&line)
-                            .unwrap_or(AgentStreamRender::Line(line))
+                    let normalized = if let Some(normalizer) = claude_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
+                    } else if let Some(normalizer) = opencode_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
+                    } else if let Some(normalizer) = codex_normalizer.as_mut() {
+                        normalizer.normalize_line("stderr", &line)
                     } else {
-                        render_agent_stream_line(&canonical, "stderr", line)
+                        None
                     };
-                    if render != AgentStreamRender::Suppress {
-                        stream_seen.store(true, Ordering::Relaxed);
-                    }
-                    match &render {
-                        AgentStreamRender::Line(formatted) => logger.log("info", formatted),
-                        AgentStreamRender::Fragment(fragment) if !stream_live => {
-                            logger.log("info", fragment)
+                    let event = match normalized {
+                        Some(NormalizedAgentLine::Event(event)) => event,
+                        Some(NormalizedAgentLine::Suppress) => continue,
+                        None => normalize_raw_agent_line(&canonical, "stderr", line),
+                    };
+                    stream_seen.store(true, Ordering::Relaxed);
+                    logger.agent_event(event.clone());
+                    if let Some(callback) = progress_callback.as_ref() {
+                        if let Ok(payload) = serde_json::to_string(&event) {
+                            (callback.callback)(&task_id, &payload, "agent", None, &0);
                         }
-                        _ => {}
-                    }
-                    if stream_live {
-                        write_agent_stream_render_live(
-                            "stderr",
-                            &render,
-                            &open_stream_fragment,
-                            &spinner_active,
-                        );
                     }
                 }
             })
@@ -815,9 +798,6 @@ impl Engine {
             Duration::from_secs(10),
         );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut spinner = tokio::time::interval(Duration::from_millis(120));
-        spinner.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut spinner_tick = 0usize;
 
         let status = loop {
             tokio::select! {
@@ -830,27 +810,15 @@ impl Engine {
                     })??;
                     break status;
                 }
-                _ = spinner.tick(), if stream_live => {
-                    if !open_stream_fragment.load(Ordering::Relaxed) {
-                        write_agent_spinner_live(agent_display_name, spinner_tick);
-                        spinner_active.store(true, Ordering::Relaxed);
-                        spinner_tick = spinner_tick.wrapping_add(1);
-                    }
-                }
                 _ = heartbeat.tick() => {
                     let waited = started_waiting.elapsed().as_secs();
-                    if should_emit_agent_wait_notice(self.workflow_run_config.output.quiet, logger)
-                        && !stream_seen.load(Ordering::Relaxed)
-                    {
-                        write_agent_wait_notice_live(&format!(
-                            "Still waiting for {agent_display_name} output ({waited}s elapsed)..."
-                        ));
-                    }
                     debug!(
-                        "Still waiting on agent '{}' pid {:?} after {}s",
+                        "Still waiting on agent '{}' ({}) pid {:?} after {}s; output_seen={}",
                         canonical,
+                        agent_display_name,
                         child_pid,
-                        waited
+                        waited,
+                        stream_seen.load(Ordering::Relaxed)
                     );
                 }
             }
@@ -861,12 +829,6 @@ impl Engine {
         }
         if let Some(reader) = stderr_reader {
             let _ = reader.join();
-        }
-        if stream_live && spinner_active.swap(false, Ordering::Relaxed) {
-            clear_agent_spinner_live();
-        }
-        if stream_live && open_stream_fragment.swap(false, Ordering::Relaxed) {
-            write_agent_stream_fragment_live("stdout", "\n");
         }
 
         if status.success() {
@@ -4410,24 +4372,6 @@ export default function transform(ast) {
         assert!(line.contains(r#""branch":"codemod-branch""#));
         assert!(!line.contains("secret body"));
         assert!(!line.contains(r#""body""#));
-    }
-
-    #[test]
-    fn live_agent_streaming_is_enabled_only_for_non_quiet_text_runs() {
-        let text_logger = StructuredLogger::default();
-        let jsonl_logger = StructuredLogger::new(crate::structured_log::OutputFormat::Jsonl);
-
-        assert!(should_stream_agent_output_live(false, &text_logger));
-        assert!(!should_stream_agent_output_live(true, &text_logger));
-        assert!(!should_stream_agent_output_live(false, &jsonl_logger));
-    }
-
-    #[test]
-    fn tui_quiet_mode_suppresses_live_agent_terminal_output() {
-        let text_logger = StructuredLogger::default();
-
-        assert!(!should_stream_agent_output_live(true, &text_logger));
-        assert!(!should_emit_agent_wait_notice(true, &text_logger));
     }
 
     #[tokio::test]

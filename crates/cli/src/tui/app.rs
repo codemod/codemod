@@ -6,6 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use crate::agent_log_renderer::render_task_log_lines;
 use crate::tui::event::AppEvent;
 
 #[derive(Clone, Debug)]
@@ -727,7 +728,7 @@ impl TuiState {
     pub fn selected_task_log_text(&self) -> String {
         self.selected_task()
             .map(|task| {
-                let mut lines = task.logs.clone();
+                let mut lines = render_task_log_lines(&task.logs);
 
                 if task.status == TaskStatus::Failed {
                     if let Some(error) = task.error.as_deref() {
@@ -959,6 +960,9 @@ impl TuiState {
             }
             WorkflowEvent::TaskLogAppended { task_id, line, .. } => {
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
+                    if is_agent_log_payload(&line) && task.logs.iter().any(|log| log == &line) {
+                        return;
+                    }
                     task.logs.push(line);
                     self.sync_current_run_task_cache();
                 }
@@ -1374,6 +1378,12 @@ impl TuiState {
     }
 }
 
+fn is_agent_log_payload(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|value| value.get("agent").is_some() && value.get("event").is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
@@ -1498,6 +1508,39 @@ mod tests {
                 .map(|task| task.logs.as_slice()),
             Some(&["hello".to_string()][..])
         );
+    }
+
+    #[test]
+    fn reducer_dedupes_live_agent_log_replay() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "node".to_string(),
+            status: TaskStatus::Running,
+            started_at: None,
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+
+        let line = r#"{"agent":"claude-code","event":"tool_call","tool_name":"Read"}"#.to_string();
+        for _ in 0..2 {
+            state.reduce(AppEvent::Workflow(WorkflowEvent::TaskLogAppended {
+                workflow_run_id: run_id,
+                task_id,
+                line: line.clone(),
+                at: Utc::now(),
+            }));
+        }
+
+        assert_eq!(state.tasks[0].logs, vec![line]);
     }
 
     #[test]

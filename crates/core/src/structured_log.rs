@@ -5,6 +5,8 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::ai_agent_stream::AgentLogEvent;
+
 pub type CapturedLineCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 const CYAN_BOLD: &str = "\x1b[1;36m";
@@ -155,6 +157,8 @@ struct JsonlRecord {
     outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<AgentLogEvent>,
 }
 
 /// Structured logger that emits JSONL lines to stdout when in Jsonl mode.
@@ -246,6 +250,12 @@ impl StructuredLogger {
         self.format != OutputFormat::Jsonl && self.text_log_fallthrough
     }
 
+    pub fn task_id(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .map(|context| context.task_id.as_str())
+    }
+
     /// Write a line to the output target. When `override_fd` is set (during
     /// stdout capture), writes directly to the saved fd. Otherwise writes to stdout.
     fn write_output(&self, line: &str) {
@@ -329,6 +339,39 @@ impl StructuredLogger {
             task_id: self.context.as_ref().map(|c| c.task_id.clone()),
             outcome: None,
             duration_ms: None,
+            agent: None,
+        };
+        if let Ok(json) = serde_json::to_string(&record) {
+            self.write_output(&json);
+        }
+    }
+
+    pub(crate) fn agent_event(&self, event: AgentLogEvent) {
+        if let Ok(mut logs) = self.collected_logs.lock() {
+            let fallback = serde_json::to_string(&event).unwrap_or_else(|_| format!("{event:?}"));
+            logs.push(fallback);
+        }
+
+        if self.format != OutputFormat::Jsonl {
+            return;
+        }
+
+        let record = JsonlRecord {
+            seq: self.seq.fetch_add(1, Ordering::Relaxed),
+            ts: Utc::now().to_rfc3339(),
+            level: "info".to_string(),
+            event: "agent".to_string(),
+            msg: None,
+            target: None,
+            step_name: self.context.as_ref().map(|c| c.step_name.clone()),
+            step_id: self.context.as_ref().and_then(|c| c.step_id.clone()),
+            step_index: self.context.as_ref().map(|c| c.step_index),
+            node_id: self.context.as_ref().map(|c| c.node_id.clone()),
+            node_name: self.context.as_ref().map(|c| c.node_name.clone()),
+            task_id: self.context.as_ref().map(|c| c.task_id.clone()),
+            outcome: None,
+            duration_ms: None,
+            agent: Some(event),
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);
@@ -362,6 +405,7 @@ impl StructuredLogger {
             task_id: Some(ctx.task_id.clone()),
             outcome: None,
             duration_ms: None,
+            agent: None,
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);
@@ -392,6 +436,7 @@ impl StructuredLogger {
             task_id: Some(ctx.task_id.clone()),
             outcome: Some(outcome.to_string()),
             duration_ms: Some(duration_ms),
+            agent: None,
         };
         if let Ok(json) = serde_json::to_string(&record) {
             self.write_output(&json);

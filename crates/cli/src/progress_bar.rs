@@ -50,6 +50,7 @@ pub fn download_progress_bar() -> Arc<Box<dyn Fn(u64, u64) + Send + Sync>> {
 pub enum ProgressAction {
     Start { total_files: Option<u64> },
     Update { current_file: String },
+    Agent { payload: String },
     Log { title: String, line: String },
     Diagnostic { title: String, message: String },
     Increment,
@@ -73,14 +74,15 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
     .unwrap()
     .progress_chars("━╸ ");
 
-    let spinner_style = ProgressStyle::with_template(
-        "{prefix:.bold.cyan} {spinner:.cyan} {msg} {elapsed_precise:.dim}",
-    )
-    .unwrap()
-    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let spinner_style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
+        .unwrap()
+        .tick_chars("⠈⠉⠋⠓⠒⠐⠐⠒⠖⠦⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈ ");
 
     let multi_progress = Arc::new(MultiProgress::new());
     let progress_bars = Arc::new(Mutex::new(HashMap::<String, ProgressBar>::new()));
+    let agent_spinners = Arc::new(Mutex::new(HashMap::<String, ProgressBar>::new()));
+    let agent_message_buffers = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+    let agent_message_open = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let active_log_title = Arc::new(Mutex::new(None::<String>));
 
     // Enable stderr output
@@ -88,6 +90,9 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
 
     let reporter: ProgressReporter = Arc::new(Box::new(move |update: ProgressUpdate| {
         let bars = Arc::clone(&progress_bars);
+        let agent_spinners = Arc::clone(&agent_spinners);
+        let agent_message_buffers = Arc::clone(&agent_message_buffers);
+        let agent_message_open = Arc::clone(&agent_message_open);
         let mp = Arc::clone(&multi_progress);
         let active_log_title = Arc::clone(&active_log_title);
         let task_id = update.task_id.clone();
@@ -113,6 +118,7 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                     pb.set_style(spinner_style.clone());
                     pb.set_prefix(task_id.clone());
                     pb.set_message(style("Starting").dim().to_string());
+                    pb.enable_steady_tick(std::time::Duration::from_millis(120));
                     pb
                 };
 
@@ -136,6 +142,123 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                 let bars_lock = bars.lock().unwrap();
                 if let Some(pb) = bars_lock.get(&task_id) {
                     pb.inc(1);
+                }
+            }
+
+            ProgressAction::Agent { payload } => {
+                if payload.trim().is_empty() {
+                    return;
+                }
+                let value = serde_json::from_str::<serde_json::Value>(&payload).ok();
+                if is_agent_starting_event(value.as_ref()) {
+                    let agent = value
+                        .as_ref()
+                        .and_then(|value| value.get("agent"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(agent_display_name)
+                        .unwrap_or("Agent");
+                    if let Some(pb) = bars.lock().unwrap().get(&task_id) {
+                        pb.set_message(style(format!("{agent} is thinking...")).dim().to_string());
+                        pb.tick();
+                    } else {
+                        start_agent_spinner(&mp, &agent_spinners, &spinner_style, &task_id, agent);
+                    }
+                    return;
+                }
+                if let Some(pb) = bars.lock().unwrap().get(&task_id) {
+                    pb.tick();
+                }
+
+                if let Some(delta) = agent_message_delta(value.as_ref()) {
+                    clear_agent_spinner(&agent_spinners, &task_id);
+                    let was_open = *agent_message_open
+                        .lock()
+                        .unwrap()
+                        .get(&task_id)
+                        .unwrap_or(&false);
+                    let fragment =
+                        crate::agent_log_renderer::render_agent_message_fragment(delta, was_open);
+                    if !fragment.is_empty() {
+                        mp.suspend(|| {
+                            eprint!("{fragment}");
+                        });
+                        let is_open = !fragment.ends_with('\n');
+                        agent_message_open
+                            .lock()
+                            .unwrap()
+                            .insert(task_id.clone(), is_open);
+                        if !is_open {
+                            let agent = value
+                                .as_ref()
+                                .and_then(|value| value.get("agent"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(agent_display_name)
+                                .unwrap_or("Agent");
+                            start_agent_spinner(
+                                &mp,
+                                &agent_spinners,
+                                &spinner_style,
+                                &task_id,
+                                agent,
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                let Some(rendered) =
+                    crate::agent_log_renderer::render_agent_event_payload_styled(&payload, false)
+                else {
+                    return;
+                };
+                match rendered {
+                    crate::agent_log_renderer::RenderedAgentEvent::Line(line) => {
+                        clear_agent_spinner(&agent_spinners, &task_id);
+                        mp.suspend(|| {
+                            if agent_message_open
+                                .lock()
+                                .unwrap()
+                                .insert(task_id.clone(), false)
+                                .unwrap_or(false)
+                            {
+                                eprintln!();
+                            }
+                            if let Some(message) =
+                                agent_message_buffers.lock().unwrap().remove(&task_id)
+                            {
+                                if !message.trim().is_empty() {
+                                    eprintln!("  {} {}", style("›").cyan(), message.trim_end());
+                                }
+                            }
+                            eprintln!("{line}");
+                        });
+                        if !bars.lock().unwrap().contains_key(&task_id) {
+                            let agent = value
+                                .as_ref()
+                                .and_then(|value| value.get("agent"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(agent_display_name)
+                                .unwrap_or("Agent");
+                            start_agent_spinner(
+                                &mp,
+                                &agent_spinners,
+                                &spinner_style,
+                                &task_id,
+                                agent,
+                            );
+                        }
+                    }
+                    crate::agent_log_renderer::RenderedAgentEvent::Fragment(fragment) => {
+                        if fragment.is_empty() {
+                            return;
+                        }
+                        agent_message_buffers
+                            .lock()
+                            .unwrap()
+                            .entry(task_id.clone())
+                            .or_default()
+                            .push_str(&fragment);
+                    }
                 }
             }
 
@@ -179,6 +302,23 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
             ProgressAction::Finish { message } => {
                 let mut bars_lock = bars.lock().unwrap();
                 *active_log_title.lock().unwrap() = None;
+                if let Some(message) = agent_message_buffers.lock().unwrap().remove(&task_id) {
+                    if !message.trim().is_empty() {
+                        clear_agent_spinner(&agent_spinners, &task_id);
+                        mp.suspend(|| {
+                            eprintln!("  {} {}", style("›").cyan(), message.trim_end());
+                        });
+                    }
+                }
+                if agent_message_open
+                    .lock()
+                    .unwrap()
+                    .remove(&task_id)
+                    .unwrap_or(false)
+                {
+                    mp.suspend(|| eprintln!());
+                }
+                clear_agent_spinner(&agent_spinners, &task_id);
                 if let Some(pb) = bars_lock.remove(&task_id) {
                     let finish_message = message.unwrap_or_else(|| "Completed".to_string());
                     pb.finish_with_message(style(finish_message).green().to_string());
@@ -188,4 +328,63 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
     }));
 
     (reporter, started)
+}
+
+fn is_agent_starting_event(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(|value| value.get("event"))
+        .and_then(serde_json::Value::as_str)
+        == Some("status")
+        && value
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str)
+            == Some("starting")
+}
+
+fn agent_message_delta(value: Option<&serde_json::Value>) -> Option<&str> {
+    let value = value?;
+    if value.get("event").and_then(serde_json::Value::as_str) != Some("message") {
+        return None;
+    }
+    if !value
+        .get("delta")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    value.get("text").and_then(serde_json::Value::as_str)
+}
+
+fn start_agent_spinner(
+    multi_progress: &MultiProgress,
+    agent_spinners: &Arc<Mutex<HashMap<String, ProgressBar>>>,
+    spinner_style: &ProgressStyle,
+    task_id: &str,
+    agent: &str,
+) {
+    let mut spinners = agent_spinners.lock().unwrap();
+    spinners.entry(task_id.to_string()).or_insert_with(|| {
+        let pb = multi_progress.add(ProgressBar::new_spinner());
+        pb.set_style(spinner_style.clone());
+        pb.set_prefix(style("AI").bold().cyan().to_string());
+        pb.set_message(style(format!("{agent} is thinking...")).dim().to_string());
+        pb.enable_steady_tick(std::time::Duration::from_millis(120));
+        pb
+    });
+}
+
+fn clear_agent_spinner(agent_spinners: &Arc<Mutex<HashMap<String, ProgressBar>>>, task_id: &str) {
+    if let Some(spinner) = agent_spinners.lock().unwrap().remove(task_id) {
+        spinner.finish_and_clear();
+    }
+}
+
+fn agent_display_name(canonical: &str) -> &str {
+    match canonical {
+        "claude-code" => "Claude Code",
+        "opencode" => "OpenCode",
+        "codex" => "Codex",
+        _ => canonical,
+    }
 }

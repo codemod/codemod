@@ -344,7 +344,7 @@ fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
     let tasks_header = Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            format!("{:<step_width$}", "Step", step_width = step_width),
+            format!("{:<step_width$}", "Task", step_width = step_width),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),

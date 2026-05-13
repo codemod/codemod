@@ -5,6 +5,7 @@ use inquire::{Select, Text};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
+mod agent_log_renderer;
 mod agent_select;
 mod ascii_art;
 mod auth;

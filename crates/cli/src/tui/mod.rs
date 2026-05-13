@@ -187,6 +187,21 @@ pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCal
                 _ => None,
             };
 
+            if matches!(status, "agent" | "log" | "diagnostic") {
+                if !path.trim().is_empty() {
+                    publish_event(
+                        workflow_run_id,
+                        WorkflowEvent::TaskLogAppended {
+                            workflow_run_id,
+                            task_id,
+                            line: path.to_string(),
+                            at: chrono::Utc::now(),
+                        },
+                    );
+                }
+                return;
+            }
+
             let processed_files = match status {
                 "increment" | "finish" => *index,
                 "start" | "counting" => 0,
