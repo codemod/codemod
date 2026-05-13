@@ -2186,9 +2186,6 @@ mod tests {
         assert!(project_path.join("scripts/codemod.ts").is_file());
         assert!(project_path.join("tests/fixtures/input.xml").is_file());
         assert!(project_path.join("tests/fixtures/expected.xml").is_file());
-        let expected =
-            fs::read_to_string(project_path.join("tests/fixtures/expected.xml")).unwrap();
-        assert!(expected.contains("<TargetFramework>net472</TargetFramework>"));
         let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
         assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
     }

@@ -984,7 +984,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn js_lang() -> CodemodLang {
-        CodemodLang::from(SupportLang::JavaScript)
+        CodemodLang::Static(SupportLang::JavaScript)
     }
 
     /// Helper to create a temporary codemod file and test directory

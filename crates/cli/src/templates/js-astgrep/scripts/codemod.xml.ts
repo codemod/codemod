@@ -17,12 +17,7 @@ const codemod: Codemod<Xml> = async (root) => {
         return null;
       }
 
-      const tfm = rawValue.replace(
-        /^v(?<major>\d)\.(?<minor>\d)(?:\.(?<patch>\d))?$/,
-        "net$<major>$<minor>$<patch>"
-      );
-
-      return node.replace(`<TargetFramework>${tfm}</TargetFramework>`);
+      return node.replace(`<TargetFramework>${rawValue}</TargetFramework>`);
     })
     .filter(Boolean) as Edit[];
 

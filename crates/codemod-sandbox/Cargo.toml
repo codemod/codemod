@@ -52,7 +52,6 @@ language-javascript = { workspace = true, optional = true }
 language-python = { workspace = true, optional = true }
 tree-sitter-loader = { workspace = true, optional = true }
 ast-grep-dynamic = { workspace = true, optional = true }
-tree-sitter-xml = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -88,7 +87,6 @@ native = [
   "language-python",
   "tree-sitter-loader",
   "ast-grep-dynamic",
-  "tree-sitter-xml",
   "vfs",
 ]
 jssg-in-memory = ["native"]

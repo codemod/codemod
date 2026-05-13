@@ -3,10 +3,4 @@ id: legacy-target-framework-version
 language: xml
 rule:
   pattern: <TargetFrameworkVersion>$VALUE</TargetFrameworkVersion>
-fix: <TargetFramework>$TFM</TargetFramework>
-transform:
-  TFM:
-    replace:
-      source: $VALUE
-      replace: ^v(?<major>\d)\.(?<minor>\d)(?:\.(?<patch>\d))?$
-      by: net$major$minor$patch
+fix: <TargetFramework>$VALUE</TargetFramework>

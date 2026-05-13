@@ -10,8 +10,6 @@ pub(crate) mod transform_helpers;
 
 #[cfg(feature = "native")]
 pub mod codemod_lang;
-#[cfg(feature = "native")]
-pub mod static_lang;
 
 pub use execution_engine::*;
 pub use in_memory_engine::*;

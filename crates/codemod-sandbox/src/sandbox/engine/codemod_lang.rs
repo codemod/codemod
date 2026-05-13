@@ -9,16 +9,14 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-use super::static_lang::StaticLang;
-
-/// A language type that wraps statically-linked languages and dynamically-loaded
-/// `DynamicLang` (from tree-sitter-loader).
+/// A language type that wraps both statically-linked `SupportLang` (from ast-grep)
+/// and dynamically-loaded `DynamicLang` (from tree-sitter-loader).
 ///
 /// This allows the engine to support languages beyond the 26 built into ast-grep
 /// by downloading and loading tree-sitter parsers at runtime.
 #[derive(Clone, Copy)]
 pub enum CodemodLang {
-    Static(StaticLang),
+    Static(SupportLang),
     Dynamic(DynamicLang),
 }
 
@@ -72,7 +70,7 @@ impl FromStr for CodemodLang {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Try static languages first
-        if let Ok(lang) = StaticLang::from_str(s) {
+        if let Ok(lang) = SupportLang::from_str(s) {
             return Ok(CodemodLang::Static(lang));
         }
 
@@ -91,12 +89,6 @@ impl FromStr for CodemodLang {
 
 impl From<SupportLang> for CodemodLang {
     fn from(lang: SupportLang) -> Self {
-        CodemodLang::Static(StaticLang::Builtin(lang))
-    }
-}
-
-impl From<StaticLang> for CodemodLang {
-    fn from(lang: StaticLang) -> Self {
         CodemodLang::Static(lang)
     }
 }
@@ -163,7 +155,7 @@ impl Language for CodemodLang {
     }
 
     fn from_path<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
-        if let Some(lang) = StaticLang::from_path(path.as_ref()) {
+        if let Some(lang) = SupportLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
         }
         if let Some(lang) = DynamicLang::from_path(path.as_ref()) {
