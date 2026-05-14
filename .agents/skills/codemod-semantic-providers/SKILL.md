@@ -24,6 +24,8 @@ description: Use when changing Codemod semantic analysis providers, language-cor
   behavior changes.
 - JavaScript provider changes should consider OXC resolver and Yarn PnP behavior.
 - Python provider changes should keep Ruff/ty integration narrow and version-aware.
+- Do not print directly to stdout/stderr from provider code. Return diagnostics or errors to callers
+  so `crates/cli` can preserve TUI and JSONL output modes.
 
 ## Validation
 

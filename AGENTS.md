@@ -48,10 +48,15 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
 
 ## Output Discipline
 
-- TUI/quiet mode owns the terminal. Do not write workflow logs, agent output, prompts, spinners, or
-  progress directly to stdout/stderr while `WorkflowOutputSettings.quiet` is true. Route
-  interactions through workflow/TUI events, and keep output in task logs unless the run is a
-  non-quiet text run.
+- Only the CLI package may write user-facing output to the terminal. All other crates and packages
+  must return structured data, errors, events, reports, or logs for `crates/cli` to route.
+- Do not call `println!`, `eprintln!`, `console.log`, `console.error`, or write directly to
+  stdout/stderr from engine, scheduler, sandbox, semantic-provider, package, or utility code.
+- Direct terminal writes outside the CLI can leak to stdout while the TUI is shown and can bypass the
+  JSONL formatter. Treat that as a correctness bug, not just noisy output.
+- TUI/quiet mode owns the terminal. While `WorkflowOutputSettings.quiet` is true, route workflow
+  logs, agent output, prompts, spinners, and progress through workflow/TUI events and task logs.
+- Non-quiet text runs may print only through CLI-owned output paths.
 
 ## Repo-Local Skills
 

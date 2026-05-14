@@ -13,6 +13,9 @@ JSSG execution, nested codemods, and runtime services.
   these are user-visible workflow semantics.
 - Preserve structured logs and reports when changing execution paths. Logs are part of debugging and
   hosted-platform handoff behavior.
+- Never print directly to stdout/stderr from core. Emit structured logs, reports, task events, or
+  errors and let `crates/cli` route them. Printing here can leak through the TUI or bypass JSONL
+  formatting.
 - Use deterministic temp directories and fixtures in tests. Avoid relying on the developer's git
   state except in tests that explicitly construct a repository.
 

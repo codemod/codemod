@@ -14,9 +14,15 @@ commands, workflow subcommands, report UI serving, and terminal UI.
 
 ## TUI And Output
 
+- The CLI owns all user-facing terminal output for the repo. Other crates and packages must expose
+  structured data, errors, events, reports, or logs; the CLI routes them to text, TUI, JSONL, or task
+  logs.
 - TUI/quiet mode owns the terminal. Do not write workflow logs, agent output, prompts, spinners, or
   progress directly to stdout/stderr while `WorkflowOutputSettings.quiet` is true.
-- Route interaction through workflow/TUI events and task logs. Non-quiet text runs may print directly.
+- Direct writes outside CLI-owned output paths can leak to stdout while the TUI is shown or bypass
+  JSONL formatting.
+- Route interaction through workflow/TUI events and task logs. Non-quiet text runs may print only
+  through CLI-owned output paths.
 - For terminal dependencies, keep `crossterm` usage centralized; CI checks this with
   `bash ./scripts/check-single-crossterm.sh`.
 

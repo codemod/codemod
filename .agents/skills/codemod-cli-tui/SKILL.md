@@ -16,10 +16,14 @@ description: Use when changing Codemod CLI commands, terminal UI, workflow comma
 
 ## Rules
 
+- The CLI owns all user-facing terminal output for the repo. Other crates and packages must expose
+  structured data, errors, events, reports, or logs for CLI routing.
 - Preserve non-interactive behavior; CI-facing commands must not prompt unexpectedly.
 - Keep command-specific logic in command modules and shared behavior in `utils` only when reused.
 - TUI/quiet mode must not write workflow logs, prompts, agent output, spinners, or progress directly
   to stdout/stderr while `WorkflowOutputSettings.quiet` is true.
+- Direct writes outside CLI-owned output paths can leak to stdout while the TUI is shown or bypass
+  JSONL formatting.
 - Route quiet-mode interaction through workflow/TUI events and task logs.
 - Template changes should update generated package files and user-facing template docs together.
 - npm wrapper changes need wrapper tests because users install through the package, not only the Rust

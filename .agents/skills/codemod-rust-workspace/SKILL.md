@@ -24,6 +24,8 @@ description: Use when working on Codemod's Rust workspace, including workflow en
 - Keep model contracts in `crates/models`; avoid duplicate public structs in higher-level crates.
 - Preserve async cancellation and error propagation.
 - Avoid logging-only failures for user-visible workflow behavior.
+- Do not write directly to stdout/stderr from non-CLI crates. Return structured data, errors, events,
+  reports, or log records and let `crates/cli` choose text, TUI, JSONL, or task-log routing.
 - Keep feature gates meaningful, especially `docker`, `podman`, `wasm`, `native`, and `real-fs`.
 - For schema-affecting model changes, run `cargo xtask schema` and review generated diffs.
 

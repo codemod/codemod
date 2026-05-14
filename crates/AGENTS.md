@@ -12,6 +12,9 @@ workspace dependencies from the root `Cargo.toml` over adding direct versions in
   higher-level type, move the shared contract down instead.
 - Keep public model changes backward-compatible unless the task is explicitly a breaking change.
 - For async code, preserve cancellation and error propagation. Do not hide task failures behind logs.
+- Do not write directly to stdout/stderr from non-CLI crates. Return structured data, errors, events,
+  reports, or log records and let `crates/cli` decide whether to render text, TUI updates, JSONL, or
+  task logs.
 - For filesystem or git operations, prefer existing helpers in `crates/core/src/*_ops.rs`,
   `crates/cli/src/utils`, or `testing-utils`.
 

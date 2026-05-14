@@ -22,6 +22,8 @@ description: Use when working on JSSG, Codemod's JavaScript/TypeScript sandbox, 
 - Capability changes often need Rust capability updates, TS exports, and declaration updates.
 - Keep sandbox isolation explicit. Treat filesystem, process, network, and module access as security
   boundaries.
+- Do not print directly to stdout/stderr from sandbox internals or JSSG packages. Return output,
+  diagnostics, metrics, and logs to callers so `crates/cli` can route TUI, text, and JSONL modes.
 - JSSG utility functions should produce predictable edits and clear types for codemod authors.
 
 ## Validation

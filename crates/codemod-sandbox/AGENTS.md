@@ -14,6 +14,8 @@ integration, WASM/native builds, runtime module declarations, and sandbox packag
   and `packages/jssg-types` declarations when applicable.
 - Preserve sandbox isolation. Be explicit about filesystem, network, process, and runtime-module
   access.
+- Do not print directly to stdout/stderr from sandbox internals or package glue. Return output,
+  diagnostics, metrics, and logs to the caller so `crates/cli` can route TUI, text, and JSONL modes.
 
 ## Validation
 
