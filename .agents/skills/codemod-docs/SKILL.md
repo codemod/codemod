@@ -1,7 +1,19 @@
 ---
-globs: apps/docs/**/*.mdx
-alwaysApply: false
+name: codemod-docs
+description: Use when editing Codemod documentation, Mintlify MDX, docs navigation, CLI/JSSG/workflow/platform docs, docs snippets, examples, troubleshooting, or technical writing under docs/.
 ---
+
+# Codemod Docs
+
+## Rules
+
+- Keep docs task-oriented: goal, prerequisites, steps, expected outcome, verification, and likely
+  troubleshooting.
+- Use second person, active voice, current CLI names, and current package paths.
+- Update `docs/docs.json` when adding, removing, renaming, or moving pages.
+- Prefer real command snippets that can be validated against the repo.
+- Use Mintlify components only when they make the page easier to scan or safer to follow.
+
 
 # Mintlify technical writing rule
 
