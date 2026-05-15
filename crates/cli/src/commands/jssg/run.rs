@@ -204,6 +204,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let shared_state_context = SharedStateContext::new();
     let metrics_context_clone = metrics_context.clone();
     let shared_state_context_clone = shared_state_context.clone();
+    let runtime_event_output = super::RuntimeEventOutput::stdout();
 
     // Create diff config for dry-run mode
     let diff_config = DiffConfig::with_color_control(args.no_color);
@@ -222,6 +223,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         if !file_path.is_file() {
             return;
         }
+
+        let runtime_event_buffer = super::RuntimeEventBuffer::new();
+        let runtime_event_callback = runtime_event_buffer.callback_for_title(
+            super::display_path_title(file_path, Some(&target_directory)),
+        );
+        let runtime_event_output = runtime_event_output.clone();
 
         // Use a tokio runtime to handle the async execution within the sync callback
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -248,7 +255,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
                 shared_state_context: Some(shared_state_context_clone.clone()),
-                runtime_event_callback: None,
+                runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,
                 test_mode: false,
                 dry_run: false,
@@ -375,6 +382,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
             }
         });
+
+        runtime_event_output.flush(&runtime_event_buffer);
     });
 
     let metrics_data = metrics_context.get_all();
