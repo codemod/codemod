@@ -1,5 +1,6 @@
 ---
+"@codemod.com/jssg-types": patch
 "@jssg/utils": patch
 ---
 
-Add XML element helpers for tag lookup, attribute reads, indentation, and line deletion.
+Add XML AST node types and XML element helpers for tag lookup, attribute reads, and indentation.
