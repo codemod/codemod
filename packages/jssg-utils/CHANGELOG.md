@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.8
+
+### Patch Changes
+
+- 6685a46: Add XML AST node types and XML element helpers for tag lookup, attribute reads, and indentation.
+
 ## 0.0.7
 
 ### Patch Changes

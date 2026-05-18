@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.6.1
+
+### Patch Changes
+
+- 6685a46: Add XML AST node types and XML element helpers for tag lookup, attribute reads, and indentation.
+
 ## 1.6.0
 
 ### Minor Changes
