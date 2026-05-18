@@ -798,6 +798,56 @@ npx codemod unpublish <PACKAGE> [options]
   ```
 </Accordion>
 
+### `codemod run`
+
+Run a published Codemod package from the registry.
+
+```bash
+npx codemod run <PACKAGE> [OPTIONS]
+```
+
+`npx codemod <package>` is the shorthand form of this command. Use `codemod run` when you want the explicit subcommand form in scripts or examples.
+
+<ResponseField name="<PACKAGE>" type="string" required>
+  Package id to run from the registry, for example `react/19/migration-recipe` or `@your-org/package`.
+</ResponseField>
+
+<ResponseField name="-t, --target <PATH>" type="string">
+  Target directory to run the package on.
+</ResponseField>
+
+<ResponseField name="--param <KEY=VALUE>" type="string">
+  Pass workflow parameters through to the published package.
+</ResponseField>
+
+<ResponseField name="--workflow <NAME>" type="string">
+  Select a named workflow from a multi-workflow package. If omitted, the default workflow runs. In interactive terminals, the CLI shows a picker when no workflow is specified.
+</ResponseField>
+
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive runs, execute pending `install-skill` steps instead of skipping them by default.
+</ResponseField>
+
+<ResponseField name="--no-interactive" type="boolean">
+  Disable prompts and rely on flags plus defaults.
+</ResponseField>
+
+<Accordion title="Examples">
+  ```bash
+  # Run a published package against the current directory
+  npx codemod run react/19/migration-recipe
+
+  # Run a published package against a specific repo
+  npx codemod run @your-org/example-codemod -t /abs/path/to/repo
+
+  # Pass workflow parameters to the package
+  npx codemod run @your-org/example-codemod --param framework=next --param mode=strict
+
+  # Explicitly choose a workflow from a multi-workflow package
+  npx codemod run @your-org/example-codemod --workflow sharded
+  ```
+</Accordion>
+
 ### `codemod search`
 
 Search for packages in the registry.
@@ -861,6 +911,20 @@ npx codemod search [OPTIONS] [QUERY]
   npx codemod search --format json next
   ```
 </Accordion>
+
+### `codemod mcp`
+
+Start the Codemod MCP server directly.
+
+```bash
+npx codemod mcp
+```
+
+Use this command when you want to launch the MCP server yourself instead of using `npx codemod ai` to configure it automatically for a supported harness.
+
+<Tip>
+  Most users should start with `npx codemod ai`, which installs Codemod MCP and the Codemod skill package into the supported coding-agent harness for you.
+</Tip>
 
 ### `codemod cache`
 
