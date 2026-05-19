@@ -694,6 +694,12 @@ npx codemod login [--api-key <API_KEY>] [--registry <REGISTRY>] [--scope <SCOPE>
   Organization or user scope for publishing.
 </ResponseField>
 
+<Info>
+  `codemod login` also enables authenticated actions from the local report UI opened by
+  `codemod run --report` and `codemod workflow run --report`. If you are not logged in, the Share
+  dialog asks you to authenticate before it can upload a report link.
+</Info>
+
 <Tip>
   Need a key? Generate one in the Codemod app [here ->](https://app.codemod.com/api-keys).
 </Tip>

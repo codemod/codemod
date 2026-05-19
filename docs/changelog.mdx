@@ -78,6 +78,10 @@ mode: "center"
 <Update label="February 2026">
 - **Shareable reports**: Codemod execution reports can now be shared via URL, complete with metrics, file lists, and diff viewers — with Open Graph previews for social sharing. The CLI now also supports a `--report` flag to open reports locally in the browser.
 
+  Sharing from the report UI now checks your CLI login state first. If you are not authenticated,
+  the Share dialog prompts you to log in before publishing. The dialog also lets you choose whether
+  to share metrics only or metrics plus stats/results, depending on what the report contains.
+
 - **Code change previews in the registry**: Registry packages now display before/after diffs from cached test cases, so you can see exactly what a codemod will do before running it. Diffs are shown on click rather than hover for a cleaner experience.
 
 - **Redesigned navigation**: App navigation now mirrors the website with dropdown menus, grouped items, and improved visual hierarchy for easier feature discovery.
