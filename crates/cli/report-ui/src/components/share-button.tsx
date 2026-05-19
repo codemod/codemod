@@ -11,7 +11,6 @@ import {
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -195,13 +194,11 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup>
-                        {shareOptions.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
+                      {shareOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
