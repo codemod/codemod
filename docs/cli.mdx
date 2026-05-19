@@ -138,6 +138,24 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 `ai` performs internal skill validation checks during install flow.
 
+**`ai list`**
+
+List installed Codemod skills for a harness.
+
+```bash
+npx codemod ai list [--harness <claude|goose|opencode|cursor|codex|auto>] [--format <logs|table|json|yaml>]
+```
+
+Use this command to inspect which Codemod-managed skills are currently installed for the selected harness. This is also the command referenced by generated harness guidance after `codemod ai` installs or updates managed integrations.
+
+<ResponseField name="--harness <claude|goose|opencode|cursor|codex|auto>" type="string">
+  Target harness adapter. Defaults to `auto`.
+</ResponseField>
+
+<ResponseField name="--format <logs|table|json|yaml>" type="string">
+  Output format. Defaults to `logs`.
+</ResponseField>
+
 ### Package skill install (prompted from package run)
 
 Install a package skill from registry metadata into harness skill paths.
