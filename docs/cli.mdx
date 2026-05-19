@@ -862,6 +862,102 @@ npx codemod search [OPTIONS] [QUERY]
   ```
 </Accordion>
 
+### `codemod run`
+
+Run a published package from the Codemod Registry.
+
+```bash
+npx codemod run <PACKAGE> [options]
+```
+
+You can also omit the `run` subcommand and invoke the package directly:
+
+```bash
+npx codemod <package-name>
+```
+
+<ResponseField name="<PACKAGE>" type="string" required>
+  Package name with an optional version, for example `@org/package`, `package`, or `@org/package@1.2.3`.
+</ResponseField>
+
+<ResponseField name="--target, -t <PATH>" type="string">
+  Target directory to run the package against. Defaults to the current working directory.
+</ResponseField>
+
+<ResponseField name="--param <KEY=VALUE>" type="string">
+  Pass workflow parameters through to the package. You can repeat this flag.
+</ResponseField>
+
+<ResponseField name="--workflow <NAME>" type="string">
+  Select a named workflow when the published package defines multiple workflows in `codemod.yaml`.
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Preview changes without writing them to disk.
+</ResponseField>
+
+<ResponseField name="--allow-dirty" type="boolean">
+  Run even when the target repository has uncommitted changes.
+</ResponseField>
+
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive runs, execute `install-skill` workflow steps instead of skipping them.
+</ResponseField>
+
+<ResponseField name="--allow-fs" type="boolean">
+  Allow filesystem capabilities for workflow and JSSG steps that request them.
+</ResponseField>
+
+<ResponseField name="--allow-fetch" type="boolean">
+  Allow network fetch capabilities for workflow and JSSG steps that request them.
+</ResponseField>
+
+<ResponseField name="--allow-child-process" type="boolean">
+  Allow child-process capabilities for workflow and JSSG steps that request them.
+</ResponseField>
+
+<ResponseField name="--agent <NAME>" type="string">
+  Select the coding agent used for AI workflow steps.
+</ResponseField>
+
+<ResponseField name="--report" type="boolean">
+  Open the web-based execution report after the run completes.
+</ResponseField>
+
+<ResponseField name="--format <text|jsonl>" type="string">
+  Choose human-readable text output or structured JSONL logs.
+</ResponseField>
+
+<Accordion title="Examples">
+  ```bash
+  # Run a published package against the current directory
+  npx codemod run @codemod/example-package
+
+  # Equivalent shorthand
+  npx codemod @codemod/example-package
+
+  # Run a specific workflow variant against a target repo
+  npx codemod run @codemod/example-package --workflow sharded -t /path/to/repo
+
+  # Preview a run and emit machine-readable logs
+  npx codemod run @codemod/example-package --dry-run --format jsonl
+  ```
+</Accordion>
+
+### `codemod mcp`
+
+Start the Codemod Model Context Protocol server over stdio.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+This command is usually launched by your MCP client configuration rather than run manually in a shell.
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a local file for debugging.
+</ResponseField>
+
 ### `codemod cache`
 
 Manage the local package cache for Codemod packages.
