@@ -1,13 +1,5 @@
 import { useState, type MouseEvent } from "react";
-import {
-  Button,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@codemod.com/report-ui";
+import { Button, Input } from "@codemod.com/report-ui";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +7,14 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
+} from "@codemod.com/report-ui";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@codemod.com/report-ui";
 import type { ExecutionReport } from "@codemod.com/report-ui";
 import { Check, Copy, Lock, LogIn, Upload } from "lucide-react";
@@ -42,13 +42,18 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
   );
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  const shareOptions: { label: string; value: ShareLevel }[] = [
+    ...(hasBoth || hasStats
+      ? [{ label: "Metrics + Stats", value: "withFiles" as ShareLevel }]
+      : []),
+    { label: "Metrics only", value: "metricsOnly" as ShareLevel },
+  ];
+
   async function fetchAuthStatus() {
     setAuthState("checking");
     try {
       const resp = await fetch("/api/auth-status");
-      if (!resp.ok) {
-        throw new Error("Failed to check authentication status");
-      }
+      if (!resp.ok) throw new Error("Failed to check authentication status");
       const data = await resp.json();
       setAuthState(data.authenticated ? "authenticated" : "unauthenticated");
     } catch {
@@ -60,7 +65,6 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
     setOpen(true);
     setErrorMsg("");
     setCopied(false);
-    // Keep published + shareUrl so reopening shows "Copy link" after a successful publish.
     if (state !== "published") {
       setState("idle");
       setShareUrl("");
@@ -95,18 +99,12 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
       });
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
-        if (resp.status === 401) {
-          setAuthState("unauthenticated");
-        }
+        if (resp.status === 401) setAuthState("unauthenticated");
         throw new Error(data.error || `Upload failed: ${resp.status}`);
       }
-
       const data = await resp.json();
       const url = data.url || data.shareUrl || "";
-      if (!url) {
-        throw new Error("Share URL was not returned");
-      }
-
+      if (!url) throw new Error("Share URL was not returned");
       setShareUrl(url);
       await copyShareLink(url);
       setState("published");
@@ -181,9 +179,10 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
                 </p>
                 <div className="mb-4">
                   <Select
+                    items={shareOptions}
                     value={level}
-                    onValueChange={(v: ShareLevel | null) => {
-                      if (!v || v === level) return;
+                    onValueChange={(v: ShareLevel) => {
+                      if (v === level) return;
                       setLevel(v);
                       if (state === "published") {
                         setState("idle");
@@ -192,14 +191,17 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
                       }
                     }}
                   >
-                    <SelectTrigger className="h-11! w-full rounded-lg border-border bg-background">
+                    <SelectTrigger className="h-11 w-full rounded-lg border-border bg-background">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(hasBoth || hasStats) && (
-                        <SelectItem value="withFiles">Metrics + Stats</SelectItem>
-                      )}
-                      <SelectItem value="metricsOnly">Metrics only</SelectItem>
+                      <SelectGroup>
+                        {shareOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </div>
