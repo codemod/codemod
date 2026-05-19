@@ -862,6 +862,20 @@ npx codemod search [OPTIONS] [QUERY]
   ```
 </Accordion>
 
+### `codemod mcp`
+
+Start the Codemod MCP (Model Context Protocol) server over stdio.
+
+This command is primarily used by MCP clients and harness integrations that launch Codemod as a local MCP server process.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for debugging.
+</ResponseField>
+
 ### `codemod cache`
 
 Manage the local package cache for Codemod packages.
