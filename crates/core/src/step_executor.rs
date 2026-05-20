@@ -28,6 +28,8 @@ pub(crate) struct StepExecutionRequest<'a> {
     pub step_name: &'a str,
     pub step_env: &'a Option<HashMap<String, String>>,
     pub step_id: &'a Option<String>,
+    pub report_step_name: Option<&'a str>,
+    pub report_step_id: Option<&'a String>,
     pub node: &'a Node,
     pub task: &'a Task,
     pub params: &'a HashMap<String, serde_json::Value>,
@@ -121,6 +123,8 @@ impl<'a> StepExecutor<'a> {
                             step_name: &template_step.name,
                             step_env: &template_step.env,
                             step_id: &template_step.id,
+                            report_step_name: request.report_step_name,
+                            report_step_id: request.report_step_id,
                             node: request.node,
                             task: request.task,
                             params: &combined_params,
@@ -168,6 +172,9 @@ impl<'a> StepExecutor<'a> {
                         .execute_js_ast_grep_step(
                             request.task.id.to_string(),
                             request.step_id.clone().unwrap_or_default(),
+                            request.step_name.to_string(),
+                            request.report_step_id.cloned(),
+                            request.report_step_name.map(str::to_string),
                             js_ast_grep,
                             Some(request.params.clone()),
                             request.task.matrix_values.clone(),
@@ -197,6 +204,8 @@ impl<'a> StepExecutor<'a> {
                     self.engine
                         .execute_codemod_step(
                             codemod,
+                            request.report_step_name.unwrap_or(request.step_name),
+                            request.report_step_id.or(request.step_id.as_ref()),
                             request.step_env,
                             request.node,
                             request.task,

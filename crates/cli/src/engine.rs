@@ -7,7 +7,7 @@ use butterflow_core::config::{
     AgentSelectionCallback, DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback,
     ShellCommandApprovalCallback, WorkflowRunConfig,
 };
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
@@ -36,6 +36,12 @@ pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> Dry
             &change.original_content,
             &change.new_content,
             &config,
+            DiffMetadata {
+                step_id: change.step_id,
+                step_name: change.step_name,
+                parent_step_id: change.parent_step_id,
+                parent_step_name: change.parent_step_name,
+            },
         );
         if let Ok(mut diffs) = collector.lock() {
             diffs.push(diff);
