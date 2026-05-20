@@ -114,7 +114,7 @@ impl ExecutionReport {
         dry_run: bool,
         target_path: String,
         cli_version: String,
-        _files_modified: usize,
+        files_modified: usize,
         files_unmodified: usize,
         files_with_errors: usize,
         metrics: HashMap<String, Vec<ReportMetricEntry>>,
@@ -136,7 +136,7 @@ impl ExecutionReport {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             stats: ReportStats {
-                files_modified: report_diffs.consolidated.len(),
+                files_modified,
                 files_unmodified,
                 files_with_errors,
                 total_additions,
@@ -258,8 +258,10 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Repo
             });
         }
 
-        let group_step_id = diff.parent_step_id.clone().or(diff.step_id.clone());
-        let group_step_name = diff.parent_step_name.clone().or(diff.step_name.clone());
+        let group_step_id = normalize_optional_step_value(diff.parent_step_id.clone())
+            .or_else(|| normalize_optional_step_value(diff.step_id.clone()));
+        let group_step_name = normalize_optional_step_value(diff.parent_step_name.clone())
+            .or_else(|| normalize_optional_step_value(diff.step_name.clone()));
 
         let step_key = group_step_id.clone().unwrap_or_else(|| {
             group_step_name
@@ -310,6 +312,19 @@ fn merge_diff_text(existing: Option<&str>, next: Option<&str>, step_label: Optio
     }
 }
 
+fn normalize_optional_step_value(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() == value.len() {
+            Some(value)
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 fn normalize_report_diff_path(diff_path: &Path, target_path: &Path) -> String {
     if let Ok(relative) = diff_path.strip_prefix(target_path) {
         return relative.display().to_string();
@@ -348,8 +363,12 @@ fn relativize_managed_worktree_path(diff_path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{convert_diffs, normalize_report_diff_path};
+    use super::{
+        convert_diffs, normalize_report_diff_path, ExecutionReport, ReportDiffGroup, ReportDiffs,
+        ReportFileDiff,
+    };
     use crate::diff::FileDiff;
+    use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
@@ -428,6 +447,40 @@ mod tests {
     }
 
     #[test]
+    fn convert_diffs_does_not_collapse_distinct_steps_with_empty_step_ids() {
+        let diffs = vec![
+            FileDiff {
+                path: "/tmp/repo/src/app.ts".to_string(),
+                diff_text: "@@ first".to_string(),
+                additions: 1,
+                deletions: 0,
+                step_id: Some(String::new()),
+                step_name: Some("First Step".to_string()),
+                parent_step_id: None,
+                parent_step_name: None,
+            },
+            FileDiff {
+                path: "/tmp/repo/src/app.ts".to_string(),
+                diff_text: "@@ second".to_string(),
+                additions: 2,
+                deletions: 1,
+                step_id: Some("".to_string()),
+                step_name: Some("Second Step".to_string()),
+                parent_step_id: None,
+                parent_step_name: None,
+            },
+        ];
+
+        let report_diffs = convert_diffs(&diffs, "/tmp/repo");
+
+        assert_eq!(report_diffs.by_step.len(), 2);
+        assert_eq!(report_diffs.by_step[0].step_name, "First Step");
+        assert_eq!(report_diffs.by_step[1].step_name, "Second Step");
+        assert_eq!(report_diffs.by_step[0].step_id, None);
+        assert_eq!(report_diffs.by_step[1].step_id, None);
+    }
+
+    #[test]
     fn convert_diffs_groups_nested_codemod_changes_by_parent_step() {
         let diffs = vec![
             FileDiff {
@@ -472,5 +525,42 @@ mod tests {
             normalize_report_diff_path(path, target),
             "/outside/project/generated.txt"
         );
+    }
+
+    #[test]
+    fn build_preserves_workflow_files_modified_count() {
+        let report = ExecutionReport::build(
+            "demo".to_string(),
+            None,
+            12.0,
+            true,
+            "/tmp/repo".to_string(),
+            "1.0.0".to_string(),
+            4,
+            2,
+            1,
+            HashMap::new(),
+            ReportDiffs {
+                consolidated: vec![ReportFileDiff {
+                    path: "src/app.ts".to_string(),
+                    diff_text: Some("@@".to_string()),
+                    additions: 3,
+                    deletions: 1,
+                    step_id: None,
+                    step_name: None,
+                }],
+                by_step: vec![ReportDiffGroup {
+                    step_id: None,
+                    step_name: "Step".to_string(),
+                    additions: 3,
+                    deletions: 1,
+                    diffs: vec![],
+                }],
+            },
+        );
+
+        assert_eq!(report.stats.files_modified, 4);
+        assert_eq!(report.stats.total_additions, 3);
+        assert_eq!(report.stats.total_deletions, 1);
     }
 }

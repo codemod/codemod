@@ -4715,6 +4715,9 @@ function helper() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -4809,6 +4812,9 @@ interface ApiResponse {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "ts-codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -4883,6 +4889,9 @@ function main() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -4942,6 +4951,9 @@ export default function (
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "broken-codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -5013,6 +5025,9 @@ export default function transform(ast) {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -5079,6 +5094,9 @@ export default function transform() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: Some("src".to_string()),
@@ -5160,6 +5178,9 @@ var count = 0;
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "dry-run-codemod.js".to_string(),
                 base_path: None, // Use current directory
@@ -5212,6 +5233,9 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "nonexistent-codemod.js".to_string(),
                 base_path: None,
@@ -5290,6 +5314,9 @@ export default function transform(root) {
         .execute_js_ast_grep_step(
             "matrix-meta-files".to_string(),
             "matrix-step".to_string(),
+            "matrix-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "codemod.js".to_string(),
                 base_path: None,
@@ -5682,6 +5709,9 @@ build/
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -5720,6 +5750,9 @@ build/
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "gitignore-codemod.js".to_string(),
                 base_path: None,
@@ -5788,6 +5821,9 @@ export default function transform(ast) {
         .execute_js_ast_grep_step(
             "test-node".to_string(),
             "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
             &UseJSAstGrep {
                 js_file: "hidden-codemod.js".to_string(),
                 base_path: None,

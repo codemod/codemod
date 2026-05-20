@@ -200,7 +200,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 1);
         assert_eq!(result.deletions, 1);
@@ -218,7 +219,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 1);
         assert_eq!(result.deletions, 0);
@@ -235,7 +237,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 0);
         assert_eq!(result.deletions, 1);
@@ -252,7 +255,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 0);
         assert_eq!(result.deletions, 0);
@@ -297,7 +301,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         // Check that ANSI color codes are present
         assert!(result.diff_text.contains("\x1b[31m")); // Red for deletions
@@ -319,8 +324,13 @@ mod tests {
             ..Default::default()
         };
 
-        let result =
-            generate_unified_diff(&path, &original, &modified, &config, DiffMetadata::default());
+        let result = generate_unified_diff(
+            &path,
+            &original,
+            &modified,
+            &config,
+            DiffMetadata::default(),
+        );
 
         assert!(result.diff_text.contains("(diff truncated)"));
     }
