@@ -174,6 +174,7 @@ export default codemod;
 
 - **Deny-by-default security** — No file system, child processes, or network access unless you grant [capabilities](/jssg/security)—unlike typical Node transform runners where full `fs` and `require` are the default.
 - **Metrics for mining, not only edits** — Use [`codemod:metrics`](/jssg/metrics) to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
+- **Structured runtime logs and progress** — `console.log`, `console.warn`, and the [`codemod:runtime`](/jssg/reference#runtime-hooks) hooks surface buffered progress and warning events to task logs and diagnostics, including when emitted from handler code during execution.
 - **Import and edit utilities** — [`@jssg/utils`](/jssg/utils) and similar helpers cover tedious import and AST chores without custom Babel plugins.
 - **Multi-file and file-path changes** — Use [`jssgTransform`](/jssg/reference#multi-file-transforms-with-jssgtransform) to drive coordinated edits across files, and [`root.rename()`](/jssg/reference#file-renaming) for moves and extension changes—not only in-place source edits.
 
