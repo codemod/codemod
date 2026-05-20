@@ -48,6 +48,22 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
   **Ready to build?** Follow the [Quickstart](/oss-quickstart) for a complete walkthrough of building, testing, and publishing a codemod using MCP.
 </Tip>
 
+## Run the MCP server directly
+
+Most users should use `npx codemod ai`, which installs and configures Codemod MCP for a supported harness. If you need to launch the MCP server yourself, run:
+
+```bash
+npx codemod mcp
+```
+
+To capture MCP usage events while debugging an integration, pass `--usage-log` with a file path:
+
+```bash
+npx codemod mcp --usage-log ./codemod-mcp-usage.log
+```
+
+This writes MCP usage events to the provided file while the server is running over stdio.
+
 ## Available tools
 
 The Codemod MCP server provides these operational tools for AI assistants:
