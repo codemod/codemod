@@ -14,6 +14,14 @@ impl NodeTypesHandler {
         Self
     }
 
+    pub fn get_node_types_text(&self, language: &str) -> Result<String, String> {
+        let node_types = self
+            .get_node_types_for_language(language)
+            .ok_or_else(|| format!("Unsupported language '{language}'"))?;
+
+        Ok(format_node_types_response(node_types))
+    }
+
     #[tool(
         description = "Get tree-sitter node types for a specific programming language in AI-friendly format. You should use this tool to get the node types for the language you are working in. You do not know the node types for the language you are working in, so you should use this tool to get them."
     )]
@@ -21,34 +29,9 @@ impl NodeTypesHandler {
         &self,
         Parameters(request): Parameters<GetNodeTypesRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let node_types = match self.get_node_types_for_language(&request.language) {
-            Some(types) => types,
-            None => {
-                return Err(McpError::invalid_params(
-                    format!("Unsupported language '{}'", request.language),
-                    None,
-                ));
-            }
-        };
-
-        let result = format!(
-            r#"<TREE_SITTER_NODE_TYPES>
-{node_types}
-</TREE_SITTER_NODE_TYPES>
-
-<LEGEND>
-Legends for field notation:
-- \`?\` - optional field (may not be present in all instances)
-- \`*\` - multiple values allowed (array/list of values)
-
-In tree-sitter grammar:
-- Fields are named children with specific roles in the syntax tree
-- Format: \`fieldName=nodeType\` (e.g., "body=block")
-- When a field is not named, it's represented as \`children=nodeType\`
-- Multiple possible types are comma-separated (e.g., "value=string,number")
-</LEGEND>
-"#
-        );
+        let result = self
+            .get_node_types_text(&request.language)
+            .map_err(|error| McpError::invalid_params(error, None))?;
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -81,6 +64,26 @@ In tree-sitter grammar:
     }
 }
 
+fn format_node_types_response(node_types: &str) -> String {
+    format!(
+        "<TREE_SITTER_NODE_TYPES>\n\
+{node_types}\n\
+</TREE_SITTER_NODE_TYPES>\n\
+\n\
+<LEGEND>\n\
+Legends for field notation:\n\
+- `?` - optional field (may not be present in all instances)\n\
+- `*` - multiple values allowed (array/list of values)\n\
+\n\
+In tree-sitter grammar:\n\
+- Fields are named children with specific roles in the syntax tree\n\
+- Format: `fieldName=nodeType` (e.g., \"body=block\")\n\
+- When a field is not named, it's represented as `children=nodeType`\n\
+- Multiple possible types are comma-separated (e.g., \"value=string,number\")\n\
+</LEGEND>\n"
+    )
+}
+
 impl Default for NodeTypesHandler {
     fn default() -> Self {
         Self::new()
@@ -89,7 +92,7 @@ impl Default for NodeTypesHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::NodeTypesHandler;
+    use super::{format_node_types_response, NodeTypesHandler};
 
     #[test]
     fn xml_language_dispatch_returns_node_types() {
@@ -106,5 +109,12 @@ mod tests {
         assert!(handler
             .get_node_types_for_language("not-a-language")
             .is_none());
+    }
+
+    #[test]
+    fn formatted_node_types_tags_are_flush_left() {
+        let response = format_node_types_response("program:");
+        assert!(response.starts_with("<TREE_SITTER_NODE_TYPES>\nprogram:"));
+        assert!(response.contains("\n</TREE_SITTER_NODE_TYPES>\n\n<LEGEND>"));
     }
 }

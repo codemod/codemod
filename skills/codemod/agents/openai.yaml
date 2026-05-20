@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codemod"
+  short_description: "Search, run, and author codemods"
+  default_prompt: "Use $codemod to search for an existing codemod, run it safely, or author a new one with Codemod CLI AI tools."

@@ -18,6 +18,15 @@ impl AstDumpHandler {
         Self
     }
 
+    pub fn dump_ast_text(&self, source_code: &str, language: &str) -> Result<String, String> {
+        let language = language
+            .parse()
+            .map_err(|error| format!("Unsupported language '{language}': {error}"))?;
+
+        self.dump_ast_for_language(source_code, language)
+            .map_err(|error| format!("Failed to parse AST: {error}"))
+    }
+
     #[tool(
         description = "Dump AST nodes in an AI-friendly format for the given source code and language"
     )]
@@ -25,22 +34,9 @@ impl AstDumpHandler {
         &self,
         Parameters(request): Parameters<DumpAstRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let language = match request.language.parse() {
-            Ok(lang) => lang,
-            Err(e) => {
-                return Err(McpError::invalid_params(
-                    format!("Unsupported language '{}': {}", request.language, e),
-                    None,
-                ));
-            }
-        };
-
-        match self.dump_ast_for_language(&request.source_code, language) {
+        match self.dump_ast_text(&request.source_code, &request.language) {
             Ok(ast_dump) => Ok(CallToolResult::success(vec![Content::text(ast_dump)])),
-            Err(e) => Err(McpError::internal_error(
-                format!("Failed to parse AST: {e}"),
-                None,
-            )),
+            Err(e) => Err(McpError::invalid_params(e, None)),
         }
     }
 

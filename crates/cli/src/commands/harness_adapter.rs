@@ -18,12 +18,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.0.0";
+const MCS_SKILL_VERSION: &str = "1.1.0";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.0.0";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.1.0";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -1632,7 +1632,7 @@ fn render_skill_discovery_block(
     command_available: bool,
 ) -> String {
     let mcp_line = if harness_supports_mcp(harness) {
-        "- Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work.\n".to_string()
+        "- Codemod MCP: optional direct tool/resource integration for the same Codemod AI capabilities exposed by `npx codemod ai ...`.\n".to_string()
     } else {
         String::new()
     };
@@ -1649,6 +1649,7 @@ This section is managed by `codemod` CLI.
 - Core skill: `{skill_root_hint}/{MCS_SKILL_DIR_NAME}/SKILL.md`
 - Package skills: `{skill_root_hint}/<package-skill>/SKILL.md`
 - Marker note: the core Codemod skill uses `codemod-compatibility: mcs-v1`; authored package skills for workflow `install-skill` use `codemod-compatibility: skill-package-v1`.
+- Codemod AI CLI tools: `npx codemod ai docs`, `npx codemod ai dump-ast`, `npx codemod ai node-types`, `npx codemod ai tools`, `npx codemod ai resources`
 {mcp_line}{command_line}- List installed Codemod skills: `npx codemod ai list --harness {} --format json`
 
 {SKILL_DISCOVERY_SECTION_END}",
@@ -4399,8 +4400,9 @@ codemod-skill-version: 0.1.0
         assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_BEGIN));
         assert!(agents_content.contains(SKILL_DISCOVERY_SECTION_END));
         assert!(agents_content.contains("Core skill: `.opencode/skills/codemod/SKILL.md`"));
+        assert!(agents_content.contains("Codemod AI CLI tools: `npx codemod ai docs`"));
         assert!(agents_content.contains(
-            "Codemod MCP: use it for JSSG authoring guidance, CLI/workflow guidance, import-helper guidance, and semantic-analysis-aware codemod work."
+            "Codemod MCP: optional direct tool/resource integration for the same Codemod AI capabilities"
         ));
         assert!(agents_content.contains("/codemod"));
     }
@@ -5168,7 +5170,7 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn skill_md_routes_to_mcp_resources_and_validation_tool() {
+    fn skill_md_routes_to_cli_ai_tools_mcp_resources_and_validation_tool() {
         assert!(MCS_SKILL_MD.contains("codemod-creation-workflow-instructions"));
         assert!(MCS_SKILL_MD.contains("codemod-maintainer-monorepo-instructions"));
         assert!(MCS_SKILL_MD.contains("codemod-troubleshooting-instructions"));
@@ -5178,9 +5180,14 @@ codemod-skill-version: 0.1.0
         assert!(MCS_SKILL_MD.contains("jssg-gotchas"));
         assert!(MCS_SKILL_MD.contains("ast-grep-gotchas"));
         assert!(MCS_SKILL_MD.contains("validate_codemod_package"));
+        assert!(MCS_SKILL_MD.contains("npx codemod ai dump-ast"));
+        assert!(MCS_SKILL_MD.contains("npx codemod ai node-types"));
+        assert!(MCS_SKILL_MD.contains("npx codemod ai docs"));
+        assert!(MCS_SKILL_MD.contains("npx codemod ai call validate_codemod_package"));
         assert!(MCS_SKILL_MD.contains("codemod init <path> --no-interactive"));
         assert!(MCS_SKILL_MD.contains("do not invent `--author`"));
         assert!(MCS_SKILL_MD.contains("publish-time auth fallback"));
+        assert!(MCS_SKILL_MD.contains("do not stop authoring only because MCP is missing"));
         assert!(!MCS_SKILL_MD.contains("scaffold_codemod_package"));
     }
 
@@ -5193,6 +5200,9 @@ codemod-skill-version: 0.1.0
         assert!(MCS_COMMAND_MD.contains("do not invent author"));
         assert!(MCS_COMMAND_MD.contains("authenticated user"));
         assert!(MCS_COMMAND_MD.contains("validate_codemod_package"));
+        assert!(MCS_COMMAND_MD.contains("npx codemod ai dump-ast"));
+        assert!(MCS_COMMAND_MD.contains("npx codemod ai node-types"));
+        assert!(MCS_COMMAND_MD.contains("npx codemod ai call"));
     }
 
     #[test]

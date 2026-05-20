@@ -414,3 +414,7 @@ description: "Concise description explaining page purpose and value"
 - Use **RequestExample/ResponseExample** specifically for API endpoint documentation
 - Use **ParamField** for API parameters, **ResponseField** for API responses
 - Use **Expandable** for nested object properties or hierarchical information
+
+## Codemod MCP sync
+
+Docs are leveraged by Codemod MCP in `crates/mcp/build.rs` and must be kept in sync with MCP. If you change the path, name, or content of a doc that MCP references, update the corresponding MCP resource or tool and its references in the same PR.

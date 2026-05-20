@@ -20,6 +20,7 @@ use std::fmt;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+mod cli_tools;
 mod update;
 
 use update::auto_safe::maybe_apply_auto_safe_updates;
@@ -47,6 +48,22 @@ pub struct Command {
 
 #[derive(Subcommand, Debug)]
 enum AiAction {
+    /// Dump AST nodes for source code from stdin or a file
+    DumpAst(cli_tools::DumpAstCommand),
+    /// Print tree-sitter node types for a language
+    NodeTypes(cli_tools::NodeTypesCommand),
+    /// List, read, or search Codemod AI documentation resources
+    Docs(cli_tools::DocsCommand),
+    /// List MCP-equivalent tools exposed by the CLI
+    Tools(cli_tools::ToolsCommand),
+    /// Show metadata for one MCP-equivalent tool
+    Tool(cli_tools::ToolCommand),
+    /// Call an MCP-equivalent tool with JSON input
+    Call(cli_tools::CallCommand),
+    /// List MCP-equivalent resources exposed by the CLI
+    Resources(cli_tools::ResourcesCommand),
+    /// Read one MCP-equivalent resource by URI or name
+    Resource(cli_tools::ResourceCommand),
     /// Reconcile/apply managed updates; falls back to install when not installed yet
     Update(UpdateCommand),
     /// List installed codemod skills for a harness
@@ -176,6 +193,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             )
             .await
         }
+        Some(AiAction::DumpAst(command)) => cli_tools::handle_dump_ast(command).await,
+        Some(AiAction::NodeTypes(command)) => cli_tools::handle_node_types(command).await,
+        Some(AiAction::Docs(command)) => cli_tools::handle_docs(command).await,
+        Some(AiAction::Tools(command)) => cli_tools::handle_tools(command),
+        Some(AiAction::Tool(command)) => cli_tools::handle_tool(command),
+        Some(AiAction::Call(command)) => cli_tools::handle_call(command).await,
+        Some(AiAction::Resources(command)) => cli_tools::handle_resources(command),
+        Some(AiAction::Resource(command)) => cli_tools::handle_resource(command).await,
         Some(AiAction::List(command)) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
