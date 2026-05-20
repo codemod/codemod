@@ -22,7 +22,7 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    map_execution_result, ExecutionRequest, TestOptions, TestRunner, TestSource,
+    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
     TransformationResult,
 };
 
@@ -217,7 +217,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
         max_threads: global_config.max_threads,
         fail_fast: global_config.fail_fast,
         watch: global_config.watch,
-        reporter: global_config.reporter,
+        reporter: global_config.reporter.clone(),
         timeout: std::time::Duration::from_secs(global_config.timeout),
         ignore_whitespace: global_config.ignore_whitespace,
         context_lines: global_config.context_lines,
@@ -225,6 +225,11 @@ async fn handler_impl(args: &Command) -> Result<()> {
         strictness,
         language: global_config.language.clone(),
         expected_extension: global_config.expected_extension.clone(),
+    };
+    let runtime_event_output = if matches!(global_config.reporter, ReporterType::Json) {
+        super::RuntimeEventOutput::stderr()
+    } else {
+        super::RuntimeEventOutput::stdout()
     };
 
     let script_base_dir = codemod_path
@@ -267,6 +272,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
             let shared_metrics = shared_metrics.clone();
+            let runtime_event_output = runtime_event_output.clone();
 
             Box::pin(async move {
                 let logical_input_path = logical_input_path.unwrap_or_else(|| input_path.clone());
@@ -338,6 +344,10 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 } else {
                     semantic_provider
                 };
+                let runtime_event_buffer = super::RuntimeEventBuffer::new();
+                let runtime_event_callback = runtime_event_buffer.callback_for_title(
+                    super::display_path_title(&logical_input_path, Some(&current_dir)),
+                );
 
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
@@ -352,7 +362,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
                     shared_state_context: None,
-                    runtime_event_callback: None,
+                    runtime_event_callback: Some(runtime_event_callback),
                     cancellation_flag: None,
                     test_mode: true,
                     dry_run: false,
@@ -363,12 +373,16 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     .map(|CodemodOutput { primary, .. }| map_execution_result(primary, input_code))
                     .map_err(anyhow::Error::from);
 
-                if let Some(snapshot) = finish_metrics_collection(
+                let pending_snapshot = finish_metrics_collection(
                     shared_metrics.as_ref(),
                     &metrics_output_path,
                     Some(test_case_dir.join("metrics.json")),
                     execution_result.is_err(),
-                )? {
+                );
+
+                runtime_event_output.flush(&runtime_event_buffer);
+
+                if let Some(snapshot) = pending_snapshot? {
                     if workspace_root.is_some() {
                         write_metrics_output(&snapshot)?;
                     }
