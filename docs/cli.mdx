@@ -151,6 +151,111 @@ If managed install state is missing, `ai update` automatically falls back to an 
 
 `ai` performs internal skill validation checks during install flow.
 
+**`ai list`**
+
+List installed Codemod skills for a harness.
+
+```bash
+npx codemod ai list [--harness <claude|goose|opencode|cursor|codex|auto>] [--format <logs|table|json|yaml>]
+```
+
+Use this command to inspect which Codemod-managed skills are already installed for a given harness before running `codemod ai` again or troubleshooting harness setup.
+
+**`ai dump-ast`**
+
+Dump AST nodes for a source file or stdin using the same parser surface exposed through Codemod MCP.
+
+```bash
+npx codemod ai dump-ast [FILE] [--language <language>] [--json]
+```
+
+- Omit `FILE` or pass `-` to read from stdin.
+- If you do not pass `--language`, the CLI infers it from the file extension when possible and otherwise defaults to `tsx` for stdin.
+
+```bash
+# Parse a file and print AST text
+npx codemod ai dump-ast ./src/component.tsx
+
+# Parse stdin as TypeScript and emit JSON
+cat ./src/index.ts | npx codemod ai dump-ast - --language typescript --json
+```
+
+**`ai node-types`**
+
+Print tree-sitter node types for a supported language.
+
+```bash
+npx codemod ai node-types <language> [--json]
+```
+
+```bash
+npx codemod ai node-types tsx
+npx codemod ai node-types python --json
+```
+
+**`ai docs`**
+
+List, read, or search Codemod AI documentation resources from the CLI.
+
+```bash
+npx codemod ai docs [query...] [--json]
+```
+
+- Run without a query to list available docs-backed resources.
+- Pass a resource name or URI to read it.
+- Pass a search phrase to search across available resources.
+
+```bash
+# List available docs resources
+npx codemod ai docs
+
+# Read one resource by name
+npx codemod ai docs codemod-cli-instructions
+
+# Search across docs-backed resources
+npx codemod ai docs semantic analysis
+```
+
+**`ai tools` and `ai tool`**
+
+Inspect MCP-equivalent tools exposed by the CLI.
+
+```bash
+npx codemod ai tools [--json]
+npx codemod ai tool <name> [--json]
+```
+
+- `ai tools` lists available tool names and descriptions.
+- `ai tool <name>` prints metadata and the JSON input schema for a single tool.
+
+**`ai call`**
+
+Call an MCP-equivalent tool directly from the CLI with JSON input.
+
+```bash
+npx codemod ai call <name> [--input <JSON|@path|- >]
+```
+
+- Omit `--input` to pass an empty object (`{}`).
+- Use `--input @request.json` to load input from a file.
+- Use `--input -` to read JSON input from stdin.
+
+```bash
+npx codemod ai call dump_ast --input '{"language":"tsx","source":"const x = 1;"}'
+```
+
+**`ai resources` and `ai resource`**
+
+Inspect and read MCP-equivalent resources exposed by the CLI.
+
+```bash
+npx codemod ai resources [--json]
+npx codemod ai resource <uri-or-name> [--json]
+```
+
+- `ai resources` lists the available resource names and URIs.
+- `ai resource` reads one resource by URI or resource name.
+
 ### Package skill install (prompted from package run)
 
 Install a package skill from registry metadata into harness skill paths.
