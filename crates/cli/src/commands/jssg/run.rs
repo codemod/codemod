@@ -5,7 +5,7 @@ use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -339,6 +339,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     &original,
                                     &modified.content,
                                     &diff_config,
+                                    DiffMetadata::default(),
                                 );
                                 diff.print();
 
@@ -353,6 +354,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                         &original,
                                         &modified.content,
                                         &plain_config,
+                                        DiffMetadata {
+                                            step_id: Some("jssg".to_string()),
+                                            step_name: Some("JSSG".to_string()),
+                                            ..DiffMetadata::default()
+                                        },
                                     );
                                     if let Ok(mut diffs) = collector.lock() {
                                         diffs.push(plain_diff);

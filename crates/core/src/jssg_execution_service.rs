@@ -54,6 +54,9 @@ use crate::{
 pub(crate) struct JssgExecutionRequest<'a> {
     pub id: String,
     pub step_id: String,
+    pub step_name: String,
+    pub report_step_id: Option<String>,
+    pub report_step_name: Option<String>,
     pub js_ast_grep: &'a UseJSAstGrep,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub matrix_input: Option<HashMap<String, serde_json::Value>>,
@@ -536,7 +539,10 @@ impl<'a> JssgExecutionService<'a> {
         let succeeded_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let failed_file_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine = self.engine;
-        let step_id = request.step_id;
+        let step_id = request.step_id.clone();
+        let step_name = request.step_name.clone();
+        let report_step_id = request.report_step_id.clone();
+        let report_step_name = request.report_step_name.clone();
         let params = request.params;
         let matrix_input = request.matrix_input;
         let workflow_run_id = request.workflow_run_id;
@@ -808,6 +814,10 @@ impl<'a> JssgExecutionService<'a> {
                                                     file_path: change_path.to_path_buf(),
                                                     original_content: original,
                                                     new_content: modified.content.clone(),
+                                                    step_id: Some(step_id.clone()),
+                                                    step_name: Some(step_name.clone()),
+                                                    parent_step_id: report_step_id.clone(),
+                                                    parent_step_name: report_step_name.clone(),
                                                 });
                                             }
 
@@ -833,6 +843,10 @@ impl<'a> JssgExecutionService<'a> {
                                                     file_path: change_path.to_path_buf(),
                                                     original_content: original,
                                                     new_content: modified.content.clone(),
+                                                    step_id: Some(step_id.clone()),
+                                                    step_name: Some(step_name.clone()),
+                                                    parent_step_id: report_step_id.clone(),
+                                                    parent_step_name: report_step_name.clone(),
                                                 });
                                             }
 

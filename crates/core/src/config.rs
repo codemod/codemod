@@ -35,6 +35,14 @@ pub struct DryRunChange {
     pub original_content: String,
     /// New content that would be written
     pub new_content: String,
+    /// Step identifier that produced the change
+    pub step_id: Option<String>,
+    /// Human-readable step name that produced the change
+    pub step_name: Option<String>,
+    /// Parent step identifier used for report grouping
+    pub parent_step_id: Option<String>,
+    /// Parent step name used for report grouping
+    pub parent_step_name: Option<String>,
 }
 
 /// Callback type for reporting dry-run changes

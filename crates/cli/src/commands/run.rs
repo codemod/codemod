@@ -7,7 +7,7 @@ use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, FileDiff};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use butterflow_core::registry::RegistryError;
 use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
@@ -760,6 +760,7 @@ async fn run_legacy_codemod_with_diff(args: &Command, disable_analytics: bool) -
                             &change.old_data,
                             &change.new_data,
                             &diff_config,
+                            DiffMetadata::default(),
                         );
                         diff.print();
                         total_additions += diff.additions;
