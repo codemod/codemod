@@ -112,6 +112,19 @@ If a conflicting Codemod MCP entry already exists, re-run with `--force` to over
 The installed `/codemod` command routes by intent:
 - create, scaffold, or refine codemods -> codemod authoring flow
 - search, run, or apply existing codemods -> registry discovery and execution flow
+
+The generated Codemod skill package includes these authored files:
+- `SKILL.md`: the main skill instructions and Codemod-specific authoring and execution defaults
+- `agents/openai.yaml`: the Codemod agent interface definition used by compatible harnesses
+- `commands/codemod.md`: the `/codemod` command routing rules for harnesses with a native command surface
+
+The installed skill also points users to CLI fallbacks when MCP is unavailable or blocked. The main user-reproducible commands are:
+- `npx codemod ai docs`: list docs resources exposed through the CLI
+- `npx codemod ai docs <resource-id>`: read a specific docs resource such as `codemod-cli`, `codemod-creation-workflow`, or `codemod-troubleshooting`
+- `npx codemod ai dump-ast <file>` or `npx codemod ai dump-ast --`: inspect AST shape for a file or stdin
+- `npx codemod ai node-types <language>`: inspect tree-sitter node kinds for a language
+- `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`: validate whether a codemod package still contains starter scaffold markers or other package-surface issues
+
 `ai` also wires a periodic, cooldown-protected update check trigger:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
