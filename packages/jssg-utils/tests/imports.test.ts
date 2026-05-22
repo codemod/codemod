@@ -1181,6 +1181,81 @@ function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
   );
 }
 
+function testRemoveDefaultImportDynamic() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(({default: test}) => {\n mod();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: false,
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === `console.log('test');\n`, "Should remove the import statement");
+}
+
+function testRemoveSideEffectImportDynamic() {
+  const program = parseProgram("javascript", "import('mod');\nconsole.log('foo');");
+
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+  });
+  assert(edit === null, "Should not return an edit");
+
+  const editSideEffect = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+
+  assert(editSideEffect !== null, "Should return an edit");
+
+  const result = program.commitEdits([editSideEffect!]);
+
+  assert(result === `console.log('foo');`, "Should remove the import statement");
+}
+
+function testRemoveNamespaceImportDynamic() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then((mod) => {\n mod();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "namespace",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === `console.log('test');\n`, "Should remove the import statement");
+}
+
+function testRemoveNamedImportDynamicSpecific() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(({foo, bar}) => {\n bar();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: ["foo"],
+  });
+
+  assert(edit !== null, "Should return an edit");
+
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === `import('mod').then(({bar}) => {\n bar();\n});\nconsole.log('test');\n`,
+    "Should remove the import statement",
+  );
+}
+
 /** Only the module source string counts — not other string literals (e.g. import attributes). */
 function testRemoveSideEffectImportOnlyMatchesSourceField() {
   const src = "import 'foo' assert { type: 'mod' };\nconsole.log(1);\n";
@@ -1287,6 +1362,10 @@ function run() {
   testRemoveNamed_SubsetOfMixed_KeepsBoth();
   testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches();
   testRemoveNamespace_MixedWithDefault_KeepsDefault();
+  testRemoveDefaultImportDynamic();
+  testRemoveNamespaceImportDynamic();
+  testRemoveSideEffectImportDynamic();
+  testRemoveNamedImportDynamicSpecific();
 
   console.log("imports.test.ts: all assertions passed");
 }

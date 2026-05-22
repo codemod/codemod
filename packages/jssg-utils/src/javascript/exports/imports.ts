@@ -540,26 +540,12 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
         kind: "variable_declarator",
         has: {
           field: "value",
-          any: [
-            {
-              kind: "call_expression",
-              has: {
-                field: "function",
-                kind: "identifier",
-                regex: "^require$",
-              },
-            },
-            {
-              kind: "await_expression",
-              has: {
-                kind: "call_expression",
-                has: {
-                  field: "function",
-                  regex: "^import$",
-                },
-              },
-            },
-          ],
+          kind: "call_expression",
+          has: {
+            field: "function",
+            kind: "identifier",
+            regex: "^require$",
+          },
         },
       },
       not: {
@@ -571,7 +557,50 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
     },
   });
 
-  return [...esmImports, ...cjsImports, ...cjsVarImports] as unknown as SgNode<T>[];
+  // `var foo = await import(...)`
+  // `import(...)`
+  // `import(...).then((...) => void)`
+  const dynamicImports = tsProgram.findAll({
+    rule: {
+      any: [
+        {
+          kind: "variable_declaration",
+          has: {
+            kind: "variable_declarator",
+            has: {
+              field: "value",
+              kind: "await_expression",
+              has: {
+                kind: "call_expression",
+                has: {
+                  field: "function",
+                  regex: "^import$",
+                },
+              },
+            },
+          },
+        },
+        {
+          kind: "expression_statement",
+          has: {
+            kind: "call_expression",
+            has: {
+              stopBy: "end",
+              field: "function",
+              regex: "^import$",
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  return [
+    ...esmImports,
+    ...cjsImports,
+    ...cjsVarImports,
+    ...dynamicImports,
+  ] as unknown as SgNode<T>[];
 }
 
 /**
@@ -818,6 +847,21 @@ function findImportStatementForSpecifier<T extends Language>(
         specifier: cjsSpecifier as unknown as SgNode<T>,
       };
     }
+  }
+
+  const dynamicImportSpecifier = getImport(tsProgram, {
+    type: "named",
+    from: source,
+    name: specifierName,
+  });
+
+  if (dynamicImportSpecifier?.node) {
+    return {
+      statement: dynamicImportSpecifier.node
+        .ancestors()
+        .find((a) => a.is("expression_statement")) as unknown as SgNode<T>,
+      specifier: dynamicImportSpecifier.node as unknown as SgNode<T>,
+    };
   }
 
   return null;
@@ -1250,7 +1294,7 @@ function requireCallFirstArgIsLiteralSpecifier(
 /**
  * `require('pkg');` as a standalone expression statement (e.g. polyfill registration).
  */
-function removeBareRequireSideEffectEdit(
+function removeBareRequireImportSideEffectEdit(
   program: SgNode<TS, "program">,
   packageName: string,
 ): Edit | null {
@@ -1263,7 +1307,7 @@ function removeBareRequireSideEffectEdit(
       continue;
     }
     const fn = expr.field("function");
-    if (fn?.text() !== "require") {
+    if (fn?.text() !== "require" && fn?.text() !== "import") {
       continue;
     }
     if (!requireCallFirstArgIsLiteralSpecifier(expr as SgNode<TS>, packageName)) {
@@ -1396,7 +1440,7 @@ export function removeImport<T extends Language>(
     if (stripSideEffects) {
       const tsProgram = program as unknown as SgNode<TS, "program">;
       return (
-        removeBareRequireSideEffectEdit(tsProgram, options.from) ??
+        removeBareRequireImportSideEffectEdit(tsProgram, options.from) ??
         removeSideEffectImportStatementEdit(tsProgram, options.from)
       );
     }
@@ -1409,7 +1453,7 @@ export function removeImport<T extends Language>(
     // would miss mixed statements like `import foo, * as ns from 'mod'`,
     // where the default match wins over the namespace fallback.
     const tsProgram = program as unknown as SgNode<TS, "program">;
-    const namespaceImport = tsProgram.find({
+    const namespaceEsmImport = tsProgram.find({
       rule: {
         kind: "namespace_import",
         inside: {
@@ -1425,26 +1469,69 @@ export function removeImport<T extends Language>(
         },
       },
     });
-    if (!namespaceImport) return null;
 
-    const statement =
-      (namespaceImport.ancestors().find((a) => a.kind() === "import_statement") as
-        | SgNode<TS>
-        | undefined) ?? null;
-    if (!statement) return null;
+    // console.log({ namespaceEsmImport: namespaceEsmImport.text() });
+    if (namespaceEsmImport) {
+      const statement =
+        (namespaceEsmImport.ancestors().find((a) => a.kind() === "import_statement") as
+          | SgNode<TS>
+          | undefined) ?? null;
+      if (!statement) return null;
 
-    const parts = analyzeImportClause(statement);
-    if (parts.defaultIdent && parts.namespaceImport) {
-      // Mixed: strip ', * as ns' keeping the default binding.
-      return {
-        startPos: parts.defaultIdent.range().end.index,
-        endPos: parts.namespaceImport.range().end.index,
-        insertedText: "",
-      };
+      const parts = analyzeImportClause(statement);
+      if (parts.defaultIdent && parts.namespaceImport) {
+        // Mixed: strip ', * as ns' keeping the default binding.
+        return {
+          startPos: parts.defaultIdent.range().end.index,
+          endPos: parts.namespaceImport.range().end.index,
+          insertedText: "",
+        };
+      }
+
+      const { start, end } = getStatementRangeWithNewline(
+        statement as unknown as SgNode<Language>,
+        programText,
+      );
+      return { startPos: start, endPos: end, insertedText: "" };
     }
 
+    const namespaceDynamicImport = tsProgram.find({
+      rule: {
+        kind: "identifier",
+        inside: {
+          stopBy: "end",
+          kind: "arrow_function",
+          inside: {
+            stopBy: "end",
+            kind: "call_expression",
+            has: {
+              field: "function",
+              kind: "member_expression",
+              has: {
+                field: "property",
+                kind: "property_identifier",
+                regex: "^then$",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!namespaceDynamicImport) return null;
+    const expressStmtDynamicImport = tsProgram.find({
+      rule: {
+        inside: {
+          stopBy: "end",
+          kind: "expression_statement",
+        },
+      },
+    });
+
+    if (!expressStmtDynamicImport) return null;
+
     const { start, end } = getStatementRangeWithNewline(
-      statement as unknown as SgNode<Language>,
+      expressStmtDynamicImport as unknown as SgNode<Language>,
       programText,
     );
     return { startPos: start, endPos: end, insertedText: "" };
