@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use butterflow_core::registry::RegistryConfig;
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
@@ -192,22 +192,21 @@ fn write_auth_file(path: &std::path::Path, content: &[u8]) -> Result<()> {
 
     let restricted_permissions = fs::Permissions::from_mode(0o600);
 
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if !metadata.file_type().is_file() {
-            bail!("Auth path exists but is not a regular file: {path:?}");
-        }
-        fs::set_permissions(path, restricted_permissions.clone())?;
-    }
-
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
+
+    if !file.metadata()?.file_type().is_file() {
+        anyhow::bail!("Auth path exists but is not a regular file: {path:?}");
+    }
+
+    file.set_len(0)?;
     file.write_all(content)?;
     file.flush()?;
-    fs::set_permissions(path, restricted_permissions)?;
+    file.set_permissions(restricted_permissions)?;
 
     Ok(())
 }
@@ -315,5 +314,29 @@ mod tests {
         assert!(result.is_err());
         let mode = fs::metadata(auth_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_auth_rejects_symlink_auth_path_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("codemod")).unwrap();
+        let auth = stored_auth("https://app.codemod.com");
+        let auth_path = storage.get_auth_path("https://app.codemod.com");
+        fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
+        let symlink_target = temp_dir.path().join("target.json");
+        fs::write(&symlink_target, "do not change").unwrap();
+        symlink(&symlink_target, &auth_path).unwrap();
+
+        let result = storage.save_auth(&auth);
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(symlink_target).unwrap(), "do not change");
+        assert!(fs::symlink_metadata(auth_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

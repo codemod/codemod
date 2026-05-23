@@ -80,6 +80,9 @@ futures = { workspace = true }
 toml_edit = "0.22"
 arboard = "3.4"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 portable-pty = "0.9"
 
