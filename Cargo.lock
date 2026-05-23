@@ -1084,6 +1084,7 @@ dependencies = [
  "indicatif",
  "inquire",
  "language-core",
+ "libc",
  "libtest-mimic",
  "log",
  "miette",
