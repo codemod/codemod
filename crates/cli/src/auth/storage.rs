@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use butterflow_core::registry::RegistryConfig;
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,7 @@ impl TokenStorage {
         let content =
             serde_json::to_string_pretty(auth).context("Failed to serialize auth data")?;
 
-        fs::write(&auth_path, content)
+        write_auth_file(&auth_path, content.as_bytes())
             .with_context(|| format!("Failed to write auth file: {auth_path:?}"))?;
 
         Ok(())
@@ -181,5 +181,139 @@ impl TokenStorage {
             .replace("://", "_")
             .replace("/", "_")
             .replace(":", "_")
+    }
+}
+
+#[cfg(unix)]
+fn write_auth_file(path: &std::path::Path, content: &[u8]) -> Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let restricted_permissions = fs::Permissions::from_mode(0o600);
+
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if !metadata.file_type().is_file() {
+            bail!("Auth path exists but is not a regular file: {path:?}");
+        }
+        fs::set_permissions(path, restricted_permissions.clone())?;
+    }
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(content)?;
+    file.flush()?;
+    fs::set_permissions(path, restricted_permissions)?;
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_auth_file(path: &std::path::Path, content: &[u8]) -> Result<()> {
+    fs::write(path, content)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::types::{AuthTokens, UserInfo};
+
+    fn stored_auth(registry: &str) -> StoredAuth {
+        StoredAuth {
+            tokens: AuthTokens {
+                access_token: "access-token".to_string(),
+                refresh_token: Some("refresh-token".to_string()),
+                expires_at: None,
+                scope: vec!["read".to_string()],
+                token_type: "Bearer".to_string(),
+            },
+            user: UserInfo {
+                id: "user-id".to_string(),
+                username: "user".to_string(),
+                email: "user@example.com".to_string(),
+                organizations: None,
+            },
+            registry: registry.to_string(),
+        }
+    }
+
+    #[test]
+    fn save_auth_round_trips_stored_auth() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("codemod")).unwrap();
+        let auth = stored_auth("https://app.codemod.com");
+
+        storage.save_auth(&auth).unwrap();
+
+        let loaded = storage
+            .load_auth("https://app.codemod.com")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.tokens.access_token, "access-token");
+        assert_eq!(
+            loaded.tokens.refresh_token.as_deref(),
+            Some("refresh-token")
+        );
+        assert_eq!(loaded.user.email, "user@example.com");
+        assert_eq!(loaded.registry, "https://app.codemod.com");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_auth_creates_token_file_with_user_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("codemod")).unwrap();
+        let auth = stored_auth("https://app.codemod.com");
+
+        storage.save_auth(&auth).unwrap();
+
+        let auth_path = storage.get_auth_path("https://app.codemod.com");
+        let mode = fs::metadata(auth_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_auth_restricts_existing_permissive_token_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("codemod")).unwrap();
+        let auth = stored_auth("https://app.codemod.com");
+        let auth_path = storage.get_auth_path("https://app.codemod.com");
+        fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
+        fs::write(&auth_path, "{}").unwrap();
+        fs::set_permissions(&auth_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        storage.save_auth(&auth).unwrap();
+
+        let mode = fs::metadata(auth_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_auth_rejects_non_file_auth_path_without_changing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp_dir.path().join("codemod")).unwrap();
+        let auth = stored_auth("https://app.codemod.com");
+        let auth_path = storage.get_auth_path("https://app.codemod.com");
+        fs::create_dir_all(&auth_path).unwrap();
+        fs::set_permissions(&auth_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = storage.save_auth(&auth);
+
+        assert!(result.is_err());
+        let mode = fs::metadata(auth_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
     }
 }
