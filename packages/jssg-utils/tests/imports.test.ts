@@ -835,6 +835,23 @@ function testAddImportAfterMixedImportsUsesLastSourcePosition() {
   );
 }
 
+function testAddNamedImportToDynamicImportCallback() {
+  const source = `import('mod').then(({foo}) => {\n  foo();\n})`;
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === `import('mod').then(({ foo, bar }) => {\n  foo();\n})`,
+    "New import should be inserted after the last import by source position",
+  );
+}
+
 // ============================================================================
 // removeImport tests
 // ============================================================================
@@ -1336,6 +1353,7 @@ function run() {
   testAddImportAfterExisting();
   testAddImportAfterExistingKeepsSeparateLines();
   testAddImportAfterMixedImportsUsesLastSourcePosition();
+  testAddNamedImportToDynamicImportCallback();
 
   // removeImport tests
   testRemoveDefaultImportESM();

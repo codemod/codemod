@@ -642,9 +642,13 @@ function findNamedImports<T extends Language>(importStmt: SgNode<T>): SgNode<T> 
 /**
  * Generate a specifier string like "foo" or "foo as bar".
  */
-function formatSpecifier(spec: ImportSpecifier): string {
+function formatSpecifier(
+  spec: ImportSpecifier,
+  kind: "named_imports" | "object_pattern" = "named_imports",
+): string {
   if (spec.alias && spec.alias !== spec.name) {
-    return `${spec.name} as ${spec.alias}`;
+    if (kind === "named_imports") return `${spec.name} as ${spec.alias}`;
+    if (kind === "object_pattern") return `${spec.name}: ${spec.alias}`;
   }
   return spec.name;
 }
@@ -664,7 +668,7 @@ function generateEsmImport(options: AddImportOptions): string {
   }
 
   // Named imports
-  const specifierStr = options.specifiers.map(formatSpecifier).join(", ");
+  const specifierStr = options.specifiers.map((spec) => formatSpecifier(spec)).join(", ");
   return `import { ${specifierStr} } from '${source}';\n`;
 }
 
@@ -1034,6 +1038,50 @@ function hasTrailingComma<T extends Language>(nodes: SgNode<T>[]) {
   return false;
 }
 
+function mergeSpecifiers<T extends Language>(
+  parentNode: SgNode<T>,
+  newSpecifiers: ImportSpecifier[],
+) {
+  const parentNodeKind =
+    parentNode.kind() === "object_pattern" ? "object_pattern" : "named_imports";
+  const isMultiline = parentNode.range().start.line !== parentNode.range().end.line;
+  const separator = isMultiline ? `,\n  ` : ", ";
+
+  const trailingComma = hasTrailingComma(parentNode.children()) ? "," : "";
+
+  const namedImportNodes = parentNode.children().filter((n) => n.isNamed() || n.is("comment"));
+
+  const namedImportsText: string[] = [];
+
+  for (let i = 0; i < namedImportNodes.length; i++) {
+    if (isMultiline) {
+      if (namedImportNodes[i + 1]?.is("comment")) {
+        namedImportsText[i] = namedImportNodes[i]?.text() + ",";
+        continue;
+      }
+
+      if (namedImportNodes[i]?.is("comment")) {
+        namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
+        continue;
+      }
+
+      namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
+      continue;
+    }
+
+    namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
+  }
+
+  const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec, parentNodeKind));
+
+  const importsUpdatedStr =
+    namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
+
+  return isMultiline
+    ? parentNode.replace(`{\n  ${importsUpdatedStr}\n}`)
+    : parentNode.replace(`{ ${importsUpdatedStr} }`);
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -1143,6 +1191,7 @@ export function addImport<T extends Language>(
         name: spec.name,
         from: options.from,
       });
+
       if (!existing) {
         newSpecifiers.push(spec);
       }
@@ -1158,46 +1207,7 @@ export function addImport<T extends Language>(
       if (existingImport) {
         const namedImports = findNamedImports(existingImport);
         if (namedImports) {
-          // Add to existing named_imports: insert before the closing brace
-
-          const isMultiline = namedImports.range().start.line !== namedImports.range().end.line;
-          const separator = isMultiline ? `,\n  ` : ", ";
-
-          const trailingComma = hasTrailingComma(namedImports.children()) ? "," : "";
-
-          const namedImportNodes = namedImports
-            .children()
-            .filter((n) => n.isNamed() || n.is("comment"));
-
-          const namedImportsText: string[] = [];
-
-          for (let i = 0; i < namedImportNodes.length; i++) {
-            if (isMultiline) {
-              if (namedImportNodes[i + 1]?.is("comment")) {
-                namedImportsText[i] = namedImportNodes[i]?.text() + ",";
-                continue;
-              }
-
-              if (namedImportNodes[i]?.is("comment")) {
-                namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
-                continue;
-              }
-
-              namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
-              continue;
-            }
-
-            namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
-          }
-
-          const specifierStr = newSpecifiers.map(formatSpecifier);
-
-          const importsUpdatedStr =
-            namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
-
-          return isMultiline
-            ? namedImports.replace(`{\n  ${importsUpdatedStr}\n}`)
-            : namedImports.replace(`{ ${importsUpdatedStr} }`);
+          return mergeSpecifiers(namedImports, newSpecifiers);
         } else {
           // Import exists but has no named_imports (e.g., default import only)
           // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
@@ -1214,6 +1224,47 @@ export function addImport<T extends Language>(
             };
           }
         }
+      }
+
+      const dynamicImportObjectPattern = (program as unknown as SgNode<TS, "program">).find({
+        rule: {
+          kind: "object_pattern",
+          inside: {
+            stopBy: "end",
+            kind: "call_expression",
+            has: {
+              kind: "member_expression",
+              has: {
+                kind: "call_expression",
+                all: [
+                  {
+                    has: {
+                      field: "function",
+                      kind: "import",
+                    },
+                  },
+                  {
+                    has: {
+                      field: "arguments",
+                      kind: "arguments",
+                      has: {
+                        kind: "string",
+                        has: {
+                          kind: "string_fragment",
+                          regex: options.from,
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+
+      if (dynamicImportObjectPattern) {
+        return mergeSpecifiers(dynamicImportObjectPattern, newSpecifiers);
       }
     }
 
@@ -1470,7 +1521,6 @@ export function removeImport<T extends Language>(
       },
     });
 
-    // console.log({ namespaceEsmImport: namespaceEsmImport.text() });
     if (namespaceEsmImport) {
       const statement =
         (namespaceEsmImport.ancestors().find((a) => a.kind() === "import_statement") as
