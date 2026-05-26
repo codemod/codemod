@@ -144,6 +144,19 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[test]
+    fn normalize_rolldown_path_converts_verbatim_unc_paths() {
+        let normalized = normalize_rolldown_path(Path::new(
+            r"\\?\UNC\server\share\workspace\scripts\codemod.ts",
+        ));
+
+        assert_eq!(
+            normalized,
+            PathBuf::from(r"\\server\share\workspace\scripts\codemod.ts")
+        );
+    }
+
+    #[cfg(windows)]
     #[tokio::test]
     async fn bundle_succeeds_with_canonicalized_windows_paths() {
         let temp_dir = TempDir::new().unwrap();
