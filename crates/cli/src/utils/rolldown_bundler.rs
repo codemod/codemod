@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, SourceMapType};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Simple rolldown-based bundler configuration
 #[derive(Debug, Clone)]
@@ -49,25 +49,24 @@ impl RolldownBundler {
     /// Bundle the entry file and its dependencies into a single JavaScript file
     pub async fn bundle(&self) -> Result<BundleResult> {
         let base_dir = if let Some(base_dir) = &self.config.base_dir {
-            base_dir.clone()
+            normalize_rolldown_path(base_dir)
         } else {
-            self.config
-                .entry_path
+            normalize_rolldown_path(&self.config.entry_path)
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("Entry path has no parent directory"))?
                 .to_path_buf()
         };
+        let entry_path = normalize_rolldown_path(&self.config.entry_path);
 
         let entry_str = if let Some(base_dir) = &self.config.base_dir {
-            self.config
-                .entry_path
-                .strip_prefix(base_dir)
-                .unwrap_or(&self.config.entry_path)
+            let normalized_base_dir = normalize_rolldown_path(base_dir);
+            entry_path
+                .strip_prefix(&normalized_base_dir)
+                .unwrap_or(&entry_path)
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("Entry path is not valid UTF-8"))?
         } else {
-            self.config
-                .entry_path
+            entry_path
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("Entry path is not valid UTF-8"))?
         };
@@ -104,6 +103,21 @@ impl RolldownBundler {
             output_path: self.config.output_path.clone(),
         })
     }
+}
+
+fn normalize_rolldown_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path_str = path.to_string_lossy();
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{stripped}"));
+        }
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+
+    path.to_path_buf()
 }
 
 #[cfg(test)]
