@@ -109,6 +109,10 @@ impl RolldownBundler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::fs;
+    #[cfg(windows)]
+    use tempfile::TempDir;
 
     #[test]
     fn test_rolldown_bundler_creation() {
@@ -123,5 +127,35 @@ mod tests {
 
         assert_eq!(bundler.config.entry_path, config.entry_path);
         assert_eq!(bundler.config.source_maps, config.source_maps);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bundle_succeeds_with_canonicalized_windows_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let scripts_dir = temp_dir.path().join("scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+
+        let entry_path = scripts_dir.join("codemod.ts");
+        fs::write(
+            &entry_path,
+            "export default function codemod() { return 1; }",
+        )
+        .unwrap();
+
+        let config = RolldownBundlerConfig {
+            entry_path: entry_path.canonicalize().unwrap(),
+            base_dir: Some(temp_dir.path().canonicalize().unwrap()),
+            output_path: None,
+            source_maps: false,
+        };
+
+        let bundler = RolldownBundler::new(config);
+        let result = bundler.bundle().await;
+
+        assert!(
+            result.is_ok(),
+            "expected bundling with canonicalized Windows paths to succeed, got: {result:?}"
+        );
     }
 }
