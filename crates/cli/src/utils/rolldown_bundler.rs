@@ -157,6 +157,9 @@ mod tests {
         )
         .unwrap();
 
+        // This test relies on the actual path form Windows returns from
+        // canonicalize() on the CI runner. That keeps it realistic, but it
+        // means we don't hard-code or assert the verbatim \\?\ prefix here.
         let config = RolldownBundlerConfig {
             entry_path: entry_path.canonicalize().unwrap(),
             base_dir: Some(temp_dir.path().canonicalize().unwrap()),
