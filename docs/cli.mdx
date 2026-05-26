@@ -256,6 +256,24 @@ npx codemod ai resource <uri-or-name> [--json]
 - `ai resources` lists the available resource names and URIs.
 - `ai resource` reads one resource by URI or resource name.
 
+### `codemod mcp`
+
+Start the Codemod MCP server over stdio.
+
+Use this command when you are wiring Codemod into an MCP client manually or when you want to debug the MCP server outside the guided `codemod ai` install flow.
+
+```bash
+npx codemod mcp [--usage-log <path>]
+```
+
+<ResponseField name="--usage-log <path>" type="string">
+  Write MCP usage events to a local file for debugging.
+</ResponseField>
+
+<Info>
+  In most setups, you should run `npx codemod ai` instead of configuring `codemod mcp` directly. The `ai` command installs the MCP server entry for supported harnesses and also installs the related Codemod skill files and command entrypoints.
+</Info>
+
 ### Package skill install (prompted from package run)
 
 Install a package skill from registry metadata into harness skill paths.

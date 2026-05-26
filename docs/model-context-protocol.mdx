@@ -21,6 +21,18 @@ npx codemod ai
 
 This is the main setup path for the AI-native CLI experience. It installs Codemod Master Skill and Codemod MCP for your coding agent so it can use Codemod CLI with built-in best practices for building, running, testing, and publishing codemods.
 
+If you need to run the MCP server yourself, start it with:
+
+```bash
+npx codemod mcp
+```
+
+To debug MCP traffic locally, add `--usage-log`:
+
+```bash
+npx codemod mcp --usage-log ./codemod-mcp-usage.log
+```
+
 <Accordion title="Manual MCP setup">
   If you prefer to configure MCP yourself:
 
