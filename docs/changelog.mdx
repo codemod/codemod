@@ -5,6 +5,42 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="May 2026">
+- **Codemod Builder in Global Chat**: Global Chat can now help turn repeatable migration requests into generated codemod packages, stream builder progress, publish to the registry, iterate on source-available generated packages, and hand off to campaign creation when appropriate. It also gained page-aware suggestions, repository mentions, directive chips, chat history improvements, and codebase tools for file search, AST search, dependency lookup, and indexed repository context.
+
+- **Self-healing campaigns**: Campaign-created pull requests can now track CI check state and run auto-heal attempts with copied check logs and branch context. Recovery supports manual triggering, retry limits, status links, GitHub Actions, and GitLab pipeline/job webhooks.
+
+- **Campaign and automation controls**:
+  - Advisory sharding analysis can preview changed-file counts by `CODEOWNERS` group or directory before large campaigns
+  - Automations can trigger background agents
+  - Pull request merged triggers can filter by author, title regex, state, and repository
+  - Campaign and background-agent logs now render AI messages, tool calls, file edits, and search matches more clearly
+
+- **Insights dashboard notes**: Insights dashboards now support markdown Notes widgets, so teams can add context, caveats, and next steps alongside metrics. Query editing and package/repository selection were also polished, especially when working with template variables.
+
+- **Reports are easier to read and share**: Execution reports now consolidate duplicate file entries when multiple steps touch the same file, with an option to view changes by step. The report UI now combines files and diffs into a single Changes tab, keeps Metrics separate, improves mobile layout, and has clearer authenticated sharing flows.
+
+- **Registry transparency and discovery**:
+  - AI-generated codemod packages can show a source browser when an archived source bundle is available
+  - Generated package names and visibility defaults are safer
+  - Package aliases and scope normalization make scoped packages resolve and download more reliably
+  - Registry cards, filters, package pages, and generated-source campaign creation received UI polish
+
+- **JSSG and CLI improvements**:
+  - XML support for JSSG, including templates, node types, and utilities
+  - `jssg run` and `jssg test` now surface runtime logs again
+  - `addImport()` formatting is more reliable when merging named imports
+  - Dry runs no longer auto-launch the workflow TUI, and workflow summaries/log output are cleaner
+  - Windows bundling handles canonical paths more reliably
+  - Package publishing and registry download errors are clearer
+
+- **App navigation and platform UX**:
+  - Global Cmd/Ctrl+K search now jumps to pages, Insights dashboards, Campaigns, and Automations
+  - API Keys now have clearer tabs for keys and trusted publishers, better table filtering, and improved create/delete dialogs
+  - Repository selectors gained search, infinite scrolling, loading states, and cleaner onboarding flows
+  - The app shell, login experience, sidebar, user menu, dashboards, website landing pages, and mobile styling received broad polish
+</Update>
+
 <Update label="April 2026">
 - **Automations are now more powerful**: Automations can start from scheduled or incoming webhook triggers, scan codebases with ast-grep or JSSG queries, create campaigns, and pass action outputs into downstream steps. The editor now starts from a blank canvas, has clearer node insertion/configuration flows, shows action output fields, supports action-to-action chaining, and can use Handlebars templates for looping over array values.
 
