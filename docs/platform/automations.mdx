@@ -1,0 +1,57 @@
+---
+title: 'Automations'
+sidebarTitle: 'Automations'
+icon: 'bolt'
+description: 'Create rules that react to events across your projects.'
+---
+
+Automations let you turn recurring codebase maintenance into rules that run when something happens, such as a pull request event, a scheduled check, or an incoming webhook.
+
+Use Automations when you want Codemod to watch for a condition, inspect code, and start the next action without requiring someone to manually create the same work each time.
+
+## Where Automations Fit
+
+Automations sit between Insights and Campaigns:
+
+- **Insights** help you understand what exists across repositories.
+- **Automations** decide when Codemod should act.
+- **Campaigns** execute coordinated code changes, tasks, and pull requests.
+
+For example, an Automation can react to an event, scan matching repositories, and create follow-up work that runs through Codemod's campaign infrastructure.
+
+## What You Can Automate
+
+Automations are organization-level rules. A rule can combine:
+
+- **Triggers** that start the rule, such as schedules, webhooks, or repository events.
+- **Conditions and scans** that inspect codebases or event payloads before taking action.
+- **Actions** that create campaigns, start follow-up work, or pass data to later steps.
+- **Logs** that show what ran and where a rule needs attention.
+
+<Info>
+  The exact trigger and action options available to you depend on your organization's enabled integrations and plan.
+</Info>
+
+## Before You Start
+
+Make sure your organization has the integrations needed for the repositories or events you want to automate:
+
+<CardGroup cols={2}>
+  <Card title="GitHub Integration" icon="github" href="/platform/integrations/github">
+    Connect GitHub repositories that Automations and Campaigns can act on.
+  </Card>
+  <Card title="GitLab Integration" icon="gitlab" href="/platform/integrations/gitlab">
+    Connect GitLab repositories and webhook events.
+  </Card>
+</CardGroup>
+
+## Related Docs
+
+<CardGroup cols={2}>
+  <Card title="Campaigns" icon="arrow-up-right-dots" href="/platform/campaigns">
+    Run coordinated migrations and track the work Automations create.
+  </Card>
+  <Card title="Insights" icon="chart-simple" href="/platform/insights">
+    Measure code patterns and migration progress before or after automation.
+  </Card>
+</CardGroup>
