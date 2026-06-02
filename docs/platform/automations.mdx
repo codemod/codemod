@@ -5,43 +5,91 @@ icon: 'bolt'
 description: 'Create rules that react to events across your projects.'
 ---
 
-Automations let you turn recurring codebase maintenance into rules that run when something happens, such as a pull request event, a scheduled check, or an incoming webhook.
+Automations let you turn recurring codebase maintenance into rules that run when something happens, such as a campaign task moving status, a pull request check failing, a scheduled scan, or an incoming webhook.
 
-Use Automations when you want Codemod to watch for a condition, inspect code, and start the next action without requiring someone to manually create the same work each time.
+Use automations when Codemod should watch for a condition, inspect code or event payloads, and start the next action without someone repeating the same manual setup.
 
-## Where automations fit
+## How automations work
 
-Automations sit between Insights and Campaigns:
+An automation is an organization-level rule made of connected steps:
 
-- **Insights** help you understand what exists across repositories.
-- **Automations** decide when Codemod should act.
-- **Campaigns** execute coordinated code changes, tasks, and pull requests.
+- A **trigger** starts the rule from a campaign, workflow, repository, schedule, issue status, or webhook event.
+- Optional **controls** branch or delay the rule before later steps run.
+- **Actions** run work, update issue state, scan code, create campaigns, call a webhook, or hand repository work to a coding agent.
+- Execution **logs** show what ran and where a rule needs attention.
 
-For example, an Automation can react to an event, scan matching repositories, and create follow-up work that runs through Codemod's campaign infrastructure.
+For example, an automation can react when a campaign-generated pull request has a failing CI check, run a codebase scan, and then start follow-up work with the relevant event fields already available.
 
-## What you can automate
+## Create an automation
 
-Automations are organization-level rules. A rule can combine:
+<Steps>
+  <Step title="Choose a trigger">
+    Start from the event that should wake up the rule. Automations can react to task status changes, workflow completions or failures, pull request state changes, completed CI checks, Jira or Linear status changes, schedules, and incoming webhooks.
+  </Step>
 
-- **Triggers** that start the rule, such as schedules, webhooks, or repository events.
-- **Conditions and scans** that inspect codebases or event payloads before taking action.
-- **Actions** that create campaigns, start follow-up work, or pass data to later steps.
-- **Logs** that show what ran and where a rule needs attention.
+  <Step title="Add filters and controls">
+    Narrow the trigger to the cases that matter. Pull request triggers can filter by repository, Codemod bot PRs, author login, and title regex. CI triggers can filter by check result. Task and issue triggers can filter by previous or next status.
 
-<Info>
-  The exact trigger and action options available to you depend on your organization's enabled integrations and plan.
-</Info>
+    Add **If / Switch** when the rule needs to branch based on event data, or **Delay** when later work should wait before continuing.
+  </Step>
+
+  <Step title="Add actions">
+    Add the work Codemod should perform after the trigger. Actions can run a linked workflow, update an issue status, run a coding agent against selected repositories, scan codebases, create a campaign, or send an HTTP webhook.
+  </Step>
+
+  <Step title="Use runtime fields">
+    Automation templates can insert fields from the trigger and earlier steps. The editor exposes available fields, and templates support Handlebars syntax such as `{{field}}`, `{{#each scan.rows}}...{{/each}}`, `{{json value}}`, and `{{expr jsExpression}}`.
+  </Step>
+
+  <Step title="Save and monitor">
+    Save the automation after the graph is configured. Incoming webhook endpoints are generated after the rule is saved. Use execution logs to review runs, inspect trigger payloads and action results, and diagnose failed steps.
+  </Step>
+</Steps>
+
+## Triggers
+
+Automations currently support these shipped trigger categories:
+
+- **Campaign and workflow events**: task status changes, workflow completions, and workflow failures.
+- **Code and CI events**: pull request state changes and completed CI checks. CI checks can match `Failure`, `Success`, `Timed Out`, or `Action Required`.
+- **Project management events**: Jira or Linear issue status changes, matched by exact status names.
+- **Schedules and webhooks**: cron schedules with a timezone, or incoming HTTP `POST` payloads.
+
+## Actions and controls
+
+Use actions to start the next unit of work:
+
+- **Run Workflow** starts the linked workflow for the task associated with the incoming event.
+- **Update Issue Status** moves the mapped Jira or Linear issue to a selected status.
+- **Coding Agent** checks out one or more repositories, follows a prompt, and can commit changes or open a pull request when configured.
+- **Scan Codebase** runs an ast-grep or JSSG query against selected repositories.
+- **Create Campaign** creates a follow-up campaign project with a templated title and optional description.
+- **Webhook** sends an HTTP request with the automation context or a custom body.
+
+Use **If / Switch** to branch on event data and **Delay** to wait before later steps run.
+
+## Scan code before acting
+
+The **Scan Codebase** action uses the same query model as [Insights](/platform/insights). It can run ast-grep rules or JSSG queries and return either:
+
+- A scalar result available as `scan.totalCount`
+- Table rows available as `scan.rows`
+
+Use scan output in later templates to decide whether to create a campaign, send a webhook, or ask a coding agent to work only when the query finds matching code.
 
 ## Before you start
 
-Make sure your organization has the integrations needed for the repositories or events you want to automate:
+Make sure your organization has the integrations needed for the repositories, issues, or events you want to automate:
 
-<CardGroup cols={2}>
-  <Card title="GitHub Integration" icon="github" href="/platform/integrations/github">
-    Connect GitHub repositories that Automations and Campaigns can act on.
+<CardGroup cols={3}>
+  <Card title="GitHub integration" icon="github" href="/platform/integrations/github">
+    Connect GitHub repositories that automations and campaigns can act on.
   </Card>
-  <Card title="GitLab Integration" icon="gitlab" href="/platform/integrations/gitlab">
+  <Card title="GitLab integration" icon="gitlab" href="/platform/integrations/gitlab">
     Connect GitLab repositories and webhook events.
+  </Card>
+  <Card title="Jira integration" icon="jira" href="/platform/integrations/jira">
+    Connect Jira projects when automations need issue status events or updates.
   </Card>
 </CardGroup>
 
@@ -49,7 +97,7 @@ Make sure your organization has the integrations needed for the repositories or 
 
 <CardGroup cols={2}>
   <Card title="Campaigns" icon="arrow-up-right-dots" href="/platform/campaigns">
-    Run coordinated migrations and track the work Automations create.
+    Run coordinated migrations and track the work automations create.
   </Card>
   <Card title="Insights" icon="chart-simple" href="/platform/insights">
     Measure code patterns and migration progress before or after automation.
