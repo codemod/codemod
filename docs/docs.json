@@ -68,6 +68,7 @@
             "group": "Enterprise",
             "pages": [
               "platform/quickstart",
+              "platform/codemod-wish",
               "platform/insights",
               "platform/campaigns",
               "platform/automations",
@@ -166,6 +167,14 @@
     {
       "source": "/quickstart",
       "destination": "/platform/quickstart"
+    },
+    {
+      "source": "/codemod-wish",
+      "destination": "/platform/codemod-wish"
+    },
+    {
+      "source": "/wish",
+      "destination": "/platform/codemod-wish"
     },
     {
       "source": "/campaigns",
