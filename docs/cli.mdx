@@ -958,6 +958,11 @@ npx codemod search [OPTIONS] [QUERY]
 
 <ResponseField name="--format <FORMAT>" type="string">
   Output format (default: table). Possible values: table, json, yaml
+
+  In `json` and `yaml` formats, the response also includes:
+  - `metadata_coverage`: summary of how completely matching packages fill in key registry metadata
+  - `threshold_route_preview`: Codemod's suitability routing preview for the current result set
+  - `packages[].metadata_coverage`: per-package metadata coverage details
 </ResponseField>
 
 <Accordion title="Examples">
@@ -977,6 +982,12 @@ npx codemod search [OPTIONS] [QUERY]
 
   ```bash
   npx codemod search --format json next
+  ```
+
+  Preview package metadata completeness and routing signals in YAML:
+
+  ```bash
+  npx codemod search react --format yaml
   ```
 </Accordion>
 
