@@ -66,6 +66,8 @@ impl Command {
             base_dir: Some(base_dir),
             output_path: self.output.clone(),
             source_maps: self.source_maps,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
         };
 
         // Create and run rolldown bundler
