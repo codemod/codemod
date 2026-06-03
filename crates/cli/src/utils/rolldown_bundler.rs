@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, SourceMapType};
+use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
 use std::path::{Path, PathBuf};
 
 /// Simple rolldown-based bundler configuration
@@ -13,6 +13,10 @@ pub struct RolldownBundlerConfig {
     pub output_path: Option<PathBuf>,
     /// Enable source maps
     pub source_maps: bool,
+    /// Module specifiers that may remain external in the bundle
+    pub external_modules: Vec<String>,
+    /// Treat Rolldown unresolved import diagnostics as bundle failures
+    pub fail_on_unresolved_imports: bool,
 }
 
 /// Result of bundling operation
@@ -81,6 +85,8 @@ impl RolldownBundler {
             }]),
             cwd: Some(base_dir.clone()),
             sourcemap: self.config.source_maps.then_some(SourceMapType::File),
+            external: (!self.config.external_modules.is_empty())
+                .then(|| IsExternal::from(self.config.external_modules.clone())),
             ..Default::default()
         };
 
@@ -90,6 +96,15 @@ impl RolldownBundler {
             .generate()
             .await
             .map_err(|e| anyhow::anyhow!("Rolldown bundling failed: {:?}", e))?;
+        if self.config.fail_on_unresolved_imports {
+            if let Some(warning) = result
+                .warnings
+                .iter()
+                .find(|warning| warning.kind().to_string() == "UNRESOLVED_IMPORT")
+            {
+                return Err(anyhow::anyhow!("Rolldown unresolved import: {}", warning));
+            }
+        }
 
         let bundled_code = Self::extract_js_code(&result)?;
 
@@ -135,6 +150,8 @@ mod tests {
             base_dir: None,
             output_path: None,
             source_maps: false,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
         };
 
         let bundler = RolldownBundler::new(config.clone());
@@ -178,6 +195,8 @@ mod tests {
             base_dir: Some(temp_dir.path().canonicalize().unwrap()),
             output_path: None,
             source_maps: false,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
         };
 
         let bundler = RolldownBundler::new(config);

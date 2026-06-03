@@ -7,6 +7,79 @@ use std::collections::HashSet;
 
 use crate::types::LlrtSupportedModules;
 
+pub const CODEMOD_RUNTIME_MODULES: &[&str] = &[
+    "codemod:ast-grep",
+    "codemod:workflow",
+    "codemod:metrics",
+    "codemod:runtime",
+];
+
+const LLRT_RUNTIME_MODULES: &[&str] = &[
+    "assert",
+    "buffer",
+    "child_process",
+    "console",
+    "crypto",
+    "events",
+    "fs",
+    "fs/promises",
+    "module",
+    "os",
+    "path",
+    "perf_hooks",
+    "process",
+    "stream/web",
+    "string_decoder",
+    "tty",
+    "url",
+    "util",
+    "zlib",
+];
+
+pub fn supported_runtime_external_modules() -> Vec<&'static str> {
+    let mut modules =
+        Vec::with_capacity(CODEMOD_RUNTIME_MODULES.len() + LLRT_RUNTIME_MODULES.len() * 2);
+    modules.extend(CODEMOD_RUNTIME_MODULES.iter().copied());
+    for module in LLRT_RUNTIME_MODULES {
+        modules.push(*module);
+        modules.push(match *module {
+            "assert" => "node:assert",
+            "buffer" => "node:buffer",
+            "child_process" => "node:child_process",
+            "console" => "node:console",
+            "crypto" => "node:crypto",
+            "events" => "node:events",
+            "fs" => "node:fs",
+            "fs/promises" => "node:fs/promises",
+            "module" => "node:module",
+            "os" => "node:os",
+            "path" => "node:path",
+            "perf_hooks" => "node:perf_hooks",
+            "process" => "node:process",
+            "stream/web" => "node:stream/web",
+            "string_decoder" => "node:string_decoder",
+            "tty" => "node:tty",
+            "url" => "node:url",
+            "util" => "node:util",
+            "zlib" => "node:zlib",
+            _ => unreachable!("all LLRT runtime modules are covered"),
+        });
+    }
+    modules
+}
+
+pub fn is_supported_runtime_external_module(specifier: &str) -> bool {
+    if CODEMOD_RUNTIME_MODULES.contains(&specifier) {
+        return true;
+    }
+
+    let normalized = specifier
+        .strip_prefix("node:")
+        .unwrap_or(specifier)
+        .trim_end_matches('/');
+    LLRT_RUNTIME_MODULES.contains(&normalized)
+}
+
 macro_rules! define_safe_modules {
     (
         $(

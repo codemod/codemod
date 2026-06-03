@@ -9,6 +9,7 @@ use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
+use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use console::style;
 use log::{debug, info, warn};
 use regex::Regex;
@@ -196,13 +197,22 @@ async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
         base_dir: Some(package_path.to_path_buf()),
         output_path: None, // Return code directly, don't write to file
         source_maps: false,
+        external_modules: supported_runtime_external_modules()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        fail_on_unresolved_imports: true,
     };
 
     let bundler = RolldownBundler::new(config);
     let bundle_result = bundler
         .bundle()
         .await
-        .map_err(|e| anyhow!("Failed to bundle {js_file}:\n{e}"))?;
+        .map_err(|e| {
+            anyhow!(
+                "Cannot publish: JS file {js_file} imports a module that could not be resolved or bundled.\n{e}"
+            )
+        })?;
 
     info!(
         "Successfully bundled {} ({} bytes)",
@@ -959,5 +969,85 @@ nodes:
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("missing compatibility marker"));
+    }
+
+    #[tokio::test]
+    async fn publish_bundle_bundles_installed_dependencies() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("transform.js"),
+            r#"
+import { helper } from "local-helper";
+export default function transform() {
+  return helper();
+}
+"#,
+        )
+        .unwrap();
+        let dependency_dir = temp_dir.path().join("node_modules/local-helper");
+        fs::create_dir_all(&dependency_dir).unwrap();
+        fs::write(
+            dependency_dir.join("package.json"),
+            r#"{"name":"local-helper","version":"1.0.0","main":"index.js"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dependency_dir.join("index.js"),
+            r#"export function helper() { return "bundled"; }"#,
+        )
+        .unwrap();
+
+        let bundled = bundle_js_file(temp_dir.path(), "transform.js")
+            .await
+            .unwrap();
+
+        assert!(bundled.contains("bundled"));
+        assert!(!bundled.contains("\"local-helper\""));
+        assert!(!bundled.contains("'local-helper'"));
+    }
+
+    #[tokio::test]
+    async fn publish_bundle_rejects_missing_dependencies_before_upload() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("transform.js"),
+            r#"import { helper } from "@nodejs/codemod-utils/ast-grep/require-call";"#,
+        )
+        .unwrap();
+
+        let error = bundle_js_file(temp_dir.path(), "transform.js")
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Cannot publish"));
+        assert!(message.contains("transform.js"));
+        assert!(message.contains("@nodejs/codemod-utils"));
+    }
+
+    #[tokio::test]
+    async fn publish_bundle_allows_only_runtime_modules_as_externals() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("transform.js"),
+            r#"
+import { format } from "node:util";
+import path from "path";
+import { readFile } from "fs/promises";
+import { parse } from "codemod:ast-grep";
+export default function transform() {
+  return [format("%s", "ok"), path.sep, readFile, parse];
+}
+"#,
+        )
+        .unwrap();
+
+        let bundled = bundle_js_file(temp_dir.path(), "transform.js")
+            .await
+            .unwrap();
+
+        assert!(bundled.contains("node:util"));
+        assert!(bundled.contains("path"));
+        assert!(bundled.contains("fs/promises"));
+        assert!(bundled.contains("codemod:ast-grep"));
     }
 }
