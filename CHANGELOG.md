@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.11.2] - 2026-05-26
+
+### 🐛 Bug Fixes
+
+- *(cli)* Windows rolldown verbatim path (#2238)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.11.2 (#2240)
 ## [codemod-cli@1.11.1] - 2026-05-20
 
 ### 🚀 Features
