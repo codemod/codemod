@@ -28,21 +28,20 @@ To create a new dashboard, go to `Insights → Create Dashboard`.
     ![Creating a new dashboard](/images/insights/create-dashboard.png)
 </Frame>
 
-The dashboard-level time range controls the default range for timeseries widgets. New dashboards use a 14-day default range, and each timeseries widget can either inherit that range or override it.
-
 <Tip>
-  When you are editing an Insights dashboard, Ask Codemod Wish can inspect the current dashboard draft and add or update widgets. Review the changes and save the dashboard when the draft looks right.
+  For an AI-native experience, try using Codemod Wish while viewing a dashboard. You can ask for new widgets, changes to existing widgets, or explanations of the data.
 </Tip>
 
 ## Widgets
 
-Widgets are the building blocks of a dashboard. Query-backed widgets run one or more queries against your repositories and render the results in one of three formats:
+Widgets are the building blocks of a dashboard. Insights supports four widget types:
 
 - **Timeseries chart** - track how a metric changes over time, such as deprecated API calls trending down week over week.
 - **Single number** - show a point-in-time value, such as total files still using an old pattern.
 - **Table view** - show breakdowns with sorting and row limits, such as remaining work by repository or codeowner.
+- **Notes** - add Markdown context, caveats, interpretation, or next actions.
 
-You can also add a **Notes** widget for context, caveats, interpretation, or next actions. Notes widgets use Markdown and do not run queries.
+Timeseries chart, single number, and table view widgets are query-backed. They run one or more queries against your repositories and render the results in the selected format. Notes widgets do not run queries.
 
 <Frame>
     ![Creating a new widget](/images/insights/create-widget.png)
@@ -170,7 +169,7 @@ To add a template variable, click **Add variable** at the top of your dashboard.
 Once created, template variables appear as selectable options in query configuration fields. When configuring a query's repository, rule, or JSSG source, you can choose between specifying a value directly or referencing a template variable.
 
 <Frame>
-![Referencing template variables](/images/insights/using-template-variable-in-jssg.png)
+![Referencing template variables](/images/insights/using-template-variable.png)
 </Frame>
 
 String variables can be referenced in group-by and dimension filter fields with the `$variableName` syntax.
