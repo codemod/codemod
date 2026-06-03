@@ -68,10 +68,12 @@
             "group": "Enterprise",
             "pages": [
               "platform/quickstart",
-              "platform/campaigns",
+              "platform/codemod-wish",
               "platform/insights",
-              "platform/registry",
+              "platform/campaigns",
+              "platform/automations",
               "platform/codemod-studio",
+              "platform/registry",
               {
                 "icon": "plug",
                 "group": "Integrations",
@@ -167,12 +169,28 @@
       "destination": "/platform/quickstart"
     },
     {
+      "source": "/codemod-wish",
+      "destination": "/platform/codemod-wish"
+    },
+    {
+      "source": "/wish",
+      "destination": "/platform/codemod-wish"
+    },
+    {
       "source": "/campaigns",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/projects",
       "destination": "/platform/campaigns"
     },
     {
       "source": "/insights",
       "destination": "/platform/insights"
+    },
+    {
+      "source": "/automations",
+      "destination": "/platform/automations"
     },
     {
       "source": "/registry",
@@ -181,6 +199,14 @@
     {
       "source": "/codemod-studio",
       "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/studio",
+      "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/api-keys",
+      "destination": "/publishing#api-keys"
     },
     {
       "source": "/integrations/github",
