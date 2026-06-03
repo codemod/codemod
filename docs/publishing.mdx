@@ -6,6 +6,18 @@ description: "Learn how to publish codemods to the Codemod Registry using differ
 
 This guide covers all the ways to publish codemods to the [Codemod Registry](/platform/registry), from local development to automated CI/CD pipelines.
 
+## What Publish Validates
+
+When you run `npx codemod publish`, the CLI validates the package before it uploads the tarball:
+
+- It checks that `codemod.yaml` exists and parses correctly.
+- It validates the package structure for workflow packages, skill packages, or packages that include both.
+- It validates every referenced workflow file.
+- It bundles JavaScript dependencies referenced by `js-ast-grep` workflow steps.
+- It stops if a referenced transform imports a module that cannot be resolved.
+
+Use this as a packaging check, not just an upload command. If local validation fails, nothing is published.
+
 ## Authentication Methods
 
 Codemod supports three authentication methods for publishing:
@@ -35,6 +47,17 @@ After logging in, you can publish packages:
 ```bash
 npx codemod publish
 ```
+
+<Warning>
+  `codemod publish` fails before upload when a referenced transform imports a module that cannot be resolved or bundled. Runtime-provided modules such as Node built-ins and `codemod:` modules are allowed, but package-local dependencies must be present and resolvable at publish time.
+</Warning>
+
+If publish fails with an unresolved import error:
+
+- Install the missing dependency in the package you are publishing.
+- Check that the import path is correct relative to the package root.
+- Keep runtime externals limited to supported runtime modules.
+- Re-run `npx codemod publish` after the package bundles successfully.
 
 ### When to Use
 
