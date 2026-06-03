@@ -57,6 +57,14 @@ The Codemod MCP server provides these operational tools for AI assistants:
 - **`run_jssg_tests`** - Run tests for JSSG codemods with test cases
 - **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold or incomplete
 
+You can inspect and invoke the same MCP-equivalent tool surface from the CLI without wiring an MCP client:
+
+```bash
+npx codemod ai tools
+npx codemod ai tool dump_ast
+npx codemod ai call dump_ast --input '{"language":"tsx","source":"const x = 1;"}'
+```
+
 ## Available resources
 
 The Codemod MCP server provides these guidance resources for AI assistants:
@@ -71,6 +79,14 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 - **`codemod-troubleshooting-instructions`** - Troubleshooting guidance for common Codemod CLI failures
 - **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
 - **`sharding-instructions`** - Docs-backed sharding guidance
+
+You can also browse and read these resources directly through the CLI:
+
+```bash
+npx codemod ai resources
+npx codemod ai resource codemod-cli-instructions
+npx codemod ai docs semantic analysis
+```
 
 For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 
