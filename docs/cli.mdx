@@ -119,8 +119,9 @@ The generated Codemod skill package includes these authored files:
 - `commands/codemod.md`: the `/codemod` command routing rules for harnesses with a native command surface
 
 The installed skill also points users to CLI fallbacks when MCP is unavailable or blocked. The main user-reproducible commands are:
-- `npx codemod ai docs`: list docs resources exposed through the CLI
-- `npx codemod ai docs <resource-id>`: read a specific docs resource such as `codemod-cli`, `codemod-creation-workflow`, or `codemod-troubleshooting`
+- `npx codemod ai docs`: list, read, or search docs-backed resources through the CLI
+- `npx codemod ai resources`: list MCP-equivalent resources exposed by the CLI
+- `npx codemod ai resource <uri-or-name>`: read one MCP-equivalent resource by URI or resource name
 - `npx codemod ai dump-ast <file>` or `npx codemod ai dump-ast --`: inspect AST shape for a file or stdin
 - `npx codemod ai node-types <language>`: inspect tree-sitter node kinds for a language
 - `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`: validate whether a codemod package still contains starter scaffold markers or other package-surface issues
