@@ -984,6 +984,8 @@ npx codemod search [OPTIONS] [QUERY]
 
 Manage the local package cache for Codemod packages.
 
+Use these commands when you want to inspect what the CLI has already downloaded from the registry, remove stale package versions, or clear the cache before re-running a package fetch.
+
 **`cache info`**
 
 Show cache information and statistics.
@@ -1035,3 +1037,61 @@ npx codemod cache prune [--max-age <MAX_AGE>] [--dry-run]
 <ResponseField name="--dry-run" type="boolean">
   Dry run - show what would be removed.
 </ResponseField>
+
+<Accordion title="Examples">
+  Show the cache location and total size:
+
+  ```bash
+  npx codemod cache info
+  ```
+
+  List cached packages with per-version details:
+
+  ```bash
+  npx codemod cache list --detailed
+  ```
+
+  Remove one cached package:
+
+  ```bash
+  npx codemod cache clear @acme/react-19
+  ```
+
+  Preview which entries would be removed before pruning:
+
+  ```bash
+  npx codemod cache prune --max-age 14 --dry-run
+  ```
+</Accordion>
+
+### `codemod mcp`
+
+Start Codemod's Model Context Protocol server over stdio.
+
+Use this command when you are wiring Codemod into an MCP-compatible client manually, or when you need to debug the MCP server outside the higher-level `codemod ai` installation flow.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for debugging.
+</ResponseField>
+
+<Note>
+  Most users should prefer `npx codemod ai`, which installs the Codemod skill package and writes the correct MCP client configuration for supported harnesses automatically.
+</Note>
+
+<Accordion title="Examples">
+  Start the MCP server on stdio:
+
+  ```bash
+  npx codemod mcp
+  ```
+
+  Record MCP usage events while debugging a client integration:
+
+  ```bash
+  npx codemod mcp --usage-log ./codemod-mcp-usage.jsonl
+  ```
+</Accordion>
