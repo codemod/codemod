@@ -567,7 +567,7 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 </ResponseField>
 
 <ResponseField name="--language <LANG>" type="string" required>
-  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, `json`, `yaml`, `xml`, `toml`, etc.).
 </ResponseField>
 
 <ResponseField name="--extensions <ext1,ext2>" type="string">
@@ -603,7 +603,7 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--language" type="string" required>
-  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, `json`, `yaml`, `xml`, `toml`, etc.).
 </ResponseField>
 
 <ResponseField name="--test-directory" type="string">
@@ -637,7 +637,7 @@ npx codemod jssg test <codemod_file> [options]
   - `ast` - Compare Abstract Syntax Trees (ignores formatting, preserves ordering)
   - `loose` - Loose AST comparison (ignores formatting and ordering of unordered nodes like object properties, imports)
 
-  Supported languages: JavaScript, TypeScript, Python, Go, Rust, JSON.
+  Supported languages: JavaScript, TypeScript, Python, Go, Rust, JSON, YAML, XML, TOML.
 </ResponseField>
 
 <ResponseField name="--timeout" type="number">

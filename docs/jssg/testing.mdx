@@ -307,6 +307,9 @@ The `loose` level ignores ordering for semantically unordered constructs:
 | Go | Imports, struct literals (keyed), interface definitions |
 | Rust | Struct expressions, derive attributes, use lists, trait bounds |
 | JSON | Objects |
+| TOML | Tables and key/value pairs |
+| XML | Elements and attributes |
+| YAML | Mappings and sequences |
 
 <Warning>
 AST comparison preserves order when it matters semantically. For example, spread operators (`{...x, a: 1}` vs `{a: 1, ...x}`) maintain their order because they affect property override behavior.
