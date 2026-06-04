@@ -204,6 +204,8 @@ const JS_APPLY_SCRIPT_FOR_JSON: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
 const JS_APPLY_SCRIPT_FOR_YAML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
+const JS_APPLY_SCRIPT_FOR_TOML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.toml.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -253,6 +255,9 @@ const JSON_TEST_EXPECTED: &str =
 const YAML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.yaml");
 const YAML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.yaml");
+const TOML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.toml");
+const TOML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.toml");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -778,6 +783,7 @@ fn select_language() -> Result<String> {
         "Elixir",
         "Json",
         "Yaml",
+        "Toml",
         "Other",
     ];
 
@@ -802,6 +808,7 @@ fn select_language() -> Result<String> {
         "Elixir" => "elixir",
         "Json" => "json",
         "Yaml" => "yaml",
+        "Toml" => "toml",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -936,6 +943,7 @@ fn default_include_patterns(language: &str) -> String {
         "elixir" => &["**/*.{ex,exs}"],
         "json" => &["**/*.json"],
         "yaml" => &["**/*.{yaml,yml}"],
+        "toml" => &["**/*.toml"],
         _ => &["**/*"],
     };
 
@@ -998,6 +1006,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
         "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -1077,6 +1086,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
         "json" => JS_APPLY_SCRIPT_FOR_JSON,
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
@@ -1331,6 +1341,15 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.yaml"),
             YAML_TEST_EXPECTED,
+        )?;
+    } else if config.language == "toml" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.toml"),
+            TOML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.toml"),
+            TOML_TEST_EXPECTED,
         )?;
     }
 
