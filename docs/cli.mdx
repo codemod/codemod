@@ -751,6 +751,16 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
   Required in `--no-interactive` mode for `ast-grep-js`, `hybrid`, and `--workspace`.
 </ResponseField>
 
+<ResponseField name="--workspace" type="boolean">
+  Scaffold a monorepo-style codemod workspace. The root keeps shared repo and publishing files, and new codemods live under `codemods/<slug>/`.
+
+  In interactive mode, this changes the generated layout to a dedicated codemods repository structure. In `--no-interactive` mode, pair it with the values normally gathered from prompts, such as `--name`, `--description`, `--author`, `--license`, and `--package-manager`.
+
+  ```bash
+  npx codemod init --workspace
+  ```
+</ResponseField>
+
 <ResponseField name="--language <LANGUAGE>" type="string">
   Target language.
 
