@@ -136,6 +136,7 @@ const JS_ASTGREP_WORKFLOW_TEMPLATE: &str = include_str!("../templates/js-astgrep
 const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
     include_str!("../templates/astgrep-yaml/workflow.yaml");
 const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
+const HYBRID_TOML_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.toml.yaml");
 const SKILL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/skill/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
@@ -204,6 +205,8 @@ const JS_APPLY_SCRIPT_FOR_JSON: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
 const JS_APPLY_SCRIPT_FOR_YAML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
+const JS_APPLY_SCRIPT_FOR_TOML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.toml.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -253,6 +256,9 @@ const JSON_TEST_EXPECTED: &str =
 const YAML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.yaml");
 const YAML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.yaml");
+const TOML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.toml");
+const TOML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.toml");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -778,6 +784,7 @@ fn select_language() -> Result<String> {
         "Elixir",
         "Json",
         "Yaml",
+        "Toml",
         "Other",
     ];
 
@@ -802,6 +809,7 @@ fn select_language() -> Result<String> {
         "Elixir" => "elixir",
         "Json" => "json",
         "Yaml" => "yaml",
+        "Toml" => "toml",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -890,14 +898,18 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             .replace("{name}", &config.name)
             .replace("{skill_path}", &default_skill_path)
     } else {
-        match config.project_type {
-            ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
-            ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
-            ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
-            ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
-        }
-        .replace("{language}", &config.language)
-        .replace(
+        let template = if config.project_type == ProjectType::Hybrid && config.language == "toml" {
+            HYBRID_TOML_WORKFLOW_TEMPLATE
+        } else {
+            match config.project_type {
+                ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
+                ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
+                ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
+                ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
+            }
+        };
+
+        template.replace("{language}", &config.language).replace(
             "{include_patterns}",
             &default_include_patterns(&config.language),
         )
@@ -936,6 +948,7 @@ fn default_include_patterns(language: &str) -> String {
         "elixir" => &["**/*.{ex,exs}"],
         "json" => &["**/*.json"],
         "yaml" => &["**/*.{yaml,yml}"],
+        "toml" => &["**/*.toml"],
         _ => &["**/*"],
     };
 
@@ -998,6 +1011,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
         "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -1012,7 +1026,6 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
 }
 
 fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    // Create rules directory
     let rules_dir = project_path.join("rules");
     fs::create_dir_all(&rules_dir)?;
 
@@ -1077,48 +1090,40 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
         "json" => JS_APPLY_SCRIPT_FOR_JSON,
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
 
-    // Create rules directory
-    let rules_dir = project_path.join("rules");
-    fs::create_dir_all(&rules_dir)?;
+    if config.language != "toml" {
+        let rules_dir = project_path.join("rules");
+        fs::create_dir_all(&rules_dir)?;
 
-    let config_file = match config.language.as_str() {
-        "javascript" | "typescript" => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
-        "python" => ASTGREP_PATTERNS_FOR_PYTHON,
-        "rust" => ASTGREP_PATTERNS_FOR_RUST,
-        "go" => ASTGREP_PATTERNS_FOR_GO,
-        "java" => ASTGREP_PATTERNS_FOR_JAVA,
-        "html" => ASTGREP_PATTERNS_FOR_HTML,
-        "xml" => ASTGREP_PATTERNS_FOR_XML,
-        "css" => ASTGREP_PATTERNS_FOR_CSS,
-        "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
-        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
-        "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
-        "cpp" => ASTGREP_PATTERNS_FOR_CPP,
-        "c" => ASTGREP_PATTERNS_FOR_C,
-        "php" => ASTGREP_PATTERNS_FOR_PHP,
-        "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
-        "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
-        "json" => ASTGREP_PATTERNS_FOR_JSON,
-        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
-        _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
-    };
-    fs::write(rules_dir.join("config.yml"), config_file)?;
-
-    // Create tests directory
-    let tests_dir = project_path.join("tests");
-    fs::create_dir_all(tests_dir.join("fixtures"))?;
-
-    if config.language == "javascript" || config.language == "typescript" {
-        fs::write(tests_dir.join("fixtures").join("input.js"), JS_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.js"),
-            JS_TEST_EXPECTED,
-        )?;
+        let config_file = match config.language.as_str() {
+            "javascript" | "typescript" => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
+            "python" => ASTGREP_PATTERNS_FOR_PYTHON,
+            "rust" => ASTGREP_PATTERNS_FOR_RUST,
+            "go" => ASTGREP_PATTERNS_FOR_GO,
+            "java" => ASTGREP_PATTERNS_FOR_JAVA,
+            "html" => ASTGREP_PATTERNS_FOR_HTML,
+            "xml" => ASTGREP_PATTERNS_FOR_XML,
+            "css" => ASTGREP_PATTERNS_FOR_CSS,
+            "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
+            "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
+            "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
+            "cpp" => ASTGREP_PATTERNS_FOR_CPP,
+            "c" => ASTGREP_PATTERNS_FOR_C,
+            "php" => ASTGREP_PATTERNS_FOR_PHP,
+            "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
+            "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+            "json" => ASTGREP_PATTERNS_FOR_JSON,
+            "yaml" => ASTGREP_PATTERNS_FOR_YAML,
+            _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
+        };
+        fs::write(rules_dir.join("config.yml"), config_file)?;
     }
+
+    create_js_tests(project_path, config)?;
 
     // Create package.json and tsconfig.json at project root
     let package_json_content = format!(
@@ -1331,6 +1336,15 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.yaml"),
             YAML_TEST_EXPECTED,
+        )?;
+    } else if config.language == "toml" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.toml"),
+            TOML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.toml"),
+            TOML_TEST_EXPECTED,
         )?;
     }
 
@@ -1971,6 +1985,42 @@ mod tests {
         assert!(manifest.contains("default: true"));
         assert!(manifest.contains("capabilities: []"));
         assert!(manifest.contains("Keep this aligned with the files matched in workflow.yaml."));
+    }
+
+    #[test]
+    fn create_toml_hybrid_project_uses_js_ast_grep_without_yaml_rules() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("toml-hybrid-project");
+
+        let config = ProjectConfig {
+            name: "toml-hybrid-project".to_string(),
+            description: "TOML hybrid package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::Hybrid,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "toml".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("language: \"toml\""));
+        assert!(workflow.contains("depends_on: [shell-transform]"));
+        assert!(!workflow.contains("apply-yaml"));
+        assert!(!workflow.contains("\n        ast-grep:"));
+
+        let codemod_script = fs::read_to_string(project_path.join("scripts/codemod.ts")).unwrap();
+        assert!(codemod_script.contains("langs/toml"));
+
+        assert!(!project_path.join("rules/config.yml").exists());
+        assert!(project_path.join("tests/fixtures/input.toml").is_file());
+        assert!(project_path.join("tests/fixtures/expected.toml").is_file());
     }
 
     #[test]

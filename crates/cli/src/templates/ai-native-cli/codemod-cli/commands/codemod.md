@@ -20,6 +20,8 @@ Non-negotiable constraints:
 - For migration, upgrade, update, or deprecation-rollout requests that do not explicitly ask to create a codemod, search the registry first before proposing a custom codemod plan.
 - For codemod authoring, inspect only a small representative slice of the repo after or alongside registry discovery, then scaffold and iterate.
 - For codemod authoring, stay AST-first, define fixtures before deep implementation, keep work inside the requested scope, and do not stop until workflow validation, package validation, and the package default tests are green.
+- For codemod authoring, treat parser-backed formats as mandatory AST-edit targets. JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, and TOML should use `js-ast-grep` with AST-selected `node.replace(...)` edits and `commitEdits(...)`.
+- For codemod authoring, use raw regex, line splitting, whole-file `.replace(...)`, Python file I/O, shell scripts, or Node `fs` rewrites only for unsupported plain-text formats or explicitly documented fallback cases with focused fixtures.
 - For codemod authoring, if symbol origin matters, use semantic analysis and binding-aware checks.
 - For codemod authoring, use `npx codemod ai dump-ast --` and `npx codemod ai node-types <language>` when AST shape or node fields are unclear.
 - For codemod authoring, before stopping, re-check the whole package surface: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths or ids. Update all affected files together instead of leaving stale metadata or docs behind.

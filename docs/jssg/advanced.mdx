@@ -118,6 +118,33 @@ export default codemod;
 - **`undefined`**: Same as null
 - **Other types**: Runtime error
 
+## Parser-Backed Edits
+
+Use AST-selected edits whenever the target file type has a JSSG parser. That includes source languages plus structured config formats such as JSON, YAML, XML, and TOML.
+
+```ts
+import type { Codemod, Edit } from "codemod:ast-grep";
+import type Toml from "codemod:ast-grep/langs/toml";
+
+const codemod: Codemod<Toml> = async (root) => {
+  const rootNode = root.root();
+  const edits = rootNode
+    .findAll({
+      rule: {
+        kind: "pair",
+        has: { kind: "bare_key", regex: "^package-manager$" },
+      },
+    })
+    .map((node) => node.replace('package-manager = "pnpm@9.0.0"'));
+
+  return edits.length > 0 ? rootNode.commitEdits(edits as Edit[]) : null;
+};
+
+export default codemod;
+```
+
+Avoid using JSSG as a file walker while doing the actual transform with `fs`, `root.source().replace(...)`, or full-source `.split(...)`/`.join(...)` logic. Raw text rewriting is a fallback for unsupported plain-text formats or rare cases where no parser or structured library exists.
+
 ## Parameters and Configuration
 
 Parameters make your codemods flexible and reusable by allowing you to pass configuration values at runtime. This enables you to create codemods that adapt their behavior based on user input or different execution contexts.
