@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use super::codemod_lang::CodemodLang;
 
 const LESS_EXTENSIONS: &[&str] = &[".less"];
+const TOML_EXTENSIONS: &[&str] = &[".toml"];
 const XML_EXTENSIONS: &[&str] = &[
     ".xml", ".csproj", ".props", ".targets", ".config", ".resx", ".xaml",
 ];
@@ -69,6 +70,9 @@ pub fn get_extensions_for_language(lang: CodemodLang) -> Vec<&'static str> {
     if lang.to_string() == "less" {
         return LESS_EXTENSIONS.to_vec();
     }
+    if lang.to_string() == "toml" {
+        return TOML_EXTENSIONS.to_vec();
+    }
     if lang.to_string() == "xml" {
         return XML_EXTENSIONS.to_vec();
     }
@@ -83,6 +87,9 @@ pub fn get_language_from_extension(extension: &str) -> Option<CodemodLang> {
 
     if extension == "less" {
         return "less".parse().ok();
+    }
+    if extension == "toml" {
+        return "toml".parse().ok();
     }
     if XML_EXTENSIONS
         .iter()
@@ -108,6 +115,7 @@ pub fn get_all_supported_extensions() -> Vec<&'static str> {
     let map = create_language_extension_map();
     let mut extensions: Vec<&'static str> = map.values().flatten().copied().collect();
     extensions.extend_from_slice(LESS_EXTENSIONS);
+    extensions.extend_from_slice(TOML_EXTENSIONS);
     extensions.extend_from_slice(XML_EXTENSIONS);
     extensions.sort();
     extensions.dedup();
@@ -145,12 +153,18 @@ mod tests {
         assert!(js_extensions.contains(&".js"));
         assert!(js_extensions.contains(&".mjs"));
         assert!(js_extensions.contains(&".cjs"));
+
+        let toml_extensions = get_extensions_for_language("toml".parse().unwrap());
+        assert_eq!(toml_extensions, vec![".toml"]);
     }
 
     #[test]
     fn test_get_language_from_extension() {
         let lang = get_language_from_extension(".rs");
         assert!(lang.is_some());
+
+        let lang = get_language_from_extension(".toml");
+        assert_eq!(lang.unwrap().to_string(), "toml");
 
         let lang = get_language_from_extension(".unknown");
         assert!(lang.is_none());
@@ -163,5 +177,6 @@ mod tests {
         assert!(extensions.contains(&".js"));
         assert!(extensions.contains(&".rs"));
         assert!(extensions.contains(&".py"));
+        assert!(extensions.contains(&".toml"));
     }
 }
