@@ -2,8 +2,7 @@ use crate::utils::ancestor_search::find_in_ancestors;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
     expected_workflow_paths, package_has_authored_skill_layout, package_has_install_skill_steps,
-    parser_backed_authoring_warnings, validate_package_behavior_structure, validate_skill_behavior,
-    DEFAULT_WORKFLOW_FILE_NAME,
+    validate_package_behavior_structure, validate_skill_behavior, DEFAULT_WORKFLOW_FILE_NAME,
 };
 use anyhow::{anyhow, Context, Result};
 use butterflow_core::utils;
@@ -51,7 +50,6 @@ fn resolve_package_root(input_path: &Path) -> Option<PathBuf> {
 fn validate_package(package_root: &Path) -> Result<()> {
     let manifest = load_manifest(package_root)?;
     validate_package_behavior_structure(package_root, &manifest)?;
-    let authoring_warnings = parser_backed_authoring_warnings(package_root, &manifest)?;
 
     for resolved in expected_workflow_paths(package_root, &manifest)? {
         if !resolved.path.is_file() {
@@ -80,14 +78,6 @@ fn validate_package(package_root: &Path) -> Result<()> {
         println!(
             "✅ Skill references: Valid ({} links checked)",
             skill_summary.linked_reference_count
-        );
-    }
-
-    for warning in authoring_warnings {
-        println!(
-            "⚠️ Parser-backed authoring warning ({}): {}",
-            warning.workflow_path.display(),
-            warning.message
         );
     }
 
