@@ -35,6 +35,10 @@ Built-in codemod modules:
 
 Every JSSG codemod exports a transform function:
 
+<Info>
+Prefer the `Codemod` type for new code. The older `Transform` type is deprecated and remains only for backward compatibility.
+</Info>
+
 ```ts
 import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
