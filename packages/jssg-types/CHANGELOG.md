@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.6.2
+
+### Patch Changes
+
+- 2e5eade: Add TOML language node types and `codemod:ast-grep/langs/toml` module declarations.
+
 ## 1.6.1
 
 ### Patch Changes
