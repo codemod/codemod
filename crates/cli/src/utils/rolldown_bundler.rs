@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, SourceMapType};
-use std::path::PathBuf;
+use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
+use std::path::{Path, PathBuf};
 
 /// Simple rolldown-based bundler configuration
 #[derive(Debug, Clone)]
@@ -13,6 +13,10 @@ pub struct RolldownBundlerConfig {
     pub output_path: Option<PathBuf>,
     /// Enable source maps
     pub source_maps: bool,
+    /// Module specifiers that may remain external in the bundle
+    pub external_modules: Vec<String>,
+    /// Treat Rolldown unresolved import diagnostics as bundle failures
+    pub fail_on_unresolved_imports: bool,
 }
 
 /// Result of bundling operation
@@ -49,25 +53,24 @@ impl RolldownBundler {
     /// Bundle the entry file and its dependencies into a single JavaScript file
     pub async fn bundle(&self) -> Result<BundleResult> {
         let base_dir = if let Some(base_dir) = &self.config.base_dir {
-            base_dir.clone()
+            normalize_rolldown_path(base_dir)
         } else {
-            self.config
-                .entry_path
+            normalize_rolldown_path(&self.config.entry_path)
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("Entry path has no parent directory"))?
                 .to_path_buf()
         };
+        let entry_path = normalize_rolldown_path(&self.config.entry_path);
 
         let entry_str = if let Some(base_dir) = &self.config.base_dir {
-            self.config
-                .entry_path
-                .strip_prefix(base_dir)
-                .unwrap_or(&self.config.entry_path)
+            let normalized_base_dir = normalize_rolldown_path(base_dir);
+            entry_path
+                .strip_prefix(&normalized_base_dir)
+                .unwrap_or(&entry_path)
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("Entry path is not valid UTF-8"))?
         } else {
-            self.config
-                .entry_path
+            entry_path
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("Entry path is not valid UTF-8"))?
         };
@@ -82,6 +85,8 @@ impl RolldownBundler {
             }]),
             cwd: Some(base_dir.clone()),
             sourcemap: self.config.source_maps.then_some(SourceMapType::File),
+            external: (!self.config.external_modules.is_empty())
+                .then(|| IsExternal::from(self.config.external_modules.clone())),
             ..Default::default()
         };
 
@@ -91,6 +96,15 @@ impl RolldownBundler {
             .generate()
             .await
             .map_err(|e| anyhow::anyhow!("Rolldown bundling failed: {:?}", e))?;
+        if self.config.fail_on_unresolved_imports {
+            if let Some(warning) = result
+                .warnings
+                .iter()
+                .find(|warning| warning.kind().to_string() == "UNRESOLVED_IMPORT")
+            {
+                return Err(anyhow::anyhow!("Rolldown unresolved import: {}", warning));
+            }
+        }
 
         let bundled_code = Self::extract_js_code(&result)?;
 
@@ -106,9 +120,28 @@ impl RolldownBundler {
     }
 }
 
+fn normalize_rolldown_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path_str = path.to_string_lossy();
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{stripped}"));
+        }
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+
+    path.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::fs;
+    #[cfg(windows)]
+    use tempfile::TempDir;
 
     #[test]
     fn test_rolldown_bundler_creation() {
@@ -117,11 +150,61 @@ mod tests {
             base_dir: None,
             output_path: None,
             source_maps: false,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
         };
 
         let bundler = RolldownBundler::new(config.clone());
 
         assert_eq!(bundler.config.entry_path, config.entry_path);
         assert_eq!(bundler.config.source_maps, config.source_maps);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_rolldown_path_converts_verbatim_unc_paths() {
+        let normalized = normalize_rolldown_path(Path::new(
+            r"\\?\UNC\server\share\workspace\scripts\codemod.ts",
+        ));
+
+        assert_eq!(
+            normalized,
+            PathBuf::from(r"\\server\share\workspace\scripts\codemod.ts")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bundle_succeeds_with_canonicalized_windows_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let scripts_dir = temp_dir.path().join("scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+
+        let entry_path = scripts_dir.join("codemod.ts");
+        fs::write(
+            &entry_path,
+            "export default function codemod() { return 1; }",
+        )
+        .unwrap();
+
+        // This test relies on the actual path form Windows returns from
+        // canonicalize() on the CI runner. That keeps it realistic, but it
+        // means we don't hard-code or assert the verbatim \\?\ prefix here.
+        let config = RolldownBundlerConfig {
+            entry_path: entry_path.canonicalize().unwrap(),
+            base_dir: Some(temp_dir.path().canonicalize().unwrap()),
+            output_path: None,
+            source_maps: false,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
+        };
+
+        let bundler = RolldownBundler::new(config);
+        let result = bundler.bundle().await;
+
+        assert!(
+            result.is_ok(),
+            "expected bundling with canonicalized Windows paths to succeed, got: {result:?}"
+        );
     }
 }
