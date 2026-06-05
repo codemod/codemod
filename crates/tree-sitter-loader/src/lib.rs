@@ -95,6 +95,16 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
                 "4b64dd3a03ec002258d6268d712fd93716d6ab57"
             ),
         },
+        DynamicLanguageDefinition {
+            name: "toml",
+            symbol: "tree_sitter_toml",
+            extensions: &["toml"],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-toml",
+                "64b56832c2cffe41758f28e05c756a3a98d16f41"
+            ),
+        },
     ]
 }
 

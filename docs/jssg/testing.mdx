@@ -66,6 +66,15 @@ npx codemod jssg test -l <language> <codemod-file> [test-directory]
 <ParamField path="codemod-file" type="string" required>Path to your transform file (e.g., "./scripts/codemod.ts").</ParamField>
 <ParamField path="test-directory" type="string">Path to test directory (defaults to "./tests").</ParamField>
 
+Common parser-backed config formats are supported directly:
+
+```bash
+npx codemod jssg test -l json ./scripts/codemod.ts
+npx codemod jssg test -l yaml ./scripts/codemod.ts
+npx codemod jssg test -l xml ./scripts/codemod.ts
+npx codemod jssg test -l toml ./scripts/codemod.ts
+```
+
 ### Common options
 
 ```bash

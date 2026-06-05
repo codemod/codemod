@@ -53,6 +53,7 @@ impl NodeTypesHandler {
             "css" => Some(include_str!("../data/node_types/css.txt")),
             "json" => Some(include_str!("../data/node_types/json.txt")),
             "yaml" | "yml" => Some(include_str!("../data/node_types/yaml.txt")),
+            "toml" => Some(include_str!("../data/node_types/toml.txt")),
             "php" => Some(include_str!("../data/node_types/php.txt")),
             "ruby" | "rb" => Some(include_str!("../data/node_types/ruby.txt")),
             "kotlin" | "kt" => Some(include_str!("../data/node_types/kotlin.txt")),

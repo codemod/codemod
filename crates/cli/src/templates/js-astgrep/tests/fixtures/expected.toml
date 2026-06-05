@@ -1,0 +1,6 @@
+[project]
+name = "example"
+version = "0.1.0"
+
+[tool.codemod]
+package-manager = "pnpm@9.0.0"

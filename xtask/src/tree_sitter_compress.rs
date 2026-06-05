@@ -54,6 +54,7 @@ pub enum Lang {
     Ruby,
     Elixir,
     Yaml,
+    Toml,
 }
 
 impl Lang {
@@ -80,6 +81,7 @@ impl Lang {
             Lang::Ruby => "ruby",
             Lang::Elixir => "elixir",
             Lang::Yaml => "yaml",
+            Lang::Toml => "toml",
         }
     }
 
@@ -106,6 +108,7 @@ impl Lang {
             Lang::Ruby => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/refs/tags/v0.23.0/src/node-types.json",
             Lang::Elixir => "https://raw.githubusercontent.com/elixir-lang/tree-sitter-elixir/refs/tags/v0.3.4/src/node-types.json",
             Lang::Yaml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-yaml/refs/heads/master/src/node-types.json",
+            Lang::Toml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/refs/tags/v0.7.0/src/node-types.json",
         }
     }
 
@@ -132,6 +135,7 @@ impl Lang {
             Lang::Ruby,
             Lang::Elixir,
             Lang::Yaml,
+            Lang::Toml,
         ]
     }
 }
