@@ -576,6 +576,12 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
               },
             },
           },
+          not: {
+            has: {
+              kind: "variable_declarator",
+              nthChild: 2,
+            },
+          },
         },
         {
           kind: "expression_statement",
