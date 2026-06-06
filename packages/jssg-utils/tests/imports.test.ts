@@ -73,7 +73,7 @@ function testSingleNamedDynamicImport() {
 function testSingleNamedDynamicImportWithAlias() {
   const program = parseProgram(
     "javascript",
-    "import('test').then(({fn: test}) => {\n const pair = fn('test');\n });",
+    "import('test').then(({fn: test}) => {\n const pair = test('test');\n });",
   );
 
   const res = getAllImports(program, { type: "named", name: "fn", from: "test" });
@@ -1209,7 +1209,7 @@ function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
 function testRemoveDefaultImportDynamic() {
   const program = parseProgram(
     "javascript",
-    "import('mod').then(({default: test}) => {\n mod();\n});\nconsole.log('test');\n",
+    "import('mod').then(({default: test}) => {\n test();\n});\nconsole.log('test');\n",
   );
 
   const edit = removeImport(program, {

@@ -1346,7 +1346,7 @@ function requireCallFirstArgIsLiteralSpecifier(
 }
 
 /**
- * `require('pkg');` as a standalone expression statement (e.g. polyfill registration).
+ * `require('pkg');` / `import('pkg');` as a standalone expression statement (e.g. polyfill registration).
  */
 function removeBareRequireImportSideEffectEdit(
   program: SgNode<TS, "program">,
