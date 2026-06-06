@@ -152,32 +152,6 @@ function findRawImportMatches<T extends Language>(
     ],
   } satisfies Rule<Language>;
 
-  const dynamicThenRule = {
-    inside: {
-      stopBy: "end",
-      kind: "call_expression",
-      has: {
-        field: "function",
-        kind: "member_expression",
-        all: [
-          {
-            has: {
-              field: "property",
-              kind: "property_identifier",
-              regex: "^then$",
-            },
-          },
-          {
-            has: {
-              field: "object",
-              matches: CJS_OR_DYNAMIC_VALUE_UTIL_RULE,
-            },
-          },
-        ],
-      },
-    },
-  } satisfies Rule<Language>;
-
   return tsProgram.findAll({
     utils: {
       [CJS_OR_DYNAMIC_VALUE_UTIL_RULE]: cjsOrDynamicValue,
@@ -239,72 +213,94 @@ function findRawImportMatches<T extends Language>(
             },
           ],
         },
-        // - dynamic with callback: import("mod").then(mod => ...) or import("mod").then(function(mod) { ... })
         {
           all: [
             {
-              kind: "identifier",
-              pattern: "$VAR_NAME",
               any: [
+                // - dynamic with callback: import("mod").then((mod) => ...) or import("mod").then(function(mod) { ... })
                 {
-                  inside: {
-                    kind: "arrow_function",
-                    field: "parameter",
-                  },
-                },
-                {
+                  kind: "identifier",
+                  pattern: "$NAMESPACE_ALIAS",
                   inside: {
                     kind: "formal_parameters",
-                    stopBy: "end",
+                  },
+                },
+                // - dynamic with callback: import("mod").then(mod => ...)
+                {
+                  kind: "identifier",
+                  pattern: "$NAMESPACE_ALIAS",
+                  inside: {
+                    kind: "arrow_function",
+                  },
+                },
+                // - dynamic with destructured callback: import("mod").then(({test}) => ...)
+                {
+                  kind: "shorthand_property_identifier_pattern",
+                  pattern: "$ORIGINAL",
+                  inside: {
+                    kind: "object_pattern",
                     inside: {
-                      any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
+                      kind: "formal_parameters",
                     },
                   },
                 },
+                // - dynamic with destructured + alias callback: import("mod").then(({test: alias}) => ...)
+                {
+                  all: [
+                    { kind: "pair_pattern" },
+                    { has: { field: "key", kind: "property_identifier", pattern: "$ORIGINAL" } },
+                    {
+                      not: { has: { field: "key", kind: "property_identifier", regex: "default" } },
+                    },
+                    { has: { field: "value", kind: "identifier", pattern: "$ALIAS" } },
+                  ],
+                },
+                // - dynamic with destructured callback using default: import("mod").then(({default: test}) => ...)
+                {
+                  all: [
+                    { kind: "pair_pattern" },
+                    { has: { field: "key", kind: "property_identifier", regex: "default" } },
+                    { has: { field: "value", kind: "identifier", pattern: "$VAR_NAME" } },
+                  ],
+                },
               ],
             },
-            dynamicThenRule,
-          ],
-        },
-        // - dynamic with destructured callback: import("mod").then(({test}) => ...)
-        {
-          all: [
-            { kind: "shorthand_property_identifier_pattern" },
-            { pattern: "$ORIGINAL" },
             {
               inside: {
-                kind: "object_pattern",
-                inside: {
-                  kind: "formal_parameters",
-                  stopBy: "end",
-                  inside: {
-                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
-                  },
+                stopBy: "end",
+                kind: "call_expression",
+                has: {
+                  field: "function",
+                  kind: "member_expression",
+                  all: [
+                    {
+                      has: {
+                        field: "property",
+                        kind: "property_identifier",
+                        regex: "^then$",
+                      },
+                    },
+                    {
+                      has: {
+                        field: "object",
+                        kind: "call_expression",
+                        has: {
+                          field: "arguments",
+                          kind: "arguments",
+                          has: {
+                            kind: "string",
+                            has: {
+                              kind: "string_fragment",
+                              pattern: "$SOURCE",
+                            },
+                          },
+                        },
+                      },
+                    },
+                  ],
                 },
               },
             },
-            dynamicThenRule,
-          ],
-        },
-        // - dynamic with destructured + alias callback: import("mod").then(({test: alias}) => ...)
-        {
-          all: [
-            { kind: "pair_pattern" },
-            { has: { field: "key", kind: "property_identifier", pattern: "$ORIGINAL" } },
-            { has: { field: "value", kind: "identifier", pattern: "$ALIAS" } },
-            {
-              inside: {
-                kind: "object_pattern",
-                inside: {
-                  kind: "formal_parameters",
-                  stopBy: "end",
-                  inside: {
-                    any: [{ kind: "arrow_function" }, { kind: "function_expression" }],
-                  },
-                },
-              },
-            },
-            dynamicThenRule,
           ],
         },
         // - CJS: const { foo } = require("mod")
@@ -421,6 +417,7 @@ function matchToImportResult<T extends Language>(
 ): ResolvedImport<T> | null {
   if (options.type === "default") {
     const nameNode = match.getMatch("DEFAULT_NAME") ?? match.getMatch("VAR_NAME");
+
     if (!nameNode) return null;
     return {
       alias: nameNode.text(),
@@ -1251,7 +1248,7 @@ export function addImport<T extends Language>(
                         kind: "string",
                         has: {
                           kind: "string_fragment",
-                          regex: options.from,
+                          regex: stringToExactRegexString(options.from),
                         },
                       },
                     },
@@ -1557,11 +1554,32 @@ export function removeImport<T extends Language>(
             has: {
               field: "function",
               kind: "member_expression",
-              has: {
-                field: "property",
-                kind: "property_identifier",
-                regex: "^then$",
-              },
+              all: [
+                {
+                  has: {
+                    field: "object",
+                    kind: "call_expression",
+                    has: {
+                      field: "arguments",
+                      kind: "arguments",
+                      has: {
+                        kind: "string",
+                        has: {
+                          kind: "string_fragment",
+                          pattern: "$SOURCE",
+                        },
+                      },
+                    },
+                  },
+                },
+                {
+                  has: {
+                    field: "property",
+                    kind: "property_identifier",
+                    regex: "^then$",
+                  },
+                },
+              ],
             },
           },
         },
@@ -1569,7 +1587,7 @@ export function removeImport<T extends Language>(
     });
 
     if (!namespaceDynamicImport) return null;
-    const expressStmtDynamicImport = tsProgram.find({
+    const expressStmtDynamicImport = namespaceDynamicImport.find({
       rule: {
         inside: {
           stopBy: "end",
