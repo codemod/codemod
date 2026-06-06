@@ -1215,7 +1215,7 @@ export function addImport<T extends Language>(
             rule: { kind: "import_clause" },
           });
           if (importClause) {
-            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
+            const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec)).join(", ");
             const insertPos = importClause.range().end.index;
             return {
               startPos: insertPos,
