@@ -1209,7 +1209,7 @@ function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
 function testRemoveDefaultImportDynamic() {
   const program = parseProgram(
     "javascript",
-    "import('mod').then(({default: test}) => {\n test();\n});\nconsole.log('test');\n",
+    "import('mod').then(function({default: test}) => {\n test();\n});\nconsole.log('test');\n",
   );
 
   const edit = removeImport(program, {

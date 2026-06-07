@@ -1553,40 +1553,36 @@ export function removeImport<T extends Language>(
         kind: "identifier",
         inside: {
           stopBy: "end",
-          kind: "arrow_function",
-          inside: {
-            stopBy: "end",
-            kind: "call_expression",
-            has: {
-              field: "function",
-              kind: "member_expression",
-              all: [
-                {
+          kind: "call_expression",
+          has: {
+            field: "function",
+            kind: "member_expression",
+            all: [
+              {
+                has: {
+                  field: "object",
+                  kind: "call_expression",
                   has: {
-                    field: "object",
-                    kind: "call_expression",
+                    field: "arguments",
+                    kind: "arguments",
                     has: {
-                      field: "arguments",
-                      kind: "arguments",
+                      kind: "string",
                       has: {
-                        kind: "string",
-                        has: {
-                          kind: "string_fragment",
-                          pattern: "$SOURCE",
-                        },
+                        kind: "string_fragment",
+                        pattern: "$SOURCE",
                       },
                     },
                   },
                 },
-                {
-                  has: {
-                    field: "property",
-                    kind: "property_identifier",
-                    regex: "^then$",
-                  },
+              },
+              {
+                has: {
+                  field: "property",
+                  kind: "property_identifier",
+                  regex: "^then$",
                 },
-              ],
-            },
+              },
+            ],
           },
         },
       },
