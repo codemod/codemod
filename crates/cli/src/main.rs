@@ -15,6 +15,7 @@ mod commands;
 mod diagnostics;
 mod dirty_git_check;
 mod engine;
+mod feedback;
 mod progress_bar;
 mod report_server;
 mod suitability;
@@ -602,8 +603,34 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_ai_feedback_opt_in() {
+        let parse_result = Cli::try_parse_from(["codemod", "ai", "--allow-feedback"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_ai_feedback_command() {
+        let parse_result = Cli::try_parse_from([
+            "codemod",
+            "ai",
+            "feedback",
+            "--category",
+            "jssg",
+            "--message",
+            "Please add multi-file JSSG examples.",
+        ]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
     fn parser_accepts_ai_list() {
         let parse_result = Cli::try_parse_from(["codemod", "ai", "list"]);
+        assert!(parse_result.is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_mcp_feedback_opt_in() {
+        let parse_result = Cli::try_parse_from(["codemod", "mcp", "--allow-feedback"]);
         assert!(parse_result.is_ok());
     }
 

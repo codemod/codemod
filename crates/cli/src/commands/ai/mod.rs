@@ -10,8 +10,9 @@ use crate::commands::harness_adapter::{
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
 };
+use crate::feedback;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
 use codemod_telemetry::send_event::BaseEvent;
 use inquire::Select;
@@ -42,6 +43,9 @@ use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 pub struct Command {
     #[command(subcommand)]
     action: Option<AiAction>,
+    /// Opt in to anonymous Codemod AI and MCP feedback for this OS user
+    #[arg(long, global = true)]
+    allow_feedback: bool,
     #[command(flatten)]
     install: InstallCommand,
 }
@@ -68,6 +72,8 @@ enum AiAction {
     Update(UpdateCommand),
     /// List installed codemod skills for a harness
     List(ListCommand),
+    /// Submit short anonymous platform feedback after recording consent
+    Feedback(FeedbackCommand),
 }
 
 #[derive(Args, Debug)]
@@ -169,8 +175,20 @@ struct ListCommand {
     format: OutputFormat,
 }
 
+#[derive(Args, Debug)]
+struct FeedbackCommand {
+    /// Thematic feedback category, for example jssg, workflow, ai-docs, mcp, cli, registry, or other
+    #[arg(long, value_name = "CATEGORY")]
+    category: String,
+    /// Short feedback message to submit anonymously
+    #[arg(long, value_name = "TEXT")]
+    message: String,
+}
+
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
-    match &args.action {
+    feedback::persist_feedback_consent_if_requested(args.allow_feedback)?;
+
+    let result = match &args.action {
         None => {
             let command = &args.install;
             handle_install_like_action(
@@ -201,6 +219,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(AiAction::Call(command)) => cli_tools::handle_call(command).await,
         Some(AiAction::Resources(command)) => cli_tools::handle_resources(command),
         Some(AiAction::Resource(command)) => cli_tools::handle_resource(command).await,
+        Some(AiAction::Feedback(command)) => handle_feedback_command(command).await,
         Some(AiAction::List(command)) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
@@ -228,7 +247,74 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .await;
             Ok(())
         }
+    };
+
+    if result.is_ok() && !matches!(args.action, Some(AiAction::Feedback(_))) {
+        send_ai_feedback_event(args).await;
     }
+
+    result
+}
+
+async fn send_ai_feedback_event(args: &Command) {
+    let (event, command_name) = match &args.action {
+        None => ("install", "codemod.ai.install"),
+        Some(AiAction::Update(_)) => ("update", "codemod.ai.update"),
+        Some(AiAction::DumpAst(_)) => ("dump_ast", "codemod.ai.dump_ast"),
+        Some(AiAction::NodeTypes(_)) => ("node_types", "codemod.ai.node_types"),
+        Some(AiAction::Docs(_)) => ("docs", "codemod.ai.docs"),
+        Some(AiAction::Tools(_)) => ("tools", "codemod.ai.tools"),
+        Some(AiAction::Tool(_)) => ("tool", "codemod.ai.tool"),
+        Some(AiAction::Call(_)) => ("call", "codemod.ai.call"),
+        Some(AiAction::Resources(_)) => ("resources", "codemod.ai.resources"),
+        Some(AiAction::Resource(_)) => ("resource", "codemod.ai.resource"),
+        Some(AiAction::List(_)) => ("list", "codemod.ai.list"),
+        Some(AiAction::Feedback(_)) => ("feedback", "codemod.ai.feedback"),
+    };
+
+    feedback::send_anonymous_feedback_event(
+        "cli-ai",
+        event,
+        HashMap::from([("command".to_string(), command_name.to_string())]),
+    )
+    .await;
+}
+
+async fn handle_feedback_command(command: &FeedbackCommand) -> Result<()> {
+    let category = command.category.trim();
+    let message = command.message.trim();
+
+    if category.is_empty() {
+        bail!("Feedback category cannot be empty.");
+    }
+
+    if category.len() > 64
+        || !category.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+    {
+        bail!("Feedback category must be 64 characters or fewer and contain only letters, numbers, '.', '_', or '-'.");
+    }
+
+    if message.is_empty() {
+        bail!("Feedback message cannot be empty.");
+    }
+
+    if message.len() > 4000 {
+        bail!("Feedback message must be 4000 characters or fewer.");
+    }
+
+    let consented_at = feedback::persist_feedback_consent()?;
+    feedback::submit_anonymous_feedback(category.to_string(), message.to_string()).await?;
+
+    match consented_at {
+        Some(consented_at) => {
+            println!("Anonymous feedback submitted. Feedback consent recorded at {consented_at}.")
+        }
+        None => println!("Anonymous feedback submitted."),
+    }
+
+    Ok(())
 }
 
 async fn handle_install_like_action(

@@ -32,6 +32,7 @@ Codemod AI tools must be usable without MCP. Prefer the CLI commands below when 
 - Inspect node types for a language: `npx codemod ai node-types tsx`
 - List docs resources: `npx codemod ai docs`
 - Read/search docs: `npx codemod ai docs codemod-creation-workflow`
+- Submit anonymous platform feedback after user consent: `npx codemod ai feedback --category jssg --message "Short feedback"`
 
 If MCP is available, direct MCP calls are acceptable. If MCP is unavailable, do not stop authoring only because MCP is missing; use the `codemod ai` CLI equivalents.
 
@@ -45,13 +46,18 @@ When the user:
 - **Needs import manipulation helpers** — Read `jssg-utils-instructions` via MCP or `npx codemod ai docs jssg-utils`.
 - **Needs to split a large migration into multiple PRs** — Read `sharding-instructions` via MCP or `npx codemod ai docs sharding`.
 
+## Anonymous feedback
+
+If you discover a Codemod platform gap, ask the user for explicit consent before enabling or submitting anonymous feedback. With consent, run `npx codemod ai feedback --category <category> --message <message>`. The command records the consent timestamp in user-wide Codemod config and submits the short feedback anonymously.
+
+Use these categories when possible: `jssg` for JSSG feature requests or runtime gaps, `workflow` for workflow authoring feedback, `ai-docs` for docs/resource enhancements, `mcp` for MCP tool or resource feedback, `cli`, `registry`, `package-validation`, or `other`.
+
+Keep feedback short and thematic. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.
+
 ## Authoring defaults
 
 - Treat the Codemod docs served through `codemod ai docs` or MCP resources as the source of truth for CLI, workflow, and JSSG semantics.
 - Keep source transforms AST-first. Do not use regex or raw source-text rewriting as the primary implementation strategy.
-- Before using line-based parsing, regular-expression replacement, or whole-file source rewriting, check whether the target file type has a JSSG language parser. Parser-backed formats include JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, and TOML.
-- For parser-backed files, use a `js-ast-grep` workflow with the matching language import, AST queries (`find`, `findAll`, `getMatch`, fields), `node.replace(...)`, and `root.root().commitEdits(...)`. String construction is acceptable for the replacement text, but AST-selected nodes must define the edit boundaries.
-- Use raw text manipulation only for unsupported plain-text formats or when a structured parser is unavailable. When you do, document the fallback in code or README and cover comments, multiline values, quoting, false positives, and no-op cases in fixtures.
 - Use `npx codemod ai dump-ast` or MCP `dump_ast` before broadening heuristics.
 - Use `npx codemod ai node-types <language>` or MCP `get_node_types` when node kinds or fields are unclear.
 - If symbol origin matters, use semantic analysis and binding-aware checks.
@@ -100,6 +106,4 @@ When the user:
 - Do not keep reading broad guidance after a registry miss without scaffolding a package.
 - Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
 - Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop.
-- Do not use JSSG as a file-walking wrapper around parser-backed files while doing the actual transformation with `fs`, `root.source().replace(...)`, or full-source `.split(...)`/`.join(...)` rewrites.
-- Do not choose Python, shell, or Node file I/O for JSON, YAML, XML, TOML, or source-code transforms when a matching `js-ast-grep` language exists.
 - Do not stop codemod authoring only because Codemod MCP is unavailable; use `codemod ai` CLI equivalents.

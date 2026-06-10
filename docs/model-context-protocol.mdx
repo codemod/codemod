@@ -84,6 +84,17 @@ Codemod MCP democratizes code transformation by integrating robust deterministic
 - **Accessibility**: Makes tackling tech debt more approachable for developers of all skill levels
 - **AI Integration**: Seamlessly integrates deterministic code transformation engines into AI IDE workflows
 
+## Codemod MCP vs Codemod Studio
+
+| | Codemod MCP | Codemod Studio |
+|---------|-------------|----------------|
+| **Interface** | Integrated into your IDE | Web-based interface |
+| **AI Model** | Your choice of AI model | Built-in AI assistant |
+| **Control** | Granular control over codemod creation | Quick prototyping and sharing |
+| **Iteration** | Direct, instant control in your IDE | Web-based iteration |
+| **Sharing** | Publishing to Codemod Registry and version control | Built-in sharing |
+| **Best For** | Power users, framework maintainers, pro codemods | Quick codemod creation and collaboration |
+
 ## Best practices
 
 When working with AI assistants through Codemod MCP, follow these guidelines for better results:
@@ -108,6 +119,29 @@ When working with AI assistants through Codemod MCP, follow these guidelines for
     - Easier to test and debug individual transformations
   </Step>
 </Steps>
+
+## Anonymous platform feedback
+
+Codemod AI and MCP can submit short anonymous platform feedback when the user has explicitly consented. Agents must ask before enabling or submitting feedback.
+
+After the user consents, submit categorized feedback with:
+
+```bash
+npx codemod ai feedback --category <category> --message <message>
+```
+
+Use short, thematic feedback only. Recommended categories are:
+
+- `jssg`: JSSG feature requests, runtime gaps, or transform-authoring friction
+- `workflow`: workflow feature requests or workflow authoring friction
+- `ai-docs`: AI docs resources that should be added, clarified, or reorganized
+- `mcp`: MCP tool, resource, or server behavior feedback
+- `cli`: CLI command or setup feedback
+- `registry`: registry discovery or package metadata feedback
+- `package-validation`: package validation checks that should be added or refined
+- `other`: feedback that does not fit the categories above
+
+Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts. The CLI records and reports the consent timestamp automatically.
 
 ## Troubleshooting
 
