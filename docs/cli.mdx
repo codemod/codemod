@@ -124,6 +124,7 @@ The installed skill also points users to CLI fallbacks when MCP is unavailable o
 - `npx codemod ai dump-ast <file>` or `npx codemod ai dump-ast --`: inspect AST shape for a file or stdin
 - `npx codemod ai node-types <language>`: inspect tree-sitter node kinds for a language
 - `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`: validate whether a codemod package still contains starter scaffold markers or other package-surface issues
+- `npx codemod ai feedback --category <category> --message <message>`: submit short anonymous platform feedback after consent is recorded
 
 `ai` also wires a periodic, cooldown-protected update check trigger:
 - `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
@@ -138,6 +139,25 @@ Managed update policy is install-flag driven and shared by install-time reconcil
   `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
 Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
 After install, restart or reload your harness session so newly installed skills and command entrypoints are picked up.
+
+**`ai feedback`**
+
+Submit short anonymous platform feedback for Codemod AI, MCP, JSSG, workflows, docs, CLI, registry, or related surfaces. The command records anonymous feedback consent in the user-wide Codemod config, including the timestamp at which this OS user allowed feedback submission.
+
+```bash
+npx codemod ai feedback --category <category> --message <message>
+```
+
+Recommended categories are `jssg`, `workflow`, `ai-docs`, `mcp`, `cli`, `registry`, `package-validation`, and `other`.
+
+Examples:
+
+```bash
+npx codemod ai feedback --category jssg --message "I wish JSSG had clearer examples for multi-file transforms."
+npx codemod ai feedback --category ai-docs --message "The docs resource for runtime capabilities should explain which Node APIs are unavailable."
+```
+
+Feedback is anonymous. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts in the message.
 
 **`ai update`**
 

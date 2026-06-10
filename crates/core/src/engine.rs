@@ -2902,27 +2902,9 @@ impl Engine {
 
         debug!("Executing AI agent step with prompt: {}", resolved_prompt);
 
-        // 1. Check if running inside a parent coding agent
-        let handoff_detection = detect_parent_coding_agent();
-        let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
-        debug!(
-            "AI handoff detection confidence={} agent={} reasons={}",
-            handoff_detection.confidence.as_str(),
-            detected_agent,
-            handoff_detection.reasons.join(" | ")
-        );
-
-        if handoff_detection.confidence == DetectionConfidence::Detected {
-            self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
-            debug!(
-                "AI handoff mode=handoff confidence={} agent={}",
-                handoff_detection.confidence.as_str(),
-                detected_agent
-            );
-            return Ok(());
-        }
-
-        // 2. Check if agent was explicitly specified via --agent
+        // 1. Check if agent was explicitly specified via --agent. Explicit
+        // agent selection should not depend on parent-process inspection, which
+        // may be unavailable in slim/containerized runtimes.
         if let Some(ref agent_name) = self.workflow_run_config.interaction.agent {
             if let Some(canonical) = resolve_agent_name(agent_name) {
                 debug!("Agent specified via --agent: {}", canonical);
@@ -2954,7 +2936,7 @@ impl Engine {
             }
         }
 
-        // 2b. Check for LLM_AGENT env var (useful in non-interactive mode)
+        // 1b. Check for LLM_AGENT env var (useful in non-interactive mode).
         if let Ok(env_agent) = std::env::var("LLM_AGENT") {
             if !env_agent.is_empty() {
                 if let Some(canonical) = resolve_agent_name(&env_agent) {
@@ -2991,6 +2973,26 @@ impl Engine {
                     );
                 }
             }
+        }
+
+        // 2. Check if running inside a parent coding agent.
+        let handoff_detection = detect_parent_coding_agent();
+        let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
+        debug!(
+            "AI handoff detection confidence={} agent={} reasons={}",
+            handoff_detection.confidence.as_str(),
+            detected_agent,
+            handoff_detection.reasons.join(" | ")
+        );
+
+        if handoff_detection.confidence == DetectionConfidence::Detected {
+            self.emit_ai_instructions(logger, ai_config.system_prompt.as_deref(), &resolved_prompt);
+            debug!(
+                "AI handoff mode=handoff confidence={} agent={}",
+                handoff_detection.confidence.as_str(),
+                detected_agent
+            );
+            return Ok(());
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
