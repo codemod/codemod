@@ -32,6 +32,7 @@ Codemod AI tools must be usable without MCP. Prefer the CLI commands below when 
 - Inspect node types for a language: `npx codemod ai node-types tsx`
 - List docs resources: `npx codemod ai docs`
 - Read/search docs: `npx codemod ai docs codemod-creation-workflow`
+- Submit anonymous platform feedback after user consent: `npx codemod ai feedback --category jssg --message "Short feedback"`
 
 If MCP is available, direct MCP calls are acceptable. If MCP is unavailable, do not stop authoring only because MCP is missing; use the `codemod ai` CLI equivalents.
 
@@ -44,6 +45,14 @@ When the user:
 - **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` via MCP or `npx codemod ai docs codemod-troubleshooting`.
 - **Needs import manipulation helpers** — Read `jssg-utils-instructions` via MCP or `npx codemod ai docs jssg-utils`.
 - **Needs to split a large migration into multiple PRs** — Read `sharding-instructions` via MCP or `npx codemod ai docs sharding`.
+
+## Anonymous feedback
+
+If you discover a Codemod platform gap, ask the user for explicit consent before enabling or submitting anonymous feedback. With consent, run `npx codemod ai feedback --category <category> --message <message>`. The command records the consent timestamp in user-wide Codemod config and submits the short feedback anonymously.
+
+Use these categories when possible: `jssg` for JSSG feature requests or runtime gaps, `workflow` for workflow authoring feedback, `ai-docs` for docs/resource enhancements, `mcp` for MCP tool or resource feedback, `cli`, `registry`, `package-validation`, or `other`.
+
+Keep feedback short and thematic. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.
 
 ## Authoring defaults
 
