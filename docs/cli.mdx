@@ -1004,6 +1004,8 @@ npx codemod search [OPTIONS] [QUERY]
 
 Manage the local package cache for Codemod packages.
 
+Codemod stores cached packages by package name and version. Scoped packages are cached under their scope, and unscoped packages are cached under a shared `global/` directory inside the cache root.
+
 **`cache info`**
 
 Show cache information and statistics.
@@ -1012,6 +1014,8 @@ Show cache information and statistics.
 npx codemod cache info
 ```
 
+Prints the cache location, total cached packages, total cached versions, and aggregate disk usage.
+
 **`cache list`**
 
 List cached packages.
@@ -1019,6 +1023,8 @@ List cached packages.
 ```bash
 npx codemod cache list [--detailed]
 ```
+
+Without `--detailed`, the command prints one row per cached package with the number of cached versions and total size. With `--detailed`, each row also includes per-version size and how long ago that version was last modified.
 
 <ResponseField name="--detailed" type="boolean">
   Show package details.
@@ -1032,8 +1038,10 @@ Clear cache for a specific package, or all packages.
 npx codemod cache clear [PACKAGE] [--all]
 ```
 
+Use `PACKAGE` to remove all cached versions for a single package. Use `--all` to remove the entire local package cache and recreate an empty cache directory.
+
 <ResponseField name="[PACKAGE]" type="string">
-  Package name (e.g., `@org/package` or `package`).
+  Package name (for example `@org/package` or `package`).
 </ResponseField>
 
 <ResponseField name="--all" type="boolean">
@@ -1048,10 +1056,12 @@ Prune old or unused cache entries.
 npx codemod cache prune [--max-age <MAX_AGE>] [--dry-run]
 ```
 
+Prunes cached package versions older than `--max-age` days.
+
 <ResponseField name="--max-age <MAX_AGE>" type="number">
   Maximum age in days to keep (default: 30).
 </ResponseField>
 
 <ResponseField name="--dry-run" type="boolean">
-  Dry run - show what would be removed.
+  Show which cached package versions would be removed without deleting them.
 </ResponseField>
