@@ -1020,6 +1020,24 @@ npx codemod cache clear [PACKAGE] [--all]
   Clear all cached packages.
 </ResponseField>
 
+### `codemod mcp`
+
+Start the Codemod Model Context Protocol (MCP) server over stdio.
+
+```bash
+npx codemod mcp [--usage-log <PATH>]
+```
+
+Use this command when you want an MCP-compatible client or harness to talk to Codemod through the CLI.
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for debugging.
+</ResponseField>
+
+<Info>
+  This command is primarily intended to be launched by MCP clients and Codemod-managed AI integrations, not run directly in a normal terminal session.
+</Info>
+
 **`cache prune`**
 
 Prune old or unused cache entries.
