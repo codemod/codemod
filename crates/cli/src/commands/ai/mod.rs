@@ -250,13 +250,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     };
 
     if result.is_ok() && !matches!(args.action, Some(AiAction::Feedback(_))) {
-        send_ai_feedback_event(args).await;
+        send_ai_feedback_event(args);
     }
 
     result
 }
 
-async fn send_ai_feedback_event(args: &Command) {
+fn send_ai_feedback_event(args: &Command) {
     let (event, command_name) = match &args.action {
         None => ("install", "codemod.ai.install"),
         Some(AiAction::Update(_)) => ("update", "codemod.ai.update"),
@@ -272,12 +272,11 @@ async fn send_ai_feedback_event(args: &Command) {
         Some(AiAction::Feedback(_)) => ("feedback", "codemod.ai.feedback"),
     };
 
-    feedback::send_anonymous_feedback_event(
-        "cli-ai",
-        event,
-        HashMap::from([("command".to_string(), command_name.to_string())]),
-    )
-    .await;
+    let event = event.to_string();
+    let metadata = HashMap::from([("command".to_string(), command_name.to_string())]);
+    let _handle = tokio::spawn(async move {
+        feedback::send_anonymous_feedback_event("cli-ai", &event, metadata).await;
+    });
 }
 
 async fn handle_feedback_command(command: &FeedbackCommand) -> Result<()> {

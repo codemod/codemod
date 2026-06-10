@@ -30,7 +30,7 @@ impl Command {
 
         let service = CodemodMcpServer::new_with_feedback(
             self.usage_log.clone(),
-            feedback::anonymous_feedback_client("mcp")?,
+            feedback::anonymous_feedback_client("mcp").unwrap_or(None),
         )
         .serve(transport::stdio())
         .await
