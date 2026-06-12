@@ -523,7 +523,7 @@ async fn upload_package(
             ));
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
-                "Authentication failed. Please run 'npx codemod@latest login' again."
+                "Authentication failed. Please run 'npx codemod login' again."
             ));
         }
 
@@ -613,7 +613,7 @@ fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<S
         .get_auth_for_registry(registry_url)?
         .ok_or_else(|| {
             anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first, or set CODEMOD_AUTH_TOKEN environment variable.",
+                "Not authenticated with registry: {}. Run 'npx codemod login' first, or set CODEMOD_AUTH_TOKEN environment variable.",
                 registry_url
             )
         })?;

@@ -1835,11 +1835,11 @@ fn selected_package_manager_spec(config: &ProjectConfig) -> &'static str {
 
 fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
     match package_manager {
-        "npm" => "npx codemod@latest",
-        "yarn" => "yarn dlx codemod@latest",
-        "pnpm" => "pnpm dlx codemod@latest",
-        "bun" => "bunx codemod@latest",
-        _ => "npx codemod@latest",
+        "npm" => "npx codemod",
+        "yarn" => "yarn dlx codemod",
+        "pnpm" => "pnpm dlx codemod",
+        "bun" => "bunx codemod",
+        _ => "npx codemod",
     }
 }
 
@@ -1914,7 +1914,7 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(readme.contains("npx codemod @codemod/sample-skill"));
     }
 
     #[test]
@@ -1946,7 +1946,7 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(readme.contains("npx codemod @codemod/sample-skill"));
         assert!(root_readme.contains("## One-time setup"));
         assert!(root_readme.contains("codemods/<slug>/"));
         assert!(root_readme.contains("`@codemod/*`"));
@@ -2060,7 +2060,7 @@ mod tests {
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
-        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
+        assert!(readme.contains("npx codemod @codemod/hybrid-project"));
     }
 
     #[test]
@@ -2089,7 +2089,7 @@ mod tests {
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
         assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
-        assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
+        assert!(package_json.contains("yarn dlx codemod jssg test"));
         assert!(readme.contains("yarn test"));
         assert!(!readme.contains("npm test"));
     }

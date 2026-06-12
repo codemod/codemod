@@ -1532,7 +1532,7 @@ mod tests {
         let package_json = PackageJsonLite {
             scripts: BTreeMap::from([(
                 "test".to_string(),
-                "npx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+                "npx codemod jssg test ./scripts/codemod.ts".to_string(),
             )]),
             package_manager: Some("yarn".to_string()),
         };
@@ -1546,7 +1546,7 @@ mod tests {
         let package_json = PackageJsonLite {
             scripts: BTreeMap::from([(
                 "test".to_string(),
-                "yarn dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+                "yarn dlx codemod jssg test ./scripts/codemod.ts".to_string(),
             )]),
             package_manager: Some("yarn".to_string()),
         };
@@ -1560,7 +1560,7 @@ mod tests {
         let package_json = PackageJsonLite {
             scripts: BTreeMap::from([(
                 "test".to_string(),
-                "pnpm dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+                "pnpm dlx codemod jssg test ./scripts/codemod.ts".to_string(),
             )]),
             package_manager: Some("pnpm".to_string()),
         };
@@ -1608,7 +1608,7 @@ mod tests {
         let package_json = PackageJsonLite {
             scripts: BTreeMap::from([(
                 "test".to_string(),
-                "corepack pnpm dlx codemod@latest jssg test ./scripts/codemod.ts".to_string(),
+                "corepack pnpm dlx codemod jssg test ./scripts/codemod.ts".to_string(),
             )]),
             package_manager: Some("yarn".to_string()),
         };

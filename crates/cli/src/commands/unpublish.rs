@@ -71,7 +71,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         .get_auth_for_registry(&registry_url)?
         .ok_or_else(|| {
             anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first.",
+                "Not authenticated with registry: {}. Run 'npx codemod login' first.",
                 registry_url
             )
         })?;
@@ -225,7 +225,7 @@ async fn unpublish_package(
             }
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(anyhow!(
-                    "Authentication failed. Please run 'npx codemod@latest login' again.\n\
+                    "Authentication failed. Please run 'npx codemod login' again.\n\
                      Your session may have expired."
                 ))
             }
