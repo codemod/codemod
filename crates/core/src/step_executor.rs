@@ -39,6 +39,7 @@ pub(crate) struct StepExecutionRequest<'a> {
     pub dependency_chain: &'a [CodemodDependency],
     pub capabilities: &'a Option<HashSet<LlrtSupportedModules>>,
     pub task_expr_ctx: Option<&'a TaskExpressionContext>,
+    pub progress_task_id: Option<&'a str>,
     pub logger: &'a StructuredLogger,
 }
 
@@ -134,6 +135,7 @@ impl<'a> StepExecutor<'a> {
                             dependency_chain: request.dependency_chain,
                             capabilities: request.capabilities,
                             task_expr_ctx: request.task_expr_ctx,
+                            progress_task_id: request.progress_task_id,
                             logger: request.logger,
                         })
                         .await?;
@@ -161,16 +163,23 @@ impl<'a> StepExecutor<'a> {
                     )?;
                     self.engine
                         .execute_ast_grep_step(
-                            request.node.id.clone(),
+                            request
+                                .progress_task_id
+                                .unwrap_or(&request.node.id)
+                                .to_string(),
                             &resolved_ast_grep,
                             request.logger,
                         )
                         .await
                 }
                 StepAction::JSAstGrep(js_ast_grep) => {
+                    let progress_task_id = request
+                        .progress_task_id
+                        .map(str::to_string)
+                        .unwrap_or_else(|| request.task.id.to_string());
                     self.engine
                         .execute_js_ast_grep_step(
-                            request.task.id.to_string(),
+                            progress_task_id,
                             request.step_id.clone().unwrap_or_default(),
                             request.step_name.to_string(),
                             request.report_step_id.cloned(),

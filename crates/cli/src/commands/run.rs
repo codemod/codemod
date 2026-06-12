@@ -1,4 +1,7 @@
 use crate::engine::{create_engine, create_registry_client};
+use crate::pro_dry_run::{
+    apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
+};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{default_workflow_path, select_workflow_path};
@@ -220,37 +223,6 @@ pub async fn handler(
         }
     };
 
-    // Auto-force dry-run for non-pro users accessing pro codemods.
-    // Show an informational notice explaining what free preview covers and
-    // how to unlock applying changes + advanced insights.
-    let (resolved_package, dry_run) = if resolved_package.dry_run_only {
-        if !args.dry_run && !args.no_interactive {
-            let notice = style(
-                "This is a Pro codemod. Preview changes and insights for free with no login or code sharing. \
-                 Applying changes and advanced insights requires a Pro plan and signing in. \
-                 Learn more: codemod.com/contact."
-            )
-            .yellow();
-
-            // Only block for a keypress when both stdin and stdout are attached
-            // to a terminal. Otherwise the notice (or the "press any key" line)
-            // would be hidden from the user — e.g. `codemod run <pro> > out.txt`
-            // would silently hang. In that case, route the notice to stderr so
-            // it stays visible and proceed straight into dry-run.
-            if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                println!("{notice}");
-                println!("{}", style("Press any key to proceed.").dim());
-                wait_for_any_key();
-            } else {
-                eprintln!("{notice}");
-            }
-        }
-
-        (resolved_package, true)
-    } else {
-        (resolved_package, args.dry_run)
-    };
-
     info!(
         "Resolved codemod package: {} -> {}",
         args.package,
@@ -295,6 +267,29 @@ pub async fn handler(
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
     let workflow_definition = butterflow_core::utils::parse_workflow_file(&workflow_path)
         .map_err(|e| anyhow::anyhow!("Failed to parse workflow before run: {}", e))?;
+
+    let dry_run_only_dependency = if resolved_package.dry_run_only {
+        Some(args.package.clone())
+    } else {
+        butterflow_core::utils::find_dry_run_only_codemod_dependency(
+            &workflow_definition,
+            &registry_client,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to inspect bundled codemods: {}", e))?
+    };
+    let pro_dry_run_required = dry_run_only_dependency.is_some();
+    if pro_dry_run_required && !args.dry_run {
+        if resolved_package.dry_run_only {
+            notify_pro_dry_run_required(ProDryRunReason::TopLevelCodemod, args.no_interactive);
+        } else if let Some(source) = dry_run_only_dependency.as_deref() {
+            notify_pro_dry_run_required(
+                ProDryRunReason::BundledChild { source },
+                args.no_interactive,
+            );
+        }
+    }
+    let dry_run = args.dry_run || pro_dry_run_required;
     let auto_launch_tui =
         should_auto_launch_package_run_tui(args.no_interactive, dry_run, &workflow_definition);
 
@@ -316,11 +311,11 @@ pub async fn handler(
     let output_format = args.format;
 
     // Run workflow using the extracted workflow runner
-    let (mut engine, config) = create_engine(
+    let (mut engine, mut config) = create_engine(
         workflow_path,
         target_path.clone(),
         dry_run,
-        args.allow_dirty || resolved_package.dry_run_only,
+        args.allow_dirty || pro_dry_run_required,
         params,
         args.registry.clone(),
         Some(capabilities.clone()),
@@ -344,12 +339,9 @@ pub async fn handler(
     // For pro codemod dry-run: streamline execution — auto-trigger manual
     // steps, skip shards, skip state writes, flatten matrix to one task per node.
     // Set on both engine (used at runtime) and config (passed to run_workflow).
-    if resolved_package.dry_run_only {
-        let engine_config = engine.workflow_run_config_mut();
-        engine_config.execution.auto_trigger_manual_steps = true;
-        engine_config.execution.skip_shard_steps = true;
-        engine_config.execution.skip_state_writes = true;
-        engine_config.execution.flatten_matrix_tasks = true;
+    if pro_dry_run_required {
+        apply_pro_dry_run_execution_settings(engine.workflow_run_config_mut());
+        apply_pro_dry_run_execution_settings(&mut config);
     }
 
     let run_result = run_workflow(&mut engine, config).await;
@@ -452,30 +444,6 @@ fn legacy_command_error(exit_code: Option<i32>) -> anyhow::Error {
         "Legacy codemod command failed with exit code: {:?}",
         exit_code
     )
-}
-
-/// Block until the user presses any key. Falls back to a no-op when either
-/// stdin or stdout isn't a terminal (e.g. piped input or redirected output)
-/// or when raw mode can't be enabled. Callers must ensure any prompt they want
-/// the user to read has already been printed to a stream the user can see.
-fn wait_for_any_key() {
-    use crossterm::event::{read, Event, KeyEventKind};
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return;
-    }
-    if enable_raw_mode().is_err() {
-        return;
-    }
-    loop {
-        match read() {
-            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
-    let _ = disable_raw_mode();
 }
 
 fn load_codemod_manifest(codemod_config_path: &Path) -> Result<Option<CodemodManifest>> {

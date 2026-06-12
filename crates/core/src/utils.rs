@@ -8,6 +8,11 @@ use serde_yaml;
 
 use butterflow_models::{Error, Node, Result, Workflow};
 
+use crate::{
+    engine::CodemodDependency, nested_codemod_service::NestedCodemodService,
+    registry::RegistryClient,
+};
+
 fn has_parent_path_components(path: &Path) -> bool {
     path.components().any(|component| {
         matches!(
@@ -43,6 +48,15 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
             }
         }
     }
+}
+
+pub async fn find_dry_run_only_codemod_dependency(
+    workflow: &Workflow,
+    registry_client: &RegistryClient,
+) -> Result<Option<String>> {
+    NestedCodemodService::new(registry_client)
+        .find_dry_run_only_dependency(workflow, &[] as &[CodemodDependency])
+        .await
 }
 
 /// Validate a workflow definition

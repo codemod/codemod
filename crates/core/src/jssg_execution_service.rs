@@ -552,7 +552,8 @@ impl<'a> JssgExecutionService<'a> {
         let failed_file_count_for_closure = Arc::clone(&failed_file_count);
 
         let execute_result = config
-            .execute_before_finish(
+            .execute_with_task_id_before_finish(
+                &request_id,
                 move |file_path, config| {
                     if canceled_flag_for_closure.load(Ordering::Acquire)
                         || idle_timed_out_for_closure.load(Ordering::Acquire)
