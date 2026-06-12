@@ -120,7 +120,16 @@ impl<'a> NestedCodemodService<'a> {
         for node in &workflow.nodes {
             for step in &node.steps {
                 if let butterflow_models::step::StepAction::Codemod(codemod) = &step.action {
-                    let resolved = self.resolve(&codemod.source, dependency_chain).await?;
+                    let resolved = match self.resolve(&codemod.source, dependency_chain).await {
+                        Ok(resolved) => resolved,
+                        Err(error) => {
+                            warn!(
+                                "Failed to inspect codemod dependency {} for dry-run-only status: {}",
+                                codemod.source, error
+                            );
+                            continue;
+                        }
+                    };
 
                     if resolved.package.dry_run_only {
                         return Ok(Some(codemod.source.clone()));
@@ -254,6 +263,39 @@ mod tests {
             .find_dry_run_only_dependency(&workflow, &[])
             .await
             .expect("dry-run-only scan should succeed");
+
+        assert_eq!(dry_run_only_dependency.as_deref(), Some("child-pro"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn find_dry_run_only_dependency_skips_unresolved_children() {
+        let packages = HashMap::from([(
+            "child-pro".to_string(),
+            MockPackage {
+                workflow: workflow_yaml_without_children(),
+                dry_run_only: true,
+            },
+        )]);
+        let (registry_url, server) = spawn_registry_server(packages).await;
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let registry_client = RegistryClient::new(
+            crate::registry::RegistryConfig {
+                default_registry: registry_url,
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+        let workflow: Workflow = serde_yaml::from_str(&workflow_yaml_with_children(&[
+            "missing-child",
+            "child-pro",
+        ]))
+        .expect("workflow yaml");
+
+        let dry_run_only_dependency = NestedCodemodService::new(&registry_client)
+            .find_dry_run_only_dependency(&workflow, &[])
+            .await
+            .expect("dry-run-only scan should skip unresolved children");
 
         assert_eq!(dry_run_only_dependency.as_deref(), Some("child-pro"));
         server.abort();
@@ -430,6 +472,15 @@ mod tests {
         format!(
             "version: '1'\nnodes:\n- id: test\n  name: Test\n  steps:\n  - name: Run child\n    codemod:\n      source: {source}\n"
         )
+    }
+
+    fn workflow_yaml_with_children(sources: &[&str]) -> String {
+        let steps = sources
+            .iter()
+            .map(|source| format!("  - name: Run {source}\n    codemod:\n      source: {source}\n"))
+            .collect::<String>();
+
+        format!("version: '1'\nnodes:\n- id: test\n  name: Test\n  steps:\n{steps}")
     }
 
     fn workflow_yaml_without_children() -> String {

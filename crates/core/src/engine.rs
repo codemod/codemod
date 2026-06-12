@@ -2902,6 +2902,7 @@ impl Engine {
     pub async fn execute_js_ast_grep_step(
         &self,
         id: String,
+        progress_task_id: Option<String>,
         step_id: String,
         step_name: String,
         report_step_id: Option<String>,
@@ -2921,6 +2922,7 @@ impl Engine {
         JssgExecutionService::new(self)
             .execute(JssgExecutionRequest {
                 id,
+                progress_task_id,
                 step_id,
                 step_name,
                 report_step_id,
@@ -3625,6 +3627,7 @@ impl Engine {
 
         self.execute_js_ast_grep_step(
             task_id.to_string(),
+            None,
             "shard-scan".to_string(),
             "Shard Scan".to_string(),
             None,
@@ -4241,6 +4244,7 @@ export default function transform(ast) {
         engine
             .execute_js_ast_grep_step(
                 "test-node".to_string(),
+                None,
                 "test-step".to_string(),
                 "test-step".to_string(),
                 None,

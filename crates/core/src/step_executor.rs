@@ -179,7 +179,8 @@ impl<'a> StepExecutor<'a> {
                         .unwrap_or_else(|| request.task.id.to_string());
                     self.engine
                         .execute_js_ast_grep_step(
-                            progress_task_id,
+                            request.task.id.to_string(),
+                            Some(progress_task_id),
                             request.step_id.clone().unwrap_or_default(),
                             request.step_name.to_string(),
                             request.report_step_id.cloned(),

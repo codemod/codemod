@@ -4714,6 +4714,7 @@ function helper() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -4811,6 +4812,7 @@ interface ApiResponse {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -4888,6 +4890,7 @@ function main() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -4950,6 +4953,7 @@ export default function (
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5024,6 +5028,7 @@ export default function transform(ast) {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5093,6 +5098,7 @@ export default function transform() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5177,6 +5183,7 @@ var count = 0;
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5232,6 +5239,7 @@ async fn test_execute_js_ast_grep_step_nonexistent_js_file() {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5313,6 +5321,7 @@ export default function transform(root) {
     let result = engine
         .execute_js_ast_grep_step(
             "matrix-meta-files".to_string(),
+            None,
             "matrix-step".to_string(),
             "matrix-step".to_string(),
             None,
@@ -5708,6 +5717,7 @@ build/
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5749,6 +5759,7 @@ build/
     let result_no_gitignore = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,
@@ -5820,6 +5831,7 @@ export default function transform(ast) {
     let result = engine
         .execute_js_ast_grep_step(
             "test-node".to_string(),
+            None,
             "test-step".to_string(),
             "test-step".to_string(),
             None,

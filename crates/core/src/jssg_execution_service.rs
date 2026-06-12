@@ -53,6 +53,7 @@ use crate::{
 
 pub(crate) struct JssgExecutionRequest<'a> {
     pub id: String,
+    pub progress_task_id: Option<String>,
     pub step_id: String,
     pub step_name: String,
     pub report_step_id: Option<String>,
@@ -414,7 +415,11 @@ impl<'a> JssgExecutionService<'a> {
         let js_file_path_clone = js_file_path.clone();
         let resolver_clone = resolver.clone();
         let request_id = request.id.clone();
-        let id_clone = Arc::new(request_id.clone());
+        let progress_task_id = request
+            .progress_task_id
+            .clone()
+            .unwrap_or_else(|| request_id.clone());
+        let id_clone = Arc::new(progress_task_id.clone());
         let progress_callback = self
             .engine
             .workflow_run_config()
@@ -553,7 +558,7 @@ impl<'a> JssgExecutionService<'a> {
 
         let execute_result = config
             .execute_with_task_id_before_finish(
-                &request_id,
+                &progress_task_id,
                 move |file_path, config| {
                     if canceled_flag_for_closure.load(Ordering::Acquire)
                         || idle_timed_out_for_closure.load(Ordering::Acquire)
