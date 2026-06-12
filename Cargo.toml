@@ -118,3 +118,4 @@ wasm-bindgen-macro = { git = "https://github.com/mohebifar/wasm-bindgen.git", br
 wasm-bindgen-shared = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
 wasm-bindgen-macro-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
 js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
+oxc_resolver = { path = "/Users/sahilmobaidin/Desktop/myprojects/oxc-resolver" }

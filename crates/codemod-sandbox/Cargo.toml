@@ -18,7 +18,7 @@ bytes = "1.0"
 dashmap = "6"
 vfs = { version = "0.12", optional = true, default-features = false }
 sha2 = "0.10"
-oxc_resolver = "11.13.1"
+oxc_resolver = { path = "/Users/sahilmobaidin/Desktop/myprojects/oxc-resolver", version = "11.21.0" }
 oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
 swc_core = { version = "33.0", features = [
   "common",

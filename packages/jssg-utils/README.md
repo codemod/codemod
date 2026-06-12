@@ -110,3 +110,66 @@ These helpers work on XML `SgNode`s from `codemod:ast-grep/langs/xml`.
 - `getAttributeValue(element, attrName)` returns an unquoted XML attribute value, or `null`.
 - `hasTag(root, tag)` checks whether a tag exists.
 - `getLineIndent(src, node)` returns the whitespace before `node` on its line.
+
+## Java helpers
+
+Java utilities are split by concern:
+
+```ts
+import {
+  cleanupJavaImports,
+  collectJavaImports,
+  hasConflictingJavaSimpleImport,
+  isJavaTypeImported,
+} from "@jssg/utils/java/imports";
+import { findVisibleJavaDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceJavaTypeIdentifierSafely } from "@jssg/utils/java/types";
+import {
+  getJavaMethodInvocationParts,
+  getJavaReceiverIdentifier,
+} from "@jssg/utils/java/method-invocations";
+import { rewriteAnonymousJavaCallbackToWhenComplete } from "@jssg/utils/java/callbacks";
+```
+
+These helpers cover recurring Java codemod review issues:
+
+- exact and wildcard import ownership checks
+- conflicting simple-name imports
+- obsolete import cleanup after type rewrites
+- visible declaration lookup before a usage site
+- receiver identifier extraction for method invocations
+- type identifier replacement that avoids FQCN subnodes
+- anonymous callback-to-`whenComplete` rewrites with duplicate parameter handling
+
+Example:
+
+```ts
+const imports = collectJavaImports(rootNode);
+
+if (
+  isJavaTypeImported(imports, {
+    simpleName: "ResponseEntity",
+    fullyQualifiedName: "org.springframework.http.ResponseEntity",
+  }) &&
+  !hasConflictingJavaSimpleImport(imports, {
+    simpleName: "ResponseEntity",
+    expectedFullyQualifiedName: "org.springframework.http.ResponseEntity",
+  })
+) {
+  // Safe to treat simple ResponseEntity references as Spring ResponseEntity.
+}
+```
+
+For migrations that rewrite imported types:
+
+```ts
+const rewritten = rootNode.commitEdits(edits);
+
+return cleanupJavaImports(rewritten, {
+  removeIfUnreferenced: [
+    "org.springframework.util.concurrent.ListenableFuture",
+    "org.springframework.util.concurrent.SettableListenableFuture",
+  ],
+  addIfReferenced: ["java.util.concurrent.CompletableFuture"],
+});
+```

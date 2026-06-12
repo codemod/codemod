@@ -26,6 +26,42 @@ import { getImport, addImport, removeImport } from "@jssg/utils/javascript/impor
 These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically.
 </Info>
 
+## Java Utilities
+
+`@jssg/utils` also includes Java helpers for recurring safe-codemod patterns:
+
+```typescript
+import {
+  cleanupJavaImports,
+  collectJavaImports,
+  hasConflictingJavaSimpleImport,
+  isJavaTypeImported,
+} from "@jssg/utils/java/imports";
+import { findVisibleJavaDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceJavaTypeIdentifierSafely } from "@jssg/utils/java/types";
+import {
+  getJavaMethodInvocationParts,
+  getJavaReceiverIdentifier,
+} from "@jssg/utils/java/method-invocations";
+import { rewriteAnonymousJavaCallbackToWhenComplete } from "@jssg/utils/java/callbacks";
+```
+
+Use these when Java codemods need to prove framework ownership, handle wildcard/conflicting imports, avoid shadowed receivers, replace type identifiers without touching fully qualified names, or convert anonymous callback classes safely.
+
+```typescript
+const imports = collectJavaImports(rootNode);
+
+const isSpringResponseEntity =
+  isJavaTypeImported(imports, {
+    simpleName: "ResponseEntity",
+    fullyQualifiedName: "org.springframework.http.ResponseEntity",
+  }) &&
+  !hasConflictingJavaSimpleImport(imports, {
+    simpleName: "ResponseEntity",
+    expectedFullyQualifiedName: "org.springframework.http.ResponseEntity",
+  });
+```
+
 ---
 
 ## `getImport`

@@ -13,7 +13,7 @@ log = { workspace = true }
 
 # OXC dependencies for semantic analysis
 oxc = { version = "0.99.0", features = ["semantic"] }
-oxc_resolver = "11.13.1"
+oxc_resolver = { path = "/Users/sahilmobaidin/Desktop/myprojects/oxc-resolver", version = "11.21.0" }
 ignore = { workspace = true }
 
 # Concurrency
@@ -28,4 +28,3 @@ yarn_pnp = ["oxc_resolver/yarn_pnp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
