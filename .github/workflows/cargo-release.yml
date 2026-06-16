@@ -35,12 +35,13 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_name: codemod-darwin-x86_64
-          - os: windows-latest
+          # Pin MSVC releases to VS 2022 until libz-ng-sys/cmake supports the VS 2026 image.
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             binary_name: codemod-windows-x86_64.exe
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -55,7 +56,7 @@ jobs:
         id: binary_path
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          if [ "${{ matrix.os }}" == "windows-2022" ]; then
             echo "path=target/${{ matrix.target }}/release/codemod.exe" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -81,17 +82,17 @@ jobs:
 
       - name: Import Code Signing Certificate (macOS only)
         if: matrix.os == 'macos-latest'
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - name: Install report UI dependencies
         run: pnpm install --frozen-lockfile --filter codemod-report-ui...
@@ -157,19 +158,19 @@ jobs:
       #   run: xcrun stapler staple -v ${{ steps.binary_path.outputs.path }}
 
       - name: Rename binary (Non-Windows)
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-2022'
         run: |
           cd target/${{ matrix.target }}/release
           mv codemod ${{ matrix.binary_name }}
 
       - name: Rename binary (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: |
           cd target/${{ matrix.target }}/release
           mv codemod.exe ${{ matrix.binary_name }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
@@ -182,7 +183,7 @@ jobs:
     outputs:
       changelog: ${{ steps.git-cliff.outputs.content }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: recursive
@@ -208,7 +209,7 @@ jobs:
           rm CHANGELOG.md.bak
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore(changelog): Update changelog for ${{ github.ref_name }}"
@@ -232,11 +233,11 @@ jobs:
       contents: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
 
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           body: ${{ needs.changelog.outputs.changelog }}
           tag_name: ${{ github.ref_name }}
@@ -259,16 +260,16 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
