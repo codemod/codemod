@@ -16,6 +16,7 @@ mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod feedback;
+mod pro_dry_run;
 mod progress_bar;
 mod report_server;
 mod suitability;
