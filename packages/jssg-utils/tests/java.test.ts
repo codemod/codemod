@@ -92,6 +92,27 @@ function testCleanupImportsRemovesOldSpringImportsAndAddsNewImport() {
   );
 }
 
+function testCleanupImportsIgnoresFullyQualifiedTypeLeaves() {
+  const input = [
+    "import com.example.Widget;",
+    "",
+    "class Example {",
+    "  com.other.Widget widget;",
+    "}",
+    "",
+  ].join("\n");
+
+  const output = cleanupImports(input, {
+    removeIfUnreferenced: ["com.example.Widget"],
+    addIfReferenced: ["com.example.Helper"],
+  });
+
+  assert(
+    output === ["class Example {", "  com.other.Widget widget;", "}", ""].join("\n"),
+    "FQCN simple-name leaves should not keep stale imports or trigger unrelated imports",
+  );
+}
+
 function testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField() {
   const root = parseJava(
     [
@@ -124,6 +145,34 @@ function testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField() {
     declaration!.typeText === "com.google.common.util.concurrent.ListenableFuture<String>",
     "Should return the Guava local type, not the Spring field type",
   );
+}
+
+function testFindVisibleDeclarationBeforeUsageIgnoresNestedClassFields() {
+  const root = parseJava(
+    [
+      "class Example {",
+      "  class Inner {",
+      "    private String value;",
+      "  }",
+      "",
+      "  void read() {",
+      "    value.toString();",
+      "  }",
+      "}",
+    ].join("\n"),
+  );
+  const invocation = root.find({ rule: { pattern: "$RECEIVER.toString()" } });
+  assert(invocation !== null, "Should find receiver usage");
+
+  const parts = getMethodInvocationParts(invocation!);
+  assert(parts?.receiver !== null, "Should read receiver");
+
+  const declaration = findVisibleDeclarationBeforeUsage({
+    usageNode: invocation!,
+    name: getReceiverIdentifier(parts!.receiver)!,
+  });
+
+  assert(declaration === null, "Nested class fields should not be visible in the outer class");
 }
 
 function testReplaceTypeIdentifierSafelySkipsFqcnSubnode() {
@@ -221,9 +270,35 @@ function testAnonymousClassMethodHelpersSupportCallbackMigrationShapes() {
   assert(failureBody!.includes("recover(value);"), "Should preserve failure body references");
 }
 
+function testGetSingleParameterNameRejectsMultiParameterMethods() {
+  const root = parseJava(
+    [
+      "class Example {",
+      "  Runnable callback = new Runnable() {",
+      "    public void accept(String first, String second) {",
+      "      handle(first, second);",
+      "    }",
+      "  };",
+      "}",
+    ].join("\n"),
+  );
+  const callback = root.find({ rule: { kind: "object_creation_expression" } });
+  assert(callback !== null, "Should find anonymous class");
+
+  const method = getAnonymousClassMethods(callback!, ["accept"])?.get("accept");
+  assert(method !== undefined, "Should find anonymous method");
+  assert(
+    getSingleParameterName(method!) === null,
+    "Multi-parameter methods should not be treated as single-parameter methods",
+  );
+}
+
 testCollectImportsHandlesWildcardsAndConflicts();
 testCleanupImportsRemovesOldSpringImportsAndAddsNewImport();
+testCleanupImportsIgnoresFullyQualifiedTypeLeaves();
 testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField();
+testFindVisibleDeclarationBeforeUsageIgnoresNestedClassFields();
 testReplaceTypeIdentifierSafelySkipsFqcnSubnode();
 testReplaceTypeIdentifierSafelyReplacesGenericType();
 testAnonymousClassMethodHelpersSupportCallbackMigrationShapes();
+testGetSingleParameterNameRejectsMultiParameterMethods();

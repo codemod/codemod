@@ -49,7 +49,17 @@ export function getAnonymousClassMethods(
 
 export function getSingleParameterName(method: JavaNode): string | null {
   const params = method.find({ rule: { kind: "formal_parameters" } });
-  const parameter = params?.find({ rule: { kind: "formal_parameter" } });
+  const parameters =
+    params
+      ?.children()
+      .filter(
+        (child) => child.kind() === "formal_parameter" || child.kind() === "spread_parameter",
+      ) ?? [];
+  if (parameters.length !== 1) {
+    return null;
+  }
+
+  const parameter = parameters[0];
   if (!parameter) {
     return null;
   }

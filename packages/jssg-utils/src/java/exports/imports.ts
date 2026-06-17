@@ -133,7 +133,7 @@ export function referencesIdentifier(rootNode: JavaNode, name: string): boolean 
         any: [{ kind: "identifier" }, { kind: "type_identifier" }],
       },
     })
-    .some((node) => node.text() === name && !isInsideImport(node));
+    .some((node) => node.text() === name && !isInsideImport(node) && !isPartOfScopedType(node));
 }
 
 function packageNameOf(fullyQualifiedName: string): string {
@@ -213,6 +213,10 @@ function expandRemovalEdit(node: JavaNode, source: string): Edit {
 
 function isInsideImport(node: JavaNode): boolean {
   return node.ancestors().some((ancestor) => ancestor.kind() === "import_declaration");
+}
+
+function isPartOfScopedType(node: JavaNode): boolean {
+  return node.ancestors().some((ancestor) => ancestor.kind() === "scoped_type_identifier");
 }
 
 function normalizeImportSpacing(source: string): string {

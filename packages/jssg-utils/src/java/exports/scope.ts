@@ -136,7 +136,14 @@ function findPriorLocalDeclaration(
 }
 
 function findFieldDeclaration(classNode: JavaNode, name: string): DeclarationInfo | null {
-  for (const field of classNode.findAll({ rule: { kind: "field_declaration" } })) {
+  const classBody = classNode.find({ rule: { kind: "class_body" } });
+  if (!classBody) {
+    return null;
+  }
+
+  for (const field of classBody
+    .children()
+    .filter((child) => child.kind() === "field_declaration")) {
     const typeText = findTypeNode(field)?.text() ?? null;
     for (const declarator of field.fieldChildren("declarator")) {
       if (declarator.field("name")?.text() === name) {
