@@ -1,24 +1,25 @@
+import { parse } from "codemod:ast-grep";
 import type Java from "@codemod.com/jssg-types/langs/java";
-import type { SgNode } from "@codemod.com/jssg-types/main";
+import type { Edit, SgNode } from "@codemod.com/jssg-types/main";
 
 export type JavaNode = SgNode<Java>;
 
-export type JavaImportState = {
+export type ImportState = {
   imported: Set<string>;
   wildcardImportedPackages: Set<string>;
 };
 
-export type JavaImportCleanupOptions = {
+export type ImportCleanupOptions = {
   removeIfUnreferenced?: string[];
   addIfReferenced?: string[];
 };
 
-export function collectJavaImports(rootNode: JavaNode): JavaImportState {
+export function collectImports(rootNode: JavaNode): ImportState {
   const imported = new Set<string>();
   const wildcardImportedPackages = new Set<string>();
 
   for (const importNode of rootNode.findAll({ rule: { kind: "import_declaration" } })) {
-    const importPath = parseJavaImportDeclaration(importNode.text());
+    const importPath = getImportPath(importNode);
     if (!importPath) {
       continue;
     }
@@ -33,8 +34,8 @@ export function collectJavaImports(rootNode: JavaNode): JavaImportState {
   return { imported, wildcardImportedPackages };
 }
 
-export function isJavaTypeImported(
-  imports: JavaImportState,
+export function isTypeImported(
+  imports: ImportState,
   options: { simpleName: string; fullyQualifiedName: string },
 ): boolean {
   if (imports.imported.has(options.fullyQualifiedName)) {
@@ -45,13 +46,13 @@ export function isJavaTypeImported(
   return imports.wildcardImportedPackages.has(packageName);
 }
 
-export function hasConflictingJavaSimpleImport(
-  imports: JavaImportState,
+export function hasConflictingSimpleImport(
+  imports: ImportState,
   options: { simpleName: string; expectedFullyQualifiedName: string },
 ): boolean {
   for (const importPath of imports.imported) {
     if (
-      simpleJavaName(importPath) === options.simpleName &&
+      simpleName(importPath) === options.simpleName &&
       importPath !== options.expectedFullyQualifiedName
     ) {
       return true;
@@ -61,39 +62,47 @@ export function hasConflictingJavaSimpleImport(
   return false;
 }
 
-export function cleanupJavaImports(source: string, options: JavaImportCleanupOptions): string {
+export function cleanupImports(source: string, options: ImportCleanupOptions): string {
+  const rootNode = parse<Java>("java", source).root();
+  const edits = createImportCleanupEdits(rootNode, options, source);
+  return edits.length > 0 ? normalizeImportSpacing(rootNode.commitEdits(edits)) : source;
+}
+
+export function createImportCleanupEdits(
+  rootNode: JavaNode,
+  options: ImportCleanupOptions,
+  source = rootNode.text(),
+): Edit[] {
+  const edits: Edit[] = [];
+  const removedImportIds = new Set<number>();
   const removeIfUnreferenced = new Set(options.removeIfUnreferenced ?? []);
   const addIfReferenced = options.addIfReferenced ?? [];
-  const withoutImports = stripJavaImportLines(source);
 
-  let next = source
-    .split("\n")
-    .filter((line) => {
-      const importPath = parseJavaImportDeclaration(line);
-      if (!importPath || !removeIfUnreferenced.has(importPath)) {
-        return true;
-      }
+  for (const importNode of rootNode.findAll({ rule: { kind: "import_declaration" } })) {
+    const importPath = getImportPath(importNode);
+    if (!importPath || !removeIfUnreferenced.has(importPath)) {
+      continue;
+    }
 
-      return referencesJavaIdentifier(withoutImports, simpleJavaName(importPath));
-    })
-    .join("\n");
+    if (!referencesIdentifier(rootNode, simpleName(importPath))) {
+      edits.push(expandRemovalEdit(importNode, source));
+      removedImportIds.add(importNode.id());
+    }
+  }
 
-  const bodyWithoutImports = stripJavaImportLines(next);
   const importsToAdd = addIfReferenced
-    .filter((importPath) =>
-      referencesJavaIdentifier(bodyWithoutImports, simpleJavaName(importPath)),
-    )
-    .filter((importPath) => !hasJavaImportInSource(next, importPath))
+    .filter((importPath) => referencesIdentifier(rootNode, simpleName(importPath)))
+    .filter((importPath) => !hasImport(rootNode, importPath))
     .sort();
 
   if (importsToAdd.length > 0) {
-    next = insertJavaImportBlock(next, importsToAdd.map((path) => `import ${path};`).join("\n"));
+    addImportInsertionEdit(rootNode, importsToAdd, removedImportIds, edits);
   }
 
-  return normalizeJavaImportSpacing(next);
+  return edits;
 }
 
-export function parseJavaImportDeclaration(importText: string): string | null {
+export function parseImportDeclaration(importText: string): string | null {
   const trimmed = importText.trim();
   if (!trimmed.startsWith("import ") || !trimmed.endsWith(";")) {
     return null;
@@ -102,60 +111,111 @@ export function parseJavaImportDeclaration(importText: string): string | null {
   return trimmed.slice("import ".length, -1).trim();
 }
 
-export function simpleJavaName(fullyQualifiedName: string): string {
+export function getImportPath(importNode: JavaNode): string | null {
+  const scopedIdentifier = importNode.find({ rule: { kind: "scoped_identifier" } });
+  if (!scopedIdentifier) {
+    return null;
+  }
+
+  return importNode.find({ rule: { kind: "asterisk" } })
+    ? `${scopedIdentifier.text()}.*`
+    : scopedIdentifier.text();
+}
+
+export function simpleName(fullyQualifiedName: string): string {
   return fullyQualifiedName.slice(fullyQualifiedName.lastIndexOf(".") + 1);
 }
 
-export function referencesJavaIdentifier(source: string, name: string): boolean {
-  let index = source.indexOf(name);
-  while (index !== -1) {
-    const previous = index === 0 ? "" : (source[index - 1] ?? "");
-    const next = source[index + name.length] ?? "";
-    if (!isJavaIdentifierPart(previous) && !isJavaIdentifierPart(next)) {
-      return true;
-    }
-    index = source.indexOf(name, index + name.length);
-  }
-
-  return false;
+export function referencesIdentifier(rootNode: JavaNode, name: string): boolean {
+  return rootNode
+    .findAll({
+      rule: {
+        any: [{ kind: "identifier" }, { kind: "type_identifier" }],
+      },
+    })
+    .some((node) => node.text() === name && !isInsideImport(node));
 }
 
 function packageNameOf(fullyQualifiedName: string): string {
   return fullyQualifiedName.slice(0, fullyQualifiedName.lastIndexOf("."));
 }
 
-function stripJavaImportLines(source: string): string {
-  return source
-    .split("\n")
-    .filter((line) => parseJavaImportDeclaration(line) === null)
-    .join("\n");
+function hasImport(rootNode: JavaNode, importPath: string): boolean {
+  return rootNode
+    .findAll({ rule: { kind: "import_declaration" } })
+    .some((importNode) => getImportPath(importNode) === importPath);
 }
 
-function hasJavaImportInSource(source: string, importPath: string): boolean {
-  return source.split("\n").some((line) => parseJavaImportDeclaration(line) === importPath);
-}
+function addImportInsertionEdit(
+  rootNode: JavaNode,
+  importPaths: string[],
+  removedImportIds: Set<number>,
+  edits: Edit[],
+): void {
+  const importBlock = importPaths.map((path) => `import ${path};`).join("\n");
+  const importNodes = rootNode.findAll({ rule: { kind: "import_declaration" } });
+  const survivingImports = importNodes.filter((node) => !removedImportIds.has(node.id()));
+  const lastImport = survivingImports[survivingImports.length - 1];
 
-function insertJavaImportBlock(source: string, importBlock: string): string {
-  const lines = source.split("\n");
-  let lastImportIndex = -1;
-  let packageIndex = -1;
+  if (lastImport) {
+    edits.push({
+      startPos: lastImport.range().end.index,
+      endPos: lastImport.range().end.index,
+      insertedText: `\n${importBlock}`,
+    });
+    return;
+  }
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (parseJavaImportDeclaration(line) !== null) {
-      lastImportIndex = index;
-    }
-    if (line.trim().startsWith("package ")) {
-      packageIndex = index;
+  const firstRemovedImport = importNodes.find((node) => removedImportIds.has(node.id()));
+  if (firstRemovedImport) {
+    const removalEdit = edits.find(
+      (edit) => edit.startPos === firstRemovedImport.range().start.index,
+    );
+    if (removalEdit) {
+      removalEdit.insertedText = importBlock.endsWith("\n") ? importBlock : `${importBlock}\n`;
+      return;
     }
   }
 
-  const insertionIndex = lastImportIndex >= 0 ? lastImportIndex + 1 : packageIndex + 1;
-  lines.splice(insertionIndex, 0, ...importBlock.split("\n"));
-  return lines.join("\n");
+  const packageNode = rootNode.find({ rule: { kind: "package_declaration" } });
+  if (packageNode) {
+    edits.push({
+      startPos: packageNode.range().end.index,
+      endPos: packageNode.range().end.index,
+      insertedText: `\n\n${importBlock}`,
+    });
+    return;
+  }
+
+  edits.push({
+    startPos: 0,
+    endPos: 0,
+    insertedText: `${importBlock}\n`,
+  });
 }
 
-function normalizeJavaImportSpacing(source: string): string {
+function expandRemovalEdit(node: JavaNode, source: string): Edit {
+  const range = node.range();
+  let endPos = range.end.index;
+
+  if (source[endPos] === "\r" && source[endPos + 1] === "\n") {
+    endPos += 2;
+  } else if (source[endPos] === "\n") {
+    endPos += 1;
+  }
+
+  return {
+    startPos: range.start.index,
+    endPos,
+    insertedText: "",
+  };
+}
+
+function isInsideImport(node: JavaNode): boolean {
+  return node.ancestors().some((ancestor) => ancestor.kind() === "import_declaration");
+}
+
+function normalizeImportSpacing(source: string): string {
   const lines = source.split("\n");
   const normalized: string[] = [];
 
@@ -177,8 +237,4 @@ function normalizeJavaImportSpacing(source: string): string {
   }
 
   return normalized.join("\n");
-}
-
-function isJavaIdentifierPart(character: string): boolean {
-  return /^[A-Za-z0-9_$]$/.test(character);
 }

@@ -32,33 +32,40 @@ These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle
 
 ```typescript
 import {
-  cleanupJavaImports,
-  collectJavaImports,
-  hasConflictingJavaSimpleImport,
-  isJavaTypeImported,
+  cleanupImports,
+  collectImports,
+  createImportCleanupEdits,
+  hasConflictingSimpleImport,
+  isTypeImported,
 } from "@jssg/utils/java/imports";
-import { findVisibleJavaDeclarationBeforeUsage } from "@jssg/utils/java/scope";
-import { replaceJavaTypeIdentifierSafely } from "@jssg/utils/java/types";
+import { findVisibleDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceTypeIdentifierSafely } from "@jssg/utils/java/types";
 import {
-  getJavaMethodInvocationParts,
-  getJavaReceiverIdentifier,
+  getMethodInvocationParts,
+  getReceiverIdentifier,
 } from "@jssg/utils/java/method-invocations";
-import { rewriteAnonymousJavaCallbackToWhenComplete } from "@jssg/utils/java/callbacks";
+import {
+  getAnonymousClassMethod,
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+  renameIdentifiersInNode,
+} from "@jssg/utils/java/anonymous-classes";
 ```
 
-Use these when Java codemods need to prove framework ownership, handle wildcard/conflicting imports, avoid shadowed receivers, replace type identifiers without touching fully qualified names, or convert anonymous callback classes safely.
+Use these when Java codemods need to prove type ownership, handle wildcard/conflicting imports, avoid shadowed receivers, replace type identifiers without touching fully qualified names, or inspect anonymous class methods safely.
 
 ```typescript
-const imports = collectJavaImports(rootNode);
+const imports = collectImports(rootNode);
 
-const isSpringResponseEntity =
-  isJavaTypeImported(imports, {
-    simpleName: "ResponseEntity",
-    fullyQualifiedName: "org.springframework.http.ResponseEntity",
+const isExpectedWidget =
+  isTypeImported(imports, {
+    simpleName: "Widget",
+    fullyQualifiedName: "com.example.Widget",
   }) &&
-  !hasConflictingJavaSimpleImport(imports, {
-    simpleName: "ResponseEntity",
-    expectedFullyQualifiedName: "org.springframework.http.ResponseEntity",
+  !hasConflictingSimpleImport(imports, {
+    simpleName: "Widget",
+    expectedFullyQualifiedName: "com.example.Widget",
   });
 ```
 

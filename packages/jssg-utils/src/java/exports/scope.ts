@@ -3,17 +3,17 @@ import type { SgNode } from "@codemod.com/jssg-types/main";
 
 export type JavaNode = SgNode<Java>;
 
-export type JavaDeclarationInfo = {
+export type DeclarationInfo = {
   kind: "parameter" | "local" | "field";
   name: string;
   typeText: string | null;
   node: JavaNode;
 };
 
-export function findVisibleJavaDeclarationBeforeUsage(options: {
+export function findVisibleDeclarationBeforeUsage(options: {
   usageNode: JavaNode;
   name: string;
-}): JavaDeclarationInfo | null {
+}): DeclarationInfo | null {
   const { usageNode, name } = options;
 
   for (const ancestor of usageNode.ancestors()) {
@@ -22,7 +22,7 @@ export function findVisibleJavaDeclarationBeforeUsage(options: {
       ancestor.kind() === "constructor_declaration" ||
       ancestor.kind() === "lambda_expression"
     ) {
-      const parameter = findDirectJavaParameter(ancestor, name);
+      const parameter = findDirectParameter(ancestor, name);
       if (parameter) {
         return parameter;
       }
@@ -38,15 +38,15 @@ export function findVisibleJavaDeclarationBeforeUsage(options: {
     }
   }
 
-  const enclosingClass = findEnclosingJavaNode(usageNode, "class_declaration");
-  return enclosingClass ? findJavaFieldDeclaration(enclosingClass, name) : null;
+  const enclosingClass = findEnclosingNode(usageNode, "class_declaration");
+  return enclosingClass ? findFieldDeclaration(enclosingClass, name) : null;
 }
 
-export function findEnclosingJavaNode(node: JavaNode, kind: string): JavaNode | null {
+export function findEnclosingNode(node: JavaNode, kind: string): JavaNode | null {
   return node.ancestors().find((ancestor) => ancestor.kind() === kind) ?? null;
 }
 
-export function findDirectJavaChild(parent: JavaNode, descendant: JavaNode): JavaNode | null {
+export function findDirectChild(parent: JavaNode, descendant: JavaNode): JavaNode | null {
   let current: JavaNode | null = descendant;
   while (current?.parent() && current.parent()?.id() !== parent.id()) {
     current = current.parent();
@@ -55,7 +55,7 @@ export function findDirectJavaChild(parent: JavaNode, descendant: JavaNode): Jav
   return current?.parent()?.id() === parent.id() ? current : null;
 }
 
-export function findJavaTypeNode(node: JavaNode): JavaNode | null {
+export function findTypeNode(node: JavaNode): JavaNode | null {
   return (
     node
       .children()
@@ -74,7 +74,7 @@ export function findJavaTypeNode(node: JavaNode): JavaNode | null {
   );
 }
 
-function findDirectJavaParameter(scope: JavaNode, name: string): JavaDeclarationInfo | null {
+function findDirectParameter(scope: JavaNode, name: string): DeclarationInfo | null {
   const parameters = scope.find({ rule: { kind: "formal_parameters" } });
   if (!parameters) {
     return null;
@@ -92,7 +92,7 @@ function findDirectJavaParameter(scope: JavaNode, name: string): JavaDeclaration
     return {
       kind: "parameter",
       name,
-      typeText: findJavaTypeNode(parameter)?.text() ?? null,
+      typeText: findTypeNode(parameter)?.text() ?? null,
       node: parameter,
     };
   }
@@ -104,8 +104,8 @@ function findPriorLocalDeclaration(
   block: JavaNode,
   usageNode: JavaNode,
   name: string,
-): JavaDeclarationInfo | null {
-  const containingChild = findDirectJavaChild(block, usageNode);
+): DeclarationInfo | null {
+  const containingChild = findDirectChild(block, usageNode);
   if (!containingChild) {
     return null;
   }
@@ -119,7 +119,7 @@ function findPriorLocalDeclaration(
       continue;
     }
 
-    const typeText = findJavaTypeNode(child)?.text() ?? null;
+    const typeText = findTypeNode(child)?.text() ?? null;
     for (const declarator of child.fieldChildren("declarator")) {
       if (declarator.field("name")?.text() === name) {
         return {
@@ -135,9 +135,9 @@ function findPriorLocalDeclaration(
   return null;
 }
 
-function findJavaFieldDeclaration(classNode: JavaNode, name: string): JavaDeclarationInfo | null {
+function findFieldDeclaration(classNode: JavaNode, name: string): DeclarationInfo | null {
   for (const field of classNode.findAll({ rule: { kind: "field_declaration" } })) {
-    const typeText = findJavaTypeNode(field)?.text() ?? null;
+    const typeText = findTypeNode(field)?.text() ?? null;
     for (const declarator of field.fieldChildren("declarator")) {
       if (declarator.field("name")?.text() === name) {
         return {

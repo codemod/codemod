@@ -3,16 +3,14 @@ import type { SgNode } from "@codemod.com/jssg-types/main";
 
 export type JavaNode = SgNode<Java>;
 
-export type JavaMethodInvocationParts = {
+export type MethodInvocationParts = {
   receiver: JavaNode | null;
   methodName: string | null;
   nameNode: JavaNode | null;
   args: JavaNode[];
 };
 
-export function getJavaMethodInvocationParts(
-  invocation: JavaNode,
-): JavaMethodInvocationParts | null {
+export function getMethodInvocationParts(invocation: JavaNode): MethodInvocationParts | null {
   if (invocation.kind() !== "method_invocation") {
     return null;
   }
@@ -32,16 +30,19 @@ export function getJavaMethodInvocationParts(
   };
 }
 
-export function getJavaReceiverIdentifier(receiver: JavaNode | null): string | null {
+export function getReceiverIdentifier(receiver: JavaNode | null): string | null {
   if (!receiver) {
     return null;
   }
 
-  const trimmed = receiver.text().trim();
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
-    return trimmed;
+  if (receiver.kind() === "identifier") {
+    return receiver.text();
   }
 
-  const match = /(?:this\.)?([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
-  return match?.[1] ?? null;
+  const field = receiver.field("field");
+  if (field?.kind() === "identifier") {
+    return field.text();
+  }
+
+  return null;
 }

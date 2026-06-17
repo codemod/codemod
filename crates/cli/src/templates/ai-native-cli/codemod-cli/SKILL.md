@@ -43,7 +43,7 @@ When the user:
 - **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` via MCP or `npx codemod ai docs codemod-maintainer-monorepo`.
 - **Runs or discovers codemods** — Read `codemod-cli-instructions` via MCP or `npx codemod ai docs codemod-cli`.
 - **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` via MCP or `npx codemod ai docs codemod-troubleshooting`.
-- **Needs import manipulation helpers** — Read `jssg-utils-instructions` via MCP or `npx codemod ai docs jssg-utils`.
+- **Needs reusable JSSG helpers** — Read `jssg-utils-instructions` via MCP or `npx codemod ai docs jssg-utils`.
 - **Needs to split a large migration into multiple PRs** — Read `sharding-instructions` via MCP or `npx codemod ai docs sharding`.
 
 ## Anonymous feedback

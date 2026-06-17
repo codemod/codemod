@@ -3,18 +3,22 @@ import { parse } from "codemod:ast-grep";
 import type Java from "@codemod.com/jssg-types/langs/java";
 import type { SgNode } from "@codemod.com/jssg-types/main";
 import {
-  cleanupJavaImports,
-  collectJavaImports,
-  hasConflictingJavaSimpleImport,
-  isJavaTypeImported,
+  cleanupImports,
+  collectImports,
+  hasConflictingSimpleImport,
+  isTypeImported,
 } from "@jssg/utils/java/imports";
-import { findVisibleJavaDeclarationBeforeUsage } from "@jssg/utils/java/scope";
-import { replaceJavaTypeIdentifierSafely } from "@jssg/utils/java/types";
+import { findVisibleDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceTypeIdentifierSafely } from "@jssg/utils/java/types";
 import {
-  getJavaMethodInvocationParts,
-  getJavaReceiverIdentifier,
+  getMethodInvocationParts,
+  getReceiverIdentifier,
 } from "@jssg/utils/java/method-invocations";
-import { rewriteAnonymousJavaCallbackToWhenComplete } from "@jssg/utils/java/callbacks";
+import {
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+} from "@jssg/utils/java/anonymous-classes";
 
 type JavaNode = SgNode<Java>;
 
@@ -22,7 +26,7 @@ function parseJava(source: string): JavaNode {
   return parse<Java>("java", source).root();
 }
 
-function testCollectJavaImportsHandlesWildcardsAndConflicts() {
+function testCollectImportsHandlesWildcardsAndConflicts() {
   const root = parseJava(
     [
       "import org.springframework.http.*;",
@@ -31,17 +35,17 @@ function testCollectJavaImportsHandlesWildcardsAndConflicts() {
       "class Example {}",
     ].join("\n"),
   );
-  const imports = collectJavaImports(root);
+  const imports = collectImports(root);
 
   assert(
-    isJavaTypeImported(imports, {
+    isTypeImported(imports, {
       simpleName: "ResponseEntity",
       fullyQualifiedName: "org.springframework.http.ResponseEntity",
     }),
     "Wildcard Spring HTTP import should import ResponseEntity",
   );
   assert(
-    hasConflictingJavaSimpleImport(imports, {
+    hasConflictingSimpleImport(imports, {
       simpleName: "ResponseEntity",
       expectedFullyQualifiedName: "org.springframework.http.ResponseEntity",
     }),
@@ -49,7 +53,7 @@ function testCollectJavaImportsHandlesWildcardsAndConflicts() {
   );
 }
 
-function testCleanupJavaImportsRemovesOldSpringImportsAndAddsNewImport() {
+function testCleanupImportsRemovesOldSpringImportsAndAddsNewImport() {
   const input = [
     "import org.springframework.scheduling.annotation.AsyncResult;",
     "import org.springframework.util.concurrent.ListenableFuture;",
@@ -63,7 +67,7 @@ function testCleanupJavaImportsRemovesOldSpringImportsAndAddsNewImport() {
     "",
   ].join("\n");
 
-  const output = cleanupJavaImports(input, {
+  const output = cleanupImports(input, {
     removeIfUnreferenced: [
       "org.springframework.scheduling.annotation.AsyncResult",
       "org.springframework.util.concurrent.ListenableFuture",
@@ -106,12 +110,12 @@ function testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField() {
   const invocation = root.find({ rule: { pattern: "$RECEIVER.addCallback($A, $B)" } });
   assert(invocation !== null, "Should find addCallback invocation");
 
-  const parts = getJavaMethodInvocationParts(invocation!);
+  const parts = getMethodInvocationParts(invocation!);
   assert(parts?.receiver !== null, "Should read receiver");
 
-  const declaration = findVisibleJavaDeclarationBeforeUsage({
+  const declaration = findVisibleDeclarationBeforeUsage({
     usageNode: invocation!,
-    name: getJavaReceiverIdentifier(parts!.receiver)!,
+    name: getReceiverIdentifier(parts!.receiver)!,
   });
 
   assert(declaration !== null, "Should resolve visible declaration");
@@ -122,7 +126,7 @@ function testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField() {
   );
 }
 
-function testReplaceJavaTypeIdentifierSafelySkipsFqcnSubnode() {
+function testReplaceTypeIdentifierSafelySkipsFqcnSubnode() {
   const root = parseJava(
     [
       "class Example {",
@@ -137,11 +141,11 @@ function testReplaceJavaTypeIdentifierSafelySkipsFqcnSubnode() {
     .find((node) => node.text() === "ListenableFuture");
   assert(simpleType !== null, "Should find nested simple type identifier");
 
-  const edit = replaceJavaTypeIdentifierSafely(simpleType!, "CompletableFuture");
+  const edit = replaceTypeIdentifierSafely(simpleType!, "CompletableFuture");
   assert(edit === null, "Should skip simple type identifiers inside FQCN scoped types");
 }
 
-function testReplaceJavaTypeIdentifierSafelyReplacesGenericType() {
+function testReplaceTypeIdentifierSafelyReplacesGenericType() {
   const root = parseJava(
     [
       "class Example {",
@@ -156,7 +160,7 @@ function testReplaceJavaTypeIdentifierSafelyReplacesGenericType() {
   });
   assert(genericType !== null, "Should find generic type");
 
-  const edit = replaceJavaTypeIdentifierSafely(genericType!, "CompletableFuture");
+  const edit = replaceTypeIdentifierSafely(genericType!, "CompletableFuture");
   assert(edit !== null, "Should create an edit for simple generic type");
   assert(
     root.commitEdits([edit!]).includes("CompletableFuture<String> getFuture()"),
@@ -164,7 +168,7 @@ function testReplaceJavaTypeIdentifierSafelyReplacesGenericType() {
   );
 }
 
-function testRewriteAnonymousJavaCallbackToWhenCompleteRenamesDuplicateParams() {
+function testAnonymousClassMethodHelpersSupportCallbackMigrationShapes() {
   const root = parseJava(
     [
       "import org.springframework.util.concurrent.ListenableFuture;",
@@ -190,26 +194,36 @@ function testRewriteAnonymousJavaCallbackToWhenCompleteRenamesDuplicateParams() 
   const callback = root.find({ rule: { kind: "object_creation_expression" } });
   assert(callback !== null, "Should find anonymous callback");
 
-  const replacement = rewriteAnonymousJavaCallbackToWhenComplete({
-    receiverText: "future",
-    callbackNode: callback!,
-  });
+  const methods = getAnonymousClassMethods(callback!, ["onSuccess", "onFailure"]);
+  assert(methods !== null, "Should find both callback methods");
 
-  assert(replacement !== null, "Should build callback replacement");
+  const success = methods!.get("onSuccess")!;
+  const failure = methods!.get("onFailure")!;
+  const successParam = getSingleParameterName(success);
+  const failureParam = getSingleParameterName(failure);
+
+  assert(successParam === "value", "Should read success parameter name");
+  assert(failureParam === "value", "Should read failure parameter name");
+
+  const resultParam = successParam === failureParam ? `${successParam}Result` : successParam!;
+  const successBody = getMethodBodyContent(success, {
+    from: successParam!,
+    to: resultParam,
+  });
+  const failureBody = getMethodBodyContent(failure);
+
+  assert(successBody !== null, "Should read success method body");
+  assert(failureBody !== null, "Should read failure method body");
   assert(
-    replacement!.includes("future.whenComplete((valueResult, value) ->"),
-    "Should rename duplicate success parameter",
+    successBody!.includes("handle(valueResult);"),
+    "Should allow callers to rename duplicate success parameters through AST edits",
   );
-  assert(
-    replacement!.includes("handle(valueResult);"),
-    "Should rewrite success body references to renamed parameter",
-  );
-  assert(replacement!.includes("recover(value);"), "Should preserve failure body references");
+  assert(failureBody!.includes("recover(value);"), "Should preserve failure body references");
 }
 
-testCollectJavaImportsHandlesWildcardsAndConflicts();
-testCleanupJavaImportsRemovesOldSpringImportsAndAddsNewImport();
+testCollectImportsHandlesWildcardsAndConflicts();
+testCleanupImportsRemovesOldSpringImportsAndAddsNewImport();
 testFindVisibleDeclarationBeforeUsagePrefersPriorLocalOverField();
-testReplaceJavaTypeIdentifierSafelySkipsFqcnSubnode();
-testReplaceJavaTypeIdentifierSafelyReplacesGenericType();
-testRewriteAnonymousJavaCallbackToWhenCompleteRenamesDuplicateParams();
+testReplaceTypeIdentifierSafelySkipsFqcnSubnode();
+testReplaceTypeIdentifierSafelyReplacesGenericType();
+testAnonymousClassMethodHelpersSupportCallbackMigrationShapes();

@@ -1,20 +1,20 @@
 import type Java from "@codemod.com/jssg-types/langs/java";
 import type { Edit, SgNode } from "@codemod.com/jssg-types/main";
 import {
-  collectJavaImports,
-  hasConflictingJavaSimpleImport,
-  isJavaTypeImported,
-  simpleJavaName,
+  collectImports,
+  hasConflictingSimpleImport,
+  isTypeImported,
+  simpleName as getSimpleName,
 } from "./imports";
 
 export type JavaNode = SgNode<Java>;
 
-export function isJavaTypeShadowed(
+export function isTypeShadowed(
   rootNode: JavaNode,
   options: { simpleName: string; expectedFullyQualifiedName: string },
 ): boolean {
-  const imports = collectJavaImports(rootNode);
-  if (hasConflictingJavaSimpleImport(imports, options)) {
+  const imports = collectImports(rootNode);
+  if (hasConflictingSimpleImport(imports, options)) {
     return true;
   }
 
@@ -24,34 +24,34 @@ export function isJavaTypeShadowed(
   });
 }
 
-export function isKnownJavaType(
+export function isKnownType(
   rootNode: JavaNode,
   typeText: string,
   fullyQualifiedName: string,
 ): boolean {
-  const baseName = baseJavaTypeName(typeText);
+  const baseName = baseTypeName(typeText);
   if (baseName === fullyQualifiedName) {
     return true;
   }
 
-  const simpleName = simpleJavaName(fullyQualifiedName);
+  const simpleName = getSimpleName(fullyQualifiedName);
   if (baseName !== simpleName) {
     return false;
   }
 
-  const imports = collectJavaImports(rootNode);
+  const imports = collectImports(rootNode);
   return (
-    isJavaTypeImported(imports, { simpleName, fullyQualifiedName }) &&
-    !hasConflictingJavaSimpleImport(imports, {
+    isTypeImported(imports, { simpleName, fullyQualifiedName }) &&
+    !hasConflictingSimpleImport(imports, {
       simpleName,
       expectedFullyQualifiedName: fullyQualifiedName,
     }) &&
-    !isJavaTypeShadowed(rootNode, { simpleName, expectedFullyQualifiedName: fullyQualifiedName })
+    !isTypeShadowed(rootNode, { simpleName, expectedFullyQualifiedName: fullyQualifiedName })
   );
 }
 
-export function replaceJavaTypeIdentifierSafely(node: JavaNode, replacement: string): Edit | null {
-  if (isInsideJavaImport(node)) {
+export function replaceTypeIdentifierSafely(node: JavaNode, replacement: string): Edit | null {
+  if (isInsideImport(node)) {
     return null;
   }
 
@@ -64,20 +64,20 @@ export function replaceJavaTypeIdentifierSafely(node: JavaNode, replacement: str
     return null;
   }
 
-  return node.replace(replaceJavaBaseTypeName(node.text(), replacement));
+  return node.replace(replaceBaseTypeName(node.text(), replacement));
 }
 
-export function baseJavaTypeName(typeText: string): string {
+export function baseTypeName(typeText: string): string {
   const genericStart = typeText.indexOf("<");
   return (genericStart === -1 ? typeText : typeText.slice(0, genericStart)).trim();
 }
 
-export function replaceJavaBaseTypeName(typeText: string, replacement: string): string {
+export function replaceBaseTypeName(typeText: string, replacement: string): string {
   const genericStart = typeText.indexOf("<");
   const suffix = genericStart === -1 ? "" : typeText.slice(genericStart);
   return `${replacement}${suffix}`;
 }
 
-function isInsideJavaImport(node: JavaNode): boolean {
+function isInsideImport(node: JavaNode): boolean {
   return node.ancestors().some((ancestor) => ancestor.kind() === "import_declaration");
 }

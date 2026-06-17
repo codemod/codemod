@@ -117,18 +117,25 @@ Java utilities are split by concern:
 
 ```ts
 import {
-  cleanupJavaImports,
-  collectJavaImports,
-  hasConflictingJavaSimpleImport,
-  isJavaTypeImported,
+  cleanupImports,
+  collectImports,
+  createImportCleanupEdits,
+  hasConflictingSimpleImport,
+  isTypeImported,
 } from "@jssg/utils/java/imports";
-import { findVisibleJavaDeclarationBeforeUsage } from "@jssg/utils/java/scope";
-import { replaceJavaTypeIdentifierSafely } from "@jssg/utils/java/types";
+import { findVisibleDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceTypeIdentifierSafely } from "@jssg/utils/java/types";
 import {
-  getJavaMethodInvocationParts,
-  getJavaReceiverIdentifier,
+  getMethodInvocationParts,
+  getReceiverIdentifier,
 } from "@jssg/utils/java/method-invocations";
-import { rewriteAnonymousJavaCallbackToWhenComplete } from "@jssg/utils/java/callbacks";
+import {
+  getAnonymousClassMethod,
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+  renameIdentifiersInNode,
+} from "@jssg/utils/java/anonymous-classes";
 ```
 
 These helpers cover recurring Java codemod review issues:
@@ -139,37 +146,50 @@ These helpers cover recurring Java codemod review issues:
 - visible declaration lookup before a usage site
 - receiver identifier extraction for method invocations
 - type identifier replacement that avoids FQCN subnodes
-- anonymous callback-to-`whenComplete` rewrites with duplicate parameter handling
+- anonymous class method lookup and method body extraction
+- identifier renaming within a method body using AST edits
 
 Example:
 
 ```ts
-const imports = collectJavaImports(rootNode);
+const imports = collectImports(rootNode);
 
 if (
-  isJavaTypeImported(imports, {
-    simpleName: "ResponseEntity",
-    fullyQualifiedName: "org.springframework.http.ResponseEntity",
+  isTypeImported(imports, {
+    simpleName: "Widget",
+    fullyQualifiedName: "com.example.Widget",
   }) &&
-  !hasConflictingJavaSimpleImport(imports, {
-    simpleName: "ResponseEntity",
-    expectedFullyQualifiedName: "org.springframework.http.ResponseEntity",
+  !hasConflictingSimpleImport(imports, {
+    simpleName: "Widget",
+    expectedFullyQualifiedName: "com.example.Widget",
   })
 ) {
-  // Safe to treat simple ResponseEntity references as Spring ResponseEntity.
+  // Safe to treat simple Widget references as com.example.Widget.
 }
 ```
 
-For migrations that rewrite imported types:
+For rewrites that replace imported types:
 
 ```ts
-const rewritten = rootNode.commitEdits(edits);
-
-return cleanupJavaImports(rewritten, {
+const importEdits = createImportCleanupEdits(rootNode, {
   removeIfUnreferenced: [
-    "org.springframework.util.concurrent.ListenableFuture",
-    "org.springframework.util.concurrent.SettableListenableFuture",
+    "com.example.LegacyWidget",
+    "com.example.LegacyWidgetBuilder",
   ],
-  addIfReferenced: ["java.util.concurrent.CompletableFuture"],
+  addIfReferenced: ["com.example.Widget"],
+});
+
+return rootNode.commitEdits([...edits, ...importEdits]);
+```
+
+If you already have a rewritten source string, use the compatibility wrapper:
+
+```ts
+return cleanupImports(source, {
+  removeIfUnreferenced: [
+    "com.example.LegacyWidget",
+    "com.example.LegacyWidgetBuilder",
+  ],
+  addIfReferenced: ["com.example.Widget"],
 });
 ```
