@@ -12,6 +12,8 @@ use crate::auth::types::{AuthTokens, UserInfo};
 pub struct Config {
     pub default_registry: String,
     pub registries: HashMap<String, RegistryAuthConfig>,
+    #[serde(default)]
+    pub anonymous_feedback: AnonymousFeedbackConfig,
 }
 
 impl Default for Config {
@@ -43,8 +45,15 @@ impl Config {
         Self {
             default_registry: registry_url.to_string(),
             registries,
+            anonymous_feedback: AnonymousFeedbackConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnonymousFeedbackConfig {
+    pub enabled: bool,
+    pub consented_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +116,33 @@ impl TokenStorage {
         let config: Config =
             serde_json::from_str(&content).context("Failed to parse config file")?;
 
+        Ok(config)
+    }
+
+    pub fn save_config(&self, config: &Config) -> Result<()> {
+        let config_path = self.config_dir.join("config.json");
+        let content =
+            serde_json::to_string_pretty(config).context("Failed to serialize config file")?;
+
+        fs::write(&config_path, content)
+            .with_context(|| format!("Failed to write config file: {config_path:?}"))?;
+
+        Ok(())
+    }
+
+    pub fn enable_anonymous_feedback(&self) -> Result<Config> {
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let mut config = self.load_config_with_env(Some(&env))?;
+        let consented_at = config
+            .anonymous_feedback
+            .consented_at
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        config.anonymous_feedback = AnonymousFeedbackConfig {
+            enabled: true,
+            consented_at: Some(consented_at),
+        };
+        self.save_config(&config)?;
         Ok(config)
     }
 
@@ -181,5 +217,80 @@ impl TokenStorage {
             .replace("://", "_")
             .replace("/", "_")
             .replace(":", "_")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TokenStorage;
+    use std::fs;
+
+    #[test]
+    fn missing_feedback_config_defaults_to_disabled() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{
+  "default_registry": "https://app.codemod.com",
+  "registries": {}
+}"#,
+        )
+        .expect("expected config write");
+
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let config = storage.load_config().expect("config");
+
+        assert!(!config.anonymous_feedback.enabled);
+        assert_eq!(config.anonymous_feedback.consented_at, None);
+    }
+
+    #[test]
+    fn enable_anonymous_feedback_persists_consent() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        let config = storage
+            .enable_anonymous_feedback()
+            .expect("expected feedback consent write");
+        let reloaded = storage.load_config().expect("expected config reload");
+
+        assert!(config.anonymous_feedback.enabled);
+        assert!(config.anonymous_feedback.consented_at.is_some());
+        assert!(reloaded.anonymous_feedback.enabled);
+        assert_eq!(
+            reloaded.anonymous_feedback.consented_at,
+            config.anonymous_feedback.consented_at
+        );
+    }
+
+    #[test]
+    fn enable_anonymous_feedback_preserves_existing_consent_date() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{
+  "default_registry": "https://app.codemod.com",
+  "registries": {},
+  "anonymous_feedback": {
+    "enabled": true,
+    "consented_at": "2026-06-09T12:00:00Z"
+  }
+}"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        let config = storage
+            .enable_anonymous_feedback()
+            .expect("expected feedback consent write");
+
+        assert!(config.anonymous_feedback.enabled);
+        assert_eq!(
+            config.anonymous_feedback.consented_at.as_deref(),
+            Some("2026-06-09T12:00:00Z")
+        );
     }
 }

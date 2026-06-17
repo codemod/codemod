@@ -109,6 +109,29 @@ When working with AI assistants through Codemod MCP, follow these guidelines for
   </Step>
 </Steps>
 
+## Anonymous platform feedback
+
+Codemod AI and MCP can submit short anonymous platform feedback when the user has explicitly consented. Agents must ask before enabling or submitting feedback.
+
+After the user consents, submit categorized feedback with:
+
+```bash
+npx codemod ai feedback --category <category> --message <message>
+```
+
+Use short, thematic feedback only. Recommended categories are:
+
+- `jssg`: JSSG feature requests, runtime gaps, or transform-authoring friction
+- `workflow`: workflow feature requests or workflow authoring friction
+- `ai-docs`: AI docs resources that should be added, clarified, or reorganized
+- `mcp`: MCP tool, resource, or server behavior feedback
+- `cli`: CLI command or setup feedback
+- `registry`: registry discovery or package metadata feedback
+- `package-validation`: package validation checks that should be added or refined
+- `other`: feedback that does not fit the categories above
+
+Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts. The CLI records and reports the consent timestamp automatically.
+
 ## Troubleshooting
 
 <AccordionGroup>

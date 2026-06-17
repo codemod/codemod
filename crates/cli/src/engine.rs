@@ -54,12 +54,17 @@ pub fn create_progress_callback() -> ProgressCallback {
     ProgressCallback {
         callback: Arc::new(Box::new(
             move |task_id: &str, path: &str, status: &str, count: Option<&u64>, index: &u64| {
+                let nested_label = task_id
+                    .split_once(':')
+                    .map(|(_, label)| label.trim())
+                    .filter(|label| !label.is_empty());
                 match status {
                     "start" | "counting" => {
                         progress_reporter(progress_bar::ProgressUpdate {
                             task_id: task_id.to_string(),
                             action: progress_bar::ProgressAction::Start {
                                 total_files: count.cloned(),
+                                label: nested_label.map(str::to_string),
                             },
                         });
                     }
@@ -110,7 +115,7 @@ pub fn create_progress_callback() -> ProgressCallback {
                         });
                     }
                     "finish" => {
-                        let message = if let Some(total) = count {
+                        let processed_message = if let Some(total) = count {
                             if *total == 1 {
                                 "Processed 1 file".to_string()
                             } else {
@@ -119,6 +124,9 @@ pub fn create_progress_callback() -> ProgressCallback {
                         } else {
                             format!("Processed {index} files")
                         };
+                        let message = nested_label
+                            .map(|label| format!("{label}: {processed_message}"))
+                            .unwrap_or(processed_message);
                         progress_reporter(progress_bar::ProgressUpdate {
                             task_id: task_id.to_string(),
                             action: progress_bar::ProgressAction::Finish {

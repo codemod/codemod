@@ -5,6 +5,7 @@ use rmcp::{
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{de, Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Write;
@@ -377,6 +378,126 @@ fn call_tool_result_text(result: CallToolResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[derive(Clone, Debug)]
+pub struct AnonymousFeedbackClient {
+    endpoint: String,
+    source: &'static str,
+    cli_version: String,
+    consented_at: Option<String>,
+    os: &'static str,
+    arch: &'static str,
+    client: reqwest::Client,
+}
+
+#[derive(Serialize)]
+struct AnonymousFeedbackPayload<'a> {
+    source: &'a str,
+    event: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(rename = "consentedAt", skip_serializing_if = "Option::is_none")]
+    consented_at: Option<&'a str>,
+    #[serde(rename = "cliVersion")]
+    cli_version: &'a str,
+    os: &'a str,
+    arch: &'a str,
+    metadata: HashMap<String, String>,
+}
+
+impl AnonymousFeedbackClient {
+    pub fn new(
+        endpoint: String,
+        source: &'static str,
+        cli_version: String,
+        consented_at: Option<String>,
+    ) -> Option<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .ok()?;
+
+        Some(Self {
+            endpoint,
+            source,
+            cli_version,
+            consented_at,
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            client,
+        })
+    }
+
+    pub async fn submit(&self, event: &str, metadata: HashMap<String, String>) {
+        let _ = self.submit_feedback(event, None, None, metadata).await;
+    }
+
+    pub async fn submit_feedback(
+        &self,
+        event: &str,
+        category: Option<String>,
+        message: Option<String>,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let payload = AnonymousFeedbackPayload {
+            source: self.source,
+            event: sanitize_feedback_event(event),
+            category,
+            message,
+            consented_at: self.consented_at.as_deref(),
+            cli_version: &self.cli_version,
+            os: self.os,
+            arch: self.arch,
+            metadata,
+        };
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .header(
+                reqwest::header::USER_AGENT,
+                format!("codemod-cli/{}", self.cli_version),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|error| format!("request failed: {error}"))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("failed to read response body: {error}"));
+
+        Err(format!("server returned {status}: {body}"))
+    }
+}
+
+fn sanitize_feedback_event(event: &str) -> String {
+    let sanitized = event
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.chars().take(128).collect()
+    }
 }
 
 fn public_docs_client() -> Option<&'static reqwest::Client> {
@@ -866,6 +987,7 @@ pub struct CodemodMcpServer {
     jssg_test_handler: JssgTestHandler,
     package_validation_handler: PackageValidationHandler,
     usage_log_path: Option<PathBuf>,
+    anonymous_feedback: Option<AnonymousFeedbackClient>,
     tool_router: ToolRouter<CodemodMcpServer>,
 }
 
@@ -877,12 +999,20 @@ impl Default for CodemodMcpServer {
 
 impl CodemodMcpServer {
     pub fn new(usage_log_path: Option<PathBuf>) -> Self {
+        Self::new_with_feedback(usage_log_path, None)
+    }
+
+    pub fn new_with_feedback(
+        usage_log_path: Option<PathBuf>,
+        anonymous_feedback: Option<AnonymousFeedbackClient>,
+    ) -> Self {
         Self {
             ast_dump_handler: AstDumpHandler::new(),
             node_types_handler: NodeTypesHandler::new(),
             jssg_test_handler: JssgTestHandler::new(),
             package_validation_handler: PackageValidationHandler::new(),
             usage_log_path,
+            anonymous_feedback,
             tool_router: Self::tool_router(),
         }
     }
@@ -1009,6 +1139,13 @@ impl CodemodMcpServer {
     }
 
     fn log_usage(&self, event: &str) {
+        if let Some(feedback) = self.anonymous_feedback.clone() {
+            let event = event.to_string();
+            let _handle = tokio::spawn(async move {
+                feedback.submit(&event, HashMap::new()).await;
+            });
+        }
+
         let Some(path) = self.usage_log_path.clone() else {
             return;
         };
@@ -1454,7 +1591,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
         }
     }
 
@@ -1699,6 +1836,7 @@ mod tests {
         assert!(instructions.contains("codemod-creation-workflow-instructions"));
         assert!(instructions.contains("direct codemod init"));
         assert!(instructions.contains("auth-derived author"));
+        assert!(instructions.contains("anonymous feedback"));
     }
 
     #[tokio::test]
@@ -1848,5 +1986,14 @@ mod tests {
 
         drop(_cwd_guard);
         fs::remove_dir_all(&temp_dir).expect("expected temp dir cleanup");
+    }
+
+    #[test]
+    fn feedback_event_names_are_sanitized() {
+        assert_eq!(
+            sanitize_feedback_event("cli:resource:jssg://instructions"),
+            "cli:resource:jssg:__instructions"
+        );
+        assert_eq!(sanitize_feedback_event("  "), "unknown");
     }
 }

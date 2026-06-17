@@ -481,6 +481,34 @@ pub(crate) fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
+fn notify_nested_codemod_progress(
+    progress_callback: &Arc<Option<ProgressCallback>>,
+    task_id: &Uuid,
+    display_path: &str,
+) {
+    let Some(callback) = progress_callback.as_ref() else {
+        return;
+    };
+
+    let title = "Bundled codemods";
+    let line = format!("Running {display_path}");
+    (callback.callback)(
+        &task_id.to_string(),
+        &format!("{title}\n{line}"),
+        "log",
+        None,
+        &0,
+    );
+}
+
+fn codemod_dependency_display_path(dependency_chain: &[CodemodDependency]) -> String {
+    dependency_chain
+        .iter()
+        .map(|dependency| dependency.source.as_str())
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
     let mut message = format!(
         "About to execute shell command for step '{}' in node '{}':",
@@ -586,6 +614,40 @@ impl Default for Engine {
 pub struct CapabilitiesData {
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AiAgentCandidateSource {
+    Explicit,
+    Env,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AiAgentCandidate<'a> {
+    source: AiAgentCandidateSource,
+    name: &'a str,
+}
+
+fn configured_ai_agent_candidates<'a>(
+    explicit_agent: Option<&'a str>,
+    env_agent: Option<&'a str>,
+) -> Vec<AiAgentCandidate<'a>> {
+    explicit_agent
+        .filter(|agent| !agent.is_empty())
+        .map(|agent| AiAgentCandidate {
+            source: AiAgentCandidateSource::Explicit,
+            name: agent,
+        })
+        .into_iter()
+        .chain(
+            env_agent
+                .filter(|agent| !agent.is_empty())
+                .map(|agent| AiAgentCandidate {
+                    source: AiAgentCandidateSource::Env,
+                    name: agent,
+                }),
+        )
+        .collect()
 }
 
 impl Engine {
@@ -1740,7 +1802,7 @@ impl Engine {
     ///
     /// # Returns
     /// * `Ok(())` if no cycles are detected
-    /// * `Err(Error::Other)` if a cycle is found, with detailed information about the cycle
+    /// * `Err(Error::Other)` if a cycle is found
     async fn validate_codemod_dependencies(
         &self,
         workflow: &Workflow,
@@ -2382,6 +2444,7 @@ impl Engine {
                     dependency_chain: &[],
                     capabilities: &self.workflow_run_config.execution.capabilities,
                     task_expr_ctx: task_expr_ctx.as_ref(),
+                    progress_task_id: None,
                     logger: &step_logger,
                 },
             ))
@@ -2839,6 +2902,7 @@ impl Engine {
     pub async fn execute_js_ast_grep_step(
         &self,
         id: String,
+        progress_task_id: Option<String>,
         step_id: String,
         step_name: String,
         report_step_id: Option<String>,
@@ -2858,6 +2922,7 @@ impl Engine {
         JssgExecutionService::new(self)
             .execute(JssgExecutionRequest {
                 id,
+                progress_task_id,
                 step_id,
                 step_name,
                 report_step_id,
@@ -2902,7 +2967,76 @@ impl Engine {
 
         debug!("Executing AI agent step with prompt: {}", resolved_prompt);
 
-        // 1. Check if running inside a parent coding agent
+        // 1. Check explicitly configured agents before inspecting the parent
+        // process. `--agent` has priority over LLM_AGENT so CLI intent is stable
+        // even when the command is run inside another coding agent.
+        let env_agent = std::env::var("LLM_AGENT").ok();
+        for candidate in configured_ai_agent_candidates(
+            self.workflow_run_config.interaction.agent.as_deref(),
+            env_agent.as_deref(),
+        ) {
+            let Some(canonical) = resolve_agent_name(candidate.name) else {
+                let source = match candidate.source {
+                    AiAgentCandidateSource::Explicit => "--agent",
+                    AiAgentCandidateSource::Env => "LLM_AGENT",
+                };
+                slog!(
+                    logger,
+                    warn,
+                    "Unknown agent '{}' specified via {}, ignoring",
+                    candidate.name,
+                    source
+                );
+                continue;
+            };
+
+            match candidate.source {
+                AiAgentCandidateSource::Explicit => {
+                    debug!("Agent specified via --agent: {}", canonical);
+                }
+                AiAgentCandidateSource::Env => {
+                    slog!(
+                        logger,
+                        info,
+                        "Agent specified via LLM_AGENT env var: {}",
+                        canonical
+                    );
+                }
+            }
+
+            if let Some(executable) = find_agent_executable(canonical) {
+                return self
+                    .launch_agent(
+                        canonical,
+                        &executable,
+                        ai_config.system_prompt.as_deref(),
+                        &resolved_prompt,
+                        logger,
+                    )
+                    .await;
+            }
+
+            match candidate.source {
+                AiAgentCandidateSource::Explicit => {
+                    slog!(
+                        logger,
+                        warn,
+                        "Agent '{}' is not installed, falling back to built-in AI",
+                        canonical
+                    );
+                }
+                AiAgentCandidateSource::Env => {
+                    slog!(
+                        logger,
+                        warn,
+                        "Agent '{}' from LLM_AGENT is not installed, falling back to built-in AI",
+                        canonical
+                    );
+                }
+            }
+        }
+
+        // 2. Check if running inside a parent coding agent.
         let handoff_detection = detect_parent_coding_agent();
         let detected_agent = handoff_detection.agent_name.as_deref().unwrap_or("none");
         debug!(
@@ -2920,77 +3054,6 @@ impl Engine {
                 detected_agent
             );
             return Ok(());
-        }
-
-        // 2. Check if agent was explicitly specified via --agent
-        if let Some(ref agent_name) = self.workflow_run_config.interaction.agent {
-            if let Some(canonical) = resolve_agent_name(agent_name) {
-                debug!("Agent specified via --agent: {}", canonical);
-                if let Some(executable) = find_agent_executable(canonical) {
-                    return self
-                        .launch_agent(
-                            canonical,
-                            &executable,
-                            ai_config.system_prompt.as_deref(),
-                            &resolved_prompt,
-                            logger,
-                        )
-                        .await;
-                } else {
-                    slog!(
-                        logger,
-                        warn,
-                        "Agent '{}' is not installed, falling back to built-in AI",
-                        canonical
-                    );
-                }
-            } else {
-                slog!(
-                    logger,
-                    warn,
-                    "Unknown agent '{}' specified via --agent, ignoring",
-                    agent_name
-                );
-            }
-        }
-
-        // 2b. Check for LLM_AGENT env var (useful in non-interactive mode)
-        if let Ok(env_agent) = std::env::var("LLM_AGENT") {
-            if !env_agent.is_empty() {
-                if let Some(canonical) = resolve_agent_name(&env_agent) {
-                    slog!(
-                        logger,
-                        info,
-                        "Agent specified via LLM_AGENT env var: {}",
-                        canonical
-                    );
-                    if let Some(executable) = find_agent_executable(canonical) {
-                        return self
-                            .launch_agent(
-                                canonical,
-                                &executable,
-                                ai_config.system_prompt.as_deref(),
-                                &resolved_prompt,
-                                logger,
-                            )
-                            .await;
-                    } else {
-                        slog!(
-                            logger,
-                            warn,
-                            "Agent '{}' from LLM_AGENT is not installed, falling back to built-in AI",
-                            canonical
-                        );
-                    }
-                } else {
-                    slog!(
-                        logger,
-                        warn,
-                        "Unknown agent '{}' specified via LLM_AGENT, ignoring",
-                        env_agent
-                    );
-                }
-            }
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
@@ -3217,6 +3280,12 @@ impl Engine {
             NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
                 .resolve(&codemod.source, dependency_chain)
                 .await?;
+        let dependency_display_path = codemod_dependency_display_path(&resolved.dependency_chain);
+        notify_nested_codemod_progress(
+            &self.workflow_run_config.execution.progress_callback,
+            &task.id,
+            &dependency_display_path,
+        );
 
         slog!(
             logger,
@@ -3320,6 +3389,11 @@ impl Engine {
             resolved_package.spec.name,
             codemod_params.len()
         );
+        let nested_progress_task_id = format!(
+            "{}:{}",
+            task.id,
+            codemod_dependency_display_path(dependency_chain)
+        );
 
         // Execute the codemod workflow synchronously by running its steps directly
         // This avoids the recursive engine execution cycle
@@ -3377,6 +3451,7 @@ impl Engine {
                         dependency_chain,
                         capabilities,
                         task_expr_ctx: Some(&codemod_task_expr_ctx),
+                        progress_task_id: Some(&nested_progress_task_id),
                         logger,
                     })
                     .await?;
@@ -3552,6 +3627,7 @@ impl Engine {
 
         self.execute_js_ast_grep_step(
             task_id.to_string(),
+            None,
             "shard-scan".to_string(),
             "Shard Scan".to_string(),
             None,
@@ -4105,6 +4181,31 @@ mod tests {
         assert_eq!(eligible, vec!["src/changed.ts"]);
     }
 
+    #[test]
+    fn configured_ai_agent_candidates_prioritize_explicit_agent_over_env() {
+        assert_eq!(
+            configured_ai_agent_candidates(Some("claude-code"), Some("codex")),
+            vec![
+                AiAgentCandidate {
+                    source: AiAgentCandidateSource::Explicit,
+                    name: "claude-code",
+                },
+                AiAgentCandidate {
+                    source: AiAgentCandidateSource::Env,
+                    name: "codex",
+                },
+            ],
+        );
+        assert_eq!(
+            configured_ai_agent_candidates(None, Some("codex")),
+            vec![AiAgentCandidate {
+                source: AiAgentCandidateSource::Env,
+                name: "codex",
+            }],
+        );
+        assert!(configured_ai_agent_candidates(Some(""), Some("")).is_empty());
+    }
+
     #[tokio::test]
     async fn dry_run_js_ast_grep_does_not_persist_shared_state() {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -4143,6 +4244,7 @@ export default function transform(ast) {
         engine
             .execute_js_ast_grep_step(
                 "test-node".to_string(),
+                None,
                 "test-step".to_string(),
                 "test-step".to_string(),
                 None,

@@ -16,7 +16,10 @@ use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
-use crate::engine::create_engine;
+use crate::engine::{create_engine, create_registry_client};
+use crate::pro_dry_run::{
+    apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
+};
 use crate::workflow_runner::{
     resolve_workflow_source_with_name, run_workflow, workflow_has_manual_steps,
 };
@@ -155,8 +158,23 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         "Failed to parse workflow file: {}",
         workflow_file_path.display()
     ))?;
+    let registry_client = create_registry_client(None)?;
+    let dry_run_only_dependency =
+        utils::find_dry_run_only_codemod_dependency(&workflow_definition, &registry_client)
+            .await
+            .context("Failed to inspect bundled codemods")?;
+    if let Some(source) = dry_run_only_dependency.as_deref() {
+        if !args.dry_run {
+            notify_pro_dry_run_required(
+                ProDryRunReason::BundledChild { source },
+                args.no_interactive,
+            );
+        }
+    }
+    let pro_dry_run_required = dry_run_only_dependency.is_some();
+    let dry_run = args.dry_run || pro_dry_run_required;
     let auto_launch_tui =
-        should_auto_launch_workflow_tui(args.no_interactive, args.dry_run, &workflow_definition);
+        should_auto_launch_workflow_tui(args.no_interactive, dry_run, &workflow_definition);
 
     // Always collect diffs so we can offer report interactively
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
@@ -168,11 +186,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    let (mut engine, config) = create_engine(
+    let (mut engine, mut config) = create_engine(
         workflow_file_path,
         target_path.clone(),
-        args.dry_run,
-        args.allow_dirty,
+        dry_run,
+        args.allow_dirty || pro_dry_run_required,
         params,
         None,
         Some(capabilities.clone()),
@@ -187,6 +205,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     engine.set_name(Some(workflow_label));
     apply_workflow_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
+    if pro_dry_run_required {
+        apply_pro_dry_run_execution_settings(engine.workflow_run_config_mut());
+        apply_pro_dry_run_execution_settings(&mut config);
+    }
     if auto_launch_tui {
         engine.set_quiet(true);
         engine.set_progress_callback(std::sync::Arc::new(None));
@@ -216,7 +238,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             args.workflow.clone(),
             None,
             duration_ms,
-            args.dry_run,
+            dry_run,
             target_path.display().to_string(),
             CLI_VERSION.to_string(),
             files_modified,
@@ -240,7 +262,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     ("executionId".to_string(), generate_execution_id()),
                     ("runTimeSeconds".to_string(), seconds.to_string()),
                     ("dirtyRun".to_string(), args.allow_dirty.to_string()),
-                    ("dryRun".to_string(), args.dry_run.to_string()),
+                    ("dryRun".to_string(), dry_run.to_string()),
                     ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
