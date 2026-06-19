@@ -55,6 +55,48 @@ import {
 
 Use these when Java codemods need to prove type ownership, handle wildcard/conflicting imports, avoid shadowed receivers, replace type identifiers without touching fully qualified names, or inspect anonymous class methods safely.
 
+### Available Java helpers
+
+`@jssg/utils/java/imports`
+
+- `collectImports(rootNode)` collects exact imports and wildcard-imported packages from a Java file.
+- `isTypeImported(imports, { simpleName, fullyQualifiedName })` checks whether a type is available through an exact import or a wildcard package import.
+- `hasConflictingSimpleImport(imports, { simpleName, expectedFullyQualifiedName })` reports whether the same simple name is imported from a different type.
+- `createImportCleanupEdits(rootNode, { removeIfUnreferenced?, addIfReferenced? })` returns import edits for removing now-unused imports and adding referenced imports.
+- `cleanupImports(source, options)` is a convenience wrapper that parses source text, applies `createImportCleanupEdits`, and returns the updated source.
+- `parseImportDeclaration(importText)` parses a single Java import declaration string such as `import com.example.Widget;` and returns the imported path.
+- `getImportPath(importNode)` returns the fully qualified import path for an `import_declaration` node, including `.*` for wildcard imports.
+- `simpleName(fullyQualifiedName)` returns the final segment of a fully qualified type name.
+- `referencesIdentifier(rootNode, name)` checks whether a simple identifier or type identifier appears outside import declarations and fully qualified type nodes.
+
+`@jssg/utils/java/scope`
+
+- `findVisibleDeclarationBeforeUsage({ usageNode, name })` finds the nearest visible parameter, local variable, or field declaration that is in scope before a usage site.
+- `findEnclosingNode(node, kind)` returns the closest ancestor of the requested kind.
+- `findDirectChild(parent, descendant)` returns the direct child of `parent` that contains `descendant`.
+- `findTypeNode(node)` returns the named child node that represents a Java type when one is present.
+
+`@jssg/utils/java/types`
+
+- `isTypeShadowed(rootNode, { simpleName, expectedFullyQualifiedName })` checks whether a type name is shadowed by another import or by a class declared in the same file.
+- `isKnownType(rootNode, typeText, fullyQualifiedName)` verifies that a type reference resolves to the fully qualified type you expect.
+- `replaceTypeIdentifierSafely(node, replacement)` replaces a type identifier while skipping imports and the child identifier inside fully qualified type nodes.
+- `baseTypeName(typeText)` returns the non-generic base name from a type string such as `List<String>`.
+- `replaceBaseTypeName(typeText, replacement)` swaps the base type name while preserving generic suffixes.
+
+`@jssg/utils/java/method-invocations`
+
+- `getMethodInvocationParts(invocation)` returns the receiver node, method name, name node, and argument nodes for a `method_invocation`.
+- `getReceiverIdentifier(receiver)` extracts a simple identifier from a receiver when the receiver is an identifier or field access.
+
+`@jssg/utils/java/anonymous-classes`
+
+- `getAnonymousClassMethod(classCreationNode, methodName)` returns a method declared on an anonymous class body.
+- `getAnonymousClassMethods(classCreationNode, methodNames)` returns a map of required anonymous-class methods, or `null` if any are missing.
+- `getSingleParameterName(method)` returns the parameter name when the method has exactly one parameter.
+- `getMethodBodyContent(method, rename?)` returns the contents of a method body, optionally after renaming identifiers.
+- `renameIdentifiersInNode(node, from, to)` rewrites matching identifiers in a node and returns the updated text.
+
 ```typescript
 const imports = collectImports(rootNode);
 
