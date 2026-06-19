@@ -812,6 +812,20 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
   In this mode, pass the values that would normally come from prompts.
 </ResponseField>
 
+<ResponseField name="--github-action" type="boolean">
+  Generate a GitHub Actions publishing workflow.
+
+  In a single-package repo this creates `.github/workflows/publish.yml` that publishes on `v*` tags. In a workspace it creates a workspace-aware publish workflow that publishes on `*@v*` tags.
+</ResponseField>
+
+<ResponseField name="--workspace" type="boolean">
+  Scaffold a monorepo workspace layout instead of a single package.
+
+  The generated structure places codemods under `codemods/`, adds root workspace configuration, and can generate a workspace-aware publishing workflow when you also pass `--github-action`.
+
+  `--package-manager` is required when you use this flag in `--no-interactive` mode.
+</ResponseField>
+
 ### `codemod login`
 
 Login to a registry.
