@@ -312,7 +312,7 @@ fn resource_infos() -> &'static [CliResourceInfo] {
         CliResourceInfo {
             uri: "jssg-utils://instructions",
             name: "jssg-utils-instructions",
-            description: Some("Docs-backed JSSG import utility guidance"),
+            description: Some("Docs-backed JSSG utility guidance"),
             mime_type: "text/markdown",
         },
         CliResourceInfo {
@@ -726,7 +726,7 @@ fn local_jssg_utils_docs_bundle() -> &'static str {
     LOCAL_JSSG_UTILS_DOCS_BUNDLE
         .get_or_init(|| {
             build_local_docs_bundle(
-                "Canonical JSSG Import Utilities Documentation",
+                "Canonical JSSG Utilities Documentation",
                 &[LocalDocSource {
                     path: "docs/jssg/utils.mdx",
                     content: LOCAL_JSSG_UTILS_DOC,

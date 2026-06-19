@@ -7,6 +7,10 @@
   "author": "Mohebifar <mo@codemod.com>",
   "license": "Apache-2.0",
   "exports": {
+    "./java/*": {
+      "types": "./src/java/exports/*.ts",
+      "default": "./src/java/exports/*.ts"
+    },
     "./javascript/*": {
       "types": "./src/javascript/exports/*.ts",
       "default": "./src/javascript/exports/*.ts"
@@ -17,7 +21,7 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/java.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
