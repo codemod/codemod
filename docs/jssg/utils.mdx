@@ -23,7 +23,7 @@ import { getImport, addImport, removeImport } from "@jssg/utils/javascript/impor
 ```
 
 <Info>
-These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically.
+These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically, including dynamic `import()` patterns that bind values through `.then(...)` callbacks.
 </Info>
 
 ## Java Utilities
@@ -113,6 +113,9 @@ Returns `null` if the import is not found.
 | CJS destructured | `const { bar } = require("module")` |
 | CJS aliased | `const { bar: baz } = require("module")` |
 | Dynamic import | `const foo = await import("module")` |
+| Dynamic `.then()` namespace callback | `import("module").then((mod) => mod.fn())` |
+| Dynamic `.then()` destructured named callback | `import("module").then(({ fn }) => fn())` |
+| Dynamic `.then()` destructured alias callback | `import("module").then(({ fn: myFn }) => myFn())` |
 
 ### Example
 
@@ -210,6 +213,7 @@ export default transform;
 Add an import to the program. Smart behavior:
 - **Skips** if the import already exists
 - **Merges** named specifiers into an existing import statement from the same source
+- **Merges** named specifiers into destructured dynamic `import().then(...)` callbacks from the same source
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
 
@@ -281,6 +285,7 @@ Remove an import from the program. Smart behavior:
 - **Named (multiple specifiers)**: Removes only the specified specifiers, keeping the rest.
 - **Named (last specifier)**: Removes the entire import statement.
 - Handles both ESM and CJS formats.
+- Handles dynamic `import()` forms, including `.then(...)` callback bindings.
 
 ### Parameters
 
@@ -390,4 +395,32 @@ const edit = addImport(rootNode, {
   from: "express",
   moduleType,
 });
+```
+
+### Work With Dynamic `import().then(...)`
+
+These helpers also treat `.then(...)` callback bindings as import-like declarations when the source module matches:
+
+```typescript
+const modImport = getImport(rootNode, { type: "default", from: "mod" });
+// Matches: import("mod").then((mod) => { mod.fn(); })
+
+const namedImport = getImport(rootNode, { type: "named", name: "foo", from: "mod" });
+// Matches: import("mod").then(({ foo }) => { foo(); })
+
+const addEdit = addImport(rootNode, {
+  type: "named",
+  specifiers: [{ name: "bar" }],
+  from: "mod",
+});
+// Turns: import("mod").then(({ foo }) => { foo(); })
+// Into:  import("mod").then(({ foo, bar }) => { foo(); })
+
+const removeEdit = removeImport(rootNode, {
+  type: "named",
+  specifiers: ["foo"],
+  from: "mod",
+});
+// Turns: import("mod").then(({ foo, bar }) => { bar(); })
+// Into:  import("mod").then(({ bar }) => { bar(); })
 ```
