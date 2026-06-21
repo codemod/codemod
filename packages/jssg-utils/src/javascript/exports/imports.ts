@@ -1570,6 +1570,7 @@ export function removeImport<T extends Language>(
                       has: {
                         kind: "string_fragment",
                         pattern: "$SOURCE",
+                        regex: stringToExactRegexString(options.from),
                       },
                     },
                   },

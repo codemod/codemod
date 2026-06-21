@@ -1327,6 +1327,19 @@ function testRemoveSideEffectImportOnlyMatchesSourceField() {
   assert(program.text() === src, "Source must be unchanged");
 }
 
+function testRemoveImportDoesNotRemoveUnrelatedModule() {
+  const program = parseProgram(
+    "javascript",
+    "foo.then((value) => value);\nimport('mod').then((mod) => {\n mod.fn();\n});\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "namespace",
+    from: "not-mod",
+  });
+  assert(edit === null, "Should return null");
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1425,6 +1438,7 @@ function run() {
   testRemoveNamedImportDynamicSpecific();
   testRemoveNamespaceImportDynamicIgnoresUnrelatedThen();
   testRemoveDefaultDynamicImportMultiDeclaratorReturnsNull();
+  testRemoveImportDoesNotRemoveUnrelatedModule();
 
   console.log("imports.test.ts: all assertions passed");
 }
