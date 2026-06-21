@@ -57,6 +57,32 @@ function testSingleDefaultESMImport() {
   assert(res[0]!.node.text() === "foo", "Node should reflect identifier");
 }
 
+function testSingleNamedDynamicImport() {
+  const program = parseProgram(
+    "javascript",
+    "import('test').then(({fn}) => {\n const pair = fn('test');\n });",
+  );
+
+  const res = getAllImports(program, { type: "named", name: "fn", from: "test" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.isNamespace === false, "isNamespace should be false");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm");
+  assert(res[0]!.node.text() === "fn", "Node should reflect identifier");
+}
+
+function testSingleNamedDynamicImportWithAlias() {
+  const program = parseProgram(
+    "javascript",
+    "import('test').then(({fn: test}) => {\n const pair = test('test');\n });",
+  );
+
+  const res = getAllImports(program, { type: "named", name: "fn", from: "test" });
+  assert(res.length === 1, "Should return exactly one result");
+  assert(res[0]!.node.text() === "test", "Node should reflect identifier");
+  assert(res[0]!.moduleType === "esm", "moduleType should be esm for dynamic()");
+  assert(res[0]!.alias === "test", "Alias should be the import name");
+}
+
 function testSingleDefaultCJSImport() {
   const program = parseProgram("javascript", "const bar = require('mod');\nconsole.log(bar);\n");
 
@@ -467,6 +493,83 @@ function testNamespaceNotReturnedAlongsideTypedResults() {
 }
 
 // ============================================================================
+// getImport — dynamic .then() callback tests
+// ============================================================================
+
+function testGetImport_DynamicThenArrowParensDefault() {
+  const program = parseProgram("javascript", "import('mod').then((mod) => { mod(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find default from dynamic .then() arrow with parens");
+  assert(res!.alias === "mod", "Alias should be the callback param name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+  assert(res!.isNamespace === true, "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenFunctionExpressionDefault() {
+  const program = parseProgram("javascript", "import('mod').then(function(mod) { mod(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find default from dynamic .then() function expression");
+  assert(res!.alias === "mod", "Alias should be the callback param name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredNamed() {
+  const program = parseProgram("javascript", "import('mod').then(({fn}) => { fn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() callback");
+  assert(res!.alias === "fn", "Alias should be the destructured name");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredNamedWithAlias() {
+  const program = parseProgram("javascript", "import('mod').then(({fn: myFn}) => { myFn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() callback with alias");
+  assert(res!.alias === "myFn", "Alias should be the renamed binding");
+  assert(res!.moduleType === "esm", "moduleType should be esm");
+}
+
+function testGetImport_DynamicThenDestructuredFunctionExpression() {
+  const program = parseProgram("javascript", "import('mod').then(function({fn}) { fn(); });\n");
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(res !== null, "Should find named from destructured .then() function expression");
+  assert(res!.alias === "fn", "Alias should be the destructured name");
+}
+
+function testGetImport_DynamicThenDestructuredAliasedFunctionExpression() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(function({fn: myFn}) { myFn(); });\n",
+  );
+  const res = getImport(program, { type: "named", name: "fn", from: "mod" });
+  assert(
+    res !== null,
+    "Should find named from destructured .then() function expression with alias",
+  );
+  assert(res!.alias === "myFn", "Alias should be the renamed binding");
+}
+
+function testGetImport_DynamicThenNamedNotFound() {
+  const program = parseProgram("javascript", "import('mod').then(({foo}) => { foo(); });\n");
+  const res = getImport(program, { type: "named", name: "bar", from: "mod" });
+  assert(res === null, "Should return null when requested named specifier is not destructured");
+}
+
+function testGetImport_DynamicThenCallbackParamIsNamespaceLike() {
+  const program = parseProgram("javascript", "import('mod').then(mod => { mod.fn(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res !== null, "Should find namespace-like dynamic .then() callback param");
+  assert(res!.alias === "mod", "Alias should be the callback parameter name");
+  assert(res!.isNamespace === true, "Callback param represents the module namespace, not default");
+}
+
+function testGetImport_DynamicThenDestructuredAliasIsNotDefault() {
+  const program = parseProgram("javascript", "import('mod').then(({fn: myFn}) => { myFn(); });\n");
+  const res = getImport(program, { type: "default", from: "mod" });
+  assert(res === null, "Destructured named aliases should not satisfy a default import lookup");
+}
+
+// ============================================================================
 // addImport tests
 // ============================================================================
 
@@ -655,6 +758,21 @@ function testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma() {
   );
 }
 
+function testAddNamedImportToDynamicImportCallbackMatchesSourceLiterally() {
+  const program = parseProgram("javascript", "import('fooXbar').then(({ a }) => a);\n");
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "b" }],
+    from: "foo.bar",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import('fooXbar').then(({ a }) => a);\nimport { b } from 'foo.bar';\n",
+    `Should not merge into a regex-like source match, got: ${JSON.stringify(result)}`,
+  );
+}
+
 function testAddImportAfterExisting() {
   const program = parseProgram("javascript", "import x from 'other';\nconsole.log(x);\n");
   const edit = addImport(program, {
@@ -721,6 +839,23 @@ function testAddImportAfterMixedImportsUsesLastSourcePosition() {
         "console.log(a, b);",
         "",
       ].join("\n"),
+    "New import should be inserted after the last import by source position",
+  );
+}
+
+function testAddNamedImportToDynamicImportCallback() {
+  const source = `import('mod').then(({foo}) => {\n  foo();\n})`;
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === `import('mod').then(({ foo, bar }) => {\n  foo();\n})`,
     "New import should be inserted after the last import by source position",
   );
 }
@@ -1071,6 +1206,112 @@ function testRemoveNamespace_MixedWithDefault_KeepsDefault() {
   );
 }
 
+function testRemoveDefaultImportDynamic() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(function({default: test}) => {\n test();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: false,
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === `console.log('test');\n`, "Should remove the import statement");
+}
+
+function testRemoveSideEffectImportDynamic() {
+  const program = parseProgram("javascript", "import('mod');\nconsole.log('foo');");
+
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+  });
+  assert(edit === null, "Should not return an edit");
+
+  const editSideEffect = removeImport(program, {
+    type: "default",
+    from: "mod",
+    removeSideEffectForms: true,
+  });
+
+  assert(editSideEffect !== null, "Should return an edit");
+
+  const result = program.commitEdits([editSideEffect!]);
+
+  assert(result === `console.log('foo');`, "Should remove the import statement");
+}
+
+function testRemoveNamespaceImportDynamic() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then((mod) => {\n mod();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "namespace",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === `console.log('test');\n`, "Should remove the import statement");
+}
+
+function testRemoveNamedImportDynamicSpecific() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(({foo, bar}) => {\n bar();\n});\nconsole.log('test');\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: ["foo"],
+  });
+
+  assert(edit !== null, "Should return an edit");
+
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === `import('mod').then(({bar}) => {\n bar();\n});\nconsole.log('test');\n`,
+    "Should remove the import statement",
+  );
+}
+
+function testRemoveNamespaceImportDynamicIgnoresUnrelatedThen() {
+  const program = parseProgram(
+    "javascript",
+    "foo.then((value) => value);\nimport('mod').then((mod) => {\n mod.fn();\n});\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "namespace",
+    from: "mod",
+  });
+  assert(edit !== null, "Should return an edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "foo.then((value) => value);\n",
+    `Should remove only the matching dynamic import statement, got: ${JSON.stringify(result)}`,
+  );
+}
+
+function testRemoveDefaultDynamicImportMultiDeclaratorReturnsNull() {
+  const program = parseProgram(
+    "javascript",
+    "var mod = await import('mod'), keep = 1;\nconsole.log(keep);\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "default",
+    from: "mod",
+  });
+  assert(edit === null, "Should not remove multi-declarator dynamic import statements");
+}
+
 /** Only the module source string counts — not other string literals (e.g. import attributes). */
 function testRemoveSideEffectImportOnlyMatchesSourceField() {
   const src = "import 'foo' assert { type: 'mod' };\nconsole.log(1);\n";
@@ -1086,8 +1327,20 @@ function testRemoveSideEffectImportOnlyMatchesSourceField() {
   assert(program.text() === src, "Source must be unchanged");
 }
 
+function testRemoveImportDoesNotRemoveUnrelatedModule() {
+  const program = parseProgram(
+    "javascript",
+    "foo.then((value) => value);\nimport('mod').then((mod) => {\n mod.fn();\n});\n",
+  );
+
+  const edit = removeImport(program, {
+    type: "namespace",
+    from: "not-mod",
+  });
+  assert(edit === null, "Should return null");
+}
+
 function run() {
-  // getAllImports tests
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
   testReturnsEmptyArrayWhenNamedSpecifierNotFound();
@@ -1107,6 +1360,8 @@ function run() {
   testMultipleNamespaceImports_getAllImports_AllReturned();
   testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned();
   testNamespaceNotReturnedAlongsideTypedResults_getAllImports();
+  testSingleNamedDynamicImport();
+  testSingleNamedDynamicImportWithAlias();
 
   // getImport tests
   testReturnsNullWhenNoMatches();
@@ -1123,6 +1378,15 @@ function run() {
   testMultipleNamespaceImports_ReturnsFirstOnly();
   testMultipleNamespaceImports_NamedQuery_ReturnsFirstOnly();
   testNamespaceNotReturnedAlongsideTypedResults();
+  testGetImport_DynamicThenArrowParensDefault();
+  testGetImport_DynamicThenFunctionExpressionDefault();
+  testGetImport_DynamicThenDestructuredNamed();
+  testGetImport_DynamicThenDestructuredNamedWithAlias();
+  testGetImport_DynamicThenDestructuredFunctionExpression();
+  testGetImport_DynamicThenDestructuredAliasedFunctionExpression();
+  testGetImport_DynamicThenNamedNotFound();
+  testGetImport_DynamicThenCallbackParamIsNamespaceLike();
+  testGetImport_DynamicThenDestructuredAliasIsNotDefault();
 
   // addImport tests
   testAddDefaultImportESM();
@@ -1137,9 +1401,11 @@ function run() {
   testAddImportMergesMultilineNamedSpecifiers();
   testAddImportMergesMultilineNamedSpecifiersWithComment();
   testAddImportMergesMultilineNamedSpecifiersPreservingTrailingComma();
+  testAddNamedImportToDynamicImportCallbackMatchesSourceLiterally();
   testAddImportAfterExisting();
   testAddImportAfterExistingKeepsSeparateLines();
   testAddImportAfterMixedImportsUsesLastSourcePosition();
+  testAddNamedImportToDynamicImportCallback();
 
   // removeImport tests
   testRemoveDefaultImportESM();
@@ -1166,6 +1432,13 @@ function run() {
   testRemoveNamed_SubsetOfMixed_KeepsBoth();
   testRemoveNamed_OptionsExceedStatement_PureNamedOnlyRemovesMatches();
   testRemoveNamespace_MixedWithDefault_KeepsDefault();
+  testRemoveDefaultImportDynamic();
+  testRemoveNamespaceImportDynamic();
+  testRemoveSideEffectImportDynamic();
+  testRemoveNamedImportDynamicSpecific();
+  testRemoveNamespaceImportDynamicIgnoresUnrelatedThen();
+  testRemoveDefaultDynamicImportMultiDeclaratorReturnsNull();
+  testRemoveImportDoesNotRemoveUnrelatedModule();
 
   console.log("imports.test.ts: all assertions passed");
 }
