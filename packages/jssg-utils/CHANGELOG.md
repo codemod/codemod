@@ -1,5 +1,12 @@
 # @jssg/utils
 
+## 0.0.9
+
+### Patch Changes
+
+- fe3790d: handle JavaScript dynamic imports on addImport, getImport, getAllImports, and removeImport
+- 77ea4c6: Add Java helper modules for import ownership checks, import cleanup, visible declaration lookup, safe type replacement, method invocation receiver handling, and anonymous class method inspection.
+
 ## 0.0.8
 
 ### Patch Changes
