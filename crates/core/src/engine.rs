@@ -481,6 +481,34 @@ pub(crate) fn log_step_output(logger: &StructuredLogger, output: &str) {
     }
 }
 
+fn notify_nested_codemod_progress(
+    progress_callback: &Arc<Option<ProgressCallback>>,
+    task_id: &Uuid,
+    display_path: &str,
+) {
+    let Some(callback) = progress_callback.as_ref() else {
+        return;
+    };
+
+    let title = "Bundled codemods";
+    let line = format!("Running {display_path}");
+    (callback.callback)(
+        &task_id.to_string(),
+        &format!("{title}\n{line}"),
+        "log",
+        None,
+        &0,
+    );
+}
+
+fn codemod_dependency_display_path(dependency_chain: &[CodemodDependency]) -> String {
+    dependency_chain
+        .iter()
+        .map(|dependency| dependency.source.as_str())
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
 fn format_shell_command_notice(request: &ShellCommandExecutionRequest) -> String {
     let mut message = format!(
         "About to execute shell command for step '{}' in node '{}':",
@@ -1774,7 +1802,7 @@ impl Engine {
     ///
     /// # Returns
     /// * `Ok(())` if no cycles are detected
-    /// * `Err(Error::Other)` if a cycle is found, with detailed information about the cycle
+    /// * `Err(Error::Other)` if a cycle is found
     async fn validate_codemod_dependencies(
         &self,
         workflow: &Workflow,
@@ -2416,6 +2444,7 @@ impl Engine {
                     dependency_chain: &[],
                     capabilities: &self.workflow_run_config.execution.capabilities,
                     task_expr_ctx: task_expr_ctx.as_ref(),
+                    progress_task_id: None,
                     logger: &step_logger,
                 },
             ))
@@ -2873,6 +2902,7 @@ impl Engine {
     pub async fn execute_js_ast_grep_step(
         &self,
         id: String,
+        progress_task_id: Option<String>,
         step_id: String,
         step_name: String,
         report_step_id: Option<String>,
@@ -2892,6 +2922,7 @@ impl Engine {
         JssgExecutionService::new(self)
             .execute(JssgExecutionRequest {
                 id,
+                progress_task_id,
                 step_id,
                 step_name,
                 report_step_id,
@@ -3249,6 +3280,12 @@ impl Engine {
             NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
                 .resolve(&codemod.source, dependency_chain)
                 .await?;
+        let dependency_display_path = codemod_dependency_display_path(&resolved.dependency_chain);
+        notify_nested_codemod_progress(
+            &self.workflow_run_config.execution.progress_callback,
+            &task.id,
+            &dependency_display_path,
+        );
 
         slog!(
             logger,
@@ -3352,6 +3389,11 @@ impl Engine {
             resolved_package.spec.name,
             codemod_params.len()
         );
+        let nested_progress_task_id = format!(
+            "{}:{}",
+            task.id,
+            codemod_dependency_display_path(dependency_chain)
+        );
 
         // Execute the codemod workflow synchronously by running its steps directly
         // This avoids the recursive engine execution cycle
@@ -3409,6 +3451,7 @@ impl Engine {
                         dependency_chain,
                         capabilities,
                         task_expr_ctx: Some(&codemod_task_expr_ctx),
+                        progress_task_id: Some(&nested_progress_task_id),
                         logger,
                     })
                     .await?;
@@ -3584,6 +3627,7 @@ impl Engine {
 
         self.execute_js_ast_grep_step(
             task_id.to_string(),
+            None,
             "shard-scan".to_string(),
             "Shard Scan".to_string(),
             None,
@@ -4200,6 +4244,7 @@ export default function transform(ast) {
         engine
             .execute_js_ast_grep_step(
                 "test-node".to_string(),
+                None,
                 "test-step".to_string(),
                 "test-step".to_string(),
                 None,

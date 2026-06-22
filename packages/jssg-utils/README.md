@@ -110,3 +110,86 @@ These helpers work on XML `SgNode`s from `codemod:ast-grep/langs/xml`.
 - `getAttributeValue(element, attrName)` returns an unquoted XML attribute value, or `null`.
 - `hasTag(root, tag)` checks whether a tag exists.
 - `getLineIndent(src, node)` returns the whitespace before `node` on its line.
+
+## Java helpers
+
+Java utilities are split by concern:
+
+```ts
+import {
+  cleanupImports,
+  collectImports,
+  createImportCleanupEdits,
+  hasConflictingSimpleImport,
+  isTypeImported,
+} from "@jssg/utils/java/imports";
+import { findVisibleDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceTypeIdentifierSafely } from "@jssg/utils/java/types";
+import {
+  getMethodInvocationParts,
+  getReceiverIdentifier,
+} from "@jssg/utils/java/method-invocations";
+import {
+  getAnonymousClassMethod,
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+  renameIdentifiersInNode,
+} from "@jssg/utils/java/anonymous-classes";
+```
+
+These helpers cover recurring Java codemod review issues:
+
+- exact and wildcard import ownership checks
+- conflicting simple-name imports
+- obsolete import cleanup after type rewrites
+- visible declaration lookup before a usage site
+- receiver identifier extraction for method invocations
+- type identifier replacement that avoids FQCN subnodes
+- anonymous class method lookup and method body extraction
+- identifier renaming within a method body using AST edits
+
+Example:
+
+```ts
+const imports = collectImports(rootNode);
+
+if (
+  isTypeImported(imports, {
+    simpleName: "Widget",
+    fullyQualifiedName: "com.example.Widget",
+  }) &&
+  !hasConflictingSimpleImport(imports, {
+    simpleName: "Widget",
+    expectedFullyQualifiedName: "com.example.Widget",
+  })
+) {
+  // Safe to treat simple Widget references as com.example.Widget.
+}
+```
+
+For rewrites that replace imported types:
+
+```ts
+const importEdits = createImportCleanupEdits(rootNode, {
+  removeIfUnreferenced: [
+    "com.example.LegacyWidget",
+    "com.example.LegacyWidgetBuilder",
+  ],
+  addIfReferenced: ["com.example.Widget"],
+});
+
+return rootNode.commitEdits([...edits, ...importEdits]);
+```
+
+If you already have a rewritten source string, use the compatibility wrapper:
+
+```ts
+return cleanupImports(source, {
+  removeIfUnreferenced: [
+    "com.example.LegacyWidget",
+    "com.example.LegacyWidgetBuilder",
+  ],
+  addIfReferenced: ["com.example.Widget"],
+});
+```

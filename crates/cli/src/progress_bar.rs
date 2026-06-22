@@ -48,13 +48,28 @@ pub fn download_progress_bar() -> Arc<Box<dyn Fn(u64, u64) + Send + Sync>> {
 }
 
 pub enum ProgressAction {
-    Start { total_files: Option<u64> },
-    Update { current_file: String },
-    Agent { payload: String },
-    Log { title: String, line: String },
-    Diagnostic { title: String, message: String },
+    Start {
+        total_files: Option<u64>,
+        label: Option<String>,
+    },
+    Update {
+        current_file: String,
+    },
+    Agent {
+        payload: String,
+    },
+    Log {
+        title: String,
+        line: String,
+    },
+    Diagnostic {
+        title: String,
+        message: String,
+    },
     Increment,
-    Finish { message: Option<String> },
+    Finish {
+        message: Option<String>,
+    },
 }
 
 pub struct ProgressUpdate {
@@ -98,7 +113,7 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
         let task_id = update.task_id.clone();
 
         match update.action {
-            ProgressAction::Start { total_files } => {
+            ProgressAction::Start { total_files, label } => {
                 let mut bars_lock = bars.lock().unwrap();
                 *active_log_title.lock().unwrap() = None;
 
@@ -111,13 +126,19 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                     let pb = mp.add(ProgressBar::new(total));
                     pb.set_style(progress_style.clone());
                     pb.set_prefix(task_id.clone());
-                    pb.set_message(style("Starting").dim().to_string());
+                    let message = label
+                        .map(|label| format!("Running {label}"))
+                        .unwrap_or_else(|| "Starting".to_string());
+                    pb.set_message(style(message).dim().to_string());
                     pb
                 } else {
                     let pb = mp.add(ProgressBar::new_spinner());
                     pb.set_style(spinner_style.clone());
                     pb.set_prefix(task_id.clone());
-                    pb.set_message(style("Starting").dim().to_string());
+                    let message = label
+                        .map(|label| format!("Running {label}"))
+                        .unwrap_or_else(|| "Starting".to_string());
+                    pb.set_message(style(message).dim().to_string());
                     pb.enable_steady_tick(std::time::Duration::from_millis(120));
                     pb
                 };

@@ -26,6 +26,49 @@ import { getImport, addImport, removeImport } from "@jssg/utils/javascript/impor
 These utilities work with JavaScript, TypeScript, JSX, and TSX ASTs. They handle both ESM (`import`) and CJS (`require()`) formats automatically.
 </Info>
 
+## Java Utilities
+
+`@jssg/utils` also includes Java helpers for recurring safe-codemod patterns:
+
+```typescript
+import {
+  cleanupImports,
+  collectImports,
+  createImportCleanupEdits,
+  hasConflictingSimpleImport,
+  isTypeImported,
+} from "@jssg/utils/java/imports";
+import { findVisibleDeclarationBeforeUsage } from "@jssg/utils/java/scope";
+import { replaceTypeIdentifierSafely } from "@jssg/utils/java/types";
+import {
+  getMethodInvocationParts,
+  getReceiverIdentifier,
+} from "@jssg/utils/java/method-invocations";
+import {
+  getAnonymousClassMethod,
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+  renameIdentifiersInNode,
+} from "@jssg/utils/java/anonymous-classes";
+```
+
+Use these when Java codemods need to prove type ownership, handle wildcard/conflicting imports, avoid shadowed receivers, replace type identifiers without touching fully qualified names, or inspect anonymous class methods safely.
+
+```typescript
+const imports = collectImports(rootNode);
+
+const isExpectedWidget =
+  isTypeImported(imports, {
+    simpleName: "Widget",
+    fullyQualifiedName: "com.example.Widget",
+  }) &&
+  !hasConflictingSimpleImport(imports, {
+    simpleName: "Widget",
+    expectedFullyQualifiedName: "com.example.Widget",
+  });
+```
+
 ---
 
 ## `getImport`

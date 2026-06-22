@@ -213,6 +213,96 @@ function findRawImportMatches<T extends Language>(
             },
           ],
         },
+        {
+          all: [
+            {
+              any: [
+                // - dynamic with callback: import("mod").then((mod) => ...) or import("mod").then(function(mod) { ... })
+                {
+                  kind: "identifier",
+                  pattern: "$NAMESPACE_ALIAS",
+                  inside: {
+                    kind: "formal_parameters",
+                  },
+                },
+                // - dynamic with callback: import("mod").then(mod => ...)
+                {
+                  kind: "identifier",
+                  pattern: "$NAMESPACE_ALIAS",
+                  inside: {
+                    kind: "arrow_function",
+                  },
+                },
+                // - dynamic with destructured callback: import("mod").then(({test}) => ...)
+                {
+                  kind: "shorthand_property_identifier_pattern",
+                  pattern: "$ORIGINAL",
+                  inside: {
+                    kind: "object_pattern",
+                    inside: {
+                      kind: "formal_parameters",
+                    },
+                  },
+                },
+                // - dynamic with destructured + alias callback: import("mod").then(({test: alias}) => ...)
+                {
+                  all: [
+                    { kind: "pair_pattern" },
+                    { has: { field: "key", kind: "property_identifier", pattern: "$ORIGINAL" } },
+                    {
+                      not: { has: { field: "key", kind: "property_identifier", regex: "default" } },
+                    },
+                    { has: { field: "value", kind: "identifier", pattern: "$ALIAS" } },
+                  ],
+                },
+                // - dynamic with destructured callback using default: import("mod").then(({default: test}) => ...)
+                {
+                  all: [
+                    { kind: "pair_pattern" },
+                    { has: { field: "key", kind: "property_identifier", regex: "default" } },
+                    { has: { field: "value", kind: "identifier", pattern: "$VAR_NAME" } },
+                  ],
+                },
+              ],
+            },
+            {
+              inside: {
+                stopBy: "end",
+                kind: "call_expression",
+                has: {
+                  field: "function",
+                  kind: "member_expression",
+                  all: [
+                    {
+                      has: {
+                        field: "property",
+                        kind: "property_identifier",
+                        regex: "^then$",
+                      },
+                    },
+                    {
+                      has: {
+                        field: "object",
+                        kind: "call_expression",
+                        has: {
+                          field: "arguments",
+                          kind: "arguments",
+                          has: {
+                            kind: "string",
+                            has: {
+                              kind: "string_fragment",
+                              pattern: "$SOURCE",
+                            },
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
         // - CJS: const { foo } = require("mod")
         {
           all: [
@@ -327,6 +417,7 @@ function matchToImportResult<T extends Language>(
 ): ResolvedImport<T> | null {
   if (options.type === "default") {
     const nameNode = match.getMatch("DEFAULT_NAME") ?? match.getMatch("VAR_NAME");
+
     if (!nameNode) return null;
     return {
       alias: nameNode.text(),
@@ -446,26 +537,12 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
         kind: "variable_declarator",
         has: {
           field: "value",
-          any: [
-            {
-              kind: "call_expression",
-              has: {
-                field: "function",
-                kind: "identifier",
-                regex: "^require$",
-              },
-            },
-            {
-              kind: "await_expression",
-              has: {
-                kind: "call_expression",
-                has: {
-                  field: "function",
-                  regex: "^import$",
-                },
-              },
-            },
-          ],
+          kind: "call_expression",
+          has: {
+            field: "function",
+            kind: "identifier",
+            regex: "^require$",
+          },
         },
       },
       not: {
@@ -477,7 +554,56 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
     },
   });
 
-  return [...esmImports, ...cjsImports, ...cjsVarImports] as unknown as SgNode<T>[];
+  // `var foo = await import(...)`
+  // `import(...)`
+  // `import(...).then((...) => void)`
+  const dynamicImports = tsProgram.findAll({
+    rule: {
+      any: [
+        {
+          kind: "variable_declaration",
+          has: {
+            kind: "variable_declarator",
+            has: {
+              field: "value",
+              kind: "await_expression",
+              has: {
+                kind: "call_expression",
+                has: {
+                  field: "function",
+                  regex: "^import$",
+                },
+              },
+            },
+          },
+          not: {
+            has: {
+              kind: "variable_declarator",
+              nthChild: 2,
+            },
+          },
+        },
+        {
+          kind: "expression_statement",
+          has: {
+            kind: "call_expression",
+            has: {
+              stopBy: "end",
+              field: "function",
+              regex: "^import$",
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  return [
+    ...esmImports,
+    ...cjsImports,
+    ...cjsVarImports,
+    ...dynamicImports,
+  ] as unknown as SgNode<T>[];
 }
 
 /**
@@ -519,9 +645,13 @@ function findNamedImports<T extends Language>(importStmt: SgNode<T>): SgNode<T> 
 /**
  * Generate a specifier string like "foo" or "foo as bar".
  */
-function formatSpecifier(spec: ImportSpecifier): string {
+function formatSpecifier(
+  spec: ImportSpecifier,
+  kind: "named_imports" | "object_pattern" = "named_imports",
+): string {
   if (spec.alias && spec.alias !== spec.name) {
-    return `${spec.name} as ${spec.alias}`;
+    if (kind === "named_imports") return `${spec.name} as ${spec.alias}`;
+    if (kind === "object_pattern") return `${spec.name}: ${spec.alias}`;
   }
   return spec.name;
 }
@@ -541,7 +671,7 @@ function generateEsmImport(options: AddImportOptions): string {
   }
 
   // Named imports
-  const specifierStr = options.specifiers.map(formatSpecifier).join(", ");
+  const specifierStr = options.specifiers.map((spec) => formatSpecifier(spec)).join(", ");
   return `import { ${specifierStr} } from '${source}';\n`;
 }
 
@@ -726,6 +856,21 @@ function findImportStatementForSpecifier<T extends Language>(
     }
   }
 
+  const dynamicImportSpecifier = getImport(tsProgram, {
+    type: "named",
+    from: source,
+    name: specifierName,
+  });
+
+  if (dynamicImportSpecifier?.node) {
+    return {
+      statement: dynamicImportSpecifier.node
+        .ancestors()
+        .find((a) => a.is("expression_statement")) as unknown as SgNode<T>,
+      specifier: dynamicImportSpecifier.node as unknown as SgNode<T>,
+    };
+  }
+
   return null;
 }
 
@@ -896,6 +1041,50 @@ function hasTrailingComma<T extends Language>(nodes: SgNode<T>[]) {
   return false;
 }
 
+function mergeSpecifiers<T extends Language>(
+  parentNode: SgNode<T>,
+  newSpecifiers: ImportSpecifier[],
+) {
+  const parentNodeKind =
+    parentNode.kind() === "object_pattern" ? "object_pattern" : "named_imports";
+  const isMultiline = parentNode.range().start.line !== parentNode.range().end.line;
+  const separator = isMultiline ? `,\n  ` : ", ";
+
+  const trailingComma = hasTrailingComma(parentNode.children()) ? "," : "";
+
+  const namedImportNodes = parentNode.children().filter((n) => n.isNamed() || n.is("comment"));
+
+  const namedImportsText: string[] = [];
+
+  for (let i = 0; i < namedImportNodes.length; i++) {
+    if (isMultiline) {
+      if (namedImportNodes[i + 1]?.is("comment")) {
+        namedImportsText[i] = namedImportNodes[i]?.text() + ",";
+        continue;
+      }
+
+      if (namedImportNodes[i]?.is("comment")) {
+        namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
+        continue;
+      }
+
+      namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
+      continue;
+    }
+
+    namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
+  }
+
+  const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec, parentNodeKind));
+
+  const importsUpdatedStr =
+    namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
+
+  return isMultiline
+    ? parentNode.replace(`{\n  ${importsUpdatedStr}\n}`)
+    : parentNode.replace(`{ ${importsUpdatedStr} }`);
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -1005,6 +1194,7 @@ export function addImport<T extends Language>(
         name: spec.name,
         from: options.from,
       });
+
       if (!existing) {
         newSpecifiers.push(spec);
       }
@@ -1020,46 +1210,7 @@ export function addImport<T extends Language>(
       if (existingImport) {
         const namedImports = findNamedImports(existingImport);
         if (namedImports) {
-          // Add to existing named_imports: insert before the closing brace
-
-          const isMultiline = namedImports.range().start.line !== namedImports.range().end.line;
-          const separator = isMultiline ? `,\n  ` : ", ";
-
-          const trailingComma = hasTrailingComma(namedImports.children()) ? "," : "";
-
-          const namedImportNodes = namedImports
-            .children()
-            .filter((n) => n.isNamed() || n.is("comment"));
-
-          const namedImportsText: string[] = [];
-
-          for (let i = 0; i < namedImportNodes.length; i++) {
-            if (isMultiline) {
-              if (namedImportNodes[i + 1]?.is("comment")) {
-                namedImportsText[i] = namedImportNodes[i]?.text() + ",";
-                continue;
-              }
-
-              if (namedImportNodes[i]?.is("comment")) {
-                namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
-                continue;
-              }
-
-              namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
-              continue;
-            }
-
-            namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
-          }
-
-          const specifierStr = newSpecifiers.map(formatSpecifier);
-
-          const importsUpdatedStr =
-            namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
-
-          return isMultiline
-            ? namedImports.replace(`{\n  ${importsUpdatedStr}\n}`)
-            : namedImports.replace(`{ ${importsUpdatedStr} }`);
+          return mergeSpecifiers(namedImports, newSpecifiers);
         } else {
           // Import exists but has no named_imports (e.g., default import only)
           // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
@@ -1067,7 +1218,7 @@ export function addImport<T extends Language>(
             rule: { kind: "import_clause" },
           });
           if (importClause) {
-            const specifierStr = newSpecifiers.map(formatSpecifier).join(", ");
+            const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec)).join(", ");
             const insertPos = importClause.range().end.index;
             return {
               startPos: insertPos,
@@ -1076,6 +1227,47 @@ export function addImport<T extends Language>(
             };
           }
         }
+      }
+
+      const dynamicImportObjectPattern = (program as unknown as SgNode<TS, "program">).find({
+        rule: {
+          kind: "object_pattern",
+          inside: {
+            stopBy: "end",
+            kind: "call_expression",
+            has: {
+              kind: "member_expression",
+              has: {
+                kind: "call_expression",
+                all: [
+                  {
+                    has: {
+                      field: "function",
+                      kind: "import",
+                    },
+                  },
+                  {
+                    has: {
+                      field: "arguments",
+                      kind: "arguments",
+                      has: {
+                        kind: "string",
+                        has: {
+                          kind: "string_fragment",
+                          regex: stringToExactRegexString(options.from),
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+
+      if (dynamicImportObjectPattern) {
+        return mergeSpecifiers(dynamicImportObjectPattern, newSpecifiers);
       }
     }
 
@@ -1154,9 +1346,9 @@ function requireCallFirstArgIsLiteralSpecifier(
 }
 
 /**
- * `require('pkg');` as a standalone expression statement (e.g. polyfill registration).
+ * `require('pkg');` / `import('pkg');` as a standalone expression statement (e.g. polyfill registration).
  */
-function removeBareRequireSideEffectEdit(
+function removeBareRequireImportSideEffectEdit(
   program: SgNode<TS, "program">,
   packageName: string,
 ): Edit | null {
@@ -1169,7 +1361,7 @@ function removeBareRequireSideEffectEdit(
       continue;
     }
     const fn = expr.field("function");
-    if (fn?.text() !== "require") {
+    if (fn?.text() !== "require" && fn?.text() !== "import") {
       continue;
     }
     if (!requireCallFirstArgIsLiteralSpecifier(expr as SgNode<TS>, packageName)) {
@@ -1302,7 +1494,7 @@ export function removeImport<T extends Language>(
     if (stripSideEffects) {
       const tsProgram = program as unknown as SgNode<TS, "program">;
       return (
-        removeBareRequireSideEffectEdit(tsProgram, options.from) ??
+        removeBareRequireImportSideEffectEdit(tsProgram, options.from) ??
         removeSideEffectImportStatementEdit(tsProgram, options.from)
       );
     }
@@ -1315,7 +1507,7 @@ export function removeImport<T extends Language>(
     // would miss mixed statements like `import foo, * as ns from 'mod'`,
     // where the default match wins over the namespace fallback.
     const tsProgram = program as unknown as SgNode<TS, "program">;
-    const namespaceImport = tsProgram.find({
+    const namespaceEsmImport = tsProgram.find({
       rule: {
         kind: "namespace_import",
         inside: {
@@ -1331,26 +1523,86 @@ export function removeImport<T extends Language>(
         },
       },
     });
-    if (!namespaceImport) return null;
 
-    const statement =
-      (namespaceImport.ancestors().find((a) => a.kind() === "import_statement") as
-        | SgNode<TS>
-        | undefined) ?? null;
-    if (!statement) return null;
+    if (namespaceEsmImport) {
+      const statement =
+        (namespaceEsmImport.ancestors().find((a) => a.kind() === "import_statement") as
+          | SgNode<TS>
+          | undefined) ?? null;
+      if (!statement) return null;
 
-    const parts = analyzeImportClause(statement);
-    if (parts.defaultIdent && parts.namespaceImport) {
-      // Mixed: strip ', * as ns' keeping the default binding.
-      return {
-        startPos: parts.defaultIdent.range().end.index,
-        endPos: parts.namespaceImport.range().end.index,
-        insertedText: "",
-      };
+      const parts = analyzeImportClause(statement);
+      if (parts.defaultIdent && parts.namespaceImport) {
+        // Mixed: strip ', * as ns' keeping the default binding.
+        return {
+          startPos: parts.defaultIdent.range().end.index,
+          endPos: parts.namespaceImport.range().end.index,
+          insertedText: "",
+        };
+      }
+
+      const { start, end } = getStatementRangeWithNewline(
+        statement as unknown as SgNode<Language>,
+        programText,
+      );
+      return { startPos: start, endPos: end, insertedText: "" };
     }
 
+    const namespaceDynamicImport = tsProgram.find({
+      rule: {
+        kind: "identifier",
+        inside: {
+          stopBy: "end",
+          kind: "call_expression",
+          has: {
+            field: "function",
+            kind: "member_expression",
+            all: [
+              {
+                has: {
+                  field: "object",
+                  kind: "call_expression",
+                  has: {
+                    field: "arguments",
+                    kind: "arguments",
+                    has: {
+                      kind: "string",
+                      has: {
+                        kind: "string_fragment",
+                        pattern: "$SOURCE",
+                        regex: stringToExactRegexString(options.from),
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                has: {
+                  field: "property",
+                  kind: "property_identifier",
+                  regex: "^then$",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    if (!namespaceDynamicImport) return null;
+    const expressStmtDynamicImport = namespaceDynamicImport.find({
+      rule: {
+        inside: {
+          stopBy: "end",
+          kind: "expression_statement",
+        },
+      },
+    });
+
+    if (!expressStmtDynamicImport) return null;
+
     const { start, end } = getStatementRangeWithNewline(
-      statement as unknown as SgNode<Language>,
+      expressStmtDynamicImport as unknown as SgNode<Language>,
       programText,
     );
     return { startPos: start, endPos: end, insertedText: "" };
