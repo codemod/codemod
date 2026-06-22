@@ -42,6 +42,7 @@ use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
+use crate::workflow_facts::WorkflowFacts;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::CodemodOutput;
@@ -596,6 +597,9 @@ pub struct Engine {
     /// (today: the js-ast-grep file loop). `cancel_workflow` flips every entry
     /// so the step can short-circuit without polling the state backend.
     step_cancel_signals: Arc<std::sync::Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
+
+    /// Workflow-start fact snapshots keyed by workflow run id.
+    workflow_facts: Arc<std::sync::Mutex<HashMap<Uuid, WorkflowFacts>>>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -968,6 +972,7 @@ impl Engine {
                 .with_text_log_fallthrough(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -994,6 +999,7 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1016,6 +1022,19 @@ impl Engine {
 
     pub(crate) fn file_writer(&self) -> Arc<AsyncFileWriter> {
         Arc::clone(&self.file_writer)
+    }
+
+    pub fn workflow_facts(&self, workflow_run_id: Uuid) -> Option<WorkflowFacts> {
+        self.workflow_facts
+            .lock()
+            .ok()
+            .and_then(|facts| facts.get(&workflow_run_id).cloned())
+    }
+
+    fn save_workflow_facts(&self, workflow_run_id: Uuid, facts: WorkflowFacts) {
+        if let Ok(mut all_facts) = self.workflow_facts.lock() {
+            all_facts.insert(workflow_run_id, facts);
+        }
     }
 
     /// Create a new engine with a custom state adapter
@@ -1043,6 +1062,7 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1494,6 +1514,21 @@ impl Engine {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
         self.validate_codemod_dependencies(&workflow, &[]).await?;
 
+        let workflow_facts =
+            match WorkflowFacts::collect_from_path(&self.workflow_run_config.execution.target_path)
+            {
+                Ok(facts) => facts,
+                Err(error) => {
+                    slog!(
+                        &self.structured_logger,
+                        warn,
+                        "Failed to collect workflow facts: {}",
+                        error
+                    );
+                    WorkflowFacts::empty()
+                }
+            };
+
         let workflow_run = WorkflowRun {
             id: workflow_run_id,
             workflow: workflow.clone(),
@@ -1513,6 +1548,7 @@ impl Engine {
             .await
             .save_workflow_run(&workflow_run)
             .await?;
+        self.save_workflow_facts(workflow_run_id, workflow_facts);
         self.emit_workflow_started(&workflow_run);
 
         self.spawn_workflow_executor(workflow_run_id);
@@ -4110,6 +4146,7 @@ impl Clone for Engine {
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
+            workflow_facts: Arc::clone(&self.workflow_facts),
         }
     }
 }

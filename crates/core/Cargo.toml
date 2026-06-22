@@ -21,6 +21,7 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+toml = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -45,6 +46,7 @@ language-core = { workspace = true }
 anyhow.workspace = true
 similar = "2.6.0"
 sha2 = "0.10"
+dependency-files = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

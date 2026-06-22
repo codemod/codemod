@@ -49,7 +49,7 @@ pub const JAVA_PROJECT_FILE_NAMES: &[&str] = &[
 ];
 
 /// Ecosystem identifier shared by dependency file consumers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Ecosystem {
     #[serde(rename = "npm")]
     Npm,

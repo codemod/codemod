@@ -18,6 +18,7 @@ pub(crate) mod step_executor;
 pub mod structured_log;
 pub(crate) mod task_state_service;
 pub mod utils;
+pub mod workflow_facts;
 pub mod workflow_runtime;
 
 pub use butterflow_models::{
