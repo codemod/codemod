@@ -69,8 +69,29 @@
             "pages": [
               "platform/quickstart",
               "platform/codemod-wish",
-              "platform/insights",
-              "platform/campaigns",
+              {
+                "icon": "chart-simple",
+                "group": "Insights",
+                "pages": [
+                  "platform/insights",
+                  "platform/insights/create-dashboard",
+                  "platform/insights/data-sources",
+                  "platform/insights/group-results",
+                  "platform/insights/filters",
+                  "platform/insights/formulas",
+                  "platform/insights/template-variables"
+                ]
+              },
+              {
+                "icon": "arrow-up-right-dots",
+                "group": "Campaigns",
+                "pages": [
+                  "platform/campaigns",
+                  "platform/campaigns/create",
+                  "platform/campaigns/review-and-start",
+                  "platform/campaigns/track-progress"
+                ]
+              },
               "platform/automations",
               "platform/codemod-studio",
               "platform/registry",

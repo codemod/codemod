@@ -1,0 +1,69 @@
+---
+title: 'Group Insights results'
+description: 'Group Insights widgets by repository, directory, code owner, or metric cardinality.'
+---
+
+Grouping controls the shape of the result. Use it when a single total is not enough and you need to know where the work is. This example groups JSSG results by top-level directory with depth `1`, so `apps`, `packages`, and `tooling` become separate rows.
+
+<Frame>
+  <img
+    src="/images/insights/group-by-light.png"
+    alt="Group by menu with repository, code owner, directory, and custom cardinality key options"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/group-by-dark.png"
+    alt="Group by menu with repository, code owner, directory, and custom cardinality key options"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Common groups
+
+| Group by | What it shows |
+| --- | --- |
+| **Repository** | Which repos have the signal. |
+| **Directory** | Where the work is located inside a repo. |
+| **Code owner** | Which team likely owns the work. |
+| **Metric cardinality key** | A custom dimension emitted by JSSG, such as component name, package name, or API name. |
+
+Directory grouping is useful when a large repository has several work areas. Start with depth `1` for a quick map, then increase the depth when you need a more specific path.
+
+## Group by metric cardinality
+
+JSSG metrics can emit cardinality keys. For example, a codemod can emit one `prop-usage` metric for each deprecated prop and attach `name = Button` or `name = Link`.
+
+Use metric cardinality when you want a table such as:
+
+- deprecated prop usage by component name
+- API usage by imported symbol
+- package usage by package name
+- migration findings by rule id
+
+## Choose the right widget type
+
+Use a table when the grouped result has many rows. Use a timeseries chart when you want to show the same group changing over time. Use a single number when you only need the total after filters and formulas.
+
+<Frame>
+  <img
+    src="/images/insights/visualization-light.png"
+    alt="Visualization controls for an Insights widget"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/visualization-dark.png"
+    alt="Visualization controls for an Insights widget"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Filter results" href="/platform/insights/filters" icon="filter">
+    Narrow grouped results by metric dimensions or file paths.
+  </Card>
+  <Card title="Use formulas" href="/platform/insights/formulas" icon="calculator">
+    Compute ratios and progress from query lines.
+  </Card>
+</CardGroup>

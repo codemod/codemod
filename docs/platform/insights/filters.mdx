@@ -1,0 +1,75 @@
+---
+title: 'Filter Insights results'
+description: 'Filter Insights widgets by metric dimensions and file path globs.'
+---
+
+Filters narrow a widget before the final value is shown. Use them to remove noise or focus one widget on a specific slice of a broader query.
+
+## Filter metric values
+
+For JSSG metrics with cardinality, filter by a dimension key and value. For example, filter `name = Button` to show only metric rows for the `Button` component.
+
+<Frame>
+  <img
+    src="/images/insights/filter-metric-light.png"
+    alt="Metric filter popover with dimension key, operator, and filter value"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/filter-metric-dark.png"
+    alt="Metric filter popover with dimension key, operator, and filter value"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Metric filters are useful when one codemod emits several related measurements and you only want one slice in a widget.
+
+## Filter files with globs
+
+Use file globs to include or exclude paths before the query runs.
+
+<Frame>
+  <img
+    src="/images/insights/filter-globs-light.png"
+    alt="File path glob filter excluding tests and fixture directories"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/filter-globs-dark.png"
+    alt="File path glob filter excluding tests and fixture directories"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Examples:
+
+```txt
+**/*.test.tsx
+**/__fixtures__/**
+```
+
+Use glob filters to remove tests, generated files, fixtures, or directories that should not count toward migration progress.
+
+## Combine filters
+
+You can combine metric filters and glob filters. For example, a widget can:
+
+1. Run a JSSG codemod that emits `prop-usage` metrics.
+2. Exclude tests and fixtures with glob filters.
+3. Filter the metric to `name = Button`.
+4. Group the remaining result by directory.
+
+<Check>
+  The preview should reload after each query change. Save the widget only after the preview reflects the filters you want.
+</Check>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Group results" href="/platform/insights/group-results" icon="table">
+    Break filtered results into repositories, directories, or metric keys.
+  </Card>
+  <Card title="Use formulas" href="/platform/insights/formulas" icon="calculator">
+    Combine filtered query lines into one value.
+  </Card>
+</CardGroup>
