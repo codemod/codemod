@@ -235,6 +235,28 @@ nodes:
 }
 
 #[test]
+fn test_validate_workflow_accepts_bump_dependency_ensure_without_target() {
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          manager: npm
+          root: frontend
+          dependencies:
+            - name: react
+              ensure: "^18.0.0"
+"#;
+
+    let result = validate_bump_dependency_yaml(yaml_content);
+    assert!(result.is_ok());
+}
+
+#[test]
 fn test_validate_workflow_rejects_empty_bump_dependency_list() {
     let yaml_content = r#"
 version: "1"
@@ -292,6 +314,22 @@ nodes:
               target: " "
 "#,
             "target must be non-empty",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+"#,
+            "target is required when if_version is used",
         ),
         (
             r#"

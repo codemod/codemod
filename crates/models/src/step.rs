@@ -366,8 +366,11 @@ pub struct BumpDependencySpec {
     pub name: String,
 
     /// Package-manager-specific version requirement to write.
+    /// Required for if_version remediation. Optional for ensure, where it defaults to the ensure range.
     /// For example, npm and Cargo accept semver-like ranges, while Go expects module versions.
-    pub target: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub target: Option<String>,
 
     /// Conditional remediation range. Use "*" or "any" to match any installed version.
     #[serde(default)]
@@ -727,7 +730,7 @@ mod tests {
         assert_eq!(config.root, Some("apps/web".to_string()));
         assert_eq!(config.dependencies.len(), 2);
         assert_eq!(config.dependencies[0].name, "react");
-        assert_eq!(config.dependencies[0].target, "^18.2.0");
+        assert_eq!(config.dependencies[0].target, Some("^18.2.0".to_string()));
         assert_eq!(
             config.dependencies[0].if_version,
             Some("<18.0.0".to_string())
@@ -755,6 +758,25 @@ mod tests {
 
         assert_eq!(config.root, Some("apps/web".to_string()));
         assert_eq!(config.dependencies[0].if_version, Some("*".to_string()));
-        assert_eq!(config.dependencies[0].target, "^18.2.0");
+        assert_eq!(config.dependencies[0].target, Some("^18.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_bump_dependency_ensure_deserializes_without_target() {
+        let yaml = r#"
+            name: "ensure react"
+            bump-dependency:
+              dependencies:
+                - name: react
+                  ensure: "^18.0.0"
+        "#;
+
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        let StepAction::BumpDependency(config) = step.action else {
+            panic!("expected bump-dependency action");
+        };
+
+        assert_eq!(config.dependencies[0].ensure, Some("^18.0.0".to_string()));
+        assert_eq!(config.dependencies[0].target, None);
     }
 }

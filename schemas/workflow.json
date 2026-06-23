@@ -114,13 +114,16 @@
           "type": "string"
         },
         "target": {
-          "description": "Package-manager-specific version requirement to write.\nFor example, npm and Cargo accept semver-like ranges, while Go expects module versions.",
-          "type": "string"
+          "description": "Package-manager-specific version requirement to write.\nRequired for if_version remediation. Optional for ensure, where it defaults to the ensure range.\nFor example, npm and Cargo accept semver-like ranges, while Go expects module versions.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "required": [
-        "name",
-        "target"
+        "name"
       ]
     },
     "CommitConfig": {

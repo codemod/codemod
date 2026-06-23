@@ -72,7 +72,8 @@ fn validate_bump_dependency_step(
                 "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency at index {dependency_index}: dependency name must be non-empty"
             )));
         }
-        if dependency.target.trim().is_empty() {
+        let target = non_empty_optional(&dependency.target);
+        if dependency.target.is_some() && target.is_none() {
             return Err(Error::WorkflowValidation(format!(
                 "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': target must be non-empty",
                 dependency.name
@@ -104,6 +105,12 @@ fn validate_bump_dependency_step(
             (Some(_), Some(_)) => {
                 return Err(Error::WorkflowValidation(format!(
                     "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': if_version and ensure are mutually exclusive",
+                    dependency.name
+                )));
+            }
+            (Some(_), None) if target.is_none() => {
+                return Err(Error::WorkflowValidation(format!(
+                    "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': target is required when if_version is used",
                     dependency.name
                 )));
             }
