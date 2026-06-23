@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use butterflow_models::step::{BumpDependencySpec, PackageManager, UseBumpDependency};
+use butterflow_models::Error;
+use butterflow_runners::{OutputCallback, Runner};
 
 use crate::package_manager_detection::{
     infer_package_manager_root, PackageManagerDetectionError, PackageManagerInferenceRequest,
@@ -29,6 +32,19 @@ pub struct BumpDependencyAction {
     pub dependency_type: Option<String>,
     pub mode: BumpDependencyMode,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BumpDependencyCommand {
+    pub manager: PackageManager,
+    pub working_dir: PathBuf,
+    pub command: String,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BumpDependencyExecution {
+    pub commands: Vec<BumpDependencyCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -66,6 +82,22 @@ pub enum BumpDependencyPlanError {
     UnsupportedVersionRequirement { name: String, requirement: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BumpDependencyExecutionError {
+    #[error("package manager {manager} is not supported for command execution yet")]
+    UnsupportedPackageManagerCommand { manager: PackageManager },
+
+    #[error("package-manager command failed: {command}")]
+    CommandFailed {
+        command: String,
+        exit_code: i32,
+        output: String,
+    },
+
+    #[error("package-manager command failed: {0}")]
+    Runtime(String),
+}
+
 pub fn plan_bump_dependency_step(
     facts: &WorkflowFacts,
     step: &UseBumpDependency,
@@ -98,6 +130,97 @@ pub fn plan_bump_dependency_step(
     Ok(BumpDependencyPlan {
         manager_root,
         actions,
+    })
+}
+
+pub async fn execute_bump_dependency_plan(
+    runner: &dyn Runner,
+    plan: &BumpDependencyPlan,
+    target_path: &Path,
+    env: &HashMap<String, String>,
+    output_callback: Option<OutputCallback>,
+) -> Result<BumpDependencyExecution, BumpDependencyExecutionError> {
+    let mut commands = Vec::new();
+
+    for action in &plan.actions {
+        let command = command_for_action(&plan.manager_root, action, target_path)?;
+        if !command.dry_run {
+            runner
+                .run_command(&command.command, env, output_callback.clone())
+                .await
+                .map_err(|error| match error {
+                    Error::ShellCommandFailed { exit_code, output } => {
+                        BumpDependencyExecutionError::CommandFailed {
+                            command: command.command.clone(),
+                            exit_code,
+                            output,
+                        }
+                    }
+                    error => BumpDependencyExecutionError::Runtime(error.to_string()),
+                })?;
+        }
+        commands.push(command);
+    }
+
+    Ok(BumpDependencyExecution { commands })
+}
+
+pub fn command_for_action(
+    manager_root: &PackageManagerRoot,
+    action: &BumpDependencyAction,
+    target_path: &Path,
+) -> Result<BumpDependencyCommand, BumpDependencyExecutionError> {
+    let working_dir = if manager_root.root == Path::new(".") {
+        target_path.to_path_buf()
+    } else {
+        target_path.join(&manager_root.root)
+    };
+    let package = package_with_target(manager_root.manager, &action.dependency, &action.target);
+    let mut args = match manager_root.manager {
+        PackageManager::Npm => vec!["install".to_string(), package],
+        PackageManager::Yarn | PackageManager::Pnpm | PackageManager::Bun => {
+            vec!["add".to_string(), package]
+        }
+        PackageManager::Cargo => vec!["add".to_string(), package],
+        PackageManager::Go => vec!["get".to_string(), package],
+        PackageManager::Pip => vec!["install".to_string(), package],
+        PackageManager::Poetry => vec!["add".to_string(), package],
+        PackageManager::Pipenv => vec!["install".to_string(), package],
+        PackageManager::Bundler => vec![
+            "add".to_string(),
+            action.dependency.clone(),
+            "--version".to_string(),
+            action.target.clone(),
+        ],
+        PackageManager::Maven | PackageManager::Gradle => {
+            return Err(
+                BumpDependencyExecutionError::UnsupportedPackageManagerCommand {
+                    manager: manager_root.manager,
+                },
+            );
+        }
+    };
+    args.extend(dependency_type_args(
+        manager_root.manager,
+        action.dependency_type.as_deref(),
+    ));
+
+    let invocation = match manager_root.manager {
+        PackageManager::Pip => shell_command("python", ["-m", "pip"].into_iter(), args),
+        PackageManager::Bundler => shell_command("bundle", std::iter::empty::<&str>(), args),
+        manager => shell_command(manager.as_str(), std::iter::empty::<&str>(), args),
+    };
+    let command = format!(
+        "cd {} && {}",
+        shell_quote(&working_dir.to_string_lossy()),
+        invocation
+    );
+
+    Ok(BumpDependencyCommand {
+        manager: manager_root.manager,
+        working_dir,
+        command,
+        dry_run: action.dry_run,
     })
 }
 
@@ -221,6 +344,57 @@ fn action_from_fact(
         mode,
         dry_run,
     }
+}
+
+fn package_with_target(manager: PackageManager, name: &str, target: &str) -> String {
+    match manager {
+        PackageManager::Pip | PackageManager::Pipenv => {
+            if target.starts_with(['<', '>', '=', '!', '~']) {
+                format!("{name}{target}")
+            } else {
+                format!("{name}=={target}")
+            }
+        }
+        _ => format!("{name}@{target}"),
+    }
+}
+
+fn dependency_type_args(manager: PackageManager, dependency_type: Option<&str>) -> Vec<String> {
+    match (manager, dependency_type) {
+        (
+            PackageManager::Npm | PackageManager::Pnpm,
+            Some("devDependencies" | "dev-dependencies"),
+        ) => vec!["--save-dev".to_string()],
+        (PackageManager::Yarn | PackageManager::Bun, Some("devDependencies")) => {
+            vec!["--dev".to_string()]
+        }
+        (PackageManager::Cargo, Some("dev-dependencies")) => vec!["--dev".to_string()],
+        (PackageManager::Cargo, Some("build-dependencies")) => vec!["--build".to_string()],
+        (PackageManager::Poetry, Some("devDependencies" | "dev-dependencies")) => {
+            vec!["--group".to_string(), "dev".to_string()]
+        }
+        (PackageManager::Pipenv, Some("devDependencies" | "dev-dependencies")) => {
+            vec!["--dev".to_string()]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn shell_command<I, S>(program: &str, prefix_args: I, args: Vec<String>) -> String
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    std::iter::once(program.to_string())
+        .chain(prefix_args.map(|arg| arg.as_ref().to_string()))
+        .chain(args)
+        .map(|part| shell_quote(&part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn version_requirement_matches(
@@ -354,7 +528,10 @@ struct VersionRequirementError;
 mod tests {
     use super::*;
     use crate::workflow_facts::{DependencyFact, EcosystemFact, EcosystemFactSource};
+    use async_trait::async_trait;
+    use butterflow_models::Result;
     use dependency_files::Ecosystem;
+    use std::sync::{Arc, Mutex};
 
     fn npm_facts(root: &str, name: &str, version: &str) -> WorkflowFacts {
         let package_path = if root == "." {
@@ -415,6 +592,24 @@ mod tests {
             target: target.map(str::to_string),
             if_version: None,
             ensure: Some(ensure.to_string()),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingRunner {
+        commands: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Runner for RecordingRunner {
+        async fn run_command(
+            &self,
+            command: &str,
+            _env: &HashMap<String, String>,
+            _output_callback: Option<OutputCallback>,
+        ) -> Result<String> {
+            self.commands.lock().unwrap().push(command.to_string());
+            Ok(String::new())
         }
     }
 
@@ -618,5 +813,123 @@ mod tests {
             error,
             BumpDependencyPlanError::UnsupportedVersionRequirement { .. }
         ));
+    }
+
+    #[test]
+    fn generates_package_manager_command_at_detected_root() {
+        let command = command_for_action(
+            &PackageManagerRoot {
+                ecosystem: Ecosystem::Npm,
+                manager: PackageManager::Pnpm,
+                root: PathBuf::from("apps/web"),
+                evidence_path: "apps/web/pnpm-lock.yaml".to_string(),
+            },
+            &BumpDependencyAction {
+                dependency: "react".to_string(),
+                current_version: "^17.0.0".to_string(),
+                target: "^18.0.0".to_string(),
+                manifest_path: "apps/web/package.json".to_string(),
+                dependency_type: Some("devDependencies".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            },
+            Path::new("/repo"),
+        )
+        .unwrap();
+
+        assert_eq!(command.manager, PackageManager::Pnpm);
+        assert_eq!(command.working_dir, PathBuf::from("/repo/apps/web"));
+        assert_eq!(
+            command.command,
+            "cd '/repo/apps/web' && 'pnpm' 'add' 'react@^18.0.0' '--save-dev'"
+        );
+    }
+
+    #[test]
+    fn generates_python_package_spec() {
+        let command = command_for_action(
+            &PackageManagerRoot {
+                ecosystem: Ecosystem::PyPI,
+                manager: PackageManager::Pip,
+                root: PathBuf::from("."),
+                evidence_path: "requirements.txt".to_string(),
+            },
+            &BumpDependencyAction {
+                dependency: "requests".to_string(),
+                current_version: "requests>=2.31.0".to_string(),
+                target: ">=2.32.0".to_string(),
+                manifest_path: "requirements.txt".to_string(),
+                dependency_type: Some("requirements".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            },
+            Path::new("/repo"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command.command,
+            "cd '/repo' && 'python' '-m' 'pip' 'install' 'requests>=2.32.0'"
+        );
+    }
+
+    #[test]
+    fn reports_unsupported_package_manager_command() {
+        let error = command_for_action(
+            &PackageManagerRoot {
+                ecosystem: Ecosystem::Java,
+                manager: PackageManager::Maven,
+                root: PathBuf::from("."),
+                evidence_path: "pom.xml".to_string(),
+            },
+            &BumpDependencyAction {
+                dependency: "org.example:library".to_string(),
+                current_version: "1.0.0".to_string(),
+                target: "2.0.0".to_string(),
+                manifest_path: "pom.xml".to_string(),
+                dependency_type: None,
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            },
+            Path::new("/repo"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            BumpDependencyExecutionError::UnsupportedPackageManagerCommand {
+                manager: PackageManager::Maven,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_execution_returns_commands_without_running_them() {
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Npm,
+                manager: PackageManager::Npm,
+                root: PathBuf::from("."),
+                evidence_path: "package-lock.json".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "react".to_string(),
+                current_version: "^17.0.0".to_string(),
+                target: "^18.0.0".to_string(),
+                manifest_path: "package.json".to_string(),
+                dependency_type: Some("dependencies".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: true,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, Path::new("/repo"), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert_eq!(execution.commands.len(), 1);
+        assert_eq!(runner.commands.lock().unwrap().len(), 0);
     }
 }
