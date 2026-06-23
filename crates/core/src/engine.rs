@@ -28,6 +28,7 @@ use crate::config::{
     CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
+use crate::dependency_bump::{execute_bump_dependency_plan, plan_bump_dependency_step};
 use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -61,7 +62,7 @@ use crate::registry::ResolvedPackage;
 use crate::step_executor::{StepExecutionRequest, StepExecutor};
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::step::{UseAI, UseAstGrep, UseBumpDependency, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskErrorDetails,
@@ -3829,6 +3830,120 @@ impl Engine {
             .map_err(|e| Error::Runtime(format!("Failed to parse shard function output: {e}")))?;
 
         Ok(shards)
+    }
+
+    /// Execute a single bump-dependency step.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn execute_bump_dependency_step(
+        &self,
+        runner: &dyn Runner,
+        bump_dependency: &UseBumpDependency,
+        step_name: &str,
+        step_env: &Option<HashMap<String, String>>,
+        node: &Node,
+        task: &Task,
+        state: &HashMap<String, serde_json::Value>,
+        bundle_path: &Option<PathBuf>,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        let workflow_facts = if let Some(facts) = self.workflow_facts(task.workflow_run_id) {
+            facts
+        } else {
+            WorkflowFacts::collect_from_path(&self.workflow_run_config.execution.target_path)?
+        };
+        let dry_run = self.workflow_run_config.execution.dry_run;
+        let plan = plan_bump_dependency_step(&workflow_facts, bump_dependency, dry_run).map_err(
+            |error| Error::StepExecution(format!("bump-dependency planning failed: {error}")),
+        )?;
+
+        if plan.actions.is_empty() {
+            slog!(
+                logger,
+                info,
+                "Skipping bump-dependency step '{}': all dependencies already satisfy requested constraints",
+                step_name
+            );
+        }
+
+        let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let state_adapter = Arc::clone(&self.state_adapter);
+        let task_id = task.id;
+        let workflow_run_id = task.workflow_run_id;
+        let log_persist_task = tokio::spawn(async move {
+            while let Some(line) = log_rx.recv().await {
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let mut adapter = state_adapter.lock().await;
+                let Ok(mut current_task) = adapter.get_task(task_id).await else {
+                    continue;
+                };
+                current_task.logs.push(line.clone());
+                let _ = adapter.save_task(&current_task).await;
+                publish_event(
+                    workflow_run_id,
+                    WorkflowEvent::TaskLogAppended {
+                        workflow_run_id,
+                        task_id,
+                        line,
+                        at: Utc::now(),
+                    },
+                );
+            }
+        });
+
+        let output_callback: OutputCallback = Arc::new(move |line: String| {
+            let _ = log_tx.send(line);
+        });
+
+        let execution = execute_bump_dependency_plan(
+            runner,
+            &plan,
+            &self.workflow_run_config.execution.target_path,
+            &prepared.env,
+            Some(Arc::clone(&output_callback)),
+        )
+        .await
+        .map_err(|error| match error {
+            crate::dependency_bump::BumpDependencyExecutionError::CommandFailed {
+                command,
+                exit_code,
+                output,
+            } => Error::ShellCommandStepFailed {
+                command,
+                exit_code,
+                output,
+            },
+            error => Error::StepExecution(format!("bump-dependency execution failed: {error}")),
+        });
+        drop(output_callback);
+        let _ = log_persist_task.await;
+
+        let execution = execution?;
+        for command in execution.commands {
+            if command.dry_run {
+                slog!(
+                    logger,
+                    info,
+                    "Dry-run bump-dependency command: {}",
+                    command.command
+                );
+            } else {
+                slog!(
+                    logger,
+                    info,
+                    "Executed bump-dependency command: {}",
+                    command.command
+                );
+            }
+        }
+
+        self.finalize_step_execution(task, String::new(), prepared)
+            .await
     }
 
     /// Execute a single RunScript step
