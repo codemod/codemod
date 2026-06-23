@@ -3,210 +3,163 @@ title: 'Insights'
 icon: 'chart-simple'
 ---
 
-In large, evolving codebases, migrations, API transitions, and security anti-patterns often go unnoticed.
+Insights turns code data into dashboards. Use it to answer questions like:
 
-Codemod Insights helps you turn repository data into dashboards that show migration progress, API adoption, dependency exposure, and other codebase signals over time.
-
-## How insights work
-
-When you run migrations across many repositories and teams, you need visibility into what changed, what is left, and who owns the remaining work. Insights gives you that visibility through a few reusable building blocks:
-
-- **[Dashboards](#dashboards)** group related widgets around a migration, initiative, or team.
-- **[Widgets](#widgets)** show query results as timeseries charts, single numbers, tables, or notes.
-- **[Queries](#queries)** pull data from repositories using JSSG codemods, ast-grep YAML rules, or indexed dependency data.
-- **[Template variables](#template-variables)** let you reuse the same dashboard with different repositories, rules, JSSG sources, or string inputs.
-
-## Dashboards
-
-Dashboards are the top-level container for your insights. Use them to organize widgets by initiative, for example an `i18n migration` dashboard that tracks old API usage, new API adoption, and files remaining across affected repositories.
-
-To create a new dashboard, go to `Insights → Create Dashboard`.
+- How many deprecated imports are left?
+- Which repositories still need a migration?
+- Which packages and versions are installed?
+- Is adoption improving over time?
 
 <Frame>
-    ![Creating a new dashboard](/images/insights/create-dashboard.png)
+  <img src="/images/insights/dashboard-details.png" alt="Insights dashboard with single number, timeseries, table, and note widgets" />
 </Frame>
 
-<Tip>
-  For an AI-native experience, try using Codemod Wish while viewing a dashboard. You can ask for new widgets, changes to existing widgets, or explanations of the data.
-</Tip>
+## Quick start
 
-## Widgets
+<Steps>
+  <Step title="Create a dashboard">
+    Go to **Insights**, then create a dashboard for one migration, code health area, or team.
+  </Step>
+  <Step title="Add a widget">
+    Click **Add Widget** and choose how you want to display the result.
 
-Widgets are the building blocks of a dashboard. Insights supports four widget types:
+    <Frame>
+      <img src="/images/insights/widget-types.png" alt="Add widget menu with timeseries, single number, table, and notes" />
+    </Frame>
+  </Step>
+  <Step title="Choose repositories">
+    Select one or more repositories. For reusable dashboards, use a repository template variable.
+  </Step>
+  <Step title="Choose a data source">
+    Pick JSSG, ast-grep, or dependencies. Configure the query, preview the result, then save the widget.
+  </Step>
+</Steps>
 
-- **Timeseries chart** - track how a metric changes over time, such as deprecated API calls trending down week over week.
-- **Single number** - show a point-in-time value, such as total files still using an old pattern.
-- **Table view** - show breakdowns with sorting and row limits, such as remaining work by repository or codeowner.
-- **Notes** - add Markdown context, caveats, interpretation, or next actions.
+## Widget types
 
-Timeseries chart, single number, and table view widgets are query-backed. They run one or more queries against your repositories and render the results in the selected format. Notes widgets do not run queries.
+Use the widget type that matches the question:
+
+| Widget | Use it for |
+| --- | --- |
+| **Timeseries chart** | Progress over time, such as deprecated API usage trending down. |
+| **Single number** | One current value, such as files left to migrate. |
+| **Table view** | Breakdowns by repository, directory, package, owner, or metric key. |
+| **Notes** | Context, next actions, caveats, and links. |
+
+## Data sources
+
+Every query starts with a data source.
 
 <Frame>
-    ![Creating a new widget](/images/insights/create-widget.png)
+  <img src="/images/insights/data-sources.png" alt="Widget query data source menu with JSSG, ast-grep, and dependencies" />
 </Frame>
 
-Each query-backed widget can contain up to 10 queries. Use the query source selector to choose the data source for each query:
+| Source | Use it when |
+| --- | --- |
+| **JSSG Codemod** | You need custom code analysis, semantic checks, or metrics emitted from a codemod. |
+| **ast-grep (YAML)** | You need a structural syntax match without writing TypeScript. |
+| **Dependencies** | You need package, version, ecosystem, workspace, or dependency depth data. |
 
-- **JSSG Codemod** - runs inline JSSG source, a JSSG codemod package, or a JSSG source template variable.
-- **ast-grep (YAML)** - runs an ast-grep YAML rule against selected repositories.
-- **Dependencies** - queries indexed dependency data from selected repositories.
+### JSSG metrics
 
-You can select the query source from the dropdown at the start of each query.
+JSSG queries can count files or read named metrics emitted by the codemod. A metric can also include cardinality keys, for example `name`, `component`, `api`, or `package`.
+
+Use metric cardinality when you want a table such as "deprecated prop usage by component name".
+
+### ast-grep rules
+
+ast-grep queries count matches from a YAML rule. They are good for direct syntax patterns, such as a specific import, JSX prop, or function call.
+
+### Dependencies
+
+Dependency queries use indexed package data from the selected repositories.
 
 <Frame>
-![Setting up a widget](/images/insights/setting-up-widget.png)
+  <img src="/images/insights/dependency-query.png" alt="Dependency query setup with ecosystem, package, version, depth, and group by controls" />
 </Frame>
 
-### Formulas
+You can filter by ecosystem, package, version range, and dependency depth, then group by fields like repository, package, version, workspace, or lock file.
 
-You can combine multiple query results with a formula. Queries are assigned alphabetical variable names (`a`, `b`, `c`, ...) that you can reference in the formula expression.
+## Group results
 
-You can also give the formula result a name using the formula alias field (e.g. `Formula Result`).
+Grouping controls the shape of the result.
 
 <Frame>
-    ![Writing formulas](/images/insights/query-formula.png)
+  <img src="/images/insights/group-by.png" alt="Group by menu with repository, codeowner, directory, and custom cardinality key options" />
 </Frame>
 
-### Visualization settings
+Common groups:
 
-Each query-backed widget has visualization options in the **Visualization** tab:
+| Group by | What it shows |
+| --- | --- |
+| **Repository** | Which repos have the signal. |
+| **Directory** | Where the work is located in a repo. |
+| **Codeowner** | Which team likely owns the work. |
+| **Metric cardinality key** | A custom dimension emitted by JSSG, such as component name or API name. |
 
-- **Timeseries chart** - choose `Line`, `Bar`, or `Area`, set a Y-axis label, and choose whether to stack series or show dots.
-- **Single number** - set a prefix, suffix, and number format.
-- **Table view** - configure sorting, row limits, and number formatting.
+Use a table widget when you want grouped results that people can scan and sort.
 
-### Time range
+## Filter metric values
 
-Timeseries widgets include a time range selector that controls the analysis window. You can inherit the dashboard default or set a widget-specific range.
-
-The time range picker supports:
-
-- **Quick ranges** - last 7, 14, 30, 60, or 90 days, and last 4, 8, or 12 weeks.
-- **Absolute ranges** - a start and end date, entered manually or selected from the calendar.
-- **Now expressions** - values such as `now-30d`, `now-4w`, and `now`.
-
-## Queries
-
-### JSSG codemod queries
-
-JSSG codemod queries use [JSSG](/jssg/intro) for static analysis and custom metrics. Use them when you need programmatic logic, package-backed metrics, semantic analysis, or dimensions beyond a simple syntax match.
-
-The JSSG source can come from:
-
-- **Inline source** - write JSSG code directly in the editor.
-- **A codemod package** - select an existing JSSG codemod package from [Codemod Registry](/platform/registry).
-- **A template variable** - reuse a JSSG source defined at the dashboard level.
-
-| Configuration | Description |
-|---|---|
-| **Source** | Inline JSSG source, a JSSG codemod package, or a JSSG source template variable |
-| **Semantic mode** | `Auto`, `Workspace`, or `File only` for supported JSSG sources |
-| **Select** | `File count` or `Metric` |
-| **Metric** | A named metric emitted by the JSSG source, with suggestions when Insights can extract them |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `repository`, `codeowner`, or metric cardinality keys |
-| **Dimension filters** | Filter metric results by cardinality key-value pairs with equals, not-equals, or regex operators |
-| **File path filter** | Include or exclude files using glob patterns |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-| **Query alias** | A label for the query result, available for timeseries and table widgets |
-
-When a JSSG metric includes cardinality keys, table widgets can use those keys to break down results by the dimension that matters to the migration, such as component name, API name, package, or risk category.
-
-### ast-grep YAML queries
-
-ast-grep YAML queries use [ast-grep YAML rules](https://ast-grep.github.io/reference/yaml.html) to match code patterns. Use them for syntax-level counts that do not need custom JSSG logic.
-
-You can generate ast-grep rules with the help of AI [using Codemod Studio](/platform/codemod-studio#use-codemod-ai).
-
-| Configuration | Description |
-|---|---|
-| **Rule** | An ast-grep YAML rule, or a rule template variable |
-| **Select** | `Match count` or `File count` |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `repository` and/or `codeowner` |
-| **File path filter** | Include or exclude files using glob patterns |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-| **Query alias** | A label for the query result, available for timeseries and table widgets |
-
-### Dependency queries
-
-Dependency queries use indexed dependency data from selected repositories. Use them to track package adoption, vulnerable package exposure, or dependency drift across teams.
-
-| Configuration | Description |
-|---|---|
-| **Ecosystem** | Filter to `npm`, `PyPI`, `Cargo`, `Go`, or `RubyGems` |
-| **Package** | Filter by package name |
-| **Version** | Filter by a semver range, such as `^16.0.0`, `>=16.0.0`, or an exact version |
-| **Depth** | Filter to direct, transitive, or all dependencies |
-| **Select** | `Dep count` or `Unique pkgs` |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `ecosystem`, `package`, `version`, `lock file`, `repository`, `workspace`, or `parent pkg` |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-
-## Template variables
-
-Template variables let you parameterize a dashboard so the same widgets can be reused with different inputs. For example, you can define a repository variable and use it across all widgets, then switch the selected repositories from one place.
-
-To add a template variable, click **Add variable** at the top of your dashboard.
+For JSSG metrics with cardinality, you can filter by a dimension key and value. For example, filter `name = Button` to show only metric rows for the `Button` component.
 
 <Frame>
-![Adding a template variable](/images/insights/create-template-variable.png)
+  <img src="/images/insights/filter-metric.png" alt="Metric filter popover with dimension key, operator, and filter value" />
 </Frame>
 
-### Variable types
+Metric filters are useful when one codemod emits several related measurements and you only want one slice in a widget.
 
-| Type | Description |
-|------|-------------|
-| **Repository** | Select one or more repositories. Repository selectors support up to 10 repositories by default. |
-| **Rule** | Define an ast-grep YAML rule that can be reused across multiple widgets. |
-| **JSSG Source** | Define JSSG source that can be reused across multiple widgets. |
-| **String** | Define a text value, optionally with a fixed set of dropdown options. Use string variables for dimension filters or group-by keys. |
+## Filter files with globs
 
-### Use template variables
-
-Once created, template variables appear as selectable options in query configuration fields. When configuring a query's repository, rule, or JSSG source, you can choose between specifying a value directly or referencing a template variable.
+Use file globs to include or exclude paths before the query runs.
 
 <Frame>
-![Referencing template variables](/images/insights/using-template-variable.png)
+  <img src="/images/insights/filter-globs.png" alt="File path glob filter excluding tests and fixture directories" />
 </Frame>
 
-String variables can be referenced in group-by and dimension filter fields with the `$variableName` syntax.
+Examples:
 
-Variables can be edited from the dashboard view. Widgets that reference a variable refresh with the updated value.
+```txt
+**/*.test.tsx
+**/__fixtures__/**
+```
 
-<Tip>
-  Template variables are especially useful for dashboards you reuse across repositories, teams, or migration phases.
-</Tip>
+Use glob filters to remove tests, generated files, fixtures, or directories that should not count toward migration progress.
+
+## Show progress with a formula
+
+Single number widgets can combine multiple query lines with a formula.
+
+<Frame>
+  <img src="/images/insights/progress-formula.png" alt="Single number widget with two JSSG queries and a progress formula" />
+</Frame>
+
+A common pattern:
+
+1. Query `a`: count the old pattern at an earlier snapshot, such as one month ago.
+2. Query `b`: count the old pattern at the latest commit.
+3. Formula: `1 - (b / a)`.
+4. Format the result as a percent.
+
+This shows progress toward removing the old pattern. If the old count was `100` and the latest count is `25`, the formula returns `75%`.
+
+## Reuse dashboards with variables
+
+Template variables let you reuse the same dashboard for different repositories, rules, JSSG source, or string values.
+
+<Frame>
+  <img src="/images/insights/template-variable.png" alt="Add template variable dialog for a repository variable" />
+</Frame>
+
+Use variables when several widgets should share the same repository list or when you want one dashboard to work across teams.
 
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card
-    title="JSSG intro"
-    href="/jssg/intro"
-    icon="code"
-  >
-    Build your first JSSG codemod.
+  <Card title="JSSG intro" href="/jssg/intro" icon="code">
+    Build custom code metrics with JSSG.
   </Card>
-  <Card
-    title="Codemod Studio"
-    href="/platform/codemod-studio"
-    icon="wand-magic-sparkles"
-  >
-    Generate ast-grep rules with the help of AI.
-  </Card>
-  <Card
-    title="Campaigns"
-    href="/platform/campaigns"
-    icon="rocket"
-  >
-    Run codemod packages at scale across your repositories.
-  </Card>
-  <Card
-    title="Codemod Registry"
-    href="/platform/registry"
-    icon="box"
-  >
-    Discover and publish reusable codemods.
+  <Card title="Campaigns" href="/platform/campaigns" icon="rocket">
+    Turn insights into a codemod rollout.
   </Card>
 </CardGroup>
