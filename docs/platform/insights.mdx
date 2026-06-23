@@ -11,7 +11,16 @@ Insights turns code data into dashboards. Use it to answer questions like:
 - Is adoption improving over time?
 
 <Frame>
-  <img src="/images/insights/dashboard-details.png" alt="Insights dashboard with single number, timeseries, table, and note widgets" />
+  <img
+    src="/images/insights/dashboard-details-light.png"
+    alt="Insights dashboard with single number, timeseries, table, and note widgets"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/dashboard-details-dark.png"
+    alt="Insights dashboard with single number, timeseries, table, and note widgets"
+    className="hidden dark:block"
+  />
 </Frame>
 
 ## Quick start
@@ -24,7 +33,16 @@ Insights turns code data into dashboards. Use it to answer questions like:
     Click **Add Widget** and choose how you want to display the result.
 
     <Frame>
-      <img src="/images/insights/widget-types.png" alt="Add widget menu with timeseries, single number, table, and notes" />
+      <img
+        src="/images/insights/widget-types-light.png"
+        alt="Add widget menu with timeseries, single number, table, and notes"
+        className="block dark:hidden"
+      />
+      <img
+        src="/images/insights/widget-types-dark.png"
+        alt="Add widget menu with timeseries, single number, table, and notes"
+        className="hidden dark:block"
+      />
     </Frame>
   </Step>
   <Step title="Choose repositories">
@@ -51,7 +69,16 @@ Use the widget type that matches the question:
 Every query starts with a data source.
 
 <Frame>
-  <img src="/images/insights/data-sources.png" alt="Widget query data source menu with JSSG, ast-grep, and dependencies" />
+  <img
+    src="/images/insights/data-sources-light.png"
+    alt="Widget query data source menu with JSSG, ast-grep, and dependencies"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/data-sources-dark.png"
+    alt="Widget query data source menu with JSSG, ast-grep, and dependencies"
+    className="hidden dark:block"
+  />
 </Frame>
 
 | Source | Use it when |
@@ -75,7 +102,16 @@ ast-grep queries count matches from a YAML rule. They are good for direct syntax
 Dependency queries use indexed package data from the selected repositories.
 
 <Frame>
-  <img src="/images/insights/dependency-query.png" alt="Dependency query setup with ecosystem, package, version, depth, and group by controls" />
+  <img
+    src="/images/insights/dependency-query-light.png"
+    alt="Dependency query setup with ecosystem, package, version, depth, and group by controls"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/dependency-query-dark.png"
+    alt="Dependency query setup with ecosystem, package, version, depth, and group by controls"
+    className="hidden dark:block"
+  />
 </Frame>
 
 You can filter by ecosystem, package, version range, and dependency depth, then group by fields like repository, package, version, workspace, or lock file.
@@ -85,7 +121,16 @@ You can filter by ecosystem, package, version range, and dependency depth, then 
 Grouping controls the shape of the result.
 
 <Frame>
-  <img src="/images/insights/group-by.png" alt="Group by menu with repository, codeowner, directory, and custom cardinality key options" />
+  <img
+    src="/images/insights/group-by-light.png"
+    alt="Group by menu with repository, codeowner, directory, and custom cardinality key options"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/group-by-dark.png"
+    alt="Group by menu with repository, codeowner, directory, and custom cardinality key options"
+    className="hidden dark:block"
+  />
 </Frame>
 
 Common groups:
@@ -104,7 +149,16 @@ Use a table widget when you want grouped results that people can scan and sort.
 For JSSG metrics with cardinality, you can filter by a dimension key and value. For example, filter `name = Button` to show only metric rows for the `Button` component.
 
 <Frame>
-  <img src="/images/insights/filter-metric.png" alt="Metric filter popover with dimension key, operator, and filter value" />
+  <img
+    src="/images/insights/filter-metric-light.png"
+    alt="Metric filter popover with dimension key, operator, and filter value"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/filter-metric-dark.png"
+    alt="Metric filter popover with dimension key, operator, and filter value"
+    className="hidden dark:block"
+  />
 </Frame>
 
 Metric filters are useful when one codemod emits several related measurements and you only want one slice in a widget.
@@ -114,7 +168,16 @@ Metric filters are useful when one codemod emits several related measurements an
 Use file globs to include or exclude paths before the query runs.
 
 <Frame>
-  <img src="/images/insights/filter-globs.png" alt="File path glob filter excluding tests and fixture directories" />
+  <img
+    src="/images/insights/filter-globs-light.png"
+    alt="File path glob filter excluding tests and fixture directories"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/filter-globs-dark.png"
+    alt="File path glob filter excluding tests and fixture directories"
+    className="hidden dark:block"
+  />
 </Frame>
 
 Examples:
@@ -131,7 +194,16 @@ Use glob filters to remove tests, generated files, fixtures, or directories that
 Single number widgets can combine multiple query lines with a formula.
 
 <Frame>
-  <img src="/images/insights/progress-formula.png" alt="Single number widget with two JSSG queries and a progress formula" />
+  <img
+    src="/images/insights/progress-formula-light.png"
+    alt="Single number widget with two JSSG queries and a progress formula"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/progress-formula-dark.png"
+    alt="Single number widget with two JSSG queries and a progress formula"
+    className="hidden dark:block"
+  />
 </Frame>
 
 A common pattern:
@@ -148,7 +220,16 @@ This shows progress toward removing the old pattern. If the old count was `100` 
 Template variables let you reuse the same dashboard for different repositories, rules, JSSG source, or string values.
 
 <Frame>
-  <img src="/images/insights/template-variable.png" alt="Add template variable dialog for a repository variable" />
+  <img
+    src="/images/insights/template-variable-light.png"
+    alt="Add template variable dialog for a repository variable"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/template-variable-dark.png"
+    alt="Add template variable dialog for a repository variable"
+    className="hidden dark:block"
+  />
 </Frame>
 
 Use variables when several widgets should share the same repository list or when you want one dashboard to work across teams.
