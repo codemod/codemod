@@ -267,6 +267,9 @@ impl<'a> StepExecutor<'a> {
                         )
                         .await
                 }
+                StepAction::BumpDependency(_) => Err(Error::StepExecution(
+                    "bump-dependency step execution is not implemented yet".to_string(),
+                )),
                 StepAction::InstallSkill(install_skill) => {
                     if self
                         .engine

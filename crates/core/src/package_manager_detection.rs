@@ -1,64 +1,10 @@
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
 
+use butterflow_models::step::PackageManager;
 use dependency_files::Ecosystem;
-use serde::{Deserialize, Serialize};
 
 use crate::workflow_facts::{EcosystemFactSource, WorkflowFacts};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PackageManager {
-    Npm,
-    Yarn,
-    Pnpm,
-    Bun,
-    Cargo,
-    Go,
-    Pip,
-    Poetry,
-    Pipenv,
-    Bundler,
-    Maven,
-    Gradle,
-}
-
-impl PackageManager {
-    pub const fn ecosystem(self) -> Ecosystem {
-        match self {
-            Self::Npm | Self::Yarn | Self::Pnpm | Self::Bun => Ecosystem::Npm,
-            Self::Cargo => Ecosystem::Cargo,
-            Self::Go => Ecosystem::Go,
-            Self::Pip | Self::Poetry | Self::Pipenv => Ecosystem::PyPI,
-            Self::Bundler => Ecosystem::RubyGems,
-            Self::Maven | Self::Gradle => Ecosystem::Java,
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Npm => "npm",
-            Self::Yarn => "yarn",
-            Self::Pnpm => "pnpm",
-            Self::Bun => "bun",
-            Self::Cargo => "cargo",
-            Self::Go => "go",
-            Self::Pip => "pip",
-            Self::Poetry => "poetry",
-            Self::Pipenv => "pipenv",
-            Self::Bundler => "bundler",
-            Self::Maven => "maven",
-            Self::Gradle => "gradle",
-        }
-    }
-}
-
-impl fmt::Display for PackageManager {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageManagerRoot {
@@ -66,6 +12,19 @@ pub struct PackageManagerRoot {
     pub manager: PackageManager,
     pub root: PathBuf,
     pub evidence_path: String,
+}
+
+pub const fn package_manager_ecosystem(manager: PackageManager) -> Ecosystem {
+    match manager {
+        PackageManager::Npm | PackageManager::Yarn | PackageManager::Pnpm | PackageManager::Bun => {
+            Ecosystem::Npm
+        }
+        PackageManager::Cargo => Ecosystem::Cargo,
+        PackageManager::Go => Ecosystem::Go,
+        PackageManager::Pip | PackageManager::Poetry | PackageManager::Pipenv => Ecosystem::PyPI,
+        PackageManager::Bundler => Ecosystem::RubyGems,
+        PackageManager::Maven | PackageManager::Gradle => Ecosystem::Java,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,7 +65,7 @@ pub fn infer_package_manager_root(
     request: &PackageManagerInferenceRequest,
 ) -> Result<PackageManagerRoot, PackageManagerDetectionError> {
     if let (Some(ecosystem), Some(manager)) = (request.ecosystem, request.manager) {
-        if manager.ecosystem() != ecosystem {
+        if package_manager_ecosystem(manager) != ecosystem {
             return Err(PackageManagerDetectionError::ManagerEcosystemMismatch {
                 manager,
                 ecosystem,
@@ -152,7 +111,7 @@ pub fn detect_package_manager_roots(facts: &WorkflowFacts) -> Vec<PackageManager
         roots
             .entry((root.clone(), manager))
             .or_insert_with(|| PackageManagerRoot {
-                ecosystem: manager.ecosystem(),
+                ecosystem: package_manager_ecosystem(manager),
                 manager,
                 root,
                 evidence_path: fact.path.clone(),
