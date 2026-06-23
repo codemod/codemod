@@ -202,6 +202,270 @@ nodes:
         .contains("parent-directory traversal is not allowed"));
 }
 
+fn validate_bump_dependency_yaml(yaml_content: &str) -> butterflow_models::Result<()> {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workflow_path = temp_dir.path().join("workflow.yaml");
+    fs::write(&workflow_path, yaml_content).unwrap();
+    let workflow = utils::parse_workflow_file(&workflow_path).unwrap();
+
+    utils::validate_workflow(&workflow, temp_dir.path())
+}
+
+#[test]
+fn test_validate_workflow_accepts_valid_bump_dependency_step() {
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          manager: npm
+          root: frontend
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#;
+
+    let result = validate_bump_dependency_yaml(yaml_content);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_workflow_rejects_empty_bump_dependency_list() {
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies: []
+"#;
+
+    let result = validate_bump_dependency_yaml(yaml_content);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("requires at least one dependency"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_invalid_bump_dependency_fields() {
+    let cases = [
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: " "
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#,
+            "dependency name must be non-empty",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: " "
+"#,
+            "target must be non-empty",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              target: "^18.0.0"
+"#,
+            "specify exactly one of if_version or ensure",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              ensure: present
+              target: "^18.0.0"
+"#,
+            "if_version and ensure are mutually exclusive",
+        ),
+    ];
+
+    for (yaml_content, expected_error) in cases {
+        let result = validate_bump_dependency_yaml(yaml_content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(expected_error));
+    }
+}
+
+#[test]
+fn test_validate_workflow_rejects_empty_bump_dependency_match_values() {
+    let cases = [
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              if_version: " "
+              target: "^18.0.0"
+"#,
+            "if_version must be non-empty",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          dependencies:
+            - name: react
+              ensure: " "
+              target: "^18.0.0"
+"#,
+            "ensure must be non-empty",
+        ),
+    ];
+
+    for (yaml_content, expected_error) in cases {
+        let result = validate_bump_dependency_yaml(yaml_content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(expected_error));
+    }
+}
+
+#[test]
+fn test_validate_workflow_rejects_unsafe_bump_dependency_roots() {
+    let cases = [
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          root: " "
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#,
+            "invalid bump-dependency root value",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          root: "*"
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#,
+            "wildcard roots are reserved but not supported yet",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          root: /tmp/project
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#,
+            "absolute paths are not allowed",
+        ),
+        (
+            r#"
+version: "1"
+nodes:
+  - id: bump
+    name: Bump
+    steps:
+      - id: bump-react
+        name: Bump React
+        bump-dependency:
+          root: ../frontend
+          dependencies:
+            - name: react
+              if_version: "^17.0.0"
+              target: "^18.0.0"
+"#,
+            "parent-directory traversal is not allowed",
+        ),
+    ];
+
+    for (yaml_content, expected_error) in cases {
+        let result = validate_bump_dependency_yaml(yaml_content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(expected_error));
+    }
+}
+
 #[test]
 fn test_validate_workflow_valid() {
     // Create a valid workflow
