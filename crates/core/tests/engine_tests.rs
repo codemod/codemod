@@ -28,8 +28,8 @@ use butterflow_core::{
 };
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseAI, UseAstGrep, UseInstallSkill,
-    UseJSAstGrep,
+    BumpDependencySpec, PackageManager, SemanticAnalysisConfig, SemanticAnalysisMode, StepAction,
+    UseAI, UseAstGrep, UseBumpDependency, UseInstallSkill, UseJSAstGrep,
 };
 use butterflow_models::strategy::Strategy;
 use butterflow_models::trigger::TriggerType;
@@ -67,6 +67,9 @@ macro_rules! workflow_run_config {
     };
     (@set $config:ident, target_path, $value:expr) => {
         $config.execution.target_path = $value;
+    };
+    (@set $config:ident, dry_run, $value:expr) => {
+        $config.execution.dry_run = $value;
     };
     (@set $config:ident, bundle_path, $value:expr) => {
         $config.execution.bundle_path = $value;
@@ -1556,6 +1559,96 @@ async fn test_run_script_approval_callback_can_reject_execution() {
     assert!(
         !output_path.exists(),
         "rejected shell command should not create files"
+    );
+}
+
+#[tokio::test]
+async fn test_bump_dependency_dry_run_completes_without_modifying_manifest() {
+    let temp_dir = TempDir::new().unwrap();
+    let package_json = temp_dir.path().join("package.json");
+    let original_manifest = r#"{"dependencies":{"react":"^17.0.2"}}"#;
+    fs::write(&package_json, original_manifest).unwrap();
+    fs::write(temp_dir.path().join("package-lock.json"), "{}").unwrap();
+
+    let config = workflow_run_config! {
+        target_path: temp_dir.path().to_path_buf(),
+        dry_run: true,
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+
+    let workflow = Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "bump-node".to_string(),
+            name: "Bump Node".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("bump-react".to_string()),
+                name: "Bump React".to_string(),
+                action: StepAction::BumpDependency(UseBumpDependency {
+                    manager: Some(PackageManager::Npm),
+                    root: Some(".".to_string()),
+                    dependencies: vec![BumpDependencySpec {
+                        name: "react".to_string(),
+                        target: None,
+                        if_version: None,
+                        ensure: Some("^18.0.0".to_string()),
+                    }],
+                }),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
+    };
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "bump-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    assert_eq!(fs::read_to_string(package_json).unwrap(), original_manifest);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "bump-node")
+        .expect("bump-node task should exist");
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("Dry-run bump-dependency command"),
+        "task logs should include the dry-run command, got: {logs}"
+    );
+    assert!(
+        logs.contains("'npm' 'install' 'react@^18.0.0'"),
+        "task logs should include the generated npm command, got: {logs}"
     );
 }
 

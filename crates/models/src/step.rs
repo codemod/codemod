@@ -779,4 +779,23 @@ mod tests {
         assert_eq!(config.dependencies[0].ensure, Some("^18.0.0".to_string()));
         assert_eq!(config.dependencies[0].target, None);
     }
+
+    #[test]
+    fn test_bump_dependency_schema_does_not_require_target() {
+        let schema_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/workflow.json");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
+
+        let required = schema
+            .pointer("/$defs/BumpDependencySpec/required")
+            .and_then(serde_json::Value::as_array)
+            .expect("BumpDependencySpec should have a required array");
+
+        assert!(required.contains(&serde_json::json!("name")));
+        assert!(
+            !required.contains(&serde_json::json!("target")),
+            "ensure-only dependency bumps should not require target in the schema"
+        );
+    }
 }
