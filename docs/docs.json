@@ -88,7 +88,6 @@
                 "pages": [
                   "platform/campaigns",
                   "platform/campaigns/create",
-                  "platform/campaigns/review-and-start",
                   "platform/campaigns/track-progress"
                 ]
               },
