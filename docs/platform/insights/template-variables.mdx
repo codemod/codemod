@@ -7,7 +7,22 @@ Template variables let you reuse one dashboard across different inputs. Add a va
 
 ## Add a variable
 
-Create a variable from the dashboard toolbar, choose its type, then set a default value.
+Create a variable from the dashboard toolbar.
+
+<Frame>
+  <img
+    src="/images/insights/template-variable-button-light.png"
+    alt="Insights dashboard toolbar with the Add Variable button highlighted"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/template-variable-button-dark.png"
+    alt="Insights dashboard toolbar with the Add Variable button highlighted"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Name the variable after the value it controls, then set a default value.
 
 <Frame>
   <img
@@ -18,6 +33,21 @@ Create a variable from the dashboard toolbar, choose its type, then set a defaul
   <img
     src="/images/insights/template-variable-dark.png"
     alt="Add template variable dialog for a repository variable"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Choose the variable type that matches the widget input you want to reuse.
+
+<Frame>
+  <img
+    src="/images/insights/template-variable-types-light.png"
+    alt="Template variable type menu with repository, rule, JSSG source, and string options"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/template-variable-types-dark.png"
+    alt="Template variable type menu with repository, rule, JSSG source, and string options"
     className="hidden dark:block"
   />
 </Frame>
@@ -43,6 +73,19 @@ Use variables when:
 ## Use variables in widgets
 
 After you create a variable, reference it from widget query controls. Repository variables are most useful when every widget on the dashboard should follow the same selected repositories.
+
+<Frame>
+  <img
+    src="/images/insights/template-variable-query-light.png"
+    alt="Widget repository selector using the repo template variable"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/template-variable-query-dark.png"
+    alt="Widget repository selector using the repo template variable"
+    className="hidden dark:block"
+  />
+</Frame>
 
 <Tip>
   Keep variable names short and predictable, such as `repo`, `package`, `component`, or `rule`.

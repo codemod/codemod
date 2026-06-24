@@ -43,8 +43,8 @@ Set it up like this:
 
 1. Query `a`: count the old pattern at an earlier snapshot, such as the first day of the current month.
 2. Query `b`: count the old pattern at the latest commit.
-3. Formula: `1 - (b / a)`.
-4. Format the result as a percent.
+3. Formula: `100 * (1 - b / a)`.
+4. In Visualization, set the suffix to `%` and give the widget a clear name.
 
 If the old count was `100` and the latest count is `25`, the formula returns `75%`.
 
@@ -52,8 +52,8 @@ If the old count was `100` and the latest count is `25`, the formula returns `75
 
 | Goal | Formula |
 | --- | --- |
-| Percent complete | `1 - (b / a)` |
-| Percent remaining | `b / a` |
+| Percent complete | `100 * (1 - b / a)` |
+| Percent remaining | `100 * (b / a)` |
 | Difference | `a - b` |
 | Ratio | `a / b` |
 

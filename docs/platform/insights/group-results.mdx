@@ -3,7 +3,7 @@ title: 'Group Insights results'
 description: 'Group Insights widgets by repository, directory, code owner, or metric cardinality.'
 ---
 
-Grouping controls the shape of the result. Use it when a single total is not enough and you need to know where the work is.
+Grouping controls the shape of the result. Use it when a single total is not enough and you need to know where the work is. This example groups JSSG results by top-level directory with depth `1`, so `apps`, `packages`, and `tooling` become separate rows.
 
 <Frame>
   <img
@@ -26,6 +26,8 @@ Grouping controls the shape of the result. Use it when a single total is not eno
 | **Directory** | Where the work is located inside a repo. |
 | **Code owner** | Which team likely owns the work. |
 | **Metric cardinality key** | A custom dimension emitted by JSSG, such as component name, package name, or API name. |
+
+Directory grouping is useful when a large repository has several work areas. Start with depth `1` for a quick map, then increase the depth when you need a more specific path.
 
 ## Group by metric cardinality
 
