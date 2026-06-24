@@ -1,0 +1,110 @@
+---
+title: 'Insights data sources'
+description: 'Choose JSSG, ast-grep, or dependency data for an Insights widget.'
+---
+
+Every query line starts with a data source. The source decides what the query can inspect and what kind of result it can return.
+
+<Frame>
+  <img
+    src="/images/insights/data-sources-light.png"
+    alt="Widget query data source menu with JSSG codemod, ast-grep YAML, and dependencies"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/data-sources-dark.png"
+    alt="Widget query data source menu with JSSG codemod, ast-grep YAML, and dependencies"
+    className="hidden dark:block"
+  />
+</Frame>
+
+| Source | Use it when |
+| --- | --- |
+| **JSSG Codemod** | You need custom code analysis, semantic checks, or named metrics emitted from a codemod. |
+| **ast-grep (YAML)** | You need a structural syntax match without writing TypeScript. |
+| **Dependencies** | You need package, version, ecosystem, workspace, or dependency depth data. |
+
+## JSSG codemods
+
+Use JSSG when you need custom logic. A JSSG source can count files, inspect AST nodes, use semantic analysis, and emit named metrics with cardinality keys.
+
+<Frame>
+  <img
+    src="/images/insights/source-options-light.png"
+    alt="JSSG widget source options menu with inline and package choices"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/source-options-dark.png"
+    alt="JSSG widget source options menu with inline and package choices"
+    className="hidden dark:block"
+  />
+</Frame>
+
+You can use an inline JSSG codemod while you explore a metric, then move the code into a package when the metric should be reused.
+
+<Frame>
+  <img
+    src="/images/insights/jssg-source-editor-light.png"
+    alt="Inline JSSG source editor in an Insights widget"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/jssg-source-editor-dark.png"
+    alt="Inline JSSG source editor in an Insights widget"
+    className="hidden dark:block"
+  />
+</Frame>
+
+### Semantic options
+
+JSSG queries can use semantic analysis when the question depends on symbol meaning, not just syntax. Use semantic mode for questions such as "which imported symbol resolves to this package?" or "which usages refer to this definition?"
+
+<Frame>
+  <img
+    src="/images/insights/semantic-options-light.png"
+    alt="Semantic analysis options in an Insights JSSG query"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/semantic-options-dark.png"
+    alt="Semantic analysis options in an Insights JSSG query"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## ast-grep rules
+
+Use ast-grep when a structural pattern is enough. It works well for a specific import, function call, JSX prop, or syntax shape.
+
+<Tip>
+  Start with ast-grep for direct syntax questions. Move to JSSG when you need custom logic, semantic resolution, or multiple named metrics.
+</Tip>
+
+## Dependencies
+
+Use dependency queries when the answer is in package metadata instead of source code. You can filter by ecosystem, package, version range, and dependency depth, then group by repository, package, version, workspace, or lock file.
+
+<Frame>
+  <img
+    src="/images/insights/dependency-query-light.png"
+    alt="Dependency query setup with ecosystem, package, version, depth, and group by controls"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/dependency-query-dark.png"
+    alt="Dependency query setup with ecosystem, package, version, depth, and group by controls"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Group results" href="/platform/insights/group-results" icon="table">
+    Turn raw query results into useful breakdowns.
+  </Card>
+  <Card title="Use formulas" href="/platform/insights/formulas" icon="calculator">
+    Combine multiple query lines into one metric.
+  </Card>
+</CardGroup>

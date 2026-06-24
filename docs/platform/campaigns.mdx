@@ -9,55 +9,6 @@ Campaigns run codemods across one or more repositories. Codemod creates tasks, o
 
 Use a campaign when you want to move from "we found the work" to "we are applying the change".
 
-## Create a campaign
-
-<Steps>
-  <Step title="Choose a codemod">
-    Go to **Campaigns**, click **Create Campaign**, and choose a codemod from the registry.
-
-    Use a package like `debarrel` for import cleanup, or choose another codemod package that matches your migration.
-  </Step>
-  <Step title="Select target repositories">
-    Pick the GitHub or GitLab repositories you want to update. You can run against one repository first, then expand to more repositories after the first run looks good.
-
-    <Frame>
-      <img
-        src="/images/campaigns/select-repositories-light.png"
-        alt="Repository picker for a campaign"
-        className="block dark:hidden"
-      />
-      <img
-        src="/images/campaigns/select-repositories-dark.png"
-        alt="Repository picker for a campaign"
-        className="hidden dark:block"
-      />
-    </Frame>
-  </Step>
-  <Step title="Configure options">
-    Fill in any parameters the codemod exposes. Some campaigns also include rollout options such as AI review, sharding, or CI recovery.
-  </Step>
-  <Step title="Review and start">
-    Review the selected package, repositories, campaign name, parameters, and recovery settings. Then create the campaign.
-
-    <Frame>
-      <img
-        src="/images/campaigns/review-campaign-light.png"
-        alt="Campaign review page before creating the campaign"
-        className="block dark:hidden"
-      />
-      <img
-        src="/images/campaigns/review-campaign-dark.png"
-        alt="Campaign review page before creating the campaign"
-        className="hidden dark:block"
-      />
-    </Frame>
-  </Step>
-</Steps>
-
-## Follow the rollout
-
-The campaign detail page shows the workflow, generated tasks, pull requests, and CI status.
-
 <Frame>
   <img
     src="/images/campaigns/campaign-detail-light.png"
@@ -71,42 +22,36 @@ The campaign detail page shows the workflow, generated tasks, pull requests, and
   />
 </Frame>
 
-Use this page to answer:
+## Campaign flow
 
-- Which workflow step is running?
-- Which task created a pull request?
-- Did CI pass on the generated PR?
-- Does a task need to be rerun or reviewed?
+<Steps>
+  <Step title="Create a campaign">
+    Choose a registry codemod and select one or more target repositories.
+  </Step>
+  <Step title="Review the plan">
+    Confirm the package, repositories, campaign name, arguments, and recovery settings.
+  </Step>
+  <Step title="Track the rollout">
+    Watch workflow tasks, generated pull requests, and CI checks from the campaign detail page.
+  </Step>
+</Steps>
 
-## How campaigns use workflows
+## Learn the pieces
 
-Campaigns are powered by [Codemod workflows](/workflows/introduction). A workflow defines the stages of a migration.
-
-| Concept | Meaning |
-| --- | --- |
-| **Node** | A stage in the workflow, such as analyzing a repository or applying a transform. |
-| **Step** | One action inside a node, such as running a JSSG codemod or a shell command. |
-| **Task** | A runtime instance of a node. Matrix workflows can create multiple tasks. |
-| **Pull request** | The branch and PR created when a task produces code changes. |
-
-Most users do not need to edit workflow files to run a campaign. Choose a registry codemod, select repositories, and review the generated plan.
-
-## Roll out safely
-
-Start small, then expand:
-
-1. Run the codemod against one repository.
-2. Review the generated pull request.
-3. Check CI status on the campaign detail page.
-4. Run the campaign against more repositories.
-
-For large migrations, use sharding to split work into smaller pull requests. You can group shards by directory or code owner so each team gets a reviewable slice.
-
-## CI checks and recovery
-
-Generated pull requests show supported CI checks inline. Passing checks appear on the task card so you can see whether the generated PR is ready to review.
-
-If a check fails and CI recovery is enabled, Codemod can try to repair the generated PR or report what failed. You can inspect logs from the campaign page before deciding what to do next.
+<CardGroup cols={2}>
+  <Card title="Create a campaign" href="/platform/campaigns/create" icon="plus">
+    Choose a codemod and select target repositories.
+  </Card>
+  <Card title="Review and start" href="/platform/campaigns/review-and-start" icon="list-checks">
+    Review campaign settings before Codemod opens PRs.
+  </Card>
+  <Card title="Track progress" href="/platform/campaigns/track-progress" icon="git-pull-request">
+    Follow generated tasks, pull requests, and CI checks.
+  </Card>
+  <Card title="Workflows" href="/workflows/introduction" icon="diagram-project">
+    Learn how workflow nodes, steps, and tasks fit together.
+  </Card>
+</CardGroup>
 
 ## Next steps
 
@@ -114,7 +59,7 @@ If a check fails and CI recovery is enabled, Codemod can try to repair the gener
   <Card title="Insights" href="/platform/insights" icon="chart-simple">
     Find and measure migration work before you run a campaign.
   </Card>
-  <Card title="Workflows" href="/workflows/introduction" icon="diagram-project">
-    Learn how workflow nodes, steps, and tasks fit together.
+  <Card title="Registry" href="/platform/registry" icon="globe">
+    Choose reusable codemods for a rollout.
   </Card>
 </CardGroup>

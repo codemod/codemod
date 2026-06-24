@@ -1,0 +1,60 @@
+---
+title: 'Use template variables in Insights'
+description: 'Reuse one Insights dashboard across repositories, strings, rules, and JSSG source.'
+---
+
+Template variables let you reuse one dashboard across different inputs. Add a variable when several widgets should share the same repository list, rule, string, or JSSG source.
+
+## Add a variable
+
+Create a variable from the dashboard toolbar, choose its type, then set a default value.
+
+<Frame>
+  <img
+    src="/images/insights/template-variable-light.png"
+    alt="Add template variable dialog for a repository variable"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/template-variable-dark.png"
+    alt="Add template variable dialog for a repository variable"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## When to use variables
+
+Use variables when:
+
+- multiple widgets should run against the same repository list
+- one dashboard should work for different teams
+- the same JSSG source should be reused by several widgets
+- a dashboard should compare the same metric across different values
+
+## Variable examples
+
+| Variable | Use it for |
+| --- | --- |
+| Repository | Reuse one dashboard for different repos or repo groups. |
+| String | Swap a package name, component name, import path, or API name. |
+| ast-grep rule | Reuse the same dashboard shape with different structural rules. |
+| JSSG source | Let advanced users adjust the query logic without rebuilding the dashboard. |
+
+## Use variables in widgets
+
+After you create a variable, reference it from widget query controls. Repository variables are most useful when every widget on the dashboard should follow the same selected repositories.
+
+<Tip>
+  Keep variable names short and predictable, such as `repo`, `package`, `component`, or `rule`.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Create a dashboard" href="/platform/insights/create-dashboard" icon="chart-simple">
+    Build a dashboard that can reuse variables.
+  </Card>
+  <Card title="Use formulas" href="/platform/insights/formulas" icon="calculator">
+    Combine variable-backed queries into progress metrics.
+  </Card>
+</CardGroup>

@@ -1,0 +1,73 @@
+---
+title: 'Use formulas in Insights'
+description: 'Combine query lines into ratios, percentages, and progress metrics.'
+---
+
+Formulas let one widget combine multiple query lines. Use them when the final number is a derived value, such as progress, ratio, or percent remaining.
+
+## Add query lines
+
+Each query line gets a letter. The formula can reference those letters.
+
+<Frame>
+  <img
+    src="/images/insights/query-formula-light.png"
+    alt="Formula editor with query aliases in an Insights widget"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/query-formula-dark.png"
+    alt="Formula editor with query aliases in an Insights widget"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Show migration progress
+
+A common progress widget compares an earlier snapshot to the latest commit.
+
+<Frame>
+  <img
+    src="/images/insights/progress-formula-light.png"
+    alt="Single number widget with two JSSG queries and a progress formula"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/progress-formula-dark.png"
+    alt="Single number widget with two JSSG queries and a progress formula"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Set it up like this:
+
+1. Query `a`: count the old pattern at an earlier snapshot, such as the first day of the current month.
+2. Query `b`: count the old pattern at the latest commit.
+3. Formula: `1 - (b / a)`.
+4. Format the result as a percent.
+
+If the old count was `100` and the latest count is `25`, the formula returns `75%`.
+
+## Formula patterns
+
+| Goal | Formula |
+| --- | --- |
+| Percent complete | `1 - (b / a)` |
+| Percent remaining | `b / a` |
+| Difference | `a - b` |
+| Ratio | `a / b` |
+
+<Warning>
+  Avoid dividing by a query that can return `0`. If a denominator can be zero, choose a safer baseline or split the dashboard into a table that shows the raw values.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Data sources" href="/platform/insights/data-sources" icon="database">
+    Build the query lines that feed a formula.
+  </Card>
+  <Card title="Template variables" href="/platform/insights/template-variables" icon="braces">
+    Reuse the same formula across repositories.
+  </Card>
+</CardGroup>

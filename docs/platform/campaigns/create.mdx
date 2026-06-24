@@ -1,0 +1,83 @@
+---
+title: 'Create a campaign'
+description: 'Choose a codemod and select target repositories for a campaign.'
+---
+
+Create a campaign when you are ready to apply a codemod to one or more repositories.
+
+## Choose a codemod
+
+Start from a registry codemod that matches the migration. For example, use `debarrel` to clean up barrel imports or an i18n codemod to roll out localization changes.
+
+<Frame>
+  <img
+    src="/images/campaigns/create-debarrel-light.png"
+    alt="Campaign creation page for the debarrel codemod"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/campaigns/create-debarrel-dark.png"
+    alt="Campaign creation page for the debarrel codemod"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Select target repositories
+
+Pick the repositories you want Codemod to update. Start with one repository when you want a small first run, then expand to multiple repositories after the generated PR looks right.
+
+<Frame>
+  <img
+    src="/images/campaigns/select-repositories-light.png"
+    alt="Repository picker for a campaign"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/campaigns/select-repositories-dark.png"
+    alt="Repository picker for a campaign"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Start small or select multiple targets
+
+Use a single target when you want to validate the codemod and CI behavior first.
+
+<Frame>
+  <img
+    src="/images/campaigns/single-target-light.png"
+    alt="Campaign creation page with one selected repository"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/campaigns/single-target-dark.png"
+    alt="Campaign creation page with one selected repository"
+    className="hidden dark:block"
+  />
+</Frame>
+
+Use multiple targets when the codemod is ready for a broader rollout.
+
+<Frame>
+  <img
+    src="/images/campaigns/multi-target-light.png"
+    alt="Campaign creation page with multiple selected repositories"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/campaigns/multi-target-dark.png"
+    alt="Campaign creation page with multiple selected repositories"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Review and start" href="/platform/campaigns/review-and-start" icon="list-checks">
+    Confirm settings before the campaign runs.
+  </Card>
+  <Card title="Track progress" href="/platform/campaigns/track-progress" icon="git-pull-request">
+    Watch tasks, PRs, and CI checks after creation.
+  </Card>
+</CardGroup>

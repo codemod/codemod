@@ -1,0 +1,96 @@
+---
+title: 'Create an Insights dashboard'
+description: 'Create a dashboard, add widgets, and select repositories for Insights queries.'
+---
+
+Create a dashboard when you want one place to track a migration, dependency rollout, or code health signal.
+
+## Create the dashboard
+
+Go to **Insights**, create a dashboard, then name it after the outcome you want to track. Good dashboard names are specific, such as "React 19 adoption" or "Repository health".
+
+<Frame>
+  <img
+    src="/images/insights/create-dashboard-light.png"
+    alt="New Insights dashboard with no widgets defined"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/create-dashboard-dark.png"
+    alt="New Insights dashboard with no widgets defined"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Add the first widget
+
+Click **Add Widget**, then choose how you want the result to appear.
+
+<Frame>
+  <img
+    src="/images/insights/widget-types-light.png"
+    alt="Add widget menu with timeseries chart, single number, table view, and notes"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/widget-types-dark.png"
+    alt="Add widget menu with timeseries chart, single number, table view, and notes"
+    className="hidden dark:block"
+  />
+</Frame>
+
+| Widget | Use it for |
+| --- | --- |
+| **Timeseries chart** | Progress over time, such as deprecated API usage trending down. |
+| **Single number** | One current value, such as files left to migrate. |
+| **Table view** | Breakdowns by repository, directory, package, owner, or metric key. |
+| **Notes** | Context, next actions, caveats, and links. |
+
+## Select repositories
+
+Every widget needs a repository source. Select one repository for a focused widget, or select multiple repositories when the result should summarize a whole migration surface.
+
+<Frame>
+  <img
+    src="/images/insights/repository-picker-light.png"
+    alt="Repository picker selecting a repository for an Insights widget"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/repository-picker-dark.png"
+    alt="Repository picker selecting a repository for an Insights widget"
+    className="hidden dark:block"
+  />
+</Frame>
+
+<Tip>
+  If several widgets should use the same repository list, add a repository template variable and reference that variable from each widget.
+</Tip>
+
+## Preview and save
+
+After you choose a data source and configure a query, wait for the preview to reload. Save the widget when the preview shows the shape you expect.
+
+<Frame>
+  <img
+    src="/images/insights/create-widget-light.png"
+    alt="Create table widget dialog with query editor and preview result"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/create-widget-dark.png"
+    alt="Create table widget dialog with query editor and preview result"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Choose a data source" href="/platform/insights/data-sources" icon="database">
+    Pick JSSG, ast-grep, or dependencies.
+  </Card>
+  <Card title="Group results" href="/platform/insights/group-results" icon="table">
+    Break widget results into useful dimensions.
+  </Card>
+</CardGroup>
