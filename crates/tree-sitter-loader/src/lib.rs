@@ -105,6 +105,16 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
                 "64b56832c2cffe41758f28e05c756a3a98d16f41"
             ),
         },
+        DynamicLanguageDefinition {
+            name: "groovy",
+            symbol: "tree_sitter_groovy",
+            extensions: &["groovy", "gradle"],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-groovy",
+                "deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d"
+            ),
+        },
     ]
 }
 
@@ -237,23 +247,38 @@ fn ensure_parser_cached(
 /// Register all dynamic language parsers, downloading any that are missing.
 ///
 /// This should be called once before using dynamic languages.
-/// Returns Ok(()) if all parsers were registered successfully.
+/// Returns Ok(()) if at least one parser was registered successfully. A parser
+/// that is unavailable for the current platform should not prevent other
+/// dynamic languages from working.
 pub fn register_all() -> Result<(), LoaderError> {
     let cache_dir = get_cache_dir()?;
     let definitions = get_definitions();
 
     let mut registrations = Vec::new();
+    let mut errors = Vec::new();
 
     for def in definitions {
-        let lib_path = ensure_parser_cached(def, &cache_dir)?;
-        registrations.push(Registration {
-            lang_name: def.name.to_string(),
-            lib_path,
-            symbol: def.symbol.to_string(),
-            meta_var_char: None,
-            expando_char: Some(def.expando_char),
-            extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
-        });
+        match ensure_parser_cached(def, &cache_dir) {
+            Ok(lib_path) => registrations.push(Registration {
+                lang_name: def.name.to_string(),
+                lib_path,
+                symbol: def.symbol.to_string(),
+                meta_var_char: None,
+                expando_char: Some(def.expando_char),
+                extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
+            }),
+            Err(error) => {
+                log::warn!("Failed to prepare dynamic parser {}: {error}", def.name);
+                errors.push(format!("{}: {error}", def.name));
+            }
+        }
+    }
+
+    if registrations.is_empty() {
+        return Err(LoaderError::Register(format!(
+            "no dynamic parsers could be prepared: {}",
+            errors.join("; ")
+        )));
     }
 
     unsafe {

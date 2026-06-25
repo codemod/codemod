@@ -5,6 +5,7 @@ use super::codemod_lang::CodemodLang;
 
 const LESS_EXTENSIONS: &[&str] = &[".less"];
 const TOML_EXTENSIONS: &[&str] = &[".toml"];
+const GROOVY_EXTENSIONS: &[&str] = &[".groovy", ".gradle"];
 const XML_EXTENSIONS: &[&str] = &[
     ".xml", ".csproj", ".props", ".targets", ".config", ".resx", ".xaml",
 ];
@@ -73,6 +74,9 @@ pub fn get_extensions_for_language(lang: CodemodLang) -> Vec<&'static str> {
     if lang.to_string() == "toml" {
         return TOML_EXTENSIONS.to_vec();
     }
+    if lang.to_string() == "groovy" {
+        return GROOVY_EXTENSIONS.to_vec();
+    }
     if lang.to_string() == "xml" {
         return XML_EXTENSIONS.to_vec();
     }
@@ -90,6 +94,12 @@ pub fn get_language_from_extension(extension: &str) -> Option<CodemodLang> {
     }
     if extension == "toml" {
         return "toml".parse().ok();
+    }
+    if GROOVY_EXTENSIONS
+        .iter()
+        .any(|ext| ext.strip_prefix('.') == Some(extension))
+    {
+        return "groovy".parse().ok();
     }
     if XML_EXTENSIONS
         .iter()
@@ -116,6 +126,7 @@ pub fn get_all_supported_extensions() -> Vec<&'static str> {
     let mut extensions: Vec<&'static str> = map.values().flatten().copied().collect();
     extensions.extend_from_slice(LESS_EXTENSIONS);
     extensions.extend_from_slice(TOML_EXTENSIONS);
+    extensions.extend_from_slice(GROOVY_EXTENSIONS);
     extensions.extend_from_slice(XML_EXTENSIONS);
     extensions.sort();
     extensions.dedup();
@@ -178,5 +189,6 @@ mod tests {
         assert!(extensions.contains(&".rs"));
         assert!(extensions.contains(&".py"));
         assert!(extensions.contains(&".toml"));
+        assert!(extensions.contains(&".gradle"));
     }
 }

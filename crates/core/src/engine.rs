@@ -24,11 +24,13 @@ use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
+use crate::codemod_steps::dependency_bump::{
+    execute_bump_dependency_plan, plan_bump_dependency_step, BumpDependencyExecutionError,
+};
 use crate::config::{
     CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
     ShellCommandExecutionRequest, WorkflowRunConfig,
 };
-use crate::dependency_bump::{execute_bump_dependency_plan, plan_bump_dependency_step};
 use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
@@ -3909,7 +3911,7 @@ impl Engine {
         )
         .await
         .map_err(|error| match error {
-            crate::dependency_bump::BumpDependencyExecutionError::CommandFailed {
+            BumpDependencyExecutionError::CommandFailed {
                 command,
                 exit_code,
                 output,
@@ -3938,6 +3940,27 @@ impl Engine {
                     info,
                     "Executed bump-dependency command: {}",
                     command.command
+                );
+            }
+        }
+        for file_edit in execution.file_edits {
+            if file_edit.dry_run {
+                slog!(
+                    logger,
+                    info,
+                    "Dry-run bump-dependency file edit: {} -> {} in {}",
+                    file_edit.dependency,
+                    file_edit.target,
+                    file_edit.path.display()
+                );
+            } else {
+                slog!(
+                    logger,
+                    info,
+                    "Applied bump-dependency file edit: {} -> {} in {}",
+                    file_edit.dependency,
+                    file_edit.target,
+                    file_edit.path.display()
                 );
             }
         }

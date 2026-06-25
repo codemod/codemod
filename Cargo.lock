@@ -699,6 +699,7 @@ version = "1.12.5"
 dependencies = [
  "anyhow",
  "ast-grep-config",
+ "ast-grep-core",
  "async-trait",
  "base64 0.22.1",
  "butterflow-models",

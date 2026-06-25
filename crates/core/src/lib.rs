@@ -1,7 +1,7 @@
 pub(crate) mod ai_agent_stream;
 pub mod ai_handoff;
+pub mod codemod_steps;
 pub mod config;
-pub mod dependency_bump;
 pub mod diff;
 pub mod engine;
 pub mod execution;

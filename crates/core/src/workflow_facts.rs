@@ -5,6 +5,7 @@ use std::path::Path;
 use butterflow_models::{Error, Result};
 use dependency_files::{detect_context_file, detect_lock_file, Ecosystem};
 use ignore::WalkBuilder;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const FACTS_SCHEMA_VERSION: u32 = 1;
@@ -154,6 +155,8 @@ fn parse_dependency_facts(
         "pyproject.toml" => parse_pyproject_dependencies(&content, rel_path),
         "go.mod" => parse_go_mod_dependencies(&content, rel_path),
         "requirements.txt" => parse_requirements_dependencies(&content, rel_path),
+        "pom.xml" => parse_maven_dependencies(&content, rel_path),
+        "build.gradle" | "build.gradle.kts" => parse_gradle_dependencies(&content, rel_path),
         _ => Vec::new(),
     };
 
@@ -355,6 +358,108 @@ fn parse_requirements_dependencies(content: &str, path: &str) -> Vec<DependencyF
     facts
 }
 
+fn parse_maven_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
+    let dependency_regex = Regex::new(r"(?s)<dependency\b[^>]*>(.*?)</dependency>").unwrap();
+    let content = remove_maven_non_project_dependency_sections(content);
+    let mut facts = Vec::new();
+
+    for dependency in dependency_regex.captures_iter(&content) {
+        let Some(block) = dependency.get(1).map(|match_| match_.as_str()) else {
+            continue;
+        };
+        let (Some(group_id), Some(artifact_id), Some(version)) = (
+            xml_tag_value(block, "groupId"),
+            xml_tag_value(block, "artifactId"),
+            xml_tag_value(block, "version"),
+        ) else {
+            continue;
+        };
+        if version.contains("${") {
+            continue;
+        }
+        let name = format!("{group_id}:{artifact_id}");
+        push_dependency(
+            &mut facts,
+            Ecosystem::Java,
+            &name,
+            version,
+            path,
+            Some("dependencies"),
+        );
+    }
+
+    facts
+}
+
+fn remove_maven_non_project_dependency_sections(content: &str) -> String {
+    Regex::new(
+        r"(?s)<dependencyManagement\b[^>]*>.*?</dependencyManagement>|<build\b[^>]*>.*?</build>",
+    )
+    .unwrap()
+    .replace_all(content, "")
+    .into_owned()
+}
+
+fn xml_tag_value<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
+    let tag_regex = Regex::new(&format!(r"(?s)<{tag}\b[^>]*>\s*([^<]+?)\s*</{tag}>")).unwrap();
+    tag_regex
+        .captures(content)?
+        .get(1)
+        .map(|match_| match_.as_str().trim())
+}
+
+fn parse_gradle_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
+    let dependency_regex =
+        Regex::new(r#"(?m)^\s*([A-Za-z][A-Za-z0-9_]*)\s*(?:\(\s*)?["']([^"']+)["']"#).unwrap();
+    let mut facts = Vec::new();
+
+    for dependency in dependency_regex.captures_iter(content) {
+        let (Some(configuration), Some(spec)) = (
+            dependency.get(1).map(|match_| match_.as_str()),
+            dependency.get(2).map(|match_| match_.as_str()),
+        ) else {
+            continue;
+        };
+        if !is_gradle_dependency_configuration(configuration) {
+            continue;
+        }
+        let parts = spec.split(':').collect::<Vec<_>>();
+        let [group, artifact, version] = parts.as_slice() else {
+            continue;
+        };
+        if version.contains('$') {
+            continue;
+        }
+        let name = format!("{group}:{artifact}");
+        push_dependency(
+            &mut facts,
+            Ecosystem::Java,
+            &name,
+            version,
+            path,
+            Some(configuration),
+        );
+    }
+
+    facts
+}
+
+fn is_gradle_dependency_configuration(configuration: &str) -> bool {
+    matches!(
+        configuration,
+        "api"
+            | "implementation"
+            | "compileOnly"
+            | "compileOnlyApi"
+            | "runtimeOnly"
+            | "testImplementation"
+            | "testCompileOnly"
+            | "testRuntimeOnly"
+            | "annotationProcessor"
+            | "testAnnotationProcessor"
+    )
+}
+
 fn python_dependency_name(spec: &str) -> Option<&str> {
     let name = spec
         .split(['<', '>', '=', '!', '~', ';', '[', ' '])
@@ -437,6 +542,14 @@ require (
         )
         .unwrap();
         fs::write(temp.path().join("pom.xml"), "<project></project>").unwrap();
+        fs::write(
+            temp.path().join("build.gradle"),
+            r#"dependencies {
+    implementation "org.slf4j:slf4j-api:2.0.9"
+}
+"#,
+        )
+        .unwrap();
 
         let facts = WorkflowFacts::collect_from_path(temp.path()).unwrap();
 
@@ -451,6 +564,75 @@ require (
         assert_dependency(&facts, Ecosystem::Cargo, "serde", "1");
         assert_dependency(&facts, Ecosystem::PyPI, "requests", "requests>=2.31.0");
         assert_dependency(&facts, Ecosystem::Go, "github.com/gin-gonic/gin", "v1.9.1");
+        assert_dependency(&facts, Ecosystem::Java, "org.slf4j:slf4j-api", "2.0.9");
+    }
+
+    #[test]
+    fn parses_direct_maven_dependencies() {
+        let facts = parse_maven_dependencies(
+            r#"
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <version>5.10.2</version>
+    </dependency>
+    <dependency>
+      <groupId>org.example</groupId>
+      <artifactId>managed</artifactId>
+      <version>${managed.version}</version>
+    </dependency>
+  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.example</groupId>
+        <artifactId>managed-direct</artifactId>
+        <version>1.0.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <build>
+    <plugins>
+      <plugin>
+        <dependencies>
+          <dependency>
+            <groupId>org.example</groupId>
+            <artifactId>plugin-dependency</artifactId>
+            <version>1.0.0</version>
+          </dependency>
+        </dependencies>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+"#,
+            "pom.xml",
+        );
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].name, "org.junit.jupiter:junit-jupiter-api");
+        assert_eq!(facts[0].version, "5.10.2");
+    }
+
+    #[test]
+    fn parses_direct_gradle_dependencies() {
+        let facts = parse_gradle_dependencies(
+            r#"
+dependencies {
+    implementation("org.slf4j:slf4j-api:2.0.9")
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    classpath "org.example:build-plugin:1.0.0"
+    implementation(libs.slf4j)
+}
+"#,
+            "build.gradle.kts",
+        );
+
+        assert_eq!(facts.len(), 2);
+        assert_dependency_name_version(&facts, "org.slf4j:slf4j-api", "2.0.9");
+        assert_dependency_name_version(&facts, "org.junit.jupiter:junit-jupiter-api", "5.10.2");
     }
 
     #[test]
@@ -471,6 +653,14 @@ require (
     fn assert_dependency(facts: &WorkflowFacts, ecosystem: Ecosystem, name: &str, version: &str) {
         assert!(facts.dependencies.iter().any(|dependency| {
             dependency.ecosystem == ecosystem
+                && dependency.name == name
+                && dependency.version == version
+        }));
+    }
+
+    fn assert_dependency_name_version(facts: &[DependencyFact], name: &str, version: &str) {
+        assert!(facts.iter().any(|dependency| {
+            dependency.ecosystem == Ecosystem::Java
                 && dependency.name == name
                 && dependency.version == version
         }));

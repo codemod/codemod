@@ -1,10 +1,18 @@
 use std::collections::HashMap;
+use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use butterflow_models::step::{BumpDependencySpec, PackageManager, UseBumpDependency};
 use butterflow_models::Error;
 use butterflow_runners::{OutputCallback, Runner};
 
+use super::utils::ast::{ast_grep_root, nearest_ancestor, node_text_starts_with};
+use super::utils::ranges::{quoted_string_content_range, replace_range};
+use super::utils::xml::{
+    xml_direct_child_element, xml_direct_child_text, xml_element_is_inside, xml_element_name,
+    xml_element_trimmed_text_range,
+};
 use crate::package_manager_detection::{
     infer_package_manager_root, PackageManagerDetectionError, PackageManagerInferenceRequest,
     PackageManagerRoot,
@@ -43,8 +51,18 @@ pub struct BumpDependencyCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BumpDependencyFileEdit {
+    pub manager: PackageManager,
+    pub path: PathBuf,
+    pub dependency: String,
+    pub target: String,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BumpDependencyExecution {
     pub commands: Vec<BumpDependencyCommand>,
+    pub file_edits: Vec<BumpDependencyFileEdit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -96,6 +114,9 @@ pub enum BumpDependencyExecutionError {
 
     #[error("package-manager command failed: {0}")]
     Runtime(String),
+
+    #[error("failed to edit dependency manifest {path}: {reason}")]
+    FileEditFailed { path: PathBuf, reason: String },
 }
 
 pub fn plan_bump_dependency_step(
@@ -141,8 +162,24 @@ pub async fn execute_bump_dependency_plan(
     output_callback: Option<OutputCallback>,
 ) -> Result<BumpDependencyExecution, BumpDependencyExecutionError> {
     let mut commands = Vec::new();
+    let mut file_edits = Vec::new();
 
     for action in &plan.actions {
+        if uses_manifest_edit(plan.manager_root.manager) {
+            let manager = plan.manager_root.manager;
+            let action = action.clone();
+            let target_path = target_path.to_path_buf();
+            let file_edit = tokio::task::spawn_blocking(move || {
+                edit_manifest_dependency(manager, &action, &target_path)
+            })
+            .await
+            .map_err(|error| {
+                BumpDependencyExecutionError::Runtime(format!("manifest edit task failed: {error}"))
+            })??;
+            file_edits.push(file_edit);
+            continue;
+        }
+
         let command = command_for_action(&plan.manager_root, action, target_path)?;
         if !command.dry_run {
             runner
@@ -162,7 +199,10 @@ pub async fn execute_bump_dependency_plan(
         commands.push(command);
     }
 
-    Ok(BumpDependencyExecution { commands })
+    Ok(BumpDependencyExecution {
+        commands,
+        file_edits,
+    })
 }
 
 pub fn command_for_action(
@@ -222,6 +262,184 @@ pub fn command_for_action(
         command,
         dry_run: action.dry_run,
     })
+}
+
+fn uses_manifest_edit(manager: PackageManager) -> bool {
+    matches!(manager, PackageManager::Maven | PackageManager::Gradle)
+}
+
+fn edit_manifest_dependency(
+    manager: PackageManager,
+    action: &BumpDependencyAction,
+    target_path: &Path,
+) -> Result<BumpDependencyFileEdit, BumpDependencyExecutionError> {
+    let manifest_path = target_path.join(&action.manifest_path);
+    let content = fs::read_to_string(&manifest_path).map_err(|error| {
+        BumpDependencyExecutionError::FileEditFailed {
+            path: manifest_path.clone(),
+            reason: error.to_string(),
+        }
+    })?;
+    let updated = match manager {
+        PackageManager::Maven => edit_maven_dependency_version(&content, action),
+        PackageManager::Gradle => edit_gradle_dependency_version(&content, action),
+        _ => unreachable!("manifest edits are only used for Maven and Gradle"),
+    }
+    .map_err(|reason| BumpDependencyExecutionError::FileEditFailed {
+        path: manifest_path.clone(),
+        reason,
+    })?;
+
+    if !action.dry_run {
+        fs::write(&manifest_path, updated).map_err(|error| {
+            BumpDependencyExecutionError::FileEditFailed {
+                path: manifest_path.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+    }
+
+    Ok(BumpDependencyFileEdit {
+        manager,
+        path: manifest_path,
+        dependency: action.dependency.clone(),
+        target: action.target.clone(),
+        dry_run: action.dry_run,
+    })
+}
+
+fn edit_maven_dependency_version(
+    content: &str,
+    action: &BumpDependencyAction,
+) -> Result<String, String> {
+    let Some((group_id, artifact_id)) = action.dependency.split_once(':') else {
+        return Err(format!(
+            "Maven dependency names must use groupId:artifactId, got {}",
+            action.dependency
+        ));
+    };
+    let root = ast_grep_root(content, "xml")?;
+    let mut replacement = None::<Range<usize>>;
+
+    for dependency in root.root().dfs().filter(|node| {
+        node.kind() == "element"
+            && xml_element_name(node).as_deref() == Some("dependency")
+            && !xml_element_is_inside(node, &["dependencyManagement", "build"])
+    }) {
+        if xml_direct_child_text(&dependency, "groupId").as_deref() != Some(group_id)
+            || xml_direct_child_text(&dependency, "artifactId").as_deref() != Some(artifact_id)
+        {
+            continue;
+        }
+        if replacement.is_some() {
+            return Err(format!(
+                "multiple Maven dependency declarations matched {}",
+                action.dependency
+            ));
+        }
+        let Some(version_element) = xml_direct_child_element(&dependency, "version") else {
+            return Err(format!(
+                "Maven dependency {} does not declare a direct <version>",
+                action.dependency
+            ));
+        };
+        let Some((current_version, version_range)) =
+            xml_element_trimmed_text_range(&version_element)
+        else {
+            return Err(format!(
+                "Maven dependency {} does not declare a direct text <version>",
+                action.dependency
+            ));
+        };
+        if current_version.contains("${") {
+            return Err(format!(
+                "Maven dependency {} uses a property-managed version",
+                action.dependency
+            ));
+        }
+        replacement = Some(version_range);
+    }
+
+    let Some(range) = replacement else {
+        return Err(format!(
+            "could not find direct Maven dependency {}",
+            action.dependency
+        ));
+    };
+    replace_range(content, range, &action.target)
+}
+
+fn edit_gradle_dependency_version(
+    content: &str,
+    action: &BumpDependencyAction,
+) -> Result<String, String> {
+    let Some(configuration) = action.dependency_type.as_deref() else {
+        return Err(format!(
+            "Gradle dependency {} is missing its dependency configuration",
+            action.dependency
+        ));
+    };
+    let manifest_file_name = dependency_files::file_name(&action.manifest_path);
+    let language = match manifest_file_name {
+        "build.gradle.kts" => "kotlin",
+        "build.gradle" => "groovy",
+        _ => {
+            return Err(format!(
+                "unsupported Gradle manifest for parser-backed dependency edits: {manifest_file_name}"
+            ));
+        }
+    };
+
+    let root = ast_grep_root(content, language)?;
+    let prefix = format!("{}:", action.dependency);
+    let mut replacement = None::<Range<usize>>;
+
+    for literal in root
+        .root()
+        .dfs()
+        .filter(|node| node.kind() == "string_literal")
+    {
+        let Some(call) = nearest_ancestor(&literal, "call_expression") else {
+            continue;
+        };
+        if !node_text_starts_with(&call, configuration) {
+            continue;
+        }
+        let text = literal.text();
+        let Some((spec, range)) = quoted_string_content_range(content, literal.range()) else {
+            continue;
+        };
+        let Some(current_version) = spec.strip_prefix(&prefix) else {
+            continue;
+        };
+        if current_version.is_empty()
+            || current_version.contains('$')
+            || current_version.contains(':')
+        {
+            continue;
+        }
+        if replacement.is_some() {
+            return Err(format!(
+                "multiple Gradle dependency declarations matched {}",
+                action.dependency
+            ));
+        }
+        if text.contains('$') {
+            return Err(format!(
+                "Gradle dependency {} uses an interpolated version",
+                action.dependency
+            ));
+        }
+        replacement = Some(range);
+    }
+
+    let Some(range) = replacement else {
+        return Err(format!(
+            "could not find direct Gradle Kotlin dependency {}",
+            action.dependency
+        ));
+    };
+    replace_range(content, range, &format!("{prefix}{}", action.target))
 }
 
 fn plan_dependency_action(
@@ -904,6 +1122,183 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executes_maven_manifest_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("pom.xml"),
+            r#"<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <version>5.10.1</version>
+    </dependency>
+  </dependencies>
+</project>
+"#,
+        )
+        .unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Java,
+                manager: PackageManager::Maven,
+                root: PathBuf::from("."),
+                evidence_path: "pom.xml".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "org.junit.jupiter:junit-jupiter-api".to_string(),
+                current_version: "5.10.1".to_string(),
+                target: "5.10.2".to_string(),
+                manifest_path: "pom.xml".to_string(),
+                dependency_type: Some("dependencies".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert!(execution.commands.is_empty());
+        assert_eq!(execution.file_edits.len(), 1);
+        assert!(fs::read_to_string(temp.path().join("pom.xml"))
+            .unwrap()
+            .contains("<version>5.10.2</version>"));
+        assert_eq!(runner.commands.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn executes_gradle_manifest_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("build.gradle.kts"),
+            r#"dependencies {
+    implementation("org.slf4j:slf4j-api:2.0.9")
+}
+"#,
+        )
+        .unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Java,
+                manager: PackageManager::Gradle,
+                root: PathBuf::from("."),
+                evidence_path: "build.gradle.kts".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "org.slf4j:slf4j-api".to_string(),
+                current_version: "2.0.9".to_string(),
+                target: "2.0.12".to_string(),
+                manifest_path: "build.gradle.kts".to_string(),
+                dependency_type: Some("implementation".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert!(execution.commands.is_empty());
+        assert_eq!(execution.file_edits.len(), 1);
+        assert!(fs::read_to_string(temp.path().join("build.gradle.kts"))
+            .unwrap()
+            .contains(r#"implementation("org.slf4j:slf4j-api:2.0.12")"#));
+        assert_eq!(runner.commands.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dry_run_manifest_edit_does_not_write_file() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("build.gradle.kts"),
+            r#"dependencies {
+    implementation("org.slf4j:slf4j-api:2.0.9")
+}
+"#,
+        )
+        .unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Java,
+                manager: PackageManager::Gradle,
+                root: PathBuf::from("."),
+                evidence_path: "build.gradle.kts".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "org.slf4j:slf4j-api".to_string(),
+                current_version: "2.0.9".to_string(),
+                target: "2.0.12".to_string(),
+                manifest_path: "build.gradle.kts".to_string(),
+                dependency_type: Some("implementation".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: true,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert_eq!(execution.file_edits.len(), 1);
+        assert!(execution.file_edits[0].dry_run);
+        assert!(fs::read_to_string(temp.path().join("build.gradle.kts"))
+            .unwrap()
+            .contains("org.slf4j:slf4j-api:2.0.9"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires released Groovy parser artifacts"]
+    async fn executes_gradle_groovy_manifest_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("build.gradle"),
+            r#"dependencies {
+    implementation "org.slf4j:slf4j-api:2.0.9"
+}
+"#,
+        )
+        .unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Java,
+                manager: PackageManager::Gradle,
+                root: PathBuf::from("."),
+                evidence_path: "build.gradle".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "org.slf4j:slf4j-api".to_string(),
+                current_version: "2.0.9".to_string(),
+                target: "2.0.12".to_string(),
+                manifest_path: "build.gradle".to_string(),
+                dependency_type: Some("implementation".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert!(execution.commands.is_empty());
+        assert_eq!(execution.file_edits.len(), 1);
+        assert!(fs::read_to_string(temp.path().join("build.gradle"))
+            .unwrap()
+            .contains(r#"implementation "org.slf4j:slf4j-api:2.0.12""#));
+    }
+
+    #[tokio::test]
     async fn dry_run_execution_returns_commands_without_running_them() {
         let runner = RecordingRunner::default();
         let plan = BumpDependencyPlan {
@@ -930,6 +1325,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(execution.commands.len(), 1);
+        assert!(execution.file_edits.is_empty());
         assert_eq!(runner.commands.lock().unwrap().len(), 0);
     }
 }

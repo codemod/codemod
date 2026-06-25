@@ -602,7 +602,7 @@ steps:
 </ParamField>
 
 <ParamField path="bump-dependency.dependencies[].name" type="string" required>
-  Package name as it appears in the package manager manifest, for example `react`, `@scope/package`, `github.com/gin-gonic/gin`, or `serde`.
+  Package name as it appears in the package manager manifest, for example `react`, `@scope/package`, `github.com/gin-gonic/gin`, `serde`, or the Maven/Gradle coordinate `group:artifact`.
 </ParamField>
 
 <ParamField path="bump-dependency.dependencies[].ensure" type="string">
@@ -618,7 +618,7 @@ steps:
 </ParamField>
 
 <ParamField path="bump-dependency.manager" type="string">
-  Package manager override. Supported command-based managers include `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `pip`, `poetry`, `pipenv`, and `bundler`. If omitted, Codemod infers the manager from package files in the repository.
+  Package manager override. Supported managers include `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `pip`, `poetry`, `pipenv`, `bundler`, `maven`, and `gradle`. If omitted, Codemod infers the manager from package files in the repository.
 </ParamField>
 
 <ParamField path="bump-dependency.root" type="string">
@@ -630,12 +630,12 @@ steps:
 </ParamField>
 
 <Info>
-In dry-run mode, Codemod plans and logs the package-manager command without changing files.
+In dry-run mode, Codemod plans and logs the package-manager command or manifest edit without changing files.
 </Info>
 
-<Warning>
-Maven and Gradle projects are detected, but Java dependency updates are not executed by this step yet.
-</Warning>
+<Info>
+Maven `pom.xml`, Gradle Kotlin DSL `build.gradle.kts`, and Gradle Groovy `build.gradle` files are supported for direct dependency declarations.
+</Info>
 
 ### Shard Step
 
