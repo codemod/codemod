@@ -1,169 +1,149 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>You're signed in - Codemod CLI</title>
 
-    <style>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>You're signed in - Codemod CLI</title>
+
+  <style>
+    :root {{
+      --background: oklch(0.1689 0.0021 286.1774);
+      --foreground: oklch(0.9851 0 0);
+      --muted: oklch(0.699 0.0031 264.5372);
+      --primary: oklch(0.9409 0.1873 122.7111);
+
+      --glow: oklch(0.9409 0.1873 122.7111 / 20%);
+    }}
+
+    @media (prefers-color-scheme: light) {{
       :root {{
-        --background: oklch(0.1876 0.027 251.6513);
-        --foreground: oklch(0.984 0.003 247.858);
-        --muted: oklch(0.65 0.02 256.848);
-        --primary: oklch(94.16% 0.186 122.47);
-        --glow: oklch(94.16% 0.186 122.47 / 20%);
-      }}
-      @media (prefers-color-scheme: light) {{
-        :root {{
-          --background: oklch(0.984 0.003 247.858);
-          --foreground: oklch(0.1876 0.027 251.6513);
-          --muted: oklch(0.4909 0.0177 260.7054);
-          --primary: oklch(0.6815 0.1709 125.7804);
-          --glow: oklch(94.16% 0.186 122.47 / 50%);
-        }}
-      }}
+        --background: oklch(0.9913 0.0013 286.376);
+        --foreground: oklch(0.1448 0 0);
+        --muted: oklch(0.4826 0.0032 286.2807);
 
-      * {{
-        box-sizing: border-box;
+        --glow: oklch(0.9409 0.1873 122.7111 / 50%);
       }}
-      html,
-      body {{
-        height: 100%;
-      }}
-      body {{
-        margin: 0;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto,
-          "Helvetica Neue", Arial, sans-serif;
-        background: radial-gradient(
-            100vw 50vh at 50% 100%,
-            var(--glow),
-            transparent 70%
-          ),
-          var(--background);
-        color: var(--foreground);
-        display: grid;
-        place-items: center;
-      }}
+    }}
 
-      main {{
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 16px;
-        text-align: center;
-        padding: 24px;
-        max-width: 900px;
-      }}
+    * {{
+      box-sizing: border-box;
+    }}
 
-      .icon {{
-        width: clamp(56px, 9vw, 88px);
-        margin-bottom: 16px;
-        height: auto;
-        color: var(--foreground);
-      }}
+    html,
+    body {{
+      height: 100%;
+    }}
 
-      h1 {{
-        margin: 0;
-        font-size: clamp(32px, 6vw, 64px);
-        font-weight: 500;
-        letter-spacing: 0.2px;
-      }}
+    body {{
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(100vw 50vh at 50% 100%,
+          var(--glow),
+          transparent 70%),
+        var(--background);
+      color: var(--foreground);
+      display: grid;
+      place-items: center;
+    }}
 
-      p {{
-        color: var(--muted);
-        margin: 0;
-        font-size: clamp(14px, 2.2vw, 22px);
-      }}
-      .mono {{
-        font-variant-numeric: tabular-nums;
-      }}
-      .hint {{
-        font-size: 13px;
-        opacity: 0;
-        transition: opacity 0.3s ease-in-out;
-      }}
-      .hint.visible {{
-        visibility: visible;
-        opacity: 1;
-      }}
-      .logo {{
-        position: fixed;
-        bottom: 5vh;
-        left: 50%;
-        transform: translateX(-50%);
-        color: var(--foreground);
-        width: clamp(100px, 10vw, 140px);
-        height: auto;
-        opacity: 0.85;
-      }}
-    </style>
-  </head>
-  <body>
-    <main role="status" aria-live="polite">
-      <!-- Theme-aware icon -->
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        aria-hidden="true"
-        class="icon"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke="currentColor"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="1.5"
-          d="M19.25 18.754v1.5a1.5 1.5 0 0 1-1.5 1.5h-3.5m0-18h3.5a1.5 1.5 0 0 1 1.5 1.5v1.5M9.394 23.246l-8-1.286a.75.75 0 0 1-.644-.742V3.725a.75.75 0 0 1 .593-.734l8-2.221a.75.75 0 0 1 .907.734v21a.751.751 0 0 1-.856.742Z"
-        />
-        <path
-          stroke="currentColor"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="1.5"
-          d="M6.375 11.629A.375.375 0 1 0 6.75 12a.374.374 0 0 0-.375-.375"
-        />
-        <path
-          stroke="var(--primary)"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="1.207"
-          d="M15.68 8.397 14 15.427"
-        />
-        <path
-          stroke="var(--primary)"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-miterlimit="10"
-          stroke-width="1.207"
-          d="M20.981 14.087c-.214.702-.882 1.34-1.944 1.34-1.296 0-2.15-.977-2.15-2.443a3.294 3.294 0 0 1 .1-.819 2.492 2.492 0 0 1 .393-.839c.119-.16.258-.3.414-.417l.043-.031.088-.059a1.99 1.99 0 0 1 .438-.203l.052-.016c.053-.015.107-.029.162-.04l.055-.011a1.906 1.906 0 0 1 .214-.028c.063-.005.126-.008.19-.008h.011c1.067.005 1.781.643 1.934 1.376"
-        />
-        <circle cx="23.095" cy="14.521" r=".905" fill="var(--primary)" />
-      </svg>
+    main {{
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      text-align: center;
+      padding: 24px;
+      max-width: 900px;
+    }}
 
-      <h1>{title}</h1>
-      <p>{description}</p>
-      <p id="cd" class="mono">Closing in <strong>5</strong> seconds…</p>
-      <p class="hint" id="hint">
-        If it doesn’t close on its own, you can close this tab.
-      </p>
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        class="logo"
-        viewBox="0 0 300 50"
-      >
-        <path
-          fill="currentColor"
-          d="M.219 48.752 18.793 1.195h6.191L6.344 48.752H.22ZM37.088 15.62c8.102 0 13.767 4.611 14.888 11.791h-6.192c-1.054-4.083-4.348-6.258-8.496-6.258-5.862 0-9.88 4.478-9.88 11.46 0 6.984 3.753 11.397 9.617 11.397 4.413 0 7.707-2.306 8.826-6.127h6.192c-1.252 6.983-7.246 11.659-15.018 11.659-9.485 0-15.742-6.718-15.742-16.863 0-10.144 6.389-17.06 15.81-17.06l-.005.002Zm34.839.066c9.617 0 16.73 6.983 16.73 16.928s-7.113 16.928-16.73 16.928c-9.618 0-16.796-6.983-16.796-16.928s7.113-16.928 16.796-16.928Zm0 28.324c6.191 0 10.539-4.678 10.539-11.396 0-6.718-4.348-11.396-10.54-11.396-6.19 0-10.538 4.678-10.538 11.396 0 6.718 4.28 11.396 10.539 11.396Zm20.149-11.264c0-9.88 5.732-17.125 15.282-17.125 4.94 0 9.091 2.173 11.264 6.126V.274h6.126v48.478h-5.532l-.527-5.861c-2.108 4.413-6.456 6.653-11.593 6.653-9.353 0-15.018-6.983-15.018-16.796l-.002-.002Zm26.479-.197c0-6.586-3.886-11.329-10.21-11.329-6.323 0-10.012 4.743-10.012 11.329s3.689 11.395 10.012 11.395c6.324 0 10.21-4.677 10.21-11.395Zm9.748.132c0-10.077 6.388-17.06 15.742-17.06 9.353 0 15.15 6.324 15.15 15.874V33.8l-24.898.066c.462 6.785 4.018 10.539 10.144 10.539 4.808 0 7.97-1.976 9.024-5.665h5.796c-1.581 6.916-6.982 10.802-14.952 10.802-9.485 0-16.006-6.85-16.006-16.863v.002Zm6.126-2.964h18.576c0-5.335-3.491-8.891-8.958-8.891-5.468 0-8.827 3.226-9.618 8.89Zm28.389 19.036v-32.21h5.533l.592 4.216c1.646-3.03 5.072-5.138 9.617-5.138 5.005 0 8.564 2.503 10.21 6.521 1.516-4.018 5.402-6.52 10.407-6.52 7.377 0 11.856 4.61 11.856 12.052v21.079h-6.059V29.19c0-5.072-2.833-7.97-7.18-7.97-4.678 0-7.773 3.294-7.773 8.432v19.1h-6.126V29.126c0-5.073-2.767-7.84-7.113-7.84-4.677 0-7.772 3.227-7.772 8.365v19.1h-6.192v.003Zm69.157-33.067c9.618 0 16.731 6.983 16.731 16.928s-7.113 16.928-16.731 16.928c-9.617 0-16.795-6.983-16.795-16.928s7.113-16.928 16.795-16.928Zm0 28.324c6.191 0 10.54-4.678 10.54-11.396 0-6.718-4.349-11.396-10.54-11.396-6.191 0-10.539 4.678-10.539 11.396 0 6.718 4.281 11.396 10.539 11.396Zm20.15-11.264c0-9.88 5.731-17.125 15.282-17.125 4.94 0 9.09 2.173 11.264 6.126V.274h6.126v48.478h-5.532l-.528-5.861c-2.107 4.413-6.455 6.653-11.593 6.653-9.353 0-15.017-6.983-15.017-16.796l-.002-.002Zm26.478-.197c0-6.586-3.885-11.329-10.209-11.329s-10.013 4.743-10.013 11.329 3.689 11.395 10.013 11.395 10.209-4.677 10.209-11.395Zm11.725 12.384c0-2.57 2.173-4.677 4.743-4.677 2.569 0 4.677 2.107 4.677 4.677 0 2.57-2.173 4.61-4.677 4.61-2.505 0-4.743-2.107-4.743-4.61Z"
-        />
-      </svg>
-    </main>
+    .icon {{
+      width: clamp(56px, 9vw, 80px);
+      height: auto;
+      color: var(--foreground);
+    }}
 
-    <script>
+    h1 {{
+      margin: 0.25em 0;
+      font-size: clamp(32px, 6vw, 64px);
+      font-weight: 600;
+    }}
+
+    p {{
+      color: var(--muted);
+      margin: 0;
+      font-size: clamp(14px, 2.2vw, 20px);
+    }}
+
+    .mono {{
+      font-variant-numeric: tabular-nums;
+      min-height: 36px;
+      opacity: 1;
+      transition: opacity 0.3s ease-in-out;
+    }}
+
+    .mono strong {{
+      color: var(--foreground);
+    }}
+
+    .hint {{
+      font-size: 13px;
+      opacity: 0;
+      min-height: 36px;
+      transition: opacity 0.3s ease-in-out;
+    }}
+
+    .hint.visible {{
+      visibility: visible;
+      opacity: 1;
+    }}
+
+    .invisible {{
+      visibility: hidden;
+      opacity: 0;
+    }}
+
+    .logo {{
+      position: fixed;
+      bottom: 4vh;
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--foreground);
+      width: clamp(100px, 10vw, 140px);
+      height: auto;
+      opacity: 0.85;
+    }}
+  </style>
+</head>
+
+<body>
+  <main role="status" aria-live="polite">
+    <!-- Theme-aware icon -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" fill="none">
+      <path fill="var(--primary)" d="M100 50c0-27.61-22.39-50-50-50S0 22.39 0 50s22.39 50 50 50 50-22.39 50-50" />
+      <path fill="#000"
+        d="M19.59 68.38 37.31 23h5.91L25.43 68.38h-5.85zm49.39-20.36h-5.91c-1.01-3.9-4.15-5.97-8.11-5.97-5.59 0-9.43 4.27-9.43 10.94s3.58 10.87 9.18 10.87c4.21 0 7.35-2.2 8.42-5.85h5.91c-1.19 6.66-6.91 11.12-14.33 11.12-9.05 0-15.02-6.41-15.02-16.09s6.1-16.31 15.09-16.28c7.45.03 13.04 4.31 14.2 11.25zm3.2 16.72c0-2.45 2.07-4.46 4.53-4.46a4.47 4.47 0 0 1 4.46 4.46c0 2.45-2.07 4.4-4.46 4.4s-4.53-2.01-4.53-4.4" />
+    </svg>
+
+    <h1>You're signed in</h1>
+    <p>You can now close this browser tab and return to the CLI.</p>
+    <p id="cd" class="mono">Closing in <strong>3</strong> seconds…</p>
+    <p class="hint" id="hint">
+      If it doesn’t close on its own, you can close this tab.
+    </p>
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" class="logo" viewBox="0 0 300 50">
+      <path fill="currentColor"
+        d="M.219 48.752 18.793 1.195h6.191L6.344 48.752H.22ZM37.088 15.62c8.102 0 13.767 4.611 14.888 11.791h-6.192c-1.054-4.083-4.348-6.258-8.496-6.258-5.862 0-9.88 4.478-9.88 11.46 0 6.984 3.753 11.397 9.617 11.397 4.413 0 7.707-2.306 8.826-6.127h6.192c-1.252 6.983-7.246 11.659-15.018 11.659-9.485 0-15.742-6.718-15.742-16.863 0-10.144 6.389-17.06 15.81-17.06l-.005.002Zm34.839.066c9.617 0 16.73 6.983 16.73 16.928s-7.113 16.928-16.73 16.928c-9.618 0-16.796-6.983-16.796-16.928s7.113-16.928 16.796-16.928Zm0 28.324c6.191 0 10.539-4.678 10.539-11.396 0-6.718-4.348-11.396-10.54-11.396-6.19 0-10.538 4.678-10.538 11.396 0 6.718 4.28 11.396 10.539 11.396Zm20.149-11.264c0-9.88 5.732-17.125 15.282-17.125 4.94 0 9.091 2.173 11.264 6.126V.274h6.126v48.478h-5.532l-.527-5.861c-2.108 4.413-6.456 6.653-11.593 6.653-9.353 0-15.018-6.983-15.018-16.796l-.002-.002Zm26.479-.197c0-6.586-3.886-11.329-10.21-11.329-6.323 0-10.012 4.743-10.012 11.329s3.689 11.395 10.012 11.395c6.324 0 10.21-4.677 10.21-11.395Zm9.748.132c0-10.077 6.388-17.06 15.742-17.06 9.353 0 15.15 6.324 15.15 15.874V33.8l-24.898.066c.462 6.785 4.018 10.539 10.144 10.539 4.808 0 7.97-1.976 9.024-5.665h5.796c-1.581 6.916-6.982 10.802-14.952 10.802-9.485 0-16.006-6.85-16.006-16.863v.002Zm6.126-2.964h18.576c0-5.335-3.491-8.891-8.958-8.891-5.468 0-8.827 3.226-9.618 8.89Zm28.389 19.036v-32.21h5.533l.592 4.216c1.646-3.03 5.072-5.138 9.617-5.138 5.005 0 8.564 2.503 10.21 6.521 1.516-4.018 5.402-6.52 10.407-6.52 7.377 0 11.856 4.61 11.856 12.052v21.079h-6.059V29.19c0-5.072-2.833-7.97-7.18-7.97-4.678 0-7.773 3.294-7.773 8.432v19.1h-6.126V29.126c0-5.073-2.767-7.84-7.113-7.84-4.677 0-7.772 3.227-7.772 8.365v19.1h-6.192v.003Zm69.157-33.067c9.618 0 16.731 6.983 16.731 16.928s-7.113 16.928-16.731 16.928c-9.617 0-16.795-6.983-16.795-16.928s7.113-16.928 16.795-16.928Zm0 28.324c6.191 0 10.54-4.678 10.54-11.396 0-6.718-4.349-11.396-10.54-11.396-6.191 0-10.539 4.678-10.539 11.396 0 6.718 4.281 11.396 10.539 11.396Zm20.15-11.264c0-9.88 5.731-17.125 15.282-17.125 4.94 0 9.09 2.173 11.264 6.126V.274h6.126v48.478h-5.532l-.528-5.861c-2.107 4.413-6.455 6.653-11.593 6.653-9.353 0-15.017-6.983-15.017-16.796l-.002-.002Zm26.478-.197c0-6.586-3.885-11.329-10.209-11.329s-10.013 4.743-10.013 11.329 3.689 11.395 10.013 11.395 10.209-4.677 10.209-11.395Zm11.725 12.384c0-2.57 2.173-4.677 4.743-4.677 2.569 0 4.677 2.107 4.677 4.677 0 2.57-2.173 4.61-4.677 4.61-2.505 0-4.743-2.107-4.743-4.61Z" />
+    </svg>
+  </main>
+
+  <script>
       // Countdown and auto-close
+      const cd = document.querySelector("#cd");
       const strong = document.querySelector("#cd strong");
       const hint = document.getElementById("hint");
-      let t = 5;
+      let t = 3;
       const timer = setInterval(() => {{
         strong.textContent = String(t);
         if (t-- <= 0) {{
@@ -171,9 +151,11 @@
           window.close();
           setTimeout(() => {{
             hint.classList.add("visible");
+            cd.classList.add("invisible");
           }}, 250);
         }}
       }}, 1000);
     </script>
-  </body>
+</body>
+
 </html>
