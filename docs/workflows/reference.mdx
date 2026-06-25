@@ -587,6 +587,18 @@ steps:
           target: "^18.0.0"
 ```
 
+For Python projects that use `requirements.txt`, use `requirements-txt`:
+
+```yaml
+steps:
+  - name: Ensure Requests 2.32
+    bump-dependency:
+      manager: requirements-txt
+      dependencies:
+        - name: requests
+          ensure: "2.32.3"
+```
+
 **Bump Dependency Step Parameters**:
 
 <ParamField path="name" type="string" required>
@@ -618,7 +630,7 @@ steps:
 </ParamField>
 
 <ParamField path="bump-dependency.manager" type="string">
-  Package manager override. Supported managers include `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `pip`, `poetry`, `pipenv`, `bundler`, `maven`, and `gradle`. If omitted, Codemod infers the manager from package files in the repository.
+  Package manager override. Supported managers include `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `requirements-txt`, `uv`, `poetry`, `pipenv`, `bundler`, `maven`, and `gradle`. If omitted, Codemod infers the manager from package files in the repository.
 </ParamField>
 
 <ParamField path="bump-dependency.root" type="string">
@@ -631,6 +643,10 @@ steps:
 
 <Info>
 In dry-run mode, Codemod plans and logs the package-manager command or manifest edit without changing files.
+</Info>
+
+<Info>
+`requirements-txt`, Maven, and Gradle update manifest files directly. Other supported managers use their package-manager command.
 </Info>
 
 <Info>

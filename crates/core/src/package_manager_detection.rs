@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use butterflow_models::step::PackageManager;
@@ -21,7 +21,10 @@ pub const fn package_manager_ecosystem(manager: PackageManager) -> Ecosystem {
         }
         PackageManager::Cargo => Ecosystem::Cargo,
         PackageManager::Go => Ecosystem::Go,
-        PackageManager::Pip | PackageManager::Poetry | PackageManager::Pipenv => Ecosystem::PyPI,
+        PackageManager::RequirementsTxt
+        | PackageManager::Uv
+        | PackageManager::Poetry
+        | PackageManager::Pipenv => Ecosystem::PyPI,
         PackageManager::Bundler => Ecosystem::RubyGems,
         PackageManager::Maven | PackageManager::Gradle => Ecosystem::Java,
     }
@@ -102,12 +105,27 @@ pub fn infer_package_manager_root(
 
 pub fn detect_package_manager_roots(facts: &WorkflowFacts) -> Vec<PackageManagerRoot> {
     let mut roots: BTreeMap<(PathBuf, PackageManager), PackageManagerRoot> = BTreeMap::new();
+    let uv_roots = facts
+        .ecosystems
+        .iter()
+        .filter(|fact| {
+            fact.source == EcosystemFactSource::LockFile
+                && dependency_files::file_name(&fact.path) == "uv.lock"
+        })
+        .map(|fact| package_root(&fact.path))
+        .collect::<BTreeSet<_>>();
 
     for fact in &facts.ecosystems {
+        let root = package_root(&fact.path);
+        if fact.source == EcosystemFactSource::ContextFile
+            && dependency_files::file_name(&fact.path) == "pyproject.toml"
+            && uv_roots.contains(&root)
+        {
+            continue;
+        }
         let Some(manager) = manager_from_fact(&fact.path, fact.source) else {
             continue;
         };
-        let root = package_root(&fact.path);
         roots
             .entry((root.clone(), manager))
             .or_insert_with(|| PackageManagerRoot {
@@ -134,7 +152,10 @@ fn manager_from_fact(path: &str, source: EcosystemFactSource) -> Option<PackageM
         ("go.mod", EcosystemFactSource::LockFile) | ("go.sum", EcosystemFactSource::LockFile) => {
             Some(PackageManager::Go)
         }
-        ("requirements.txt", EcosystemFactSource::LockFile) => Some(PackageManager::Pip),
+        ("requirements.txt", EcosystemFactSource::LockFile) => {
+            Some(PackageManager::RequirementsTxt)
+        }
+        ("uv.lock", EcosystemFactSource::LockFile) => Some(PackageManager::Uv),
         ("poetry.lock", EcosystemFactSource::LockFile)
         | ("pyproject.toml", EcosystemFactSource::ContextFile) => Some(PackageManager::Poetry),
         ("Pipfile.lock", EcosystemFactSource::LockFile) => Some(PackageManager::Pipenv),
@@ -215,6 +236,56 @@ mod tests {
 
         assert_eq!(maven.root, PathBuf::from("."));
         assert_eq!(gradle.root, PathBuf::from("services/api"));
+    }
+
+    #[test]
+    fn detects_uv_lockfile_root() {
+        let facts = facts_with_paths(&[(
+            Ecosystem::PyPI,
+            EcosystemFactSource::LockFile,
+            "services/api/uv.lock",
+        )]);
+
+        let root = infer_package_manager_root(
+            &facts,
+            &PackageManagerInferenceRequest {
+                manager: Some(PackageManager::Uv),
+                ..PackageManagerInferenceRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(root.manager, PackageManager::Uv);
+        assert_eq!(root.root, PathBuf::from("services/api"));
+        assert_eq!(root.evidence_path, "services/api/uv.lock");
+    }
+
+    #[test]
+    fn uv_lockfile_takes_precedence_over_pyproject_context() {
+        let facts = facts_with_paths(&[
+            (
+                Ecosystem::PyPI,
+                EcosystemFactSource::LockFile,
+                "services/api/uv.lock",
+            ),
+            (
+                Ecosystem::PyPI,
+                EcosystemFactSource::ContextFile,
+                "services/api/pyproject.toml",
+            ),
+        ]);
+
+        let root = infer_package_manager_root(
+            &facts,
+            &PackageManagerInferenceRequest {
+                ecosystem: Some(Ecosystem::PyPI),
+                ..PackageManagerInferenceRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(root.manager, PackageManager::Uv);
+        assert_eq!(root.root, PathBuf::from("services/api"));
     }
 
     #[test]

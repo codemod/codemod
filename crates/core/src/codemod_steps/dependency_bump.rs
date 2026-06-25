@@ -164,8 +164,8 @@ pub async fn execute_bump_dependency_plan(
     let mut commands = Vec::new();
     let mut file_edits = Vec::new();
 
-    for action in &plan.actions {
-        if uses_manifest_edit(plan.manager_root.manager) {
+    if uses_manifest_edit(plan.manager_root.manager) {
+        for action in &plan.actions {
             let manager = plan.manager_root.manager;
             let action = action.clone();
             let target_path = target_path.to_path_buf();
@@ -177,26 +177,26 @@ pub async fn execute_bump_dependency_plan(
                 BumpDependencyExecutionError::Runtime(format!("manifest edit task failed: {error}"))
             })??;
             file_edits.push(file_edit);
-            continue;
         }
-
-        let command = command_for_action(&plan.manager_root, action, target_path)?;
-        if !command.dry_run {
-            runner
-                .run_command(&command.command, env, output_callback.clone())
-                .await
-                .map_err(|error| match error {
-                    Error::ShellCommandFailed { exit_code, output } => {
-                        BumpDependencyExecutionError::CommandFailed {
-                            command: command.command.clone(),
-                            exit_code,
-                            output,
+    } else {
+        for command in commands_for_actions(&plan.manager_root, &plan.actions, target_path)? {
+            if !command.dry_run {
+                runner
+                    .run_command(&command.command, env, output_callback.clone())
+                    .await
+                    .map_err(|error| match error {
+                        Error::ShellCommandFailed { exit_code, output } => {
+                            BumpDependencyExecutionError::CommandFailed {
+                                command: command.command.clone(),
+                                exit_code,
+                                output,
+                            }
                         }
-                    }
-                    error => BumpDependencyExecutionError::Runtime(error.to_string()),
-                })?;
+                        error => BumpDependencyExecutionError::Runtime(error.to_string()),
+                    })?;
+            }
+            commands.push(command);
         }
-        commands.push(command);
     }
 
     Ok(BumpDependencyExecution {
@@ -205,9 +205,52 @@ pub async fn execute_bump_dependency_plan(
     })
 }
 
+pub fn commands_for_actions(
+    manager_root: &PackageManagerRoot,
+    actions: &[BumpDependencyAction],
+    target_path: &Path,
+) -> Result<Vec<BumpDependencyCommand>, BumpDependencyExecutionError> {
+    if actions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if manager_root.manager == PackageManager::Bundler {
+        return actions
+            .iter()
+            .map(|action| command_for_action(manager_root, action, target_path))
+            .collect();
+    }
+
+    let mut commands = Vec::new();
+    let mut groups = Vec::<Vec<BumpDependencyAction>>::new();
+    for action in actions {
+        if let Some(group) = groups.iter_mut().find(|group| {
+            dependency_type_args_are_compatible(manager_root.manager, &group[0], action)
+        }) {
+            group.push(action.clone());
+        } else {
+            groups.push(vec![action.clone()]);
+        }
+    }
+
+    for group in groups {
+        commands.push(command_for_actions(manager_root, &group, target_path)?);
+    }
+
+    Ok(commands)
+}
+
 pub fn command_for_action(
     manager_root: &PackageManagerRoot,
     action: &BumpDependencyAction,
+    target_path: &Path,
+) -> Result<BumpDependencyCommand, BumpDependencyExecutionError> {
+    command_for_actions(manager_root, std::slice::from_ref(action), target_path)
+}
+
+fn command_for_actions(
+    manager_root: &PackageManagerRoot,
+    actions: &[BumpDependencyAction],
     target_path: &Path,
 ) -> Result<BumpDependencyCommand, BumpDependencyExecutionError> {
     let working_dir = if manager_root.root == Path::new(".") {
@@ -215,23 +258,41 @@ pub fn command_for_action(
     } else {
         target_path.join(&manager_root.root)
     };
-    let package = package_with_target(manager_root.manager, &action.dependency, &action.target);
+    let packages = actions
+        .iter()
+        .map(|action| package_with_target(manager_root.manager, &action.dependency, &action.target))
+        .collect::<Vec<_>>();
     let mut args = match manager_root.manager {
-        PackageManager::Npm => vec!["install".to_string(), package],
+        PackageManager::Npm => command_args_with_packages("install", packages),
         PackageManager::Yarn | PackageManager::Pnpm | PackageManager::Bun => {
-            vec!["add".to_string(), package]
+            command_args_with_packages("add", packages)
         }
-        PackageManager::Cargo => vec!["add".to_string(), package],
-        PackageManager::Go => vec!["get".to_string(), package],
-        PackageManager::Pip => vec!["install".to_string(), package],
-        PackageManager::Poetry => vec!["add".to_string(), package],
-        PackageManager::Pipenv => vec!["install".to_string(), package],
-        PackageManager::Bundler => vec![
-            "add".to_string(),
-            action.dependency.clone(),
-            "--version".to_string(),
-            action.target.clone(),
-        ],
+        PackageManager::Cargo => command_args_with_packages("add", packages),
+        PackageManager::Go => command_args_with_packages("get", packages),
+        PackageManager::RequirementsTxt => {
+            return Err(
+                BumpDependencyExecutionError::UnsupportedPackageManagerCommand {
+                    manager: manager_root.manager,
+                },
+            );
+        }
+        PackageManager::Uv => command_args_with_packages("add", packages),
+        PackageManager::Poetry => command_args_with_packages("add", packages),
+        PackageManager::Pipenv => command_args_with_packages("install", packages),
+        PackageManager::Bundler => {
+            let [action] = actions else {
+                return Err(BumpDependencyExecutionError::Runtime(
+                    "bundler dependency bumps must be executed one dependency at a time"
+                        .to_string(),
+                ));
+            };
+            vec![
+                "add".to_string(),
+                action.dependency.clone(),
+                "--version".to_string(),
+                action.target.clone(),
+            ]
+        }
         PackageManager::Maven | PackageManager::Gradle => {
             return Err(
                 BumpDependencyExecutionError::UnsupportedPackageManagerCommand {
@@ -240,13 +301,12 @@ pub fn command_for_action(
             );
         }
     };
-    args.extend(dependency_type_args(
+    args.extend(dependency_type_args_for_actions(
         manager_root.manager,
-        action.dependency_type.as_deref(),
+        actions,
     ));
 
     let invocation = match manager_root.manager {
-        PackageManager::Pip => shell_command("python", ["-m", "pip"].into_iter(), args),
         PackageManager::Bundler => shell_command("bundle", std::iter::empty::<&str>(), args),
         manager => shell_command(manager.as_str(), std::iter::empty::<&str>(), args),
     };
@@ -260,12 +320,49 @@ pub fn command_for_action(
         manager: manager_root.manager,
         working_dir,
         command,
-        dry_run: action.dry_run,
+        dry_run: actions.iter().all(|action| action.dry_run),
     })
 }
 
+fn command_args_with_packages(command: &str, packages: Vec<String>) -> Vec<String> {
+    std::iter::once(command.to_string())
+        .chain(packages)
+        .collect()
+}
+
+fn dependency_type_args_for_actions(
+    manager: PackageManager,
+    actions: &[BumpDependencyAction],
+) -> Vec<String> {
+    let Some(first_dependency_type) = actions
+        .first()
+        .and_then(|action| action.dependency_type.as_deref())
+    else {
+        return Vec::new();
+    };
+    if actions
+        .iter()
+        .all(|action| action.dependency_type.as_deref() == Some(first_dependency_type))
+    {
+        return dependency_type_args(manager, Some(first_dependency_type));
+    }
+    Vec::new()
+}
+
+fn dependency_type_args_are_compatible(
+    manager: PackageManager,
+    left: &BumpDependencyAction,
+    right: &BumpDependencyAction,
+) -> bool {
+    dependency_type_args(manager, left.dependency_type.as_deref())
+        == dependency_type_args(manager, right.dependency_type.as_deref())
+}
+
 fn uses_manifest_edit(manager: PackageManager) -> bool {
-    matches!(manager, PackageManager::Maven | PackageManager::Gradle)
+    matches!(
+        manager,
+        PackageManager::RequirementsTxt | PackageManager::Maven | PackageManager::Gradle
+    )
 }
 
 fn edit_manifest_dependency(
@@ -281,9 +378,10 @@ fn edit_manifest_dependency(
         }
     })?;
     let updated = match manager {
+        PackageManager::RequirementsTxt => edit_requirements_dependency_spec(&content, action),
         PackageManager::Maven => edit_maven_dependency_version(&content, action),
         PackageManager::Gradle => edit_gradle_dependency_version(&content, action),
-        _ => unreachable!("manifest edits are only used for Maven and Gradle"),
+        _ => unreachable!("manifest edits are only used for requirements.txt, Maven, and Gradle"),
     }
     .map_err(|reason| BumpDependencyExecutionError::FileEditFailed {
         path: manifest_path.clone(),
@@ -306,6 +404,58 @@ fn edit_manifest_dependency(
         target: action.target.clone(),
         dry_run: action.dry_run,
     })
+}
+
+fn edit_requirements_dependency_spec(
+    content: &str,
+    action: &BumpDependencyAction,
+) -> Result<String, String> {
+    if dependency_files::file_name(&action.manifest_path) != "requirements.txt" {
+        return Err(format!(
+            "unsupported requirements manifest for dependency edits: {}",
+            action.manifest_path
+        ));
+    }
+
+    let replacement = package_with_target(
+        PackageManager::RequirementsTxt,
+        &action.dependency,
+        &action.target,
+    );
+    let mut matched_range = None::<Range<usize>>;
+    let mut offset = 0;
+
+    for line in content.split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let dependency_part = line_without_newline.split('#').next().unwrap_or("");
+        let trimmed_start = dependency_part.len() - dependency_part.trim_start().len();
+        let trimmed_end = dependency_part.trim_end().len();
+        let spec = &dependency_part[trimmed_start..trimmed_end];
+
+        if !spec.is_empty()
+            && !spec.starts_with('-')
+            && requirement_dependency_name(spec)
+                .is_some_and(|name| requirement_dependency_names_match(name, &action.dependency))
+        {
+            if matched_range.is_some() {
+                return Err(format!(
+                    "multiple requirements declarations matched {}",
+                    action.dependency
+                ));
+            }
+            matched_range = Some(offset + trimmed_start..offset + trimmed_end);
+        }
+
+        offset += line.len();
+    }
+
+    let Some(range) = matched_range else {
+        return Err(format!(
+            "could not find requirements dependency {}",
+            action.dependency
+        ));
+    };
+    replace_range(content, range, &replacement)
 }
 
 fn edit_maven_dependency_version(
@@ -566,7 +716,7 @@ fn action_from_fact(
 
 fn package_with_target(manager: PackageManager, name: &str, target: &str) -> String {
     match manager {
-        PackageManager::Pip | PackageManager::Pipenv => {
+        PackageManager::RequirementsTxt | PackageManager::Uv | PackageManager::Pipenv => {
             if target.starts_with(['<', '>', '=', '!', '~']) {
                 format!("{name}{target}")
             } else {
@@ -575,6 +725,24 @@ fn package_with_target(manager: PackageManager, name: &str, target: &str) -> Str
         }
         _ => format!("{name}@{target}"),
     }
+}
+
+fn requirement_dependency_name(spec: &str) -> Option<&str> {
+    let name = spec
+        .split(['<', '>', '=', '!', '~', ';', '[', ' '])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn requirement_dependency_names_match(left: &str, right: &str) -> bool {
+    left.replace('_', "-")
+        .eq_ignore_ascii_case(&right.replace('_', "-"))
 }
 
 fn dependency_type_args(manager: PackageManager, dependency_type: Option<&str>) -> Vec<String> {
@@ -590,6 +758,9 @@ fn dependency_type_args(manager: PackageManager, dependency_type: Option<&str>) 
         (PackageManager::Cargo, Some("build-dependencies")) => vec!["--build".to_string()],
         (PackageManager::Poetry, Some("devDependencies" | "dev-dependencies")) => {
             vec!["--group".to_string(), "dev".to_string()]
+        }
+        (PackageManager::Uv, Some("devDependencies" | "dev-dependencies")) => {
+            vec!["--dev".to_string()]
         }
         (PackageManager::Pipenv, Some("devDependencies" | "dev-dependencies")) => {
             vec!["--dev".to_string()]
@@ -1064,20 +1235,113 @@ mod tests {
     }
 
     #[test]
-    fn generates_python_package_spec() {
+    fn batches_compatible_package_manager_actions() {
+        let commands = commands_for_actions(
+            &PackageManagerRoot {
+                ecosystem: Ecosystem::Npm,
+                manager: PackageManager::Npm,
+                root: PathBuf::from("."),
+                evidence_path: "package-lock.json".to_string(),
+            },
+            &[
+                BumpDependencyAction {
+                    dependency: "react".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+                BumpDependencyAction {
+                    dependency: "react-dom".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+            ],
+            Path::new("/repo"),
+        )
+        .unwrap();
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(
+            commands[0].command,
+            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"
+        );
+    }
+
+    #[test]
+    fn splits_package_manager_actions_by_dependency_type_flags() {
+        let commands = commands_for_actions(
+            &PackageManagerRoot {
+                ecosystem: Ecosystem::Npm,
+                manager: PackageManager::Npm,
+                root: PathBuf::from("."),
+                evidence_path: "package-lock.json".to_string(),
+            },
+            &[
+                BumpDependencyAction {
+                    dependency: "react".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+                BumpDependencyAction {
+                    dependency: "vite".to_string(),
+                    current_version: "^5.0.0".to_string(),
+                    target: "^6.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("devDependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+                BumpDependencyAction {
+                    dependency: "react-dom".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+            ],
+            Path::new("/repo"),
+        )
+        .unwrap();
+
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[0].command,
+            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"
+        );
+        assert_eq!(
+            commands[1].command,
+            "cd '/repo' && 'npm' 'install' 'vite@^6.0.0' '--save-dev'"
+        );
+    }
+
+    #[test]
+    fn generates_uv_package_spec() {
         let command = command_for_action(
             &PackageManagerRoot {
                 ecosystem: Ecosystem::PyPI,
-                manager: PackageManager::Pip,
+                manager: PackageManager::Uv,
                 root: PathBuf::from("."),
-                evidence_path: "requirements.txt".to_string(),
+                evidence_path: "uv.lock".to_string(),
             },
             &BumpDependencyAction {
                 dependency: "requests".to_string(),
                 current_version: "requests>=2.31.0".to_string(),
                 target: ">=2.32.0".to_string(),
-                manifest_path: "requirements.txt".to_string(),
-                dependency_type: Some("requirements".to_string()),
+                manifest_path: "pyproject.toml".to_string(),
+                dependency_type: Some("dependencies".to_string()),
                 mode: BumpDependencyMode::Ensure,
                 dry_run: false,
             },
@@ -1087,12 +1351,12 @@ mod tests {
 
         assert_eq!(
             command.command,
-            "cd '/repo' && 'python' '-m' 'pip' 'install' 'requests>=2.32.0'"
+            "cd '/repo' && 'uv' 'add' 'requests>=2.32.0'"
         );
     }
 
     #[test]
-    fn reports_unsupported_package_manager_command() {
+    fn reports_unsupported_package_manager_command_for_manifest_edit_managers() {
         let error = command_for_action(
             &PackageManagerRoot {
                 ecosystem: Ecosystem::Java,
@@ -1214,6 +1478,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executes_requirements_txt_manifest_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("requirements.txt"),
+            "flask==3.0.0\nrequests==2.31.0  # keep this comment\n",
+        )
+        .unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::PyPI,
+                manager: PackageManager::RequirementsTxt,
+                root: PathBuf::from("."),
+                evidence_path: "requirements.txt".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "requests".to_string(),
+                current_version: "requests==2.31.0".to_string(),
+                target: "2.32.3".to_string(),
+                manifest_path: "requirements.txt".to_string(),
+                dependency_type: Some("requirements".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: false,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert!(execution.commands.is_empty());
+        assert_eq!(execution.file_edits.len(), 1);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("requirements.txt")).unwrap(),
+            "flask==3.0.0\nrequests==2.32.3  # keep this comment\n"
+        );
+        assert_eq!(runner.commands.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
     async fn dry_run_manifest_edit_does_not_write_file() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(
@@ -1253,6 +1558,44 @@ mod tests {
         assert!(fs::read_to_string(temp.path().join("build.gradle.kts"))
             .unwrap()
             .contains("org.slf4j:slf4j-api:2.0.9"));
+    }
+
+    #[tokio::test]
+    async fn dry_run_requirements_txt_edit_does_not_write_file() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("requirements.txt"), "requests==2.31.0\n").unwrap();
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::PyPI,
+                manager: PackageManager::RequirementsTxt,
+                root: PathBuf::from("."),
+                evidence_path: "requirements.txt".to_string(),
+            },
+            actions: vec![BumpDependencyAction {
+                dependency: "requests".to_string(),
+                current_version: "requests==2.31.0".to_string(),
+                target: "2.32.3".to_string(),
+                manifest_path: "requirements.txt".to_string(),
+                dependency_type: Some("requirements".to_string()),
+                mode: BumpDependencyMode::Ensure,
+                dry_run: true,
+            }],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, temp.path(), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert!(execution.commands.is_empty());
+        assert_eq!(execution.file_edits.len(), 1);
+        assert!(execution.file_edits[0].dry_run);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("requirements.txt")).unwrap(),
+            "requests==2.31.0\n"
+        );
+        assert_eq!(runner.commands.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -1327,5 +1670,49 @@ mod tests {
         assert_eq!(execution.commands.len(), 1);
         assert!(execution.file_edits.is_empty());
         assert_eq!(runner.commands.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn executes_batched_package_manager_command() {
+        let runner = RecordingRunner::default();
+        let plan = BumpDependencyPlan {
+            manager_root: PackageManagerRoot {
+                ecosystem: Ecosystem::Npm,
+                manager: PackageManager::Npm,
+                root: PathBuf::from("."),
+                evidence_path: "package-lock.json".to_string(),
+            },
+            actions: vec![
+                BumpDependencyAction {
+                    dependency: "react".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+                BumpDependencyAction {
+                    dependency: "react-dom".to_string(),
+                    current_version: "^17.0.0".to_string(),
+                    target: "^18.0.0".to_string(),
+                    manifest_path: "package.json".to_string(),
+                    dependency_type: Some("dependencies".to_string()),
+                    mode: BumpDependencyMode::Ensure,
+                    dry_run: false,
+                },
+            ],
+        };
+
+        let execution =
+            execute_bump_dependency_plan(&runner, &plan, Path::new("/repo"), &HashMap::new(), None)
+                .await
+                .unwrap();
+
+        assert_eq!(execution.commands.len(), 1);
+        assert_eq!(
+            runner.commands.lock().unwrap().as_slice(),
+            ["cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"]
+        );
     }
 }

@@ -17,6 +17,7 @@ pub const LOCK_FILE_PATTERNS: &[(&str, Ecosystem)] = &[
     // (text) is currently supported by the code indexer.
     ("poetry.lock", Ecosystem::PyPI),
     ("Pipfile.lock", Ecosystem::PyPI),
+    ("uv.lock", Ecosystem::PyPI),
     ("requirements.txt", Ecosystem::PyPI),
     ("Cargo.lock", Ecosystem::Cargo),
     ("go.mod", Ecosystem::Go),
@@ -127,6 +128,7 @@ mod tests {
             ("apps/web/bun.lock", Ecosystem::Npm),
             ("poetry.lock", Ecosystem::PyPI),
             ("services/api/Pipfile.lock", Ecosystem::PyPI),
+            ("services/api/uv.lock", Ecosystem::PyPI),
             ("requirements.txt", Ecosystem::PyPI),
             ("Cargo.lock", Ecosystem::Cargo),
             ("crates/core/Cargo.lock", Ecosystem::Cargo),
